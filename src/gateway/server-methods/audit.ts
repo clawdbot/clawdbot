@@ -174,7 +174,9 @@ export const auditHandlers: GatewayRequestHandlers = {
       typeof params.runId !== "string" ||
       (params.executionCursor === decisionCursor &&
         decisionCursor !== undefined &&
-        (decisionCursor.startsWith("a:") || decisionCursor.startsWith("g:")))
+        (decisionCursor.startsWith("a:") ||
+          decisionCursor.startsWith("m:") ||
+          decisionCursor.startsWith("g:")))
         ? undefined
         : parsePositiveAuditCursor(params.executionCursor);
     if (

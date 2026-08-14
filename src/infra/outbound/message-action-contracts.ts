@@ -61,6 +61,8 @@ export type MessageActionInput = {
     toolContext?: InternalChannelThreadingToolContext;
   };
   sessionId?: string;
+  /** @internal Admitted run correlation carried into owner-native delivery audit. */
+  runId?: string;
   toolContext?: ChannelThreadingToolContext;
   gateway?: MessageActionGateway;
   deps?: OutboundSendDeps;

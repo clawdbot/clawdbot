@@ -154,8 +154,27 @@ export type InboundMessageAuditTerminal =
       reasonCode?: AuditInboundMessageFailureReasonCode;
     };
 
-type OutboundMessageAuditTerminal =
+type OutboundMessageAuditLifecycle =
   | {
+      action: "message.outbound.queued";
+      status: "started";
+      outcome: "queued";
+      errorCode?: never;
+      reasonCode?: never;
+      failureStage?: never;
+      deliveryKind?: never;
+    }
+  | {
+      action: "message.outbound.platform-started";
+      status: "started";
+      outcome: "platform_started";
+      errorCode?: never;
+      reasonCode?: never;
+      failureStage?: never;
+      deliveryKind?: never;
+    }
+  | {
+      action: "message.outbound.finished";
       status: "succeeded";
       outcome: "sent";
       errorCode?: never;
@@ -164,6 +183,7 @@ type OutboundMessageAuditTerminal =
       deliveryKind?: AuditMessageDeliveryKind;
     }
   | {
+      action: "message.outbound.finished";
       status: "blocked";
       outcome: "suppressed";
       reasonCode: AuditOutboundMessageSuppressedReasonCode;
@@ -172,6 +192,7 @@ type OutboundMessageAuditTerminal =
       deliveryKind?: never;
     }
   | {
+      action: "message.outbound.finished";
       status: "failed";
       outcome: "failed";
       errorCode: "message_delivery_failed" | "message_delivery_partial_failure";
@@ -180,6 +201,7 @@ type OutboundMessageAuditTerminal =
       deliveryKind?: AuditMessageDeliveryKind;
     }
   | {
+      action: "message.outbound.finished";
       status: "unknown";
       outcome: "unknown";
       failureStage: AuditMessageFailureStage;
@@ -201,8 +223,7 @@ type InboundMessageAuditEventInput = MessageAuditEventInputBase &
 /** Raw identifiers exist only on the trusted producer-to-writer boundary. */
 type OutboundMessageAuditEventInput = MessageAuditEventInputBase &
   OutboundMessageAuditAttribution &
-  OutboundMessageAuditTerminal & {
-    action: "message.outbound.finished";
+  OutboundMessageAuditLifecycle & {
     direction: "outbound";
   };
 
@@ -283,8 +304,7 @@ export type InboundMessageAuditEventRecord = MessageAuditEventRecordBase &
 
 export type OutboundMessageAuditEventRecord = MessageAuditEventRecordBase &
   OutboundMessageAuditAttribution &
-  OutboundMessageAuditTerminal & {
-    action: "message.outbound.finished";
+  OutboundMessageAuditLifecycle & {
     direction: "outbound";
   };
 

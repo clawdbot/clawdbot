@@ -71,6 +71,7 @@ type OutboundSendContext = {
   /** Known destination conversation kind prepared by the caller. */
   conversationType?: ChatType;
   sessionId?: string;
+  runId?: string;
   inboundEventKind?: InboundEventKind;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
@@ -178,6 +179,7 @@ async function sendCoreMessage(params: {
     deps: params.ctx.deps,
     gateway: params.ctx.gateway,
     idempotencyKey: params.ctx.idempotencyKey,
+    runId: params.ctx.runId,
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,

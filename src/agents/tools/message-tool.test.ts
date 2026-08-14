@@ -2,6 +2,9 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { configureMessageActionDecisionSink } from "../../audit/message-action-decision.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
@@ -25,6 +28,7 @@ import {
   consumePreExecutionBlockedToolCall,
   wrapToolWithBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 type CreateMessageTool = typeof import("./message-tool-execution.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
@@ -2713,6 +2717,89 @@ describe("message tool explicit target guard", () => {
     });
 
     expect(firstRunMessageActionInput()?.params?.chatGuid).toBe("iMessage;+;chat0000");
+  });
+
+  it("records exact denial, suppression, and unowned action decisions", async () => {
+    const receipts: DecisionReceiptV1[] = [];
+    const clearSink = configureMessageActionDecisionSink((receipt) => {
+      receipts.push(receipt);
+      return true;
+    });
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:qa-channel:direct:source",
+      executionIdentityToken: createExecutionIdentityAdmissionToken("run-message-decisions", {
+        contextId: "context-message-decisions",
+        executionId: "execution-message-decisions",
+        now: 100,
+      }),
+    };
+    try {
+      const deniedTool = createMessageTool({
+        runMessageAction: mocks.runMessageAction as never,
+        requireExplicitTarget: true,
+        currentChannelProvider: "qa-channel",
+      });
+      await expect(
+        withGatewayToolCallerIdentity(identity, () =>
+          deniedTool.execute("denied-action", { action: "upload-file", filePath: "/tmp/x" }),
+        ),
+      ).rejects.toThrow(/Explicit message target required/i);
+
+      const suppressedTool = createMessageTool({
+        runMessageAction: mocks.runMessageAction as never,
+        currentChannelProvider: "qa-channel",
+        agentSessionKey: identity.sessionKey,
+      });
+      await withGatewayToolCallerIdentity(identity, () =>
+        suppressedTool.execute("suppressed-action", {
+          action: "send",
+          message: MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+        }),
+      );
+
+      mocks.runMessageAction.mockResolvedValueOnce({
+        kind: "action",
+        channel: "qa-channel",
+        action: "react",
+        handledBy: "plugin",
+        payload: { ok: true },
+        dryRun: false,
+      });
+      const actionTool = createMessageTool({
+        runMessageAction: mocks.runMessageAction as never,
+        currentChannelProvider: "qa-channel",
+      });
+      await withGatewayToolCallerIdentity(identity, () =>
+        actionTool.execute("portable-action", { action: "react", emoji: "ok" }),
+      );
+    } finally {
+      clearSink();
+    }
+
+    expect(receipts).toEqual([
+      expect.objectContaining({
+        contextId: "context-message-decisions",
+        executionId: "execution-message-decisions",
+        runId: "run-message-decisions",
+        decision: { outcome: "denied", reasonCode: "message_target_missing" },
+        enforcement: expect.objectContaining({ coverageState: "enforced" }),
+      }),
+      expect.objectContaining({
+        decision: {
+          outcome: "not-applicable",
+          reasonCode: "message_suppressed_inbound_metadata_echo",
+        },
+        enforcement: expect.objectContaining({ coverageState: "attribution-only" }),
+      }),
+      expect.objectContaining({
+        action: expect.objectContaining({ family: "message", operation: "react" }),
+        decision: { outcome: "allowed", reasonCode: "message_action_completed" },
+        enforcement: expect.objectContaining({ coverageState: "attribution-only" }),
+      }),
+    ]);
+    expect(JSON.stringify(receipts)).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+    expect(JSON.stringify(receipts)).not.toContain("/tmp/x");
   });
 
   it("requires an explicit target for upload-file when configured", async () => {

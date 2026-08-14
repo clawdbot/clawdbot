@@ -168,6 +168,27 @@ mismatched binding reports `operator_approval_execution_link_missing`,
 references. The inspector never reconstructs that binding from `runId`, session
 metadata, timestamps, or the number of retained executions.
 
+Outbound message receipts distinguish the durable lifecycle without treating
+transport progress as authorization:
+
+- `message_queued`: the shared delivery queue accepted custody.
+- `message_platform_started`: the channel adapter began the platform send.
+- `message_delivered`: the adapter returned recipient-visible delivery identity.
+- `message_delivery_failed_<stage>` or `message_delivery_unknown_<stage>`:
+  delivery did not produce a proven success; the suffix identifies `queue`,
+  `platform_send`, or an `unknown` stage before retrying.
+- `message_suppressed_<reason>`: the owning hook or payload normalizer
+  intentionally produced no visible message.
+
+These owner-native rows are always `attribution-only`. Their keyed target
+reference and channel scope describe the destination, but they retain only a
+`runId` correlation, not an exact execution binding. Consequently they never
+claim that identity or a grant authorized delivery. Target validation, message
+policy, and active-turn capability denials are `enforced` only when their exact
+context/execution/run tuple was recorded and the gate changed the outcome.
+Portable actions and early suppressions that have no durable delivery row use
+the generic decision-fact owner instead of duplicating queue or delivery state.
+
 JSON output is the Gateway result without lossy reformatting. An exact result contains one
 bounded V1 context (maximum 16 KiB), up to 100 decision receipts, coverage and
 missing-evidence codes, and an optional `nextDecisionCursor`. An ambiguous run
@@ -202,13 +223,15 @@ permits.
 
 ## Recorded events
 
-The Gateway projects trusted lifecycle streams into six actions:
+The Gateway projects trusted lifecycle streams into eight actions:
 
 - `agent.run.started`
 - `agent.run.finished`
 - `tool.action.started`
 - `tool.action.finished`
 - `message.inbound.processed`
+- `message.outbound.queued`
+- `message.outbound.platform-started`
 - `message.outbound.finished`
 
 Every returned record has a stable event id, a monotonically increasing ledger
@@ -230,10 +253,11 @@ optional delivery kind, failure stage, duration, result count, normalized
 reason code, and keyed account/conversation/message/target pseudonyms. The
 current inbound boundary covers accepted messages that reach core dispatch,
 including core duplicate and terminal processing outcomes. The outbound
-boundary writes one terminal row per original logical reply payload that reaches
-shared durable delivery; chunking and adapter fan-out are aggregated in
-`resultCount`. Queued retryable or ambiguous sends are recorded only after an
-acknowledgement, dead letter, or reconciliation makes the outcome terminal.
+boundary writes replay-safe `queued` and `platform_started` lifecycle rows plus
+one terminal row per original logical reply payload that reaches shared durable
+delivery. Chunking and adapter fan-out are aggregated in terminal `resultCount`.
+A terminal is `sent`, `suppressed`, `failed`, or `unknown` after acknowledgement,
+dead letter, or reconciliation makes that outcome known.
 Plugin-local and direct-send paths that bypass those shared boundaries are not
 yet covered; absence of a row does not prove that no message existed.
 
@@ -279,10 +303,11 @@ accepts `executionLimit` from 1–50 and an optional `executionCursor`. A run
 with multiple retained executions returns the typed `ambiguous` identity state
 and no identity context or decisions until the caller selects an execution id.
 For one selected context, receipt paging starts with admission, then reads
-owner-native terminal approvals, then generic facts for boundaries without a
-native durable record. Approval inspection never writes a generic duplicate.
-Generic fact writes and projections also require the full context, execution,
-and run tuple to match the immutable execution context.
+owner-native terminal approvals, owner-native outbound message lifecycle rows,
+and finally generic facts for boundaries without a native durable record.
+Approval and delivery inspection never write generic duplicates. Generic fact
+writes and projections also require the full context, execution, and run tuple
+to match the immutable execution context.
 
 The activity ledger remains best-effort. By contrast, a returned approval
 receipt comes from the authoritative first-answer-wins approval row, and a

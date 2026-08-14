@@ -60,6 +60,8 @@ type MessageSendParams = {
   agentId?: string;
   /** Originating session key used for requester-scoped outbound media policy. */
   requesterSessionKey?: string;
+  /** Admitted run correlation retained with durable delivery custody. */
+  runId?: string;
   /** Originating account id used for requester-scoped outbound media policy. */
   requesterAccountId?: string;
   /** Originating sender id used for sender-scoped outbound media policy. */
@@ -399,6 +401,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       channel: outboundChannel,
       to: resolvedTarget.to,
       session: outboundSession,
+      runId: params.runId,
       accountId: params.accountId,
       conversationReadOrigin: params.conversationReadOrigin,
       payloads: normalizedPayloads,

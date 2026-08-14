@@ -830,7 +830,8 @@ The closed message enums are:
   `plugin_bound_unavailable`, `plugin_bound_declined`, `plugin_bound_error`,
   `before_dispatch_handled`, `acp_dispatch_completed`, `acp_dispatch_failed`,
   `acp_dispatch_empty`, or `acp_dispatch_aborted`.
-- Outbound `outcome`: `sent`, `suppressed`, `failed`, or `unknown`; optional
+- Outbound `outcome`: `queued`, `platform_started`, `sent`, `suppressed`,
+  `failed`, or `unknown`; optional
   `reasonCode`: `cancelled_by_message_sending_hook`,
   `cancelled_by_reply_payload_sending_hook`,
   `empty_after_message_sending_hook`, `empty_after_reply_payload_sending_hook`,
@@ -841,12 +842,12 @@ The closed message enums are:
 
 Terminal fields are correlated, not independently optional:
 
-| Variant          | Terminal mapping                                                                                                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Agent run        | `started` has no `errorCode`; each non-success finished status requires its matching `run_*` code.                                                                 |
-| Tool action      | `started` and succeeded have no `errorCode`; each other finished status requires its matching `tool_*` code.                                                       |
-| Inbound message  | succeeded = `completed`; blocked = `skipped`; failed = `failed` plus `message_processing_failed`. `reasonCode`, when present, must belong to that terminal family. |
-| Outbound message | succeeded = `sent`; blocked = `suppressed` plus `reasonCode`; failed = `failed` plus `errorCode` and `failureStage`; unknown = `unknown` plus `failureStage`.      |
+| Variant          | Terminal mapping                                                                                                                                                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent run        | `started` has no `errorCode`; each non-success finished status requires its matching `run_*` code.                                                                                                                     |
+| Tool action      | `started` and succeeded have no `errorCode`; each other finished status requires its matching `tool_*` code.                                                                                                           |
+| Inbound message  | succeeded = `completed`; blocked = `skipped`; failed = `failed` plus `message_processing_failed`. `reasonCode`, when present, must belong to that terminal family.                                                     |
+| Outbound message | started = action-matched `queued` or `platform_started`; succeeded = `sent`; blocked = `suppressed` plus `reasonCode`; failed = `failed` plus `errorCode` and `failureStage`; unknown = `unknown` plus `failureStage`. |
 
 Each activity event includes a stable event id, monotonic ledger sequence,
 source event sequence, timestamp, actor, action, status, integer
@@ -856,8 +857,9 @@ records may include agent and run ids, but intentionally never include
 `sessionKey` or `sessionId`; the `sessionKey` query filter therefore applies to
 run and tool rows only. Tool events may include tool call id and tool name.
 
-Message records use `message.inbound.processed` or
-`message.outbound.finished` and add direction, channel, conversation kind,
+Message records use `message.inbound.processed`, `message.outbound.queued`,
+`message.outbound.platform-started`, or `message.outbound.finished` and add
+direction, channel, conversation kind,
 normalized outcome, and optional delivery kind, failure stage, duration,
 result count, reason code, and installation-local keyed
 account/conversation/message/target pseudonyms. These pseudonyms aid
@@ -877,9 +879,10 @@ crash-ambiguous rows omit it.
 
 Current message coverage includes accepted inbound messages that reach core
 dispatch, including core duplicate/terminal outcomes. Outbound coverage writes
-one terminal row per original logical reply payload that reaches shared durable
-delivery; chunking and adapter fan-out are aggregated in `resultCount`. Queued
-retryable or ambiguous sends are recorded only after acknowledgement, dead
+replay-safe queue and platform-start rows plus one terminal row per original
+logical reply payload that reaches shared durable delivery; chunking and
+adapter fan-out are aggregated in terminal `resultCount`. Ambiguous sends reach
+a terminal only after acknowledgement, dead
 letter, or reconciliation. Plugin-local and direct-send paths that bypass those
 shared boundaries are not yet covered. The bounded worker queue is best-effort
 and may drop records on failure or saturation, so this surface is not a

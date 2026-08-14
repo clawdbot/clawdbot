@@ -4,12 +4,76 @@ import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from 
 import type { OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import {
   completedOutboundAuditTerminals,
+  emitOutboundAuditLifecycle,
   emitOutboundAuditTerminals,
   failedOutboundAuditTerminals,
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 
 describe("outbound audit projection", () => {
+  it("projects replay-safe queued and platform-started lifecycle records", () => {
+    const events: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+    try {
+      const context = {
+        channel: "qa-channel",
+        to: "raw-target",
+        payloads: [{ text: "secret message" }],
+        preparedBatch: { runId: "run-1", sourcePayloadCount: 1 },
+      };
+      emitOutboundAuditLifecycle({
+        context,
+        outcome: "queued",
+        queueId: "queue-1",
+        startedAt: Date.now(),
+      });
+      emitOutboundAuditLifecycle({
+        context,
+        outcome: "platform_started",
+        queueId: "queue-1",
+        startedAt: Date.now(),
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        sourceId: "message:outbound:queue:queue-1:payload:0:queued",
+        action: "message.outbound.queued",
+        status: "started",
+        outcome: "queued",
+        runId: "run-1",
+      }),
+      expect.objectContaining({
+        sourceId: "message:outbound:queue:queue-1:payload:0:platform_started",
+        action: "message.outbound.platform-started",
+        status: "started",
+        outcome: "platform_started",
+        runId: "run-1",
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain("secret message");
+  });
+
+  it("keeps lifecycle observers outside delivery semantics", () => {
+    const unsubscribe = onTrustedMessageAuditEvent(() => {
+      throw new Error("observer failed");
+    });
+    try {
+      expect(() =>
+        emitOutboundAuditLifecycle({
+          context: { channel: "qa-channel", to: "target" },
+          outcome: "queued",
+          queueId: "queue-1",
+          startedAt: Date.now(),
+        }),
+      ).not.toThrow();
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("keeps mixed logical payloads distinct under one durable queue intent", () => {
     const events: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
@@ -116,7 +180,12 @@ describe("outbound audit projection", () => {
     const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
     try {
       emitOutboundAuditTerminals({
-        context: { channel: "matrix", to: "!room:target", payloads: [{ text: "sent?" }] },
+        context: {
+          channel: "matrix",
+          to: "!room:target",
+          runId: "run-preparation-failure",
+          payloads: [{ text: "sent?" }],
+        },
         terminals: uniformOutboundAuditTerminals(1, {
           outcome: "unknown",
           failureStage: "platform_send",
@@ -132,6 +201,7 @@ describe("outbound audit projection", () => {
       status: "unknown",
       outcome: "unknown",
       failureStage: "platform_send",
+      runId: "run-preparation-failure",
       resultCount: 0,
     });
     expect(events[0]).not.toHaveProperty("errorCode");

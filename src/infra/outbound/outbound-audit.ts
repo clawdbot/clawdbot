@@ -30,10 +30,11 @@ import type { OutboundSessionContext } from "./session-context.js";
 type OutboundAuditDeliveryContext = {
   channel: string;
   to: string;
+  runId?: string;
   accountId?: string;
   payloads?: readonly ReplyPayload[];
   replyPayloadSendingHook?: { runId?: string };
-  preparedBatch?: { runId?: string };
+  preparedBatch?: { runId?: string; sourcePayloadCount?: number };
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
 };
@@ -68,8 +69,13 @@ type IndexedOutboundAuditTerminal = {
   terminal: OutboundAuditTerminal;
 };
 
-function outboundQueueAuditSourceId(queueId: string, payloadIndex: number): string {
-  return `message:outbound:queue:${queueId}:payload:${payloadIndex}`;
+function outboundQueueAuditSourceId(
+  queueId: string,
+  payloadIndex: number,
+  lifecycle?: "queued" | "platform_started",
+): string {
+  const terminalId = `message:outbound:queue:${queueId}:payload:${payloadIndex}`;
+  return lifecycle ? `${terminalId}:${lifecycle}` : terminalId;
 }
 
 function outcomesByPayload(
@@ -381,8 +387,13 @@ function emitOutboundAuditTerminal(params: {
       actorType: agentId ? "agent" : "system",
       actorId: agentId ?? "gateway",
       ...(agentId ? { agentId } : {}),
-      ...((context.preparedBatch?.runId ?? context.replyPayloadSendingHook?.runId)
-        ? { runId: context.preparedBatch?.runId ?? context.replyPayloadSendingHook?.runId }
+      ...((context.runId ?? context.preparedBatch?.runId ?? context.replyPayloadSendingHook?.runId)
+        ? {
+            runId:
+              context.runId ??
+              context.preparedBatch?.runId ??
+              context.replyPayloadSendingHook?.runId,
+          }
         : {}),
       direction: "outbound",
       channel: context.channel,
@@ -393,6 +404,64 @@ function emitOutboundAuditTerminal(params: {
       targetId: context.to,
       ...identifiers,
     });
+  } catch {
+    // Audit observers cannot alter delivery or queue semantics.
+  }
+}
+
+/** Emits a replay-safe owner-native receipt after the queue transition commits. */
+export function emitOutboundAuditLifecycle(params: {
+  context: OutboundAuditDeliveryContext;
+  outcome: "queued" | "platform_started";
+  queueId: string;
+  startedAt: number;
+  payloadIndexes?: readonly number[];
+}): void {
+  if (!hasTrustedMessageAuditListeners()) {
+    return;
+  }
+  const payloadCount = params.context.preparedBatch?.sourcePayloadCount ?? 1;
+  const payloadIndexes = params.payloadIndexes ?? Array.from({ length: payloadCount }, (_, i) => i);
+  try {
+    for (const payloadIndex of payloadIndexes) {
+      if (!Number.isSafeInteger(payloadIndex) || payloadIndex < 0 || payloadIndex >= payloadCount) {
+        continue;
+      }
+      const agentId = params.context.session?.agentId ?? params.context.mirror?.agentId;
+      const common = {
+        sourceId: outboundQueueAuditSourceId(params.queueId, payloadIndex, params.outcome),
+        occurredAt: Date.now(),
+        status: "started" as const,
+        actorType: agentId ? ("agent" as const) : ("system" as const),
+        actorId: agentId ?? "gateway",
+        ...(agentId ? { agentId } : {}),
+        ...((params.context.runId ?? params.context.preparedBatch?.runId)
+          ? { runId: params.context.runId ?? params.context.preparedBatch?.runId }
+          : {}),
+        direction: "outbound" as const,
+        channel: params.context.channel,
+        conversationKind: resolveConversationKind(params.context),
+        durationMs: Math.max(0, Date.now() - params.startedAt),
+        resultCount: 0,
+        ...(params.context.accountId ? { accountId: params.context.accountId } : {}),
+        targetId: params.context.to,
+      };
+      if (params.outcome === "queued") {
+        emitTrustedMessageAuditEvent({
+          ...common,
+          kind: "message",
+          action: "message.outbound.queued",
+          outcome: "queued",
+        });
+      } else {
+        emitTrustedMessageAuditEvent({
+          ...common,
+          kind: "message",
+          action: "message.outbound.platform-started",
+          outcome: "platform_started",
+        });
+      }
+    }
   } catch {
     // Audit observers cannot alter delivery or queue semantics.
   }

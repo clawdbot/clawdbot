@@ -1,3 +1,5 @@
+import { MessageActionDeniedError } from "./message-action-denial.js";
+
 /**
  * Formats the user-facing error shown when no target is available.
  */
@@ -9,7 +11,11 @@ function missingTargetMessage(provider: string, hint?: string): string {
  * Builds an Error for missing outbound target failures.
  */
 export function missingTargetError(provider: string, hint?: string): Error {
-  return new Error(missingTargetMessage(provider, hint));
+  return new MessageActionDeniedError(
+    missingTargetMessage(provider, hint),
+    "message_target_missing",
+    "message-target:required",
+  );
 }
 
 /**
@@ -23,7 +29,11 @@ function ambiguousTargetMessage(provider: string, raw: string, hint?: string): s
  * Builds an Error for ambiguous outbound target failures.
  */
 export function ambiguousTargetError(provider: string, raw: string, hint?: string): Error {
-  return new Error(ambiguousTargetMessage(provider, raw, hint));
+  return new MessageActionDeniedError(
+    ambiguousTargetMessage(provider, raw, hint),
+    "message_target_ambiguous",
+    "message-target:unique",
+  );
 }
 
 /**
@@ -37,7 +47,11 @@ function unknownTargetMessage(provider: string, raw: string, hint?: string): str
  * Builds an Error for unknown outbound target failures.
  */
 export function unknownTargetError(provider: string, raw: string, hint?: string): Error {
-  return new Error(unknownTargetMessage(provider, raw, hint));
+  return new MessageActionDeniedError(
+    unknownTargetMessage(provider, raw, hint),
+    "message_target_unknown",
+    "message-target:known",
+  );
 }
 
 function reservedTargetLiteralMessage(provider: string, raw: string, hint?: string): string {
@@ -45,7 +59,11 @@ function reservedTargetLiteralMessage(provider: string, raw: string, hint?: stri
 }
 
 export function reservedTargetLiteralError(provider: string, raw: string, hint?: string): Error {
-  return new Error(reservedTargetLiteralMessage(provider, raw, hint));
+  return new MessageActionDeniedError(
+    reservedTargetLiteralMessage(provider, raw, hint),
+    "message_target_reserved",
+    "message-target:explicit",
+  );
 }
 
 export function isReservedTargetLiteralError(error: Error): boolean {

@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { recordAuditEvent } from "./audit-event-store.js";
 import {
   pageExecutionDecisionFactsForContext,
   pruneExpiredExecutionDecisionFacts,
@@ -112,6 +113,162 @@ function receipt(id: string, occurredAt = 100): DecisionReceiptV1 {
 }
 
 describe("execution decision facts", () => {
+  it("projects owner-native outbound delivery into run inspection", () => {
+    const database = databaseOptions();
+    const context = seedExecutionContext(database);
+    const now = Date.now();
+    recordAuditEvent(
+      {
+        sourceId: "message:outbound:queue:delivery-1:payload:0",
+        sourceSequence: 1,
+        occurredAt: now,
+        kind: "message",
+        action: "message.outbound.finished",
+        status: "succeeded",
+        outcome: "sent",
+        actorType: "agent",
+        actorId: "main",
+        agentId: "main",
+        runId: "run-1",
+        direction: "outbound",
+        channel: "qa-channel",
+        conversationKind: "direct",
+        resultCount: 1,
+        targetId: "raw-target",
+        messageId: "raw-message-id",
+      },
+      database,
+    );
+
+    expect(
+      presentExecutionDecisionReceipts({
+        context,
+        decisionLimit: 10,
+        options: { ...database, now },
+      }).decisions,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: expect.objectContaining({ family: "message", operation: "send" }),
+          decision: { outcome: "allowed", reasonCode: "message_delivered" },
+          enforcement: expect.objectContaining({ coverageState: "attribution-only" }),
+          source: expect.objectContaining({ owner: "audit_events" }),
+        }),
+      ]),
+    );
+  });
+
+  it("keeps delivery stages distinct, redacted, replay-safe, and retention bounded", () => {
+    const database = databaseOptions();
+    const context = seedExecutionContext(database);
+    const now = Date.now();
+    const common = {
+      sourceSequence: 1,
+      occurredAt: now,
+      kind: "message" as const,
+      actorType: "agent" as const,
+      actorId: "main",
+      agentId: "main",
+      runId: "run-1",
+      direction: "outbound" as const,
+      channel: "qa-channel",
+      conversationKind: "direct" as const,
+      targetId: "raw-channel-target",
+    };
+    const events = [
+      {
+        ...common,
+        occurredAt: now,
+        sourceId: "queue-1:queued",
+        action: "message.outbound.queued" as const,
+        status: "started" as const,
+        outcome: "queued" as const,
+      },
+      {
+        ...common,
+        occurredAt: now + 1,
+        sourceId: "queue-1:platform",
+        action: "message.outbound.platform-started" as const,
+        status: "started" as const,
+        outcome: "platform_started" as const,
+      },
+      {
+        ...common,
+        occurredAt: now + 2,
+        sourceId: "queue-1:finished",
+        action: "message.outbound.finished" as const,
+        status: "succeeded" as const,
+        outcome: "sent" as const,
+        messageId: "raw-platform-message",
+      },
+      {
+        ...common,
+        occurredAt: now + 3,
+        sourceId: "queue-2:failed",
+        action: "message.outbound.finished" as const,
+        status: "failed" as const,
+        outcome: "failed" as const,
+        errorCode: "message_delivery_failed" as const,
+        failureStage: "queue" as const,
+      },
+      {
+        ...common,
+        occurredAt: now + 4,
+        sourceId: "queue-3:failed",
+        action: "message.outbound.finished" as const,
+        status: "failed" as const,
+        outcome: "failed" as const,
+        errorCode: "message_delivery_failed" as const,
+        failureStage: "platform_send" as const,
+      },
+      {
+        ...common,
+        occurredAt: now + 5,
+        sourceId: "queue-4:suppressed",
+        action: "message.outbound.finished" as const,
+        status: "blocked" as const,
+        outcome: "suppressed" as const,
+        reasonCode: "no_visible_payload" as const,
+      },
+    ];
+    for (const event of events) {
+      expect(recordAuditEvent(event, database)).toBeDefined();
+    }
+    expect(recordAuditEvent(events[0]!, database)).toBeUndefined();
+
+    const inspect = () =>
+      presentExecutionDecisionReceipts({
+        context,
+        decisionCursor: "m:0:0",
+        decisionLimit: 10,
+        options: { ...database, now },
+      });
+    expect(inspect().decisions.map((item) => item.decision.reasonCode)).toEqual([
+      "message_queued",
+      "message_platform_started",
+      "message_delivered",
+      "message_delivery_failed_queue",
+      "message_delivery_failed_platform_send",
+      "message_suppressed_no_visible_payload",
+    ]);
+    expect(inspect().decisions.map((item) => item.enforcement.coverageState)).toEqual(
+      Array.from({ length: 6 }, () => "attribution-only"),
+    );
+    expect(JSON.stringify(inspect())).not.toContain("raw-channel-target");
+    expect(JSON.stringify(inspect())).not.toContain("raw-platform-message");
+
+    closeOpenClawStateDatabaseForTest();
+    expect(inspect().decisions).toHaveLength(6);
+    expect(
+      presentExecutionDecisionReceipts({
+        context,
+        decisionCursor: "m:0:0",
+        decisionLimit: 10,
+        options: { ...database, now: now + RETENTION_MS + events.length + 1 },
+      }).decisions,
+    ).toEqual([]);
+  });
+
   it("stays absent until a future owner writes one immutable fact", () => {
     const database = databaseOptions();
     seedExecutionContext(database);

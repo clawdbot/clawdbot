@@ -153,6 +153,8 @@ export type DeliverOutboundPayloadsCoreParams = {
   to: string;
   accountId?: string;
   payloads: ReplyPayload[];
+  /** Admitted run correlation copied into the prepared durable batch. */
+  runId?: string;
   /** @internal Canonical post-policy batch used by queue recovery and physical delivery. */
   preparedBatch?: PreparedOutboundBatch;
   replyToId?: string | null;
@@ -177,7 +179,7 @@ export type DeliverOutboundPayloadsCoreParams = {
   /** @internal Reports a settled native payload for post-terminal message_sent observation. */
   onMessageSentEvent?: (event: MessageSentEvent, sourceIndex: number) => void;
   /** @internal Persists ambiguous-send state immediately before platform I/O. */
-  onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
+  onPlatformSendStart?: (route: PlatformSendRoute, sourceIndex?: number) => Promise<void>;
   /** @internal Opaque durable intent id forwarded to provider reconciliation hooks. */
   deliveryQueueId?: string;
   /** @internal Stable producer id used to make queue creation idempotent across crashes. */
