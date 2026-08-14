@@ -16,6 +16,7 @@ import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/wor
 import { isPathInside } from "../infra/path-guards.js";
 import { tempWorkspace } from "../infra/private-temp-workspace.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import {
   nodeWorkspaceTransferBlobPath,
@@ -29,6 +30,7 @@ import {
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
 const validatedTlsSocketPins = new WeakMap<TLSSocket, string>();
+const transferLog = createSubsystemLogger("node-host/worker-workspace");
 
 function transferUrl(gatewayUrl: string, routePath: string): URL {
   const gateway = new URL(gatewayUrl);
@@ -483,6 +485,8 @@ async function downloadWorkspace(params: {
   transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: "download" }>;
   signal?: AbortSignal;
 }): Promise<string> {
+  const startedAt = performance.now();
+  let packDownloadMs: number | undefined;
   const raw = await downloadBuffer(
     {
       gatewayUrl: params.gatewayUrl,
@@ -508,6 +512,7 @@ async function downloadWorkspace(params: {
   try {
     if (manifest.baseCommit) {
       const packPath = path.join(staging, ".openclaw-base.pack");
+      const packStartedAt = performance.now();
       await downloadFile({
         request: {
           gatewayUrl: params.gatewayUrl,
@@ -522,6 +527,7 @@ async function downloadWorkspace(params: {
         },
         destination: packPath,
       });
+      packDownloadMs = performance.now() - packStartedAt;
       await initializeGitWorkspace({
         workspaceDir: staging,
         manifestHome: params.manifestHome,
@@ -530,6 +536,7 @@ async function downloadWorkspace(params: {
         signal: params.signal,
       });
     }
+    const blobApplyStartedAt = performance.now();
     for (const directory of manifest.directories ?? []) {
       await fsp.mkdir(workspacePath(staging, directory), { recursive: true, mode: 0o700 });
     }
@@ -556,6 +563,7 @@ async function downloadWorkspace(params: {
       });
       await fsp.chmod(destination, entry.mode);
     }
+    const blobApplyMs = performance.now() - blobApplyStartedAt;
     const observed = await captureManifest({
       workspaceDir: staging,
       manifestHome: params.manifestHome,
@@ -568,6 +576,14 @@ async function downloadWorkspace(params: {
       );
     }
     await replaceWorkspace(params.workspaceDir, staging);
+    transferLog.debug("node worker workspace transfer completed", {
+      environmentId: params.environmentId,
+      direction: "download",
+      outcome: "succeeded",
+      durationMs: performance.now() - startedAt,
+      ...(packDownloadMs === undefined ? {} : { packDownloadMs }),
+      blobApplyMs,
+    });
     return observed;
   } finally {
     await stagingWorkspace.cleanup();

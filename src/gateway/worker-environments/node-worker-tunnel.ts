@@ -18,7 +18,10 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import { createNodeWorkerWorkspaceFallback } from "./node-worker-workspace-fallback.js";
+import {
+  createNodeWorkerWorkspaceFallback,
+  recordNodeSyncPath,
+} from "./node-worker-workspace-fallback.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import type {
@@ -567,9 +570,11 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             signal: entry.abortController.signal,
           });
           try {
+            const originStartedAt = performance.now();
             const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
-            if (origin) {
-              return origin;
+            recordNodeSyncPath(entry.environmentId, entry.sessionId, origin, originStartedAt);
+            if (origin.kind === "synced") {
+              return origin.result;
             }
             const transferred = await exec({
               argv: ["openclaw-internal-workspace-transfer"],

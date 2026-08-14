@@ -26,6 +26,18 @@ import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-ser
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
+const workspaceInfo = vi.hoisted(() => vi.fn());
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/worker-workspace" ? { ...logger, info: workspaceInfo } : logger;
+    },
+  };
+});
+
 const BUILD = {
   bundleHash: "a".repeat(64),
   openclawVersion: "2026.8.13",
@@ -227,6 +239,7 @@ describe("node worker tunnel manager", () => {
   });
 
   it("preserves a typed workspace transfer cause from the node", async () => {
+    workspaceInfo.mockClear();
     const record = environment();
     const localPath = tempDirs.make("node-worker-transfer-error-");
     const rawManifest = serializeWorkerWorkspaceManifest({
@@ -272,6 +285,13 @@ describe("node worker tunnel manager", () => {
       name: NodeWorkerWorkspaceTransferError.name,
       code: NODE_WORKSPACE_TRANSFER_ERROR_CODE,
       message: "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+    });
+    expect(workspaceInfo).toHaveBeenCalledWith("worker workspace sync path selected", {
+      environmentId: "environment-1",
+      sessionId: "session-1",
+      path: "gateway-push",
+      reason: "not-git-workspace",
+      originAttemptMs: expect.any(Number),
     });
   });
 

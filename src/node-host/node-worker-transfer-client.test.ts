@@ -19,6 +19,20 @@ import { readActualWorkspaceManifest } from "../gateway/worker-environments/work
 import { runCommandBuffered, runExec } from "../process/exec.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 
+const transferDebug = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "node-host/worker-workspace"
+        ? { ...logger, debug: transferDebug }
+        : logger;
+    },
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type DrainProbe = {
@@ -443,6 +457,7 @@ describe("node worker transfer client", () => {
   });
 
   it("materializes a Git workspace with argv-only commands", async () => {
+    transferDebug.mockClear();
     const root = tempDirs.make("node-worker-transfer-git-");
     const source = path.join(root, "source");
     const workspaceDir = path.join(root, "workspace");
@@ -510,6 +525,17 @@ describe("node worker transfer client", () => {
       );
       await expect(git(workspaceDir, ["rev-parse", "HEAD"])).resolves.toBe(commit);
       await expect(git(workspaceDir, ["status", "--porcelain=v1"])).resolves.toBe("");
+      expect(transferDebug).toHaveBeenCalledWith(
+        "node worker workspace transfer completed",
+        expect.objectContaining({
+          environmentId: "environment-git",
+          direction: "download",
+          outcome: "succeeded",
+          durationMs: expect.any(Number),
+          packDownloadMs: expect.any(Number),
+          blobApplyMs: expect.any(Number),
+        }),
+      );
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
