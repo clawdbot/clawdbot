@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -18,6 +19,7 @@ import {
 } from "./message-delivery-progress-store.js";
 
 const tempDirs: string[] = [];
+const RELEASED_READER_SHA = "c3887db7c174e3c6041fda6576f6d717b67edd50";
 
 function databaseOptions() {
   return { env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "message-progress-") } };
@@ -190,6 +192,47 @@ describe("outbound message progress companion", () => {
     expect(
       countOutboundMessageAuditEventsForRun({ runId: "run-progress", database, now: occurredAt }),
     ).toBe(3);
+  });
+
+  it(`preserves the ${RELEASED_READER_SHA} terminal-only reader contract across reopen`, () => {
+    const database = databaseOptions();
+    const occurredAt = Date.now();
+    recordOutboundMessageProgress(
+      progressInput("message.outbound.queued", { occurredAt }),
+      database,
+    );
+    recordOutboundMessageProgress(
+      progressInput("message.outbound.platform-started", { occurredAt }),
+      database,
+    );
+    recordAuditEvent(terminalInput({ occurredAt }), database);
+    const databasePath = openOpenClawStateDatabase(database).path;
+    closeOpenClawStateDatabaseForTest();
+
+    // c388's released row parser accepts only terminal outbound actions. Open
+    // the candidate database in that reader's mode and exercise the same row.
+    const releasedReader = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(releasedReader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(
+        releasedReader
+          .prepare(
+            "SELECT action, message_outcome AS outcome FROM audit_events WHERE kind = 'message' AND direction = 'outbound' ORDER BY sequence",
+          )
+          .all(),
+      ).toEqual([{ action: "message.outbound.finished", outcome: "sent" }]);
+    } finally {
+      releasedReader.close();
+    }
+
+    expect(
+      pageOutboundMessageAuditEventsForRun({
+        runId: "run-progress",
+        database,
+        now: occurredAt,
+        limit: 10,
+      }).events.map((event) => event.outcome),
+    ).toEqual(["queued", "platform_started", "sent"]);
   });
 
   it("rejects a cursor whose owner row was pruned while preserving the other owner", () => {

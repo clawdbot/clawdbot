@@ -147,22 +147,6 @@ describe("audit activity protocol schemas", () => {
         status: "started",
         outcome: "queued",
       }),
-    ).toBe(true);
-    expect(
-      validate.Check({
-        ...outboundMessage,
-        action: "message.outbound.platform-started",
-        status: "started",
-        outcome: "platform_started",
-      }),
-    ).toBe(true);
-    expect(
-      validate.Check({
-        ...outboundMessage,
-        action: "message.outbound.finished",
-        status: "started",
-        outcome: "queued",
-      }),
     ).toBe(false);
     expect(
       validate.Check({

@@ -655,7 +655,10 @@ export function listAuditEvents(params: {
   let query = getAuditKysely(db)
     .selectFrom("audit_events")
     .selectAll()
-    .where("occurred_at", ">=", retainedAfter);
+    .where("occurred_at", ">=", retainedAfter)
+    // Nonterminal outbound facts belong to the lazy progress owner. Excluding
+    // transitional rows keeps the released activity contract terminal-only.
+    .where("action", "not in", ["message.outbound.queued", "message.outbound.platform-started"]);
   if (params.cursor !== undefined) {
     query = query.where("sequence", "<", params.cursor);
   }

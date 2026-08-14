@@ -370,11 +370,7 @@ const outboundMessageProperties = {
   ...commonProperties,
   ...messageProperties,
   kind: Type.Literal("message"),
-  action: Type.Union([
-    Type.Literal("message.outbound.queued"),
-    Type.Literal("message.outbound.platform-started"),
-    Type.Literal("message.outbound.finished"),
-  ]),
+  action: Type.Literal("message.outbound.finished"),
   direction: Type.Literal("outbound"),
   actor: AuditActivityOutboundActorV1Schema,
   deliveryKind: Type.Optional(
@@ -406,15 +402,12 @@ export const AuditActivityOutboundMessageV1Schema: TSchema = correlatedObject(
   {
     ...outboundMessageProperties,
     status: Type.Union([
-      Type.Literal("started"),
       Type.Literal("succeeded"),
       Type.Literal("blocked"),
       Type.Literal("failed"),
       Type.Literal("unknown"),
     ]),
     outcome: Type.Union([
-      Type.Literal("queued"),
-      Type.Literal("platform_started"),
       Type.Literal("sent"),
       Type.Literal("suppressed"),
       Type.Literal("failed"),
@@ -426,33 +419,7 @@ export const AuditActivityOutboundMessageV1Schema: TSchema = correlatedObject(
   },
   Type.Union([
     Type.Intersect([
-      Type.Object({
-        action: Type.Literal("message.outbound.queued"),
-        status: Type.Literal("started"),
-        outcome: Type.Literal("queued"),
-      }),
-      withoutErrorCode,
-      withoutReasonCode,
-      withoutFailureStage,
-      withoutDeliveryKind,
-    ]),
-    Type.Intersect([
-      Type.Object({
-        action: Type.Literal("message.outbound.platform-started"),
-        status: Type.Literal("started"),
-        outcome: Type.Literal("platform_started"),
-      }),
-      withoutErrorCode,
-      withoutReasonCode,
-      withoutFailureStage,
-      withoutDeliveryKind,
-    ]),
-    Type.Intersect([
-      Type.Object({
-        action: Type.Literal("message.outbound.finished"),
-        status: Type.Literal("succeeded"),
-        outcome: Type.Literal("sent"),
-      }),
+      Type.Object({ status: Type.Literal("succeeded"), outcome: Type.Literal("sent") }),
       withoutErrorCode,
       withoutReasonCode,
       withoutFailureStage,
@@ -460,7 +427,6 @@ export const AuditActivityOutboundMessageV1Schema: TSchema = correlatedObject(
     Type.Intersect([
       Type.Object({
         status: Type.Literal("blocked"),
-        action: Type.Literal("message.outbound.finished"),
         outcome: Type.Literal("suppressed"),
         reasonCode: outboundSuppressedReasonSchema,
       }),
@@ -471,7 +437,6 @@ export const AuditActivityOutboundMessageV1Schema: TSchema = correlatedObject(
     Type.Intersect([
       Type.Object({
         status: Type.Literal("failed"),
-        action: Type.Literal("message.outbound.finished"),
         outcome: Type.Literal("failed"),
         errorCode: outboundFailureErrorSchema,
         failureStage: outboundFailureStageSchema,
@@ -481,7 +446,6 @@ export const AuditActivityOutboundMessageV1Schema: TSchema = correlatedObject(
     Type.Intersect([
       Type.Object({
         status: Type.Literal("unknown"),
-        action: Type.Literal("message.outbound.finished"),
         outcome: Type.Literal("unknown"),
         failureStage: outboundFailureStageSchema,
       }),
@@ -633,25 +597,6 @@ export type AuditActivityInboundMessageV1 = AuditActivityMessageRecordBaseV1 & {
 
 type AuditActivityOutboundMessageV1Terminal =
   | {
-      action: "message.outbound.queued";
-      status: "started";
-      outcome: "queued";
-      errorCode?: never;
-      reasonCode?: never;
-      failureStage?: never;
-      deliveryKind?: never;
-    }
-  | {
-      action: "message.outbound.platform-started";
-      status: "started";
-      outcome: "platform_started";
-      errorCode?: never;
-      reasonCode?: never;
-      failureStage?: never;
-      deliveryKind?: never;
-    }
-  | {
-      action: "message.outbound.finished";
       status: "succeeded";
       outcome: "sent";
       errorCode?: never;
@@ -660,7 +605,6 @@ type AuditActivityOutboundMessageV1Terminal =
       deliveryKind?: "text" | "media" | "other";
     }
   | {
-      action: "message.outbound.finished";
       status: "blocked";
       outcome: "suppressed";
       errorCode?: never;
@@ -674,7 +618,6 @@ type AuditActivityOutboundMessageV1Terminal =
       deliveryKind?: never;
     }
   | {
-      action: "message.outbound.finished";
       status: "failed";
       outcome: "failed";
       errorCode: "message_delivery_failed" | "message_delivery_partial_failure";
@@ -683,7 +626,6 @@ type AuditActivityOutboundMessageV1Terminal =
       deliveryKind?: "text" | "media" | "other";
     }
   | {
-      action: "message.outbound.finished";
       status: "unknown";
       outcome: "unknown";
       errorCode?: never;
@@ -693,6 +635,7 @@ type AuditActivityOutboundMessageV1Terminal =
     };
 export type AuditActivityOutboundMessageV1 = AuditActivityMessageRecordBaseV1 & {
   eventType: "outbound_message";
+  action: "message.outbound.finished";
   direction: "outbound";
   actor: { type: "agent" | "system"; id: string };
 } & AuditActivityOutboundMessageV1Terminal;

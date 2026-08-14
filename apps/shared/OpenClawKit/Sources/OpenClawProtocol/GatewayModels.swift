@@ -9854,7 +9854,7 @@ public struct AuditActivityOutboundMessageV1: Codable, Sendable {
     public let messageref: String?
     public let targetref: String?
     public let kind: String
-    public let action: AnyCodable
+    public let action: String
     public let direction: String
     public let actor: [String: AnyCodable]
     public let deliverykind: AnyCodable?
@@ -9883,7 +9883,7 @@ public struct AuditActivityOutboundMessageV1: Codable, Sendable {
         messageref: String? = nil,
         targetref: String? = nil,
         kind: String,
-        action: AnyCodable,
+        action: String,
         direction: String,
         actor: [String: AnyCodable],
         deliverykind: AnyCodable? = nil,

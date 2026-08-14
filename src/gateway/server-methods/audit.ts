@@ -56,6 +56,9 @@ function mapAuditActivityEvent(event: AuditEventRecord): AuditActivityEventV1 {
         : { type: "system" as const, id: actorId };
     return { ...activity, eventType: "inbound_message", actor };
   }
+  if (event.action !== "message.outbound.finished") {
+    throw new Error("nonterminal outbound messages are not audit activity records");
+  }
   const { actorType, actorId, ...activity } = event;
   return { ...activity, eventType: "outbound_message", actor: { type: actorType, id: actorId } };
 }
