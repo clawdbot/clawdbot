@@ -32,7 +32,7 @@ export type TelegramMessageContextOptions = {
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   ambientTranscriptBody?: string;
-  inboundDebounceMessages?: readonly Message[];
+  bufferedMessages?: readonly Message[];
   spooledReplay?: boolean;
   /** Use an attempt-local participant so an outer retry loop owns final spool settlement. */
   isolateSpooledReplaySettlement?: boolean;

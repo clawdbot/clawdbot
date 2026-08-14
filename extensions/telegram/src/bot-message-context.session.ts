@@ -306,8 +306,11 @@ export async function buildTelegramInboundContextPayload(params: {
     sessionRuntime: sessionRuntimeOverride,
   } = params;
   const replyTarget = describeReplyTarget(msg);
-  const hasMultiMessageDebounceBatch = (options?.inboundDebounceMessages?.length ?? 0) > 1;
-  const forwardOrigin = hasMultiMessageDebounceBatch ? null : normalizeForwardedContext(msg);
+  const bufferedMessages = options?.bufferedMessages ?? [];
+  const hasMultiMessageBatch = bufferedMessages.length > 1;
+  const shouldRenderBufferedBody =
+    hasMultiMessageBatch && options?.ingressBuffer !== "text-fragment";
+  const forwardOrigin = shouldRenderBufferedBody ? null : normalizeForwardedContext(msg);
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "telegram",
@@ -335,8 +338,8 @@ export async function buildTelegramInboundContextPayload(params: {
     }).include;
   };
   // Single owner for reply-target visibility so every buffered message in a
-  // debounce batch is gated identically to the lone-message case. Without one
-  // owner, only the synthetic (first) message's reply/quote survived the merge.
+  // synthetic batch is gated identically to the lone-message case. Without one
+  // owner, only the synthetic (first) message's reply/quote survives the merge.
   const resolveVisibleReplyTarget = (
     target: TelegramReplyTarget | null,
   ): TelegramReplyTarget | null => {
@@ -388,19 +391,18 @@ export async function buildTelegramInboundContextPayload(params: {
     }
     rawReplyChain.push(entry);
   };
-  const debouncedMessages = options?.inboundDebounceMessages ?? [];
   // The synthetic message already owns the first entry's cached ancestry.
   // Recover only its erased tail; newest direct targets outrank older ancestry.
   for (
-    let index = debouncedMessages.length - 1;
+    let index = bufferedMessages.length - 1;
     index >= 1 && rawReplyChain.length < TELEGRAM_REPLY_CHAIN_MAX_DEPTH;
     index -= 1
   ) {
-    const debouncedMessage = debouncedMessages[index];
-    if (!debouncedMessage) {
+    const bufferedMessage = bufferedMessages[index];
+    if (!bufferedMessage) {
       continue;
     }
-    const visible = resolveVisibleReplyTarget(describeReplyTarget(debouncedMessage));
+    const visible = resolveVisibleReplyTarget(describeReplyTarget(bufferedMessage));
     appendReplyChainEntry(visible ? replyTargetToChainEntry(visible) : undefined);
   }
   for (const entry of inheritedReplyChain) {
@@ -439,39 +441,39 @@ export async function buildTelegramInboundContextPayload(params: {
     return [includeForwarded ? visibleEntry : stripReplyChainForwarded(visibleEntry)];
   });
   const visibleForwardOrigin = includeForwardOrigin ? forwardOrigin : null;
-  const inboundDebounceBodySegments = hasMultiMessageDebounceBatch
-    ? options?.inboundDebounceMessages?.flatMap((debouncedMessage) => {
-        const debouncedMedia = resolveTelegramPrimaryMedia(debouncedMessage);
-        const textParts = getTelegramTextParts(debouncedMessage);
+  const bufferedBodySegments = shouldRenderBufferedBody
+    ? bufferedMessages.flatMap((bufferedMessage) => {
+        const bufferedMedia = resolveTelegramPrimaryMedia(bufferedMessage);
+        const textParts = getTelegramTextParts(bufferedMessage);
         const segmentBody =
           renderTelegramTextEntities(textParts.text, textParts.entities) ||
-          formatMediaPlaceholderText(debouncedMedia ? [{ kind: debouncedMedia.kind }] : []);
+          formatMediaPlaceholderText(bufferedMedia ? [{ kind: bufferedMedia.kind }] : []);
         if (!segmentBody) {
           return [];
         }
-        const debouncedForwardOrigin = normalizeForwardedContext(debouncedMessage);
-        const visibleDebouncedForwardOrigin =
-          debouncedForwardOrigin &&
+        const bufferedForwardOrigin = normalizeForwardedContext(bufferedMessage);
+        const visibleBufferedForwardOrigin =
+          bufferedForwardOrigin &&
           shouldIncludeGroupSupplementalContext({
             kind: "forwarded",
-            senderId: debouncedForwardOrigin.fromId,
-            senderUsername: debouncedForwardOrigin.fromUsername,
+            senderId: bufferedForwardOrigin.fromId,
+            senderUsername: bufferedForwardOrigin.fromUsername,
           })
-            ? debouncedForwardOrigin
+            ? bufferedForwardOrigin
             : null;
         return [
           formatTelegramForwardedMessageBody({
             body: segmentBody,
-            forwardedFrom: visibleDebouncedForwardOrigin?.from,
-            forwardedDate: visibleDebouncedForwardOrigin?.date
-              ? visibleDebouncedForwardOrigin.date * 1000
+            forwardedFrom: visibleBufferedForwardOrigin?.from,
+            forwardedDate: visibleBufferedForwardOrigin?.date
+              ? visibleBufferedForwardOrigin.date * 1000
               : undefined,
           }),
         ];
       })
     : undefined;
-  const visibleBodyText = inboundDebounceBodySegments?.length
-    ? inboundDebounceBodySegments.join("\n")
+  const visibleBodyText = bufferedBodySegments?.length
+    ? bufferedBodySegments.join("\n")
     : formatTelegramForwardedMessageBody({
         body: bodyText,
         forwardedFrom: visibleForwardOrigin?.from,
@@ -677,7 +679,7 @@ export async function buildTelegramInboundContextPayload(params: {
       inboundEventKind,
       body,
       rawBody,
-      bodyForAgent: hasMultiMessageDebounceBatch ? visibleBodyText : bodyText,
+      bodyForAgent: shouldRenderBufferedBody ? visibleBodyText : bodyText,
       commandBody,
       inboundHistory,
       sourceModality: msg.voice ? "voice" : undefined,

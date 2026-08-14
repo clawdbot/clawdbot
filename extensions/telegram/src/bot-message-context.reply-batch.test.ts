@@ -60,7 +60,7 @@ describe("buildTelegramMessageContext reply/quote debounce batches", () => {
     const context = await buildTelegramMessageContextForTest({
       message: plainMessage(2, "plain note\nquoting note"),
       options: {
-        inboundDebounceMessages: [plainMessage(1, "plain note"), quotingMessage(2, "quoting note")],
+        bufferedMessages: [plainMessage(1, "plain note"), quotingMessage(2, "quoting note")],
       },
     });
 
@@ -82,7 +82,7 @@ describe("buildTelegramMessageContext reply/quote debounce batches", () => {
         },
       ],
       options: {
-        inboundDebounceMessages: [
+        bufferedMessages: [
           first,
           {
             ...plainMessage(2, "follow-up"),
@@ -108,7 +108,7 @@ describe("buildTelegramMessageContext reply/quote debounce batches", () => {
     const context = await buildTelegramMessageContextForTest({
       message: plainMessage(3, "first ask\nsecond ask"),
       options: {
-        inboundDebounceMessages: [quotingMessage(1, "first ask"), quotingMessage(2, "second ask")],
+        bufferedMessages: [quotingMessage(1, "first ask"), quotingMessage(2, "second ask")],
       },
     });
 
@@ -129,7 +129,7 @@ describe("buildTelegramMessageContext reply/quote debounce batches", () => {
       message: plainMessage(2, "plain note\nquoting note"),
       replyChain: ancestry,
       options: {
-        inboundDebounceMessages: [plainMessage(1, "plain note"), quotingMessage(2, "quoting note")],
+        bufferedMessages: [plainMessage(1, "plain note"), quotingMessage(2, "quoting note")],
       },
     });
 
@@ -146,7 +146,7 @@ describe("buildTelegramMessageContext reply/quote debounce batches", () => {
     );
     const context = await buildTelegramMessageContextForTest({
       message: plainMessage(99, burst.map((entry) => entry.text).join("\n")),
-      options: { inboundDebounceMessages: burst },
+      options: { bufferedMessages: burst },
     });
 
     const body = context?.ctxPayload.Body ?? "";
