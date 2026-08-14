@@ -147,13 +147,18 @@ describe("projects vitest config", () => {
     const toolingShard = fullSuiteVitestShards.find(
       (shard) => shard.config === "test/vitest/vitest.full-core-tooling.config.ts",
     );
+    const toolingProjects = [
+      "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.tooling-docker.config.ts",
+      "test/vitest/vitest.tooling-isolated.config.ts",
+    ];
 
-    expect(toolingShard?.projects).toEqual(
-      expect.arrayContaining(["test/vitest/vitest.tooling-docker.config.ts"]),
+    expect(toolingShard?.projects).toEqual(toolingProjects);
+    const rootToolingProjects = rootVitestProjects.filter((project) =>
+      toolingProjects.includes(project),
     );
-    expect(rootVitestProjects).toEqual(
-      expect.arrayContaining(["test/vitest/vitest.tooling-docker.config.ts"]),
-    );
+    expect(new Set(rootToolingProjects)).toEqual(new Set(toolingProjects));
+    expect(rootToolingProjects).toHaveLength(toolingProjects.length);
   });
 
   it("disables vite env-file loading for vitest lanes", () => {

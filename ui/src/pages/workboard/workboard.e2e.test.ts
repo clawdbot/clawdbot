@@ -14,6 +14,7 @@ import type {
   WorkboardStatus,
 } from "../../lib/workboard/index.ts";
 import {
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   type MockGatewayControls,
   type MockGatewayRequest,
@@ -302,7 +303,7 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
       viewport,
     });
     page = await context.newPage();
-    page.setDefaultTimeout(10_000);
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     return { context, page, rawVideoDir };
   } catch (error) {
     await page?.close().catch(() => {});

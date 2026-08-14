@@ -22,6 +22,8 @@ type ReplyBackendKind = "embedded" | "cli";
 
 type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
+export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
+
 export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
@@ -198,7 +200,10 @@ type ReplyOperationFailureCode =
   | "run_stalled"
   | "run_failed";
 
-type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
+type ReplyOperationAbortCode =
+  | "aborted_by_user"
+  | "aborted_for_restart"
+  | "aborted_for_supersession";
 
 type ReplyOperationResult =
   | { kind: "completed" }
@@ -208,6 +213,7 @@ type ReplyOperationResult =
 export type ReplyOperation = {
   readonly key: ReplyRunKey;
   readonly sessionId: string;
+  readonly turnKind: ReplyTurnKind;
   /** Gateway lifecycle that admitted this process-local owner. */
   readonly lifecycleGeneration?: string;
   readonly routeThreadId?: string | number;
@@ -305,6 +311,7 @@ export type ReplyOperation = {
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): boolean;
   abortForRestart(): boolean;
+  supersede(): boolean;
 };
 
 export type ReplyRunRegistry = {

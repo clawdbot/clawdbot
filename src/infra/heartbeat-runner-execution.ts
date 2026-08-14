@@ -676,13 +676,17 @@ export async function invokeHeartbeatAgentRun(
     replyOpts,
     cfg,
   );
+  const agentTurnStatus = resolveReplyOperationAgentTurn(replyOperationRunState);
+  if (agentTurnStatus === "superseded") {
+    return { kind: "preempted" } as const;
+  }
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
   const heartbeatTerminalToolFailure: HeartbeatTerminalToolFailure | undefined =
     resolveHeartbeatTerminalToolFailure(replyResult);
   const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
   const replyPayload = selectedReplyPayload;
-  const agentRunFailed = resolveReplyOperationAgentTurn(replyOperationRunState) === "failed";
+  const agentRunFailed = agentTurnStatus === "failed";
   if (
     heartbeatScratchProposal !== undefined &&
     heartbeatToolResponse &&

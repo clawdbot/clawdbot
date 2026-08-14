@@ -314,6 +314,9 @@ export async function startTelegramWebhook(opts: {
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
+  if (path === healthPath) {
+    throw new Error(`Telegram webhook path "${path}" conflicts with the health path.`);
+  }
   const port = opts.port ?? 8787;
   const host = opts.host ?? "127.0.0.1";
   const secret = normalizeOptionalString(opts.secret) ?? "";

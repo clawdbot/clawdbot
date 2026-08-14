@@ -26,6 +26,7 @@ export function createMockReplyOperation(
   const replyOperation: ReplyOperation = {
     key: overrides.key ?? "main",
     sessionId,
+    turnKind: "visible",
     abortSignal: overrides.abortSignal ?? new AbortController().signal,
     resetTriggered: false,
     terminalRecovery: false,
@@ -76,6 +77,7 @@ export function createMockReplyOperation(
     fail: failMock,
     abortByUser: vi.fn(() => true),
     abortForRestart: vi.fn(() => true),
+    supersede: vi.fn(() => true),
   };
   return {
     replyOperation,
