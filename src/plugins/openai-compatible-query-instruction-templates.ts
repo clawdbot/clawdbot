@@ -28,17 +28,13 @@ function normalizeTemplateMatchModel(model: string): string {
   return segments.at(-1) ?? normalizedModel;
 }
 
-function matchesTemplateModelAlias(model: string, alias: string): boolean {
-  return model === alias;
-}
-
 export function applyOpenAICompatibleEmbeddingQueryInstructionTemplate(
   model: string,
   queryText: string,
 ): string {
   const normalizedModel = normalizeTemplateMatchModel(model);
   const match = OPENAI_COMPATIBLE_QUERY_INSTRUCTION_TEMPLATES.find(({ aliases }) =>
-    aliases.some((alias) => matchesTemplateModelAlias(normalizedModel, alias)),
+    aliases.some((alias) => normalizedModel === alias),
   );
   return match ? match.template.replace("{query}", () => queryText) : queryText;
 }

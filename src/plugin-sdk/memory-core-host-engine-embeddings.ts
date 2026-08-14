@@ -15,7 +15,6 @@ export function createLocalEmbeddingProvider(..._args: unknown[]): Promise<never
 
 export {
   applyEmbeddingBatchOutputLine,
-  applyOpenAICompatibleEmbeddingQueryInstructionTemplate,
   buildBatchHeaders,
   buildCaseInsensitiveExtensionGlob,
   buildEmbeddingBatchGroupOptions,
@@ -73,6 +72,7 @@ export {
 } from "../plugins/memory-embedding-provider-runtime.js";
 export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-profiles/runtime-snapshots.js";
 export { adaptMemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
+export { applyOpenAICompatibleEmbeddingQueryInstructionTemplate } from "../plugins/openai-compatible-query-instruction-templates.js";
 export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,

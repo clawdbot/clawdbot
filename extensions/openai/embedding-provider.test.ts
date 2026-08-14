@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async () => {
   const { applyOpenAICompatibleEmbeddingQueryInstructionTemplate } =
-    await import("../../packages/memory-host-sdk/src/host/openai-compatible-query-instruction-templates.js");
+    await import("../../src/plugins/openai-compatible-query-instruction-templates.js");
   return {
     applyOpenAICompatibleEmbeddingQueryInstructionTemplate,
     fetchRemoteEmbeddingVectors: mocks.fetchRemoteEmbeddingVectors,

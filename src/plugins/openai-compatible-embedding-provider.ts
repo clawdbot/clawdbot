@@ -3,7 +3,6 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
-import { applyOpenAICompatibleEmbeddingQueryInstructionTemplate } from "../../packages/memory-host-sdk/src/host/openai-compatible-query-instruction-templates.js";
 import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
@@ -21,6 +20,7 @@ import type {
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
+import { applyOpenAICompatibleEmbeddingQueryInstructionTemplate } from "./openai-compatible-query-instruction-templates.js";
 
 /** Provider id for OpenAI-compatible remote embedding servers. */
 const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
