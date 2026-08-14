@@ -315,7 +315,10 @@ export function resolveAnthropicPayloadPolicy(
         : undefined,
     compactThreshold:
       serverCompactionPlan.threshold ??
-      resolveAnthropicCompactThreshold(input.contextWindow, input.extraParams?.anthropicCompactThreshold),
+      resolveAnthropicCompactThreshold(
+        input.contextWindow,
+        input.extraParams?.anthropicCompactThreshold,
+      ),
     serviceTier: input.serviceTier,
     useServerCompaction: input.enableServerCompaction === true && serverCompactionPlan.enabled,
   };
