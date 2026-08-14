@@ -80,6 +80,15 @@ private actor OnboardingProbeMethodRecorder {
     }
 }
 
+@MainActor
+private final class OnboardingProbeGatewayActivationRecorder {
+    private(set) var count = 0
+
+    func activate() {
+        self.count += 1
+    }
+}
+
 private actor OnboardingProbeConfigReadGate {
     private let blockedRead: Int
     private var readCount = 0
@@ -615,6 +624,22 @@ struct OnboardingConfiguredGatewayProbeTests {
 
     @Test func `paused local first-run probe does not recover the gateway`() async throws {
         let url = try #require(URL(string: "ws://127.0.0.1:18789"))
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-onboarding-probe-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        let state = AppStateStore.shared
+        let originalMode = state.connectionMode
+        let originalPaused = state.isPaused
+        state.connectionMode = .local
+        state.isPaused = true
+        defer {
+            state.connectionMode = originalMode
+            state.isPaused = originalPaused
+        }
+
+        let activation = OnboardingProbeGatewayActivationRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(receiveHook: { _, _ in
                 throw URLError(.cannotConnectToHost)
@@ -626,11 +651,14 @@ struct OnboardingConfiguredGatewayProbeTests {
                     config: (url: url, token: nil, password: nil),
                     routeAuthority: nil)
             },
-            sharedEndpointRecovery: { .localDenied },
+            activateGateway: { activation.activate() },
+            activationBindingKeyProvider: { nil },
             sessionBox: WebSocketSessionBox(session: session))
         let probe = OnboardingConfiguredGatewayProbe(gateway: gateway, timeoutMs: 1)
 
-        let outcome = await runOnboardingProbe(probe, connectionMode: .local)
+        let outcome = try await DeviceIdentityStore.withStateDirectory(stateDir) {
+            await runOnboardingProbe(probe, connectionMode: .local)
+        }
 
         #expect({
             if case .unavailable = outcome {
@@ -639,6 +667,7 @@ struct OnboardingConfiguredGatewayProbeTests {
                 false
             }
         }())
+        #expect(activation.count == 0)
         #expect(session.snapshotMakeCount() == 1)
         #expect(session.latestTask()?.snapshotSendCount() == 0)
     }
