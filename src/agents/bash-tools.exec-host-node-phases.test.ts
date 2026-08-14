@@ -151,7 +151,7 @@ function createDirectNodeRun(signal?: AbortSignal): DirectNodeRun {
   };
 }
 
-describe("direct node run cancellation", () => {
+describe("direct node run", () => {
   beforeEach(() => {
     callGatewayToolMock.mockReset();
     callGatewayToolMock.mockResolvedValue({
@@ -178,6 +178,33 @@ describe("direct node run cancellation", () => {
     } else {
       expect(callGatewayToolMock).toHaveBeenCalledWith(...baseArgs);
     }
+  });
+
+  it("surfaces capped stderr and the node error when stdout is also present", async () => {
+    const stdout = "small stdout";
+    const stderr = `${"x".repeat(200_000)}\n... (truncated)`;
+    const errorText = "node command failed";
+    callGatewayToolMock.mockResolvedValueOnce({
+      payload: {
+        success: false,
+        stdout,
+        stderr,
+        error: errorText,
+        exitCode: 1,
+      },
+    });
+
+    const result = await invokeNodeSystemRunDirect(createDirectNodeRun());
+    const visibleText = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(visibleText).toContain("... (truncated)");
+    expect(visibleText).toContain(errorText);
+    expect(visibleText).toBe(`${stdout}\n${stderr}\n${errorText}`);
+    expect(result.details).toMatchObject({
+      status: "failed",
+      exitCode: 1,
+      aggregated: visibleText,
+    });
   });
 
   it("never dispatches a direct node run after cancellation", async () => {

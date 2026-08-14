@@ -132,6 +132,30 @@ function launchRequest(input = launchInput()) {
 }
 
 describe("node worker launch adapter", () => {
+  it("fails with a typed availability result when no node dispatches within the grace", async () => {
+    vi.useFakeTimers();
+    const onDispatchReady = vi.fn();
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(vi.fn(), async () => []),
+      availabilityTimeoutMs: 100,
+      pollIntervalMs: 10,
+    });
+    try {
+      const launch = adapter
+        .launch({ ...launchRequest(), timeoutMs: 1_000, onDispatchReady })
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(await launch).toMatchObject({
+        name: "WorkerRunnerUnavailableError",
+        code: "runner-offline",
+      });
+      expect(onDispatchReady).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("launches once, polls status, and returns the exact completed receipt", async () => {
     const input = launchInput();
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) =>

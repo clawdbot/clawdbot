@@ -24,5 +24,12 @@ export default definePluginEntry({
       );
     }
     registerComputerUseProvider(api, createCuaComputerProvider());
+    // Dangerous plugin command: excluded from default allowlists, and the
+    // Gateway fails closed when this policy registration is missing.
+    api.registerNodeInvokePolicy({
+      commands: ["computer.act"],
+      dangerous: true,
+      handle: async (context) => await context.invokeNode(),
+    });
   },
 });

@@ -1285,6 +1285,15 @@ describe("failover-error", () => {
       expect(isNonProviderRuntimeCoordinationError(wrappedRebound)).toBe(true);
     });
 
+    it("returns true for direct and nested runner availability failures", () => {
+      const unavailable = new Error("The device runner is offline");
+      unavailable.name = "WorkerRunnerUnavailableError";
+      for (const error of [unavailable, new Error("worker turn failed", { cause: unavailable })]) {
+        expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
+        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+      }
+    });
+
     it("returns true for Codex missing tool-result local execution failures", () => {
       const missingToolResultMessage =
         "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";

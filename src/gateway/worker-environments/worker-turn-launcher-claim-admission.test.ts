@@ -4,6 +4,7 @@ import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-messa
 import type { SpawnResult } from "../../process/exec.js";
 import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -183,7 +184,8 @@ describe("worker turn launcher claim admission", () => {
       killed: false;
       termination: "exit";
     }>();
-    const launchTurn = vi.fn(() => {
+    const launchTurn = vi.fn((request: Parameters<WorkerTunnelHandle["launchTurn"]>[0]) => {
+      request.onDispatchReady?.();
       commandStarted.resolve();
       return commandFinished.promise;
     });
@@ -308,6 +310,7 @@ describe("worker turn launcher claim admission", () => {
         })),
         runWorkspaceCommand: vi.fn(),
         launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+          request.onDispatchReady?.();
           launchCount += 1;
           const descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
             kind: "unix",

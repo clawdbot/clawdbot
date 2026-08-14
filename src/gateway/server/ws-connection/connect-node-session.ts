@@ -9,7 +9,10 @@ import {
 import { getPairedDevice } from "../../../infra/device-pairing.js";
 import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING } from "../../auth-rate-limit.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../../method-scopes.js";
-import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
+import {
+  reconcileNodePairingOnConnect,
+  resolveEffectiveComputerUseDescriptor,
+} from "../../node-connect-reconcile.js";
 import { filterLegacyNodeProtocolFeatures } from "../../node-legacy-protocol-filter.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 import type {
@@ -211,6 +214,10 @@ export async function prepareGatewayNodeConnect(
       };
   connectParams.caps = effectiveFeatures.caps;
   connectParams.commands = effectiveFeatures.commands;
+  connectParams.computerUse = resolveEffectiveComputerUseDescriptor({
+    commands: effectiveFeatures.commands,
+    declared: reconciliation.declaredComputerUse,
+  });
   connectParams.permissions = reconciliation.effectivePermissions;
   return true;
 }

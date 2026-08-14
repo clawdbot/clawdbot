@@ -16,6 +16,7 @@ import {
   ReplyRunSuccessorAdmissionBlockedError,
   type ReplyOperation,
   type ReplyOperationPhase,
+  type ReplyToolAuthorityProjector,
 } from "./reply-run-registry.contracts.js";
 import {
   abortFrozenOperations,
@@ -95,6 +96,7 @@ export function createReplyOperation(params: {
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
   let toolAuthorityFingerprint: string | undefined;
+  let toolAuthorityProjector: ReplyToolAuthorityProjector | undefined;
   let toolAuthorityRoute: { provider: string; model: string } | undefined;
   const ownerSettlement = createDeferredCore();
   let ownerSettled = false;
@@ -337,6 +339,22 @@ export function createReplyOperation(params: {
         throw new Error("Reply operation cannot change tool authority after admission");
       }
       toolAuthorityFingerprint = normalized;
+    },
+    bindToolAuthorityProjector(projector) {
+      if (toolAuthorityProjector && toolAuthorityProjector !== projector) {
+        throw new Error("Reply operation cannot change tool authority projector after admission");
+      }
+      toolAuthorityProjector = projector;
+    },
+    projectToolAuthorityFingerprint(overlay) {
+      if (result || !toolAuthorityProjector || !toolAuthorityRoute) {
+        return undefined;
+      }
+      try {
+        return normalizeOptionalString(toolAuthorityProjector(overlay, toolAuthorityRoute));
+      } catch {
+        return undefined;
+      }
     },
     bindToolAuthorityRoute(route) {
       const provider = normalizeOptionalString(route.provider);

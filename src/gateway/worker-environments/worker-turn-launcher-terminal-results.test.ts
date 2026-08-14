@@ -42,7 +42,8 @@ describe("worker turn launcher terminal results", () => {
         resume: vi.fn(async () => {}),
       })),
       runWorkspaceCommand: vi.fn(),
-      launchTurn: vi.fn(async (): Promise<SpawnResult> => {
+      launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+        request.onDispatchReady?.();
         const completed = openSessionManager();
         const leafId = completed.appendMessage(
           makeAgentAssistantMessage({
@@ -127,7 +128,8 @@ describe("worker turn launcher terminal results", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(),
-        launchTurn: vi.fn(async (): Promise<SpawnResult> => {
+        launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+          request.onDispatchReady?.();
           const completed = openSessionManager();
           completed.appendMessage(
             makeAgentAssistantMessage({

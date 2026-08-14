@@ -71,6 +71,7 @@ type NodeWorkerLaunch = (request: {
   isCancellationAuthorized: () => boolean;
   timeoutMs: number;
   signal?: AbortSignal;
+  onDispatchReady?: () => void;
 }) => Promise<TerminalNodeWorkerSupervisorReceipt>;
 
 type NodeWorkerWorkspaceBinding = {
@@ -545,6 +546,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           isDispatchAuthorized,
           isCancellationAuthorized: () => hasDurableBinding(entry as NodeTunnelEntry),
           timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
+          onDispatchReady: request.onDispatchReady,
           signal: request.signal
             ? AbortSignal.any([entry.abortController.signal, request.signal])
             : entry.abortController.signal,

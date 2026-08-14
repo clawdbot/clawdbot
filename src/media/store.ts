@@ -487,7 +487,7 @@ async function writeMediaStreamToFile(params: {
         sniffChunks.push(buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer);
         sniffLen += Math.min(buffer.byteLength, remaining);
       }
-      await handle.write(buffer);
+      await handle.writeFile(buffer);
     }
     return {
       sniffBuffer: Buffer.concat(sniffChunks, sniffLen),

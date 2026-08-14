@@ -48,7 +48,10 @@ import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import {
+  createFollowupRunToolAuthorityProjector,
+  resolveFollowupRunToolAuthorityFingerprint,
+} from "./reply-tool-authority.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import {
   isDuplicateRestartRecoverySource,
@@ -477,7 +480,10 @@ export async function runReplyAgent(
       }
     }
   }
-  replyOperation.bindToolAuthorityFingerprint(incomingToolAuthorityFingerprint);
+  replyOperation.bindToolAuthorityProjector(createFollowupRunToolAuthorityProjector(followupRun));
+  replyOperation.bindToolAuthorityFingerprint(
+    resolveFollowupRunToolAuthorityFingerprint(followupRun),
+  );
   bindReplyOperationTyping(replyOperation, typing);
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;
