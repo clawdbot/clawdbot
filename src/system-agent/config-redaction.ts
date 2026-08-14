@@ -114,7 +114,11 @@ function isUnknownDynamicOwnerPath(
   if (path[0] === "plugins" && path[1] === "entries" && pluginId && path[3] === "config") {
     return !metadata.pluginIds.has(normalizePluginPolicyId(pluginId));
   }
-  return path[0] === "channels" && Boolean(path[1]) && !metadata.channelIds.has(path[1]);
+  const channelId = path[1];
+  if (path[0] === "channels" && channelId) {
+    return !metadata.channelIds.has(channelId);
+  }
+  return false;
 }
 
 function hasSensitiveConfigValue(
