@@ -456,7 +456,9 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
                   ></openclaw-viewer-avatar>
                 </span>
                 <span class="sidebar-identity-menu__identity">
-                  <span class="sidebar-identity-menu__name">${profileName}</span>
+                  <span class="sidebar-identity-menu__name" title=${profileName}
+                    >${profileName}</span
+                  >
                   ${profileEmail
                     ? html`<span class="sidebar-identity-menu__email" title=${profileEmail}
                         >${profileEmail}</span

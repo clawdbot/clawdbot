@@ -277,7 +277,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
       >
         <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
         <span class="sidebar-identity-card__text">
-          <span class="sidebar-identity-card__name">${selfLabel}</span>
+          <span class="sidebar-identity-card__name" title=${selfLabel}>${selfLabel}</span>
           ${host.offline
             ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
                 >${t("connection.reconnecting")}</span

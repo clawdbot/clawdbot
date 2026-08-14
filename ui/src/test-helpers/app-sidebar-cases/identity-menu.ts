@@ -5,6 +5,7 @@ import "../../components/app-sidebar.ts";
 
 describe("AppSidebar footer identity menu", () => {
   it("owns account utilities, restores focus, and routes Profile", async () => {
+    const fullName = "Ada Lovelace With A Deliberately Long Display Name";
     const gatewayHarness = createGatewayHarness({
       instanceId: "self-instance",
     } as GatewayBrowserClient);
@@ -22,7 +23,7 @@ describe("AppSidebar footer identity menu", () => {
           instanceId: "self-instance",
           user: {
             id: "self",
-            name: "Ada",
+            name: fullName,
             email: "ada.with.a.deliberately.long.address@example.test",
             avatarUrl: "/api/users/self/avatar?v=1",
           },
@@ -56,7 +57,12 @@ describe("AppSidebar footer identity menu", () => {
       "command:apps",
       "command:help",
     ]);
-    expect(menu?.querySelector(".sidebar-identity-menu__name")?.textContent?.trim()).toBe("Ada");
+    const footerName = identity?.querySelector(".sidebar-identity-card__name");
+    const menuName = menu?.querySelector(".sidebar-identity-menu__name");
+    expect(footerName?.textContent?.trim()).toBe(fullName);
+    expect(footerName?.getAttribute("title")).toBe(fullName);
+    expect(menuName?.textContent?.trim()).toBe(fullName);
+    expect(menuName?.getAttribute("title")).toBe(fullName);
     const menuEmail = menu?.querySelector(".sidebar-identity-menu__email");
     expect(menuEmail?.textContent?.trim()).toBe(
       "ada.with.a.deliberately.long.address@example.test",
