@@ -428,7 +428,6 @@ export async function invokeNodeSystemRunDirect(params: {
     sessionKey: params.request.sessionKey,
     notifyOnExit: params.request.notifyOnExit,
   });
-  params.request.signal?.throwIfAborted();
   const result = await invokeNodeSystemRun({
     invokeWaitMs: params.target.invokeWaitMs,
     invoke,
