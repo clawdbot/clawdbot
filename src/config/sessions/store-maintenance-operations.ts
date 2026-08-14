@@ -102,6 +102,7 @@ async function applyWarnOnlyMaintenance(params: {
   maintenance: ResolvedSessionMaintenanceConfig;
   beforeCount: number;
   shouldRunEntryMaintenance: boolean;
+  preserveSessionKeys: ReadonlySet<string> | undefined;
 }): Promise<void> {
   const activeSessionKey = params.operation.activeSessionKey?.trim();
   if (activeSessionKey && params.shouldRunEntryMaintenance) {
@@ -110,6 +111,7 @@ async function applyWarnOnlyMaintenance(params: {
       activeSessionKey,
       pruneAfterMs: params.maintenance.pruneAfterMs,
       maxEntries: params.maintenance.maxEntries,
+      preserveKeys: params.preserveSessionKeys,
     });
     if (warning) {
       params.operation.log.warn(
@@ -300,6 +302,7 @@ export async function applyFileBackedSessionStoreMaintenance(
       maintenance,
       beforeCount,
       shouldRunEntryMaintenance,
+      preserveSessionKeys,
     });
     return { changedStore: false };
   }

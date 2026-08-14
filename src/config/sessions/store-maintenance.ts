@@ -476,6 +476,7 @@ export function getActiveSessionMaintenanceWarning(params: {
   pruneAfterMs: number;
   maxEntries: number;
   nowMs?: number;
+  preserveKeys?: ReadonlySet<string>;
 }): SessionMaintenanceWarning | null {
   const activeSessionKey = params.activeSessionKey.trim();
   if (!activeSessionKey) {
@@ -485,16 +486,24 @@ export function getActiveSessionMaintenanceWarning(params: {
   if (!activeEntry) {
     return null;
   }
-  if (shouldPreserveMaintenanceEntry({ key: activeSessionKey, entry: activeEntry })) {
+  if (
+    shouldPreserveMaintenanceEntry({
+      key: activeSessionKey,
+      entry: activeEntry,
+      preserveKeys: params.preserveKeys,
+    })
+  ) {
     return null;
   }
   const now = params.nowMs ?? Date.now();
   const cutoffMs = now - params.pruneAfterMs;
   const wouldPrune = activeEntry.updatedAt != null ? activeEntry.updatedAt < cutoffMs : false;
   const keys = Object.keys(params.store);
-  const wouldCap = selectSessionEntryCapVictims(params.store, params.maxEntries).includes(
-    activeSessionKey,
-  );
+  const wouldCap = selectSessionEntryCapVictims(
+    params.store,
+    params.maxEntries,
+    params.preserveKeys,
+  ).includes(activeSessionKey);
 
   if (!wouldPrune && !wouldCap) {
     return null;

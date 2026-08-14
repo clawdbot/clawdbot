@@ -417,6 +417,52 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     expect(store["dashboard-2"]).toBeUndefined();
   });
 
+  it("uses enforcement preservation when predicting active-session eviction", async () => {
+    const now = Date.now();
+    const storePath = "/tmp/openclaw-sessions/warn-enforce-parity.json";
+    const makePressureStore = () =>
+      makeStore([
+        ["archived", { ...makeEntry(now - 2), archivedAt: now }],
+        ["active", makeEntry(now - 1)],
+        ["recent", makeEntry(now)],
+      ]);
+    const maintenanceConfig = {
+      mode: "warn" as const,
+      pruneAfterMs: 30 * DAY_MS,
+      maxEntries: 2,
+      modelRunPruneAfterMs: DAY_MS,
+      resetArchiveRetentionMs: null,
+      maxDiskBytes: null,
+      highWaterBytes: null,
+    };
+    const onWarn = vi.fn();
+
+    await applyFileBackedSessionStoreMaintenance({
+      storePath,
+      store: makePressureStore(),
+      activeSessionKey: "active",
+      maintenanceConfig,
+      onWarn,
+      log: { warn: () => {}, info: () => {} },
+      artifacts: createMaintenanceArtifacts(),
+    });
+
+    const enforcedStore = makePressureStore();
+    await applyFileBackedSessionStoreMaintenance({
+      storePath,
+      store: enforcedStore,
+      activeSessionKey: "active",
+      maintenanceConfig: { ...maintenanceConfig, mode: "enforce" },
+      log: { warn: () => {}, info: () => {} },
+      artifacts: createMaintenanceArtifacts(),
+    });
+
+    expect(onWarn).not.toHaveBeenCalled();
+    expect(enforcedStore).toHaveProperty("archived");
+    expect(enforcedStore).toHaveProperty("active");
+    expect(enforcedStore.recent).toBeUndefined();
+  });
+
   it.each([
     {
       name: "preserves every active admission instead of only the writer session",
