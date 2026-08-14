@@ -2752,7 +2752,11 @@ describe("message tool explicit target guard", () => {
       });
       await expect(
         withGatewayToolCallerIdentity(identity, () =>
-          deniedTool.execute("denied-action", { action: "upload-file", filePath: "/tmp/x" }),
+          deniedTool.execute("denied-action", {
+            action: "upload-file",
+            channel: "secret-token-in-channel",
+            filePath: "/tmp/x",
+          }),
         ),
       ).rejects.toThrow(/Explicit message target required/i);
 
@@ -2981,6 +2985,7 @@ describe("message tool explicit target guard", () => {
     expect(JSON.stringify(receipts)).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
     expect(JSON.stringify(receipts)).not.toContain("/tmp/x");
     expect(JSON.stringify(receipts)).not.toContain("missing-account");
+    expect(JSON.stringify(receipts)).not.toContain("secret-token-in-channel");
   });
 
   it("requires an explicit target for upload-file when configured", async () => {

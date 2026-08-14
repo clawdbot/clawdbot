@@ -15,8 +15,15 @@ export function createMessageToolDecisionRecorder(params: {
   channel?: string;
 }) {
   const token = getGatewayToolCallerIdentity()?.executionIdentityToken;
-  const record = (decision: Decision) =>
-    recordMessageActionDecision({ token, ...params, ...decision });
+  const { channel: sourceChannel, ...decisionIdentity } = params;
+  const recordWithChannel = (decision: Decision, channel: string | undefined) =>
+    recordMessageActionDecision({
+      token,
+      ...decisionIdentity,
+      ...(channel ? { channel } : {}),
+      ...decision,
+    });
+  const record = (decision: Decision) => recordWithChannel(decision, sourceChannel);
   const recordTypedDenial = (error: unknown): void => {
     if (!(error instanceof MessageActionDeniedError)) {
       return;
@@ -103,7 +110,7 @@ export function createMessageToolDecisionRecorder(params: {
         ],
       });
     },
-    recordActionResult(result: MessageActionResult) {
+    recordActionResult(result: MessageActionResult, trustedChannel?: string) {
       if (
         result.kind !== "action" &&
         result.kind !== "poll" &&
@@ -111,22 +118,25 @@ export function createMessageToolDecisionRecorder(params: {
       ) {
         return;
       }
-      record({
-        outcome: result.dryRun ? "not-applicable" : "allowed",
-        reasonCode: result.dryRun ? "message_action_dry_run" : "message_action_completed",
-        coverageState: "attribution-only",
-        summary: result.dryRun
-          ? "Message action was prepared without platform delivery."
-          : "Portable message action completed through its action owner.",
-        remediation: result.dryRun
-          ? [
-              {
-                code: "run_message_action",
-                text: "Remove dry-run mode to perform the message action.",
-              },
-            ]
-          : [],
-      });
+      recordWithChannel(
+        {
+          outcome: result.dryRun ? "not-applicable" : "allowed",
+          reasonCode: result.dryRun ? "message_action_dry_run" : "message_action_completed",
+          coverageState: "attribution-only",
+          summary: result.dryRun
+            ? "Message action was prepared without platform delivery."
+            : "Portable message action completed through its action owner.",
+          remediation: result.dryRun
+            ? [
+                {
+                  code: "run_message_action",
+                  text: "Remove dry-run mode to perform the message action.",
+                },
+              ]
+            : [],
+        },
+        trustedChannel,
+      );
     },
   };
 }
