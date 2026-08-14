@@ -1,4 +1,4 @@
-import type { EventFrame } from "@openclaw/gateway-protocol";
+import type { EventFrame, UiArtifact, UiArtifactViewOffer } from "@openclaw/gateway-protocol";
 import type { GatewaySessionMessageSubscriptionCoordinator } from "../browser.js";
 import type { ControlModelConversation } from "./conversation.js";
 import type {
@@ -63,6 +63,7 @@ export type ControlModelConversationMessage = Readonly<{
   pending: boolean;
   live: boolean;
   provisional: boolean;
+  artifactIds: readonly string[];
   raw: DeepReadonly<unknown>;
 }>;
 export type ControlModelConversationRun = Readonly<{
@@ -84,6 +85,7 @@ export type ControlModelConversationTool = Readonly<{
   input: unknown;
   output: unknown;
   truncated: boolean;
+  artifactIds: readonly string[];
   progress: Readonly<{ updates: number; bytes: number; truncated: boolean }>;
 }>;
 export type ControlModelConversationApproval = DeepReadonly<Record<string, unknown>> &
@@ -103,6 +105,12 @@ export type ControlModelConversationBounds = Readonly<{
   maxQuestions: number;
   maxProgressUpdates: number;
   maxProgressBytes: number;
+  maxArtifacts: number;
+  maxArtifactBytes: number;
+  maxArtifactDepth: number;
+  maxArtifactCollectionItems: number;
+  maxArtifactStringBytes: number;
+  maxArtifactViews: number;
 }>;
 export type ControlModelConversationHistory = Readonly<{
   status: "idle" | "loading" | "ready" | "error";
@@ -127,6 +135,7 @@ export type ControlModelConversationSnapshot = Readonly<{
   runs: readonly ControlModelConversationRun[];
   activeRun: ControlModelConversationRun | null;
   tools: readonly ControlModelConversationTool[];
+  artifacts: readonly DeepReadonly<UiArtifact>[];
   approvals: readonly ControlModelConversationApproval[];
   questions: readonly ControlModelConversationQuestion[];
   partialReasons: readonly string[];
@@ -138,6 +147,7 @@ export type ControlModelConversationSnapshot = Readonly<{
     resolveApproval: boolean;
     answerQuestion: boolean;
     cancelQuestion: boolean;
+    materializeView: boolean;
   }>;
   bounds: Readonly<{
     messagesTruncated: boolean;
@@ -145,6 +155,7 @@ export type ControlModelConversationSnapshot = Readonly<{
     toolsTruncated: boolean;
     approvalsTruncated: boolean;
     questionsTruncated: boolean;
+    artifactsTruncated: boolean;
   }>;
 }>;
 
@@ -171,6 +182,12 @@ export type ControlModelSendResult = Readonly<{
   status: string;
   idempotencyKey: string;
 }>;
+export type ControlModelMaterializeViewInput = Readonly<{
+  artifactId: string;
+  artifactRevision: number;
+  viewId: string;
+}>;
+export type ControlModelMaterializedView = DeepReadonly<UiArtifactViewOffer>;
 export type ControlModelConversationSubscriber = () => void | Promise<void>;
 export type ControlModelGatewayEventFrame = Readonly<
   EventFrame & {

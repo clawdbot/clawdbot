@@ -16,6 +16,43 @@ export function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+export function eventSessionKey(payload: Record<string, unknown>): string | null {
+  for (const candidate of [
+    payload,
+    record(payload.data),
+    record(payload.presentation),
+    record(payload.approval),
+    record(record(payload.approval)?.presentation),
+    record(payload.question),
+    record(payload.message),
+  ]) {
+    const key =
+      text(candidate?.sessionKey) ?? text(candidate?.key) ?? text(candidate?.sourceSessionKey);
+    if (key) {
+      return key;
+    }
+  }
+  return null;
+}
+
+export function eventAgentId(payload: Record<string, unknown>): string | null {
+  for (const candidate of [
+    payload,
+    record(payload.data),
+    record(payload.presentation),
+    record(payload.approval),
+    record(record(payload.approval)?.presentation),
+    record(payload.question),
+    record(payload.message),
+  ]) {
+    const agentId = text(candidate?.agentId);
+    if (agentId) {
+      return agentId;
+    }
+  }
+  return null;
+}
+
 export function safeInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }

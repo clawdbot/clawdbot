@@ -1,6 +1,5 @@
 import type {
   ControlModelConversationBounds,
-  ControlModelConversationTool,
   ControlModelToolStatus,
 } from "./conversation-types.js";
 import {
@@ -178,7 +177,7 @@ export class ConversationToolStore {
     return true;
   }
 
-  snapshot(): ControlModelConversationTool[] {
+  snapshot(artifactIdsForTool: (toolCallId: string) => readonly string[] = () => []) {
     return [...this.#tools.values()].map((tool) => ({
       key: `${tool.runId}:${tool.toolCallId}`,
       runId: tool.runId,
@@ -189,6 +188,7 @@ export class ConversationToolStore {
       input: tool.input === null ? null : cloneAndFreeze(tool.input),
       output: tool.output === null ? null : cloneAndFreeze(tool.output),
       truncated: tool.truncated,
+      artifactIds: tool.toolCallId === "unknown" ? [] : artifactIdsForTool(tool.toolCallId),
       progress: { updates: tool.updates, bytes: tool.bytes, truncated: tool.progressTruncated },
     }));
   }

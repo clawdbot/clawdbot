@@ -50,6 +50,16 @@ export type ControlModelGatewayBinding = Readonly<{
     params: Record<string, unknown>,
     options?: ControlModelRequestOptions,
   ): Promise<T>;
+  materializeArtifactView?(
+    input: Readonly<{
+      sessionKey: string;
+      agentId?: string;
+      artifactId: string;
+      artifactRevision: number;
+      viewId: string;
+    }>,
+    options?: ControlModelRequestOptions,
+  ): Promise<unknown>;
 }>;
 
 export type ControlModelSessionCatalogSnapshot = Readonly<{
@@ -81,6 +91,12 @@ export type ControlModelBounds = Readonly<{
   maxConversationQuestions?: number;
   maxConversationProgressUpdates?: number;
   maxConversationProgressBytes?: number;
+  maxConversationArtifacts?: number;
+  maxArtifactBytes?: number;
+  maxArtifactDepth?: number;
+  maxArtifactCollectionItems?: number;
+  maxArtifactStringBytes?: number;
+  maxArtifactViews?: number;
 }>;
 
 export type ControlModelOptions = Readonly<{
@@ -248,6 +264,12 @@ class ControlModelImpl implements ControlModel {
       maxQuestions: normalizeBound(options.bounds?.maxConversationQuestions, 100),
       maxProgressUpdates: normalizeBound(options.bounds?.maxConversationProgressUpdates, 100),
       maxProgressBytes: normalizeBound(options.bounds?.maxConversationProgressBytes, 64_000),
+      maxArtifacts: normalizeBound(options.bounds?.maxConversationArtifacts, 100),
+      maxArtifactBytes: normalizeBound(options.bounds?.maxArtifactBytes, 64_000),
+      maxArtifactDepth: normalizeBound(options.bounds?.maxArtifactDepth, 12),
+      maxArtifactCollectionItems: normalizeBound(options.bounds?.maxArtifactCollectionItems, 256),
+      maxArtifactStringBytes: normalizeBound(options.bounds?.maxArtifactStringBytes, 16_000),
+      maxArtifactViews: normalizeBound(options.bounds?.maxArtifactViews, 16),
     };
     this.#now = options.now ?? Date.now;
     this.#onSubscriberError = options.onSubscriberError;

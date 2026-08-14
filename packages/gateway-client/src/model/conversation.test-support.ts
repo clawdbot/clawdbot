@@ -53,6 +53,7 @@ export function createHarness(
     approvalReplay?: unknown;
     history?: unknown;
     keysEquivalent?: (left: string, right: string) => boolean;
+    materialize?: boolean;
   } = {},
 ) {
   let connection = initial;
@@ -118,6 +119,22 @@ export function createHarness(
   );
   // SAFETY: the mock implements the generic gateway request contract; callers choose the response type.
   const gatewayRequest = request as ControlModelGatewayBinding["request"];
+  const materializeArtifactView = vi.fn(
+    async (
+      input: {
+        sessionKey: string;
+        agentId?: string;
+        artifactId: string;
+        artifactRevision: number;
+        viewId: string;
+      },
+      requestOptions?: ControlModelRequestOptions,
+    ) => {
+      calls.push({ method: "artifact.materialize", params: input, options: requestOptions });
+      const queued = take("artifact.materialize");
+      return await Promise.resolve(queued ?? {});
+    },
+  );
   const createCoordinator = () =>
     new GatewaySessionMessageSubscriptionCoordinator(
       { request: gatewayRequest },
@@ -141,6 +158,7 @@ export function createHarness(
       return coordinator;
     },
     request: gatewayRequest,
+    ...(options.materialize === false ? {} : { materializeArtifactView }),
   };
 
   return {
@@ -150,6 +168,7 @@ export function createHarness(
     },
     calls,
     request,
+    materializeArtifactView,
     queue(method: string, value: unknown) {
       const queue = responses.get(method) ?? [];
       queue.push(value);

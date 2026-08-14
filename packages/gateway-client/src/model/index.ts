@@ -33,7 +33,16 @@ export type {
   ControlModelConversationTool,
   ControlModelConversationStatus,
   ControlModelGatewayEventFrame,
+  ControlModelMaterializeViewInput,
   ControlModelSendInput,
   ControlModelSendResult,
   ControlModelToolStatus,
 } from "./conversation.js";
+export type {
+  UiArtifact,
+  UiArtifactError,
+  UiArtifactFallback,
+  UiArtifactJsonValue,
+  UiArtifactSource,
+  UiArtifactViewOffer,
+} from "@openclaw/gateway-protocol";

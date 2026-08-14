@@ -152,9 +152,10 @@ Framework-neutral state and command projections above
 `@openclaw/gateway-client`.
 
 The proposed public model subpaths own connection lifecycle, immutable session
-catalog snapshots, and OC2 conversation projections. They do not include UI
-artifacts or framework adapters. The `./model` subpaths remain review-gated
-until RFC 0029 accepts their public compatibility and release ownership.
+catalog snapshots, OC2 conversation projections, and OC3 renderer-neutral UI
+artifact projections. They do not include renderer registries or framework
+adapters. The `./model` subpaths remain review-gated until RFC 0029 accepts
+their public compatibility and release ownership.
 
 ## Bind a Gateway client
 
@@ -229,6 +230,29 @@ finite inactive-handle bound is reached; subscribe to pin a handle or call
 reconciled through the canonical Gateway Client session projection, while live
 events are accepted only from the current connection epoch.
 `ControlModelCommandError` provides bounded, typed command failures.
+
+## OC3 UI artifacts
+
+Conversation snapshots expose bounded `artifacts` derived from canonical
+`details.uiArtifacts` metadata and existing sanitized MCP App/Canvas previews.
+Artifact identity and revision are independent of where a product renders the
+artifact. Unknown template URIs remain opaque data; this package never imports
+components or executes fallback content.
+
+Inline view data is validated as finite JSON. Deferred views contain descriptors
+only until the client selects one and calls `conversation.materializeView`.
+The optional `materializeArtifactView` host binding must re-enter the Gateway's
+session, extension, and policy checks and return only the exact selected view.
+The model rejects stale revisions and malformed or mismatched responses.
+Materialized data is scoped to the active Gateway connection epoch: disconnect
+or epoch replacement retires it, and reconnecting clients must request a fresh
+authorized materialization.
+
+Renderer registration, schema validation beyond the wire bounds, component
+construction, placement, and user selection remain host-owned. MCP App and
+Canvas fallback descriptors are explicit and inert; adopters must continue to
+use the existing sandbox, CSP, expiry, and authorization contracts to render
+them.
 
 Hosts must implement the framework-neutral event seam:
 

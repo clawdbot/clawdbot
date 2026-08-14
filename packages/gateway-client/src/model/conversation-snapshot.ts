@@ -3,6 +3,7 @@ import {
   readSessionMessageSequence,
   type SessionProjectionState,
 } from "../browser.js";
+import type { ConversationArtifactStore } from "./conversation-artifacts.js";
 import type { ConversationInteractionStore } from "./conversation-interactions.js";
 import type { ConversationToolStore } from "./conversation-tools.js";
 import type {
@@ -28,6 +29,8 @@ type ConversationSnapshotInput = {
   maxMessages: number;
   maxRuns: number;
   tools: ConversationToolStore;
+  artifacts: ConversationArtifactStore;
+  canMaterializeArtifacts: boolean;
   interactions: ConversationInteractionStore;
   partialReasons: Set<string>;
   truncation: ConversationTruncationState;
@@ -36,6 +39,7 @@ type ConversationSnapshotInput = {
 export function buildConversationSnapshot(
   input: ConversationSnapshotInput,
 ): ControlModelConversationSnapshot {
+  const artifacts = input.artifacts.snapshot(input.projection.entries);
   const occurrence = new Map<string, number>();
   const messages = input.projection.entries.map((entry) => {
     const identity = entry.identity;
@@ -58,6 +62,11 @@ export function buildConversationSnapshot(
       pending: entry.pending,
       live: entry.live,
       provisional: entry.pending || isLocallyOptimisticSessionMessage(entry.message),
+      artifactIds: identity?.id
+        ? artifacts
+            .filter((artifact) => artifact.source.messageId === identity.id)
+            .map((artifact) => artifact.id)
+        : [],
       raw: cloneAndFreeze(entry.message),
     };
   });
@@ -107,7 +116,11 @@ export function buildConversationSnapshot(
   if (runs.length > input.maxRuns) {
     input.truncation.runs = true;
   }
-  const tools = input.tools.snapshot();
+  const tools = input.tools.snapshot((toolCallId) =>
+    artifacts
+      .filter((artifact) => artifact.source.toolCallId === toolCallId)
+      .map((artifact) => artifact.id),
+  );
   const approvals = input.interactions.approvalsSnapshot();
   const questions = input.interactions.questionsSnapshot();
   const activeRun = visibleRuns.find((run) => run.status === "streaming") ?? null;
@@ -123,6 +136,7 @@ export function buildConversationSnapshot(
     runs: visibleRuns,
     activeRun,
     tools,
+    artifacts,
     approvals,
     questions,
     partialReasons: [...input.partialReasons],
@@ -134,6 +148,12 @@ export function buildConversationSnapshot(
       resolveApproval: !stale && approvals.some((approval) => approval.status === "pending"),
       answerQuestion: !stale && questions.some((question) => question.status === "pending"),
       cancelQuestion: !stale && questions.some((question) => question.status === "pending"),
+      materializeView:
+        !stale &&
+        input.canMaterializeArtifacts &&
+        artifacts.some((artifact) =>
+          artifact.views.some((view) => view.availability === "deferred"),
+        ),
     },
     bounds: {
       messagesTruncated: input.truncation.messages,
@@ -141,6 +161,7 @@ export function buildConversationSnapshot(
       toolsTruncated: input.tools.truncated,
       approvalsTruncated: input.interactions.approvalsTruncated,
       questionsTruncated: input.interactions.questionsTruncated,
+      artifactsTruncated: input.artifacts.truncated,
     },
   });
 }
