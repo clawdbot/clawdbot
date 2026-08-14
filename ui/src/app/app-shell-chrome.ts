@@ -16,6 +16,7 @@ import {
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
+  type TerminalPanelToggleDetail,
 } from "../components/panel-toggle-contract.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -40,10 +41,6 @@ import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
-};
-
-type TerminalPanelElement = PanelToggleElement & {
-  agentId: string | null;
 };
 
 export function isBrowserPanelAvailable(
@@ -466,35 +463,24 @@ export class ShellChromeOwner {
       .catch(() => undefined);
   };
 
-  deliverPanelEventAfterLoad(
-    element: OptionalCustomElement,
-    event: Event,
-    beforeDeliver?: (panel: PanelToggleElement) => void,
-  ): void {
+  deliverPanelEventAfterLoad(element: OptionalCustomElement, event: Event): void {
     const host = this.host;
     void ensureOptionalElementForHost(host, element)
       .then(async () => {
         // Wait for the host to apply availability after defining the mounted tag.
         await host.updateComplete;
-        const panel = host.querySelector<PanelToggleElement>(element.tagName);
-        if (panel) {
-          beforeDeliver?.(panel);
-          panel.handleToggleRequest(event);
-        }
+        host.querySelector<PanelToggleElement>(element.tagName)?.handleToggleRequest(event);
       })
       .catch(() => undefined);
   }
 
   readonly handleDeferredTerminalToggle = (event: Event): void => {
     const host = this.host;
-    const selectedAgentId = host.context?.agentSelection.state.selectedId?.trim() || null;
+    if (event instanceof CustomEvent && typeof event.detail === "object" && event.detail) {
+      (event.detail as TerminalPanelToggleDetail).agentId =
+        host.context?.agentSelection?.state.selectedId?.trim() || null;
+    }
     if (isOptionalElementDefined(host.terminalPanelElement)) {
-      // This listener runs before the optional panel's listener. Carry the
-      // canonical click-time selection past Lit's deferred property render.
-      const panel = host.querySelector<TerminalPanelElement>(host.terminalPanelElement.tagName);
-      if (panel) {
-        panel.agentId = selectedAgentId;
-      }
       return;
     }
     const context = host.context;
@@ -505,9 +491,7 @@ export class ShellChromeOwner {
     ) {
       return;
     }
-    this.deliverPanelEventAfterLoad(host.terminalPanelElement, event, (panel) => {
-      (panel as TerminalPanelElement).agentId = selectedAgentId;
-    });
+    this.deliverPanelEventAfterLoad(host.terminalPanelElement, event);
   };
 
   readonly handleDeferredBrowserToggle = (event: Event): void => {

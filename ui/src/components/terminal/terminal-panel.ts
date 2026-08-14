@@ -184,6 +184,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         ? (event.detail as TerminalPanelToggleDetail)
         : null;
     const dock = detail?.dock === "right" || detail?.dock === "bottom" ? detail.dock : null;
+    if (detail?.agentId !== undefined) {
+      this.agentId = detail.agentId;
+    }
     if (dock) {
       this.dockLayout.setDock(dock, false);
     }
