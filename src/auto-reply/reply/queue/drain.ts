@@ -365,6 +365,8 @@ type FollowupRuntimeMetadata = Pick<
   | "currentInboundContext"
   | "explicitSkillSelections"
   | "channelAdmissionEvidence"
+  | "toolsAllow"
+  | "disableTools"
   | "abortSignal"
   | "queueAbortSignal"
   | "deliveryCorrelations"
@@ -595,6 +597,9 @@ function collectRuntimeMetadata(
   abortSignal?: AbortSignal,
 ): FollowupRuntimeMetadata {
   const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
+  // Delivery-key equality proves every source has the same turn authority.
+  // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
+  const authoritySource = items.at(-1);
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const admissionWaitCallbacks = new Set(
     items.flatMap((item) =>
@@ -617,6 +622,8 @@ function collectRuntimeMetadata(
     channelAdmissionEvidence: combineChannelAdmissionEvidence(
       items.map((item) => item.channelAdmissionEvidence),
     ),
+    toolsAllow: authoritySource?.toolsAllow,
+    disableTools: authoritySource?.disableTools,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -974,6 +981,10 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
     explicitSkillSelections: source.explicitSkillSelections,
+    toolsAllow: source.toolsAllow,
+    disableTools: source.disableTools,
+    images: source.images,
+    imageOrder: source.imageOrder,
     media: source.media,
     channelAdmissionEvidence: source.channelAdmissionEvidence,
     messageId: source.messageId,
@@ -1054,6 +1065,8 @@ async function runSyntheticOverflowSummary(params: {
     onReplyAdmissionWaitChange: runtimeMetadata.onReplyAdmissionWaitChange,
     explicitSkillSelections: runtimeMetadata.explicitSkillSelections,
     channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
+    toolsAllow: runtimeMetadata.toolsAllow,
+    disableTools: runtimeMetadata.disableTools,
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {

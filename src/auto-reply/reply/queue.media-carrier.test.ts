@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  attachToolAllowlistIntersection,
+  readToolAllowlistIntersection,
+} from "../../agents/tool-policy.js";
+import {
   compareChannelAdmissionParticipants,
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
@@ -18,6 +22,58 @@ import { clearFollowupQueue } from "./queue/state.js";
 
 const queueKeys = new Set<string>();
 const evidenceCleanups = new Set<() => void>();
+
+function addCombinedCarrierFacts(run: FollowupRun): void {
+  run.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["exec", "message"]]);
+  run.disableTools = true;
+  run.run = {
+    ...run.run,
+    provider: "openai",
+    model: "gpt-route",
+    memberRoleIds: ["operator", "member"],
+    trustedInternalHandoff: {
+      kind: "subagent-completion",
+      sourceSessionKey: "agent:child",
+      targetSessionKey: "agent:parent",
+      targetSessionId: "session-1",
+      provider: "openai",
+      model: "gpt-route",
+    },
+    scheduledToolPolicy: { version: 1, mode: "trusted" },
+    runtimePluginToolGrant: {
+      pluginId: "workboard",
+      toolNames: ["workboard_complete"],
+    },
+  };
+}
+
+function expectCombinedCarrierFacts(run: FollowupRun | undefined): void {
+  expect(run).toBeDefined();
+  expect(run?.toolsAllow).toEqual(["exec"]);
+  expect(run?.toolsAllow ? readToolAllowlistIntersection(run.toolsAllow) : undefined).toEqual([
+    ["exec"],
+    ["exec", "message"],
+  ]);
+  expect(run?.disableTools).toBe(true);
+  expect(run?.run).toMatchObject({
+    provider: "openai",
+    model: "gpt-route",
+    memberRoleIds: ["operator", "member"],
+    trustedInternalHandoff: {
+      kind: "subagent-completion",
+      sourceSessionKey: "agent:child",
+      targetSessionKey: "agent:parent",
+      targetSessionId: "session-1",
+      provider: "openai",
+      model: "gpt-route",
+    },
+    scheduledToolPolicy: { version: 1, mode: "trusted" },
+    runtimePluginToolGrant: {
+      pluginId: "workboard",
+      toolNames: ["workboard_complete"],
+    },
+  });
+}
 
 afterEach(() => {
   for (const key of queueKeys) {
@@ -84,6 +140,9 @@ describe("followup prompt metadata carrier", () => {
       ],
     ] as const) {
       const run = createQueueTestRun({ prompt });
+      addCombinedCarrierFacts(run);
+      run.images = [{ type: "image", data: path, mimeType: contentType }];
+      run.imageOrder = ["inline"];
       run.media = [{ path, contentType }];
       run.explicitSkillSelections = [
         { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
@@ -122,6 +181,20 @@ describe("followup prompt metadata carrier", () => {
         { path: "/tmp/b.pdf", contentType: "application/pdf" },
       ],
     ]);
+    expect(calls.map((run) => run.images)).toEqual([
+      [
+        { type: "image", data: "/tmp/a.png", mimeType: "image/png" },
+        { type: "image", data: "/tmp/b.pdf", mimeType: "application/pdf" },
+      ],
+      [
+        { type: "image", data: "/tmp/a.png", mimeType: "image/png" },
+        { type: "image", data: "/tmp/b.pdf", mimeType: "application/pdf" },
+      ],
+    ]);
+    expect(calls.map((run) => run.imageOrder)).toEqual([
+      ["inline", "inline"],
+      ["inline", "inline"],
+    ]);
     const expectedSkills = [
       { name: "a", path: "/tmp/skills/a/SKILL.md" },
       { name: "shared-last", path: "/tmp/skills/shared/SKILL.md" },
@@ -131,6 +204,9 @@ describe("followup prompt metadata carrier", () => {
       expectedSkills,
       expectedSkills,
     ]);
+    for (const call of calls) {
+      expectCombinedCarrierFacts(call);
+    }
     expect(
       compareChannelAdmissionParticipants(calls.map((run) => run.channelAdmissionEvidence)),
     ).toBe("same");
@@ -157,6 +233,7 @@ describe("followup prompt metadata carrier", () => {
         originatingChannel: "test",
         originatingTo: "room:shared",
       });
+      addCombinedCarrierFacts(run);
       run.explicitSkillSelections = [
         { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
       ];
@@ -201,6 +278,7 @@ describe("followup prompt metadata carrier", () => {
       traceAuthorized: false,
       ownerNumbers: [],
     });
+    expectCombinedCarrierFacts(calls[0]);
   });
 
   it("preserves facts when an overflow source is rebuilt for retry", () => {
@@ -209,6 +287,9 @@ describe("followup prompt metadata carrier", () => {
     const source = createQueueTestRun({
       prompt: "[media attached: /tmp/retry.png (image/png)]\nretry me",
     });
+    addCombinedCarrierFacts(source);
+    source.images = [{ type: "image", data: "png", mimeType: "image/png" }];
+    source.imageOrder = ["offloaded"];
     source.media = [{ path: "/tmp/retry.png", contentType: "image/png" }];
     source.explicitSkillSelections = [{ name: "retry", path: "/tmp/skills/retry/SKILL.md" }];
     source.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
@@ -219,8 +300,11 @@ describe("followup prompt metadata carrier", () => {
     const retry = createOverflowSummaryRetrySource(source);
 
     expect(retry.prompt).toBe(source.prompt);
+    expect(retry.images).toEqual(source.images);
+    expect(retry.imageOrder).toEqual(source.imageOrder);
     expect(retry.media).toEqual(source.media);
     expect(retry.explicitSkillSelections).toEqual(source.explicitSkillSelections);
     expect(retry.channelAdmissionEvidence).toBe(source.channelAdmissionEvidence);
+    expectCombinedCarrierFacts(retry);
   });
 });
