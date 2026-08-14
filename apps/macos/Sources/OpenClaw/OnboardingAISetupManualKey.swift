@@ -84,7 +84,6 @@ extension OnboardingAISetupModel {
                        defaults: self.defaults)
                 {
                     self.pendingActivationVerification = true
-                    self.phase = .detecting
                     _ = await self.verifyPendingConfiguredInference()
                 } else {
                     self.pendingActivationVerification = false
@@ -129,4 +128,3 @@ extension OnboardingAISetupModel {
         }
     }
 }
-
