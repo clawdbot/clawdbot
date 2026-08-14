@@ -1,5 +1,6 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
+import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
@@ -79,6 +80,19 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   sessionGroupDefaults(name: string) {
     const group = this.context?.sessions.state.groupSettings.find((entry) => entry.name === name);
     return { cwd: group?.cwd ?? "", worktree: group?.worktree === true };
+  }
+
+  async listSessionGroupFolders(path?: string): Promise<FsListDirResult> {
+    const gateway = this.context?.gateway.snapshot;
+    const client = gateway?.client;
+    if (gateway?.phase !== "connected" || !client) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    const result = await client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
+    if (this.context?.gateway.snapshot.client !== client) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    return result;
   }
 
   // Lazy: the controller pulls core token-suppression modules that must stay

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  captureUiProof,
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
@@ -50,7 +51,34 @@ suite.define(() => {
         `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
       );
       await dialog.waitFor({ state: "visible" });
-      await expect.poll(() => dialog.locator('input[name="cwd"]').inputValue()).toBe(groupCwd);
+      const folderTrigger = dialog.getByRole("button", {
+        name: "Working directory: client-work",
+      });
+      await folderTrigger.click();
+      const folderPicker = dialog.locator("wa-popover.session-group-defaults__folder-popover");
+      await folderPicker.getByRole("button", { name: "Browse folders" }).click();
+      expect((await gateway.waitForRequest("fs.listDir")).params).toEqual({ path: groupCwd });
+      await expect
+        .poll(() => folderPicker.locator("input.new-session-page__browser-path").inputValue())
+        .toBe(groupCwd);
+      for (const viewport of [
+        { height: 844, name: "phone", width: 390 },
+        { height: 1024, name: "tablet", width: 768 },
+        { height: 900, name: "desktop", width: 1440 },
+      ]) {
+        await page.setViewportSize(viewport);
+        const pickerBounds = await folderPicker.locator(".new-session-page__browser").boundingBox();
+        expect(pickerBounds).not.toBeNull();
+        expect(pickerBounds?.x).toBeGreaterThanOrEqual(0);
+        expect((pickerBounds?.x ?? 0) + (pickerBounds?.width ?? 0)).toBeLessThanOrEqual(
+          viewport.width,
+        );
+        await captureUiProof(page, `group-defaults-folder-picker-${viewport.name}.png`);
+      }
+      await page.setViewportSize({ height: 900, width: 1280 });
+      await folderPicker.getByRole("button", { name: "Use this folder" }).click();
+      await expect.poll(() => folderTrigger.textContent()).toContain("client-work");
+      await expect.poll(() => dialog.locator('input[name="cwd"]').count()).toBe(0);
       await expect.poll(() => dialog.locator('select[name="mode"]').inputValue()).toBe("worktree");
       await dialog.getByRole("button", { name: "Save" }).click();
       expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({

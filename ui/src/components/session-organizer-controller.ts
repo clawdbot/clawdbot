@@ -1,4 +1,5 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
 import {
   parseSidebarEntry,
   SIDEBAR_NAV_ROUTES,
@@ -59,6 +60,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
+  listSessionGroupFolders(path?: string): Promise<FsListDirResult>;
   sessionGroupDefaults(name: string): { cwd: string; worktree: boolean };
   knownSessionCatalogIds(): string[];
   knownSectionOrder(): string[];
@@ -548,6 +550,7 @@ export class SessionOrganizerController implements ReactiveController {
     await showDialog({
       group,
       defaults: this.host.sessionGroupDefaults(group),
+      listDirectory: (path) => this.host.listSessionGroupFolders(path),
       submit: async (defaults) => {
         const scope = this.host.sessionData.beginSessionMutation();
         if (!scope) {
