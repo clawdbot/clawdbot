@@ -346,7 +346,13 @@ describe("AppSidebar group section ordering", () => {
 
   async function dropGroupBeforeCoding(sidebar: SidebarLifecycleState, group: string) {
     const dataTransfer = createDataTransferStub();
-    dispatchDragEvent(groupHeader(sidebar, group), "dragstart", dataTransfer);
+    const dragHandle = groupHeader(sidebar, group).querySelector(
+      '.sidebar-session-group-drag-handle[draggable="true"]',
+    );
+    if (!dragHandle) {
+      throw new Error(`expected drag handle for ${group}`);
+    }
+    dispatchDragEvent(dragHandle, "dragstart", dataTransfer);
     const coding = section(sidebar, "work");
     dispatchDragEvent(coding, "dragover", dataTransfer, -1);
     dispatchDragEvent(coding, "drop", dataTransfer, -1);
