@@ -174,6 +174,59 @@ describe("createSlackMessageHandler", () => {
     expect(context.cfg).toBe(startupConfig);
   });
 
+  it("keeps cached runtime contexts synchronized with mutable monitor state", async () => {
+    const startupConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "max" } } };
+    const runtimeConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "ultra" } } };
+    const initialChannels = { C_OLD: { enabled: true } };
+    const resolvedChannels = { C_RESOLVED: { enabled: true } };
+    const context = createContext({ cfg: startupConfig });
+    context.botUserId = "U_STALE";
+    context.channelsConfig = initialChannels;
+    const handler = createSlackMessageHandler({
+      ctx: context,
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+    setRuntimeConfigSnapshot(runtimeConfig, runtimeConfig);
+
+    const handleMessage = async (ts: string) => {
+      await handler(
+        {
+          type: "message",
+          channel: "D1",
+          user: "U1",
+          ts,
+          text: "hello",
+        } as never,
+        { source: "message" },
+      );
+      const entry = enqueueMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+      await runOnFlush([entry]);
+    };
+
+    await handleMessage("1709000000.009007");
+    const initialRuntimeContext = prepareSlackMessageMock.mock.calls[0]?.[0]?.ctx;
+    expect(initialRuntimeContext).toMatchObject({
+      cfg: runtimeConfig,
+      botUserId: "U_STALE",
+      channelsConfig: initialChannels,
+    });
+
+    context.botUserId = "U_RECOVERED";
+    context.channelsConfig = resolvedChannels;
+    await handleMessage("1709000000.009008");
+
+    const reusedRuntimeContext = prepareSlackMessageMock.mock.calls[1]?.[0]?.ctx;
+    expect(reusedRuntimeContext).toBe(initialRuntimeContext);
+    expect(reusedRuntimeContext).toMatchObject({
+      cfg: runtimeConfig,
+      botUserId: "U_RECOVERED",
+      channelsConfig: resolvedChannels,
+    });
+    expect(context.cfg).toBe(startupConfig);
+  });
+
   it.each([
     {
       label: "without a source snapshot",
