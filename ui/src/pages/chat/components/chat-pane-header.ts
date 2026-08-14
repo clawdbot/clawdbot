@@ -156,6 +156,9 @@ export function resolveChatPaneParentSession(
  * and separators are rendered from one list so a further segment — the parent
  * session of a nested thread, yielding project / parent / child — slots in
  * without moving the project chip or the title.
+ *
+ * Everything the session owns — creator, name, menu, sharing, viewers — renders
+ * inside this trail, leaving the action row for pane-level controls only.
  */
 function renderIdentityCrumbs(
   props: ChatPaneHeaderProps,
@@ -169,7 +172,7 @@ function renderIdentityCrumbs(
   if (parentCrumb) {
     segments.push(parentCrumb);
   }
-  segments.push(renderSessionCrumb(props));
+  segments.push(renderSessionIdentity(props));
   return html`
     <div class="chat-pane__crumbs">
       ${segments.map(
@@ -178,8 +181,41 @@ function renderIdentityCrumbs(
             ? html`<span class="chat-pane__crumb-sep" aria-hidden="true">/</span>`
             : nothing}${segment}`,
       )}
+      ${renderSessionControls(props)}
     </div>
   `;
+}
+
+/**
+ * Creator then name: the avatar answers "whose session" for the title beside it,
+ * which is why it never sits against the project every session shares.
+ */
+function renderSessionIdentity(props: ChatPaneHeaderProps) {
+  return html`<span class="chat-pane__session-identity"
+    >${renderSessionOwnerChip(
+      props.showOwnerChip ? props.session?.createdActor : undefined,
+      "header",
+      "created",
+    )}${renderSessionCrumb(props)}</span
+  >`;
+}
+
+/** Controls the session owns: manage it, share it, see who else is here. */
+function renderSessionControls(props: ChatPaneHeaderProps) {
+  const sharingControl = props.sharingControl ?? nothing;
+  const presence = props.presence ?? nothing;
+  if (props.sessionMenuAction === nothing && sharingControl === nothing && presence === nothing) {
+    return nothing;
+  }
+  return html`<span class="chat-pane__session-controls">
+    ${props.sessionMenuAction === nothing
+      ? nothing
+      : html`<span class="chat-pane__session-menu-anchor">${props.sessionMenuAction}</span>`}
+    ${sharingControl === nothing
+      ? nothing
+      : html`<span class="chat-pane__sharing-anchor">${sharingControl}</span>`}
+    ${presence}
+  </span>`;
 }
 
 function renderParentSessionCrumb(props: ChatPaneHeaderProps): TemplateResult | null {
@@ -442,13 +478,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           >`
         : nothing}
       ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
-      ${renderSessionOwnerChip(
-        props.showOwnerChip ? props.session?.createdActor : undefined,
-        "header",
-        "created",
-      )}
-      ${renderChatPanePlacement(props)} ${props.presence ?? nothing} ${props.faceControl ?? nothing}
-      ${props.sharingControl ?? nothing}
+      ${renderChatPanePlacement(props)} ${props.faceControl ?? nothing}
       ${!props.catalog && props.branches.length > 1
         ? html`
             <openclaw-tooltip
@@ -584,7 +614,6 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               </button>
             </openclaw-tooltip>`
           : nothing}
-        ${props.sessionMenuAction}
       </div>
     </div>
   `;

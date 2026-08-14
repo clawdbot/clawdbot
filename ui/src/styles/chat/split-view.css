@@ -182,8 +182,49 @@ openclaw-chat-pane {
 
 /* Renaming needs the row's spare width, which the trail must pass through:
    without this the input is trapped inside a shrink-only container. */
-.chat-pane__crumbs:has(.chat-pane__session-title-input) {
+.chat-pane__crumbs:has(.chat-pane__session-title-input),
+.chat-pane__session-identity:has(.chat-pane__session-title-input) {
   flex: 1 1 auto;
+}
+
+/* Creator and title are one unit and share the trail's gap, so the avatar reads
+   as a property of the name it precedes rather than a separate trail segment. */
+.chat-pane__session-identity {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The session's own controls sit tighter than the trail's segment gap: their
+   buttons already carry 5px of internal padding, so the optical air matches the
+   6px between segments without the boxes drifting away from the title.
+   The trail lifts itself 1px to put text on the chrome centerline; these are
+   chrome, so they give that pixel back and stay level with the action row. */
+.chat-pane__session-controls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-inline-start: -2px;
+  transform: translateY(1px);
+}
+
+/* Viewers are people, not controls: they get their own air after the buttons. */
+.chat-pane__session-controls .chat-pane__presence {
+  margin-inline-start: 4px;
+}
+
+/* A custom element defaults to display:inline, so as a flex child it keeps a
+   text line box whose descender space drags the trigger below the row
+   centerline — the same correction the action row applies to its own children. */
+.chat-pane__session-menu-anchor,
+.chat-pane__session-menu-anchor > openclaw-chat-header-session-menu,
+.chat-pane__sharing-anchor {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
 }
 
 /* House separator treatment: an aria-hidden glyph tinted with --muted, spacing
@@ -260,18 +301,27 @@ openclaw-chat-pane {
   text-overflow: ellipsis;
 }
 
+/* Renaming edits the title in place, so the field must occupy the title's box
+   rather than announce itself: the 28px height matches the action buttons the
+   row is already sized for, and border + padding reproduce the display button's
+   text origin (3px 5px pulled back by -5px) so the name does not jump when
+   editing starts or ends. The border is neutral because a rename in progress is
+   not an error or an accent-worthy state. */
 .chat-pane__session-title-input {
   flex: 1 1 auto;
   min-width: 60px;
   height: 28px;
-  padding: 0 7px;
-  border: 1px solid var(--accent);
+  box-sizing: border-box;
+  padding: 2px 4px;
+  margin-inline: -5px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
   border-radius: var(--radius-sm);
   background: var(--panel);
   color: var(--text);
   font: inherit;
   font-size: 12px;
   outline: none;
+  caret-color: var(--text);
   user-select: text;
   -webkit-user-select: text;
 }
@@ -517,7 +567,11 @@ openclaw-chat-pane {
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
+  /* The project is context, the session is the subject: holding the project one
+     step below --muted keeps the trail readable while the title stays the only
+     full-contrast text. Pointer and keyboard both restore it, so nothing that
+     can be acted on stays dim. */
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
   font-size: 12px;
   cursor: var(--cursor-action);
 }

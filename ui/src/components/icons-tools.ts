@@ -254,9 +254,14 @@ export const toolIcons = {
       d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"
     />
     <path d="m2 2 20 20" />`),
-  moreHorizontal: strokeIcon(svg` <circle cx="12" cy="12" r="1.5" />
-    <circle cx="6" cy="12" r="1.5" />
-    <circle cx="18" cy="12" r="1.5" />`),
+  // Filled on purpose: three stroked rings read as hollow circles at the sizes
+  // this glyph is used at, and thin out further wherever a surface overrides the
+  // shared stroke width. Filling keeps one solid dot triplet everywhere.
+  moreHorizontal: strokeIcon(svg` <g fill="currentColor" stroke="none">
+      <circle cx="5" cy="12" r="1.5" />
+      <circle cx="12" cy="12" r="1.5" />
+      <circle cx="19" cy="12" r="1.5" />
+    </g>`),
   ellipsis: strokeIcon(svg` <circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none" />
     <circle cx="5" cy="12" r="1.25" fill="currentColor" stroke="none" />
     <circle cx="19" cy="12" r="1.25" fill="currentColor" stroke="none" />`),
