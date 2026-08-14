@@ -147,11 +147,7 @@ export function registerMaintenanceCommands(program: Command) {
             });
             defaultRuntime.exit(exitCode);
           },
-          (err) =>
-            exitDoctorError(
-              formatError(new Error(String(err))),
-              opts.json === true || !process.stdout.isTTY,
-            ),
+          (err) => exitDoctorError(formatError(err), opts.json === true || !process.stdout.isTTY),
         );
         return;
       }
@@ -200,9 +196,7 @@ export function registerMaintenanceCommands(program: Command) {
           });
           defaultRuntime.exit(0);
         },
-        opts.json
-          ? (err: unknown) => exitDoctorError(formatError(new Error(String(err))), true)
-          : undefined,
+        opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,
       );
     });
   setCommandJsonMode(doctor, "output", isDoctorMachineOutput);

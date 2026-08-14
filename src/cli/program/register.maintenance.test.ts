@@ -121,7 +121,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--json"]);
 
     expect(runtime.writeJson).toHaveBeenCalledWith({
-      error: expect.stringContaining("Error: maintenance failed: Authorization: Bearer"),
+      error: expect.stringContaining("maintenance failed: Authorization: Bearer"),
     });
     expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain(token);
     expect(runtime.error).not.toHaveBeenCalled();
@@ -407,7 +407,7 @@ describe("registerMaintenanceCommands doctor action", () => {
 
     await runMaintenanceCli(["doctor", "--json"]);
 
-    expect(runtime.writeJson).toHaveBeenCalledWith({ error: "Error: lint failed" });
+    expect(runtime.writeJson).toHaveBeenCalledWith({ error: "lint failed" });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
@@ -420,7 +420,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     try {
       await runMaintenanceCli(["doctor", "--lint"]);
 
-      expect(runtime.error).toHaveBeenCalledWith("Error: lint failed");
+      expect(runtime.error).toHaveBeenCalledWith("lint failed");
       expect(runtime.writeJson).not.toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(2);
     } finally {
