@@ -184,7 +184,7 @@ describe("package dist inventory", () => {
       const omittedRuntimeChunk = path.join(packageRoot, "dist", "qa-runtime-AbC123.js");
       const omittedTopLevelMap = path.join(packageRoot, "dist", "runtime.js.map");
       const omittedMap = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js.map");
-      const omittedAppBundle = path.join(packageRoot, "dist", "OpenCrustacean.app");
+      const omittedAppBundle = path.join(packageRoot, "dist", "OpenClaw.app");
 
       await fs.mkdir(path.dirname(packagedRuntime), { recursive: true });
       await fs.mkdir(path.dirname(omittedNestedHelper), { recursive: true });
@@ -194,7 +194,7 @@ describe("package dist inventory", () => {
         JSON.stringify({
           files: [
             "dist/",
-            "!dist/OpenCrustacean.app/**",
+            "!dist/OpenClaw.app/**",
             "!dist/plugin-sdk/plugin-test-runtime.js",
             "!dist/plugin-sdk/plugin-test-runtime.d.ts",
             "!dist/plugin-sdk/src/test-utils/**",
@@ -407,7 +407,7 @@ describe("package dist inventory", () => {
     ).toBe(true);
     expect(
       isLegacyPluginDependencyInstallStagePath(
-        "Dist/Extensions/browser/.OpenCrustacean-Install-Stage/package.json",
+        "Dist/Extensions/browser/.OpenClaw-Install-Stage/package.json",
       ),
     ).toBe(true);
     expect(
