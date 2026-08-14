@@ -23,6 +23,30 @@ describe("sidebar customizer model", () => {
     expect(items.map((item) => item.visible)).toEqual([true, true, true, false]);
   });
 
+  it("keeps pinned sessions in their canonical page positions with a remove action", () => {
+    const items = buildSidebarCustomizerEntries({
+      canonical: ["route:tasks", "session:agent:main:taxes", "route:cron"],
+      enabledRouteIds: ["cron", "tasks", "plugins"],
+      pinnedSessions: new Map([
+        ["agent:main:taxes", { key: "agent:main:taxes", label: "Tax filing research" }],
+      ]),
+      workboards: [],
+    });
+
+    expect(items.map((item) => item.id)).toEqual([
+      "fixed:home",
+      "route:tasks",
+      "session:agent:main:taxes",
+      "route:cron",
+      "route:plugins",
+    ]);
+    expect(items[2]).toMatchObject({
+      label: "Tax filing research",
+      sessionKey: "agent:main:taxes",
+      visible: true,
+    });
+  });
+
   it("only exposes visibility for catalogs with an existing persistence owner", () => {
     const sections = [
       {

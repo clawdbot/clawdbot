@@ -1943,6 +1943,7 @@ export const en: TranslationMap = {
     customize: "Customize sidebar",
     customizeShow: "Show {item} in sidebar",
     customizeHide: "Hide {item} from sidebar",
+    customizeRemove: "Remove {item} from sidebar",
     workboardGroup: "WorkBoard",
   },
   terminal: {

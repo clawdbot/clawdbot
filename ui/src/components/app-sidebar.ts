@@ -17,6 +17,7 @@ import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
@@ -477,10 +478,22 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     }
   }
 
+  private removeSidebarCustomizerItem(item: SidebarCustomizerItem): void {
+    if (!item.sessionKey) {
+      return;
+    }
+    const session = this.reconciledSidebarZone().sessionRows.get(item.sessionKey);
+    if (session) {
+      void this.sessionOrganizer.patchSession(session, { pinned: false });
+    }
+  }
+
   private sidebarCustomizerEntries(): SidebarCustomizerItem[] {
+    const sidebarZone = this.reconciledSidebarZone();
     return buildSidebarCustomizerEntries({
-      canonical: this.reconciledSidebarZone().sidebarEntries,
+      canonical: sidebarZone.sidebarEntries,
       enabledRouteIds: this.enabledRouteIds,
+      pinnedSessions: sidebarZone.sessionRows,
       workboards: this.workboardBoards,
     });
   }
@@ -503,6 +516,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       entries: this.sidebarCustomizerEntries(),
       sections: this.sidebarCustomizerSections(),
       onToggle: (item) => this.toggleSidebarCustomizerItem(item),
+      onRemove: (item) => this.removeSidebarCustomizerItem(item),
       onBack: () => this.closeSidebarCustomizer(),
       onEntryDragStart: (event, item) => {
         const entry = item.entry ? parseSidebarEntry(item.entry) : null;
@@ -510,6 +524,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           this.sessionOrganizer.startSidebarRouteDrag(event, entry.route);
         } else if (entry?.type === "workboard") {
           this.sessionOrganizer.startSidebarWorkboardDrag(event, entry.boardId);
+        } else if (entry?.type === "session") {
+          const session = this.reconciledSidebarZone().sessionRows.get(entry.key);
+          if (session && event.dataTransfer) {
+            writeSessionDragData(event.dataTransfer, session.key);
+            this.sessionOrganizer.startSessionDrag(session);
+          }
         }
       },
       onEntryDragOver: (event, entry) =>

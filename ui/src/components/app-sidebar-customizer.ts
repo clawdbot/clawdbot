@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import {
   navigationIconForRoute,
+  parseSidebarEntry,
   serializeSidebarEntry,
   SIDEBAR_NAV_ROUTES,
   titleForRoute,
@@ -22,11 +23,13 @@ export type SidebarCustomizerItem = {
   category?: string;
   reorderable?: boolean;
   toggleable?: boolean;
+  sessionKey?: string;
 };
 
 export function buildSidebarCustomizerEntries(params: {
   canonical: readonly string[];
   enabledRouteIds?: readonly NavigationRouteId[];
+  pinnedSessions?: ReadonlyMap<string, { key: string; label: string }>;
   workboards: readonly SidebarWorkboardBoard[];
 }): SidebarCustomizerItem[] {
   const order = new Map(params.canonical.map((entry, index) => [entry, index]));
@@ -67,6 +70,25 @@ export function buildSidebarCustomizerEntries(params: {
       icon: icons.layoutGrid,
       visible: params.canonical.includes(entry),
       fallbackIndex: boardOffset + index,
+    });
+  }
+  for (const [index, entry] of params.canonical.entries()) {
+    const parsed = parseSidebarEntry(entry);
+    if (parsed?.type !== "session") {
+      continue;
+    }
+    const session = params.pinnedSessions?.get(parsed.key);
+    if (!session) {
+      continue;
+    }
+    items.push({
+      id: entry,
+      entry,
+      kind: "entry",
+      label: session.label.trim() || session.key,
+      sessionKey: session.key,
+      visible: true,
+      fallbackIndex: boardOffset + params.workboards.length + index,
     });
   }
   return items.toSorted((a, b) => {
@@ -121,6 +143,7 @@ type SidebarCustomizerParams = {
   entries: readonly SidebarCustomizerItem[];
   sections: readonly SidebarCustomizerItem[];
   onToggle: (item: SidebarCustomizerItem) => void;
+  onRemove: (item: SidebarCustomizerItem) => void;
   onBack: () => void;
   onEntryDragStart: (event: DragEvent, item: SidebarCustomizerItem) => void;
   onEntryDragOver: (event: DragEvent, entry: string) => void;
@@ -142,6 +165,7 @@ function renderCustomizerItem(
   const draggable =
     item.reorderable !== false && (item.kind === "section" || (toggleable && item.visible));
   const showVisibilityControl = toggleable;
+  const removable = item.sessionKey !== undefined;
   const visibilityLabel = t(item.visible ? "nav.customizeHide" : "nav.customizeShow", {
     item: item.label,
   });
@@ -209,24 +233,34 @@ function renderCustomizerItem(
           : ""}"
         >${item.label}</span
       >
-      ${showVisibilityControl
+      ${removable
         ? html`<button
             type="button"
-            class="sidebar-customizer__visibility"
-            aria-label=${visibilityLabel}
-            aria-pressed=${String(item.visible)}
-            ?disabled=${!toggleable}
-            title=${toggleable ? visibilityLabel : ""}
+            class="sidebar-customizer__visibility sidebar-customizer__remove"
+            aria-label=${t("nav.customizeRemove", { item: item.label })}
             @mousedown=${(event: MouseEvent) => event.stopPropagation()}
-            @click=${() => {
-              if (toggleable) {
-                params.onToggle(item);
-              }
-            }}
+            @click=${() => params.onRemove(item)}
           >
-            ${item.visible ? icons.eye : icons.eyeOff}
+            ${icons.x}
           </button>`
-        : nothing}
+        : showVisibilityControl
+          ? html`<button
+              type="button"
+              class="sidebar-customizer__visibility"
+              aria-label=${visibilityLabel}
+              aria-pressed=${String(item.visible)}
+              ?disabled=${!toggleable}
+              title=${toggleable ? visibilityLabel : ""}
+              @mousedown=${(event: MouseEvent) => event.stopPropagation()}
+              @click=${() => {
+                if (toggleable) {
+                  params.onToggle(item);
+                }
+              }}
+            >
+              ${item.visible ? icons.eye : icons.eyeOff}
+            </button>`
+          : nothing}
     </div>
   `;
 }

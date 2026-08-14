@@ -545,6 +545,15 @@ suite.define(() => {
         .poll(() => tasksRow.evaluate((row) => getComputedStyle(row).animationName))
         .toBe("none");
 
+      const pinnedSessionRow = customizer.locator(
+        '[data-sidebar-customizer-id="session:agent:main:tax-research"]',
+      );
+      await expect.poll(() => pinnedSessionRow.isVisible()).toBe(true);
+      await pinnedSessionRow
+        .getByRole("button", { name: "Remove Tax filing research from sidebar" })
+        .click();
+      await expect.poll(() => pinnedSessionRow.count()).toBe(0);
+
       await tasksRow.getByRole("button", { name: "Show Tasks in sidebar" }).click();
       await expect.poll(() => tasksRow.getAttribute("class")).not.toContain("--hidden");
       await customizer.getByRole("button", { name: "Back" }).click();
