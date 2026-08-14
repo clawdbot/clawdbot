@@ -389,19 +389,19 @@ describe("acp bridge session cwd persistence", () => {
     sessionStore.clearAllSessionsForTest();
   });
 
-  it("does not provision an explicitly routed key against a Gateway without the capability", async () => {
+  it("refuses an explicitly routed key against a Gateway without the capability", async () => {
     const sessionStore = createInMemorySessionStore();
     const { calls, gateway } = createRecordingGateway({ serverCapabilities: [] });
     const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
 
-    // Such a Gateway would apply the directory to a row it merely adopts, so creating here could
-    // overwrite an operator's cwd. session/new still succeeds rather than failing on a schema.
+    // Such a Gateway would apply the directory to a row it merely adopts, so the request cannot
+    // be honored; starting a session that claims the requested cwd would be the defect again.
     await expect(
       agent.newSession({
         ...createNewSessionRequest("/tmp/my-project"),
         _meta: { sessionKey: "agent:main:work" },
       } as never),
-    ).resolves.toBeDefined();
+    ).rejects.toThrow(/cannot scope a working directory to newly created sessions/i);
     expect(createCalls(calls)).toStrictEqual([]);
 
     sessionStore.clearAllSessionsForTest();

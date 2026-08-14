@@ -78,14 +78,16 @@ export class AcpTranslatorSessionLifecycle {
       fallbackKey: `acp-bridge:${sessionId}`,
     });
     // chat.send carries no cwd, so the requested directory only reaches a turn as the row's
-    // spawnedCwd. cwdOnCreateOnly lets the Gateway settle absence inside its own mutation; a
-    // Gateway without it would apply the directory to a row it merely adopts, so against those
-    // only bridge-minted keys are provisioned - a fresh id cannot collide with an owned session.
+    // spawnedCwd. cwdOnCreateOnly lets the Gateway settle absence inside its own mutation. A
+    // Gateway without it would apply the directory to a row it merely adopts, so a routed key
+    // cannot be honored there; a bridge-minted id is safe because nothing else can own it.
     const scopesCwdToNewSessions = this.gateway.hasServerCapability(
       GATEWAY_SERVER_CAPS.SESSIONS_CREATE_CWD_ON_CREATE_ONLY,
     );
     if (!scopesCwdToNewSessions && hasExplicitSessionRouting(meta, this.opts)) {
-      return await this.startBridgeSession({ sessionId, sessionKey, cwd: params.cwd });
+      throw new Error(
+        `ACP session/new cannot apply ${params.cwd} to session ${sessionKey}: this Gateway cannot scope a working directory to newly created sessions, so honoring it could overwrite that session's own directory. Update the Gateway, or omit the session key to start a new session.`,
+      );
     }
 
     const created = await this.gateway.request<{ entry?: { spawnedCwd?: string } }>(
@@ -107,16 +109,7 @@ export class AcpTranslatorSessionLifecycle {
       );
     }
 
-    return await this.startBridgeSession({ sessionId, sessionKey, cwd: sessionCwd });
-  }
-
-  /** Registers the bridge session and emits its opening ACP updates. */
-  private async startBridgeSession(params: {
-    sessionId: string;
-    sessionKey: string;
-    cwd: string;
-  }): Promise<NewSessionResponse> {
-    const session = this.sessionStore.createSession(params);
+    const session = this.sessionStore.createSession({ sessionId, sessionKey, cwd: sessionCwd });
     await this.sessionUpdates.startLedgerSession(session, { complete: true, reset: true });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     const sessionSnapshot = await this.sessionState.getSnapshot(session.sessionKey);
