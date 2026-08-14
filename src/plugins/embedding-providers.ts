@@ -19,6 +19,7 @@ export type {
   EmbeddingProviderCreateResult,
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
+  EmbeddingProviderStartupInspector,
   EmbeddingProviderStartupInspectionResult,
   EmbeddingProviderStartupIssue,
   RegisteredEmbeddingProvider,

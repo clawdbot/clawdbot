@@ -1,6 +1,7 @@
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
+import { resolveMemoryEmbeddingProviderStartupInspector } from "../plugins/embedding-provider-preflight-public-artifacts.js";
 import { formatErrorMessage } from "./errors.js";
 
 export type GatewayStartupPreflightBlocker = {
@@ -86,6 +87,12 @@ export async function collectGatewayStartupPreflight(params: {
         stateDir,
         oauthDir,
         resolveSqliteReadOnlyLocation: params.resolveSqliteReadOnlyLocation,
+        resolveEmbeddingProviderStartupInspector: (providerId, config) =>
+          resolveMemoryEmbeddingProviderStartupInspector({
+            providerId,
+            config,
+            env,
+          }),
       });
       if (result.status === "ready") {
         continue;

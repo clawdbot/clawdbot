@@ -7,6 +7,7 @@ import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import {
   nodeWorkerPlanHash,
@@ -132,6 +133,30 @@ function launchRequest(input = launchInput()) {
 }
 
 describe("node worker launch adapter", () => {
+  it("fails with a typed availability result when no node dispatches within the grace", async () => {
+    vi.useFakeTimers();
+    const onDispatchReady = vi.fn();
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(vi.fn(), async () => []),
+      availabilityTimeoutMs: 100,
+      pollIntervalMs: 10,
+    });
+    try {
+      const launch = adapter
+        .launch({ ...launchRequest(), timeoutMs: 1_000, onDispatchReady })
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(await launch).toMatchObject({
+        name: "WorkerRunnerUnavailableError",
+        code: "runner-offline",
+      });
+      expect(onDispatchReady).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("launches once, polls status, and returns the exact completed receipt", async () => {
     const input = launchInput();
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) =>
@@ -200,6 +225,30 @@ describe("node worker launch adapter", () => {
     expect(invoke.mock.calls[1]?.[0].params).toEqual(input);
     expect(invoke.mock.calls[0]?.[0].node.connId).toBe("conn-1");
     expect(invoke.mock.calls[1]?.[0].node.connId).toBe("conn-2");
+  });
+
+  it("does not retry or cancel a dispatched launch rejected before capacity admission", async () => {
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      request.onDispatchReady?.("invoke-1");
+      return {
+        ok: false,
+        error: {
+          code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+          message: "node worker capacity remained full for 10000 ms",
+        },
+      };
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke),
+      sleep: async () => {},
+    });
+
+    await expect(adapter.launch(launchRequest())).rejects.toMatchObject({
+      code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+      message: "device worker capacity remained full",
+    });
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke.mock.calls.map(([request]) => request.command)).toEqual(["worker.launch.v1"]);
   });
 
   it("snapshots the launch plan before asynchronous node discovery", async () => {

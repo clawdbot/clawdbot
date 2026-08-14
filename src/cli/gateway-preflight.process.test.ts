@@ -44,7 +44,13 @@ async function writePreflightFixturePlugin(pluginRoot: string): Promise<void> {
   );
   await fs.writeFile(
     path.join(pluginRoot, "index.cjs"),
-    `module.exports = {
+    `const fs = require("node:fs");
+const activationSentinel = process.env.OPENCLAW_PREFLIGHT_ACTIVATION_SENTINEL;
+if (activationSentinel) {
+  fs.writeFileSync(activationSentinel, "provider runtime activated");
+}
+
+module.exports = {
   register(api) {
     api.registerEmbeddingProvider({
       id: "local",
@@ -147,6 +153,7 @@ module.exports = { stateMigrations: [migration] };
 
 async function createFixture(params: {
   config: Record<string, unknown>;
+  disableMemorySlot?: boolean;
   invalidSessionStore?: boolean;
   vectorModel?: string;
 }) {
@@ -173,7 +180,10 @@ async function createFixture(params: {
     plugins: {
       ...configuredPlugins,
       load: { paths: [pluginRoot] },
-      slots: { ...configuredSlots, memory: "none" },
+      slots:
+        params.disableMemorySlot === false
+          ? configuredSlots
+          : { ...configuredSlots, memory: "none" },
       entries: {
         ...configuredEntries,
         [PREFLIGHT_FIXTURE_PLUGIN_ID]: { enabled: true },
@@ -490,6 +500,102 @@ describe("gateway preflight CLI process", () => {
     }
   });
 
+  it("blocks the same known-weak credential as direct Gateway startup", async () => {
+    const fixture = await createFixture({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: "change-me-now",
+          },
+        },
+        memory: { search: { provider: "none" } },
+      },
+    });
+    const before = await snapshotTree(fixture.root);
+
+    const preflight = await runPreflight(fixture);
+    expect(preflight.code).toBe(1);
+    expect(JSON.parse(preflight.stdout)).toMatchObject({
+      status: "blocked",
+      blockers: [expect.objectContaining({ code: "gateway-auth-known-weak" })],
+      errors: [],
+    });
+    expect(await snapshotTree(fixture.root)).toEqual(before);
+
+    const startup = await runGateway(fixture);
+    expect(startup.code).not.toBe(0);
+    expect(startup.stderr).toMatch(/example placeholder/i);
+  });
+
+  it("blocks the same unauthenticated LAN bind as direct Gateway startup", async () => {
+    const fixture = await createFixture({
+      config: {
+        gateway: { mode: "local", bind: "lan", auth: { mode: "none" } },
+        memory: { search: { provider: "none" } },
+      },
+    });
+    const before = await snapshotTree(fixture.root);
+
+    const preflight = await runPreflight(fixture);
+    expect(preflight.code).toBe(1);
+    expect(JSON.parse(preflight.stdout)).toMatchObject({
+      status: "blocked",
+      blockers: [expect.objectContaining({ code: "gateway-bind-auth-required" })],
+      errors: [],
+    });
+    expect(await snapshotTree(fixture.root)).toEqual(before);
+
+    const startup = await runGateway(fixture);
+    expect(startup.code).toBe(78);
+    expect(startup.stderr).toContain("Refusing to bind gateway to lan without auth.");
+  });
+
+  it("returns indeterminate for protected memory credentials in a SecretRef", async () => {
+    const fixture = await createFixture({
+      config: {
+        gateway: { mode: "local" },
+        memory: {
+          search: {
+            provider: "openai",
+            fallback: "none",
+            model: "text-embedding-3-small",
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      disableMemorySlot: false,
+      vectorModel: "text-embedding-3-small",
+    });
+    const before = await snapshotTree(fixture.root);
+
+    const result = await runPreflight(fixture, {
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+      OPENAI_API_KEY: "preflight-must-not-resolve-this",
+    });
+
+    expect(result.code).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      status: "indeterminate",
+      blockers: [],
+      errors: expect.arrayContaining([
+        expect.objectContaining({
+          code: "inspection-indeterminate",
+          message: expect.stringContaining("Memory provider credentials use a SecretRef"),
+        }),
+      ]),
+    });
+    expect(await snapshotTree(fixture.root)).toEqual(before);
+  });
+
   it("reports a startup-blocking unreadable session store without mutation", async () => {
     const fixture = await createFixture({
       config: {
@@ -608,5 +714,26 @@ describe("gateway preflight CLI process", () => {
       blockers: [],
       errors: [expect.objectContaining({ code: "invalid-config" })],
     });
+  });
+
+  it("does not activate a configured external provider runtime", async () => {
+    const fixture = await createFixture({
+      config: localMemoryConfig(),
+      disableMemorySlot: false,
+      vectorModel: "embeddinggemma-300m",
+    });
+    const sentinelPath = path.join(fixture.root, "provider-runtime-activated");
+
+    const result = await runPreflight(fixture, {
+      OPENCLAW_PREFLIGHT_ACTIVATION_SENTINEL: sentinelPath,
+    });
+
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      status: "blocked",
+      blockers: [expect.objectContaining({ code: "managed-server-config-missing" })],
+      errors: [],
+    });
+    await expect(fs.access(sentinelPath)).rejects.toThrow();
   });
 });

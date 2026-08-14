@@ -23,6 +23,7 @@ export type NodeWorkerSupervisorControl = {
   launch(
     input: NodeWorkerLaunchInput,
     connectionEndpoint: WorkerConnectionEndpoint,
+    signal?: AbortSignal,
   ): Promise<NodeWorkerLaunchReceipt>;
   status(launchId: string): Promise<NodeWorkerLaunchReceipt | undefined>;
   cancel(expected: NodeWorkerSupervisorIdentity): Promise<NodeWorkerLaunchReceipt | undefined>;

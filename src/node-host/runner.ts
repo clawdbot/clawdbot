@@ -252,6 +252,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
 
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
+  let workerRunsAvailable = false;
   let gatewayHelloReceived = false;
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
@@ -459,11 +460,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   };
 
   const publishRunnerInventory = () => {
+    // The handshake keeps the immutable build ceiling. Live inventory withdraws
+    // only new-launch eligibility while full, leaving status/cancel negotiated.
     queueOptionalPublication(
       NODE_RUNNER_INVENTORY_UPDATE_METHOD,
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        ...(preparedRuntime.manifest.workerRuns
+        ...(workerRunsAvailable && preparedRuntime.manifest.workerRuns
           ? { workerRuns: preparedRuntime.manifest.workerRuns }
           : {}),
       },
@@ -574,6 +577,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     onInventoryChanged: (nextInventory) => {
       inventory = nextInventory;
       publishInventory();
+    },
+    onRunnerAvailabilityChanged: (available) => {
+      workerRunsAvailable = available;
+      publishRunnerInventory();
     },
     onManifestChanged: (manifest) => {
       // Manifest changes force a reconnect. Retire the current publication queue

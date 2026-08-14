@@ -5,6 +5,7 @@ import type {
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
+import type { EmbeddingProviderStartupInspector } from "./embedding-provider-types.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 
 export type PluginDoctorStateMigrationDetection = {
@@ -52,6 +53,11 @@ export type PluginStartupPreflightParams = {
    * of this callback. Plugins must not retain the returned path.
    */
   resolveSqliteReadOnlyLocation: (pathname: string) => string;
+  /** Resolve a trusted bundled provider's non-mutating startup inspector. */
+  resolveEmbeddingProviderStartupInspector: (
+    providerId: string,
+    config: OpenClawConfig,
+  ) => EmbeddingProviderStartupInspector | undefined;
 };
 
 export type PluginDoctorStateMigration = {

@@ -430,6 +430,13 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps llama.cpp startup inspection on the bundled public surface", () => {
+    const llamaCpp = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "llama-cpp");
+    expectArtifactPresence(llamaCpp?.publicSurfaceArtifacts, {
+      contains: ["embedding-provider-preflight-api.js"],
+    });
+  });
+
   it("keeps iMessage message-tool discovery on a narrow public surface", () => {
     const imessage = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "imessage");
     expectArtifactPresence(imessage?.publicSurfaceArtifacts, {

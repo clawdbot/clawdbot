@@ -39,6 +39,16 @@ type EmbeddingProviderStartupPreflightResult =
     }
   | { status: "indeterminate"; reason: string };
 
+type EmbeddingProviderStartupInspector = Pick<
+  MemoryEmbeddingProviderAdapter,
+  "id" | "defaultModel" | "formatSetupError" | "inspectStartupPrerequisites"
+>;
+
+type ResolveEmbeddingProviderStartupInspector = (
+  providerId: string,
+  config: MemoryEmbeddingProviderCreateOptions["config"],
+) => EmbeddingProviderStartupInspector | undefined;
+
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const LOCAL_LLAMA_CPP_PROVIDER_ID = "local";
 
@@ -53,7 +63,10 @@ function createMissingLlamaCppProviderError(): Error {
   );
 }
 
-function formatProviderError(adapter: MemoryEmbeddingProviderAdapter, err: unknown): string {
+function formatProviderError(
+  adapter: Pick<MemoryEmbeddingProviderAdapter, "formatSetupError">,
+  err: unknown,
+): string {
   return adapter.formatSetupError?.(err) ?? formatErrorMessage(err);
 }
 
@@ -81,7 +94,7 @@ function getAdapter(
 }
 
 function resolveProviderModel(
-  adapter: MemoryEmbeddingProviderAdapter,
+  adapter: Pick<MemoryEmbeddingProviderAdapter, "defaultModel">,
   requestedModel: string,
 ): string {
   const trimmed = requestedModel.trim();
@@ -89,6 +102,21 @@ function resolveProviderModel(
     return trimmed;
   }
   return adapter.defaultModel ?? "";
+}
+
+function resolveStartupInspector(
+  providerId: string,
+  config: MemoryEmbeddingProviderCreateOptions["config"],
+  resolveInspector?: ResolveEmbeddingProviderStartupInspector,
+): EmbeddingProviderStartupInspector {
+  if (!resolveInspector) {
+    return getAdapter(providerId, config);
+  }
+  const inspector = resolveInspector(providerId, config);
+  if (!inspector) {
+    throw new Error(`Unknown memory embedding provider: ${providerId}`);
+  }
+  return inspector;
 }
 
 export function resolveEmbeddingProviderFallbackModel(
@@ -173,7 +201,7 @@ async function createWithAdapter(
 }
 
 async function inspectWithAdapter(
-  adapter: MemoryEmbeddingProviderAdapter,
+  adapter: EmbeddingProviderStartupInspector,
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderStartupPreflightResult> {
   if (!adapter.inspectStartupPrerequisites) {
@@ -204,12 +232,13 @@ async function inspectWithAdapter(
 
 export async function inspectEmbeddingProviderStartupPrerequisites(
   options: CreateEmbeddingProviderOptions,
+  resolveInspector?: ResolveEmbeddingProviderStartupInspector,
 ): Promise<EmbeddingProviderStartupPreflightResult> {
   const provider =
     options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
-  let primaryAdapter: MemoryEmbeddingProviderAdapter;
+  let primaryAdapter: EmbeddingProviderStartupInspector;
   try {
-    primaryAdapter = getAdapter(provider, options.config);
+    primaryAdapter = resolveStartupInspector(provider, options.config, resolveInspector);
   } catch (error) {
     return { status: "indeterminate", reason: formatErrorMessage(error) };
   }
@@ -225,9 +254,9 @@ export async function inspectEmbeddingProviderStartupPrerequisites(
     return primaryResult;
   }
 
-  let fallbackAdapter: MemoryEmbeddingProviderAdapter;
+  let fallbackAdapter: EmbeddingProviderStartupInspector;
   try {
-    fallbackAdapter = getAdapter(options.fallback, options.config);
+    fallbackAdapter = resolveStartupInspector(options.fallback, options.config, resolveInspector);
   } catch (error) {
     return {
       status: "indeterminate",

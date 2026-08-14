@@ -3511,15 +3511,16 @@ jobs:
         run: |
           set -euo pipefail
           swift_test_args=(--package-path apps/macos --enable-code-coverage)
-          # Hosted release and retry runs have shown test-process contention;
-          # keep the faster first-attempt Blacksmith path parallel.
-          if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
-            swift_test_args+=(--parallel)
-          else
-            swift_test_args+=(--no-parallel)
-          fi
           for attempt in 1 2 3; do
-            if swift test "${swift_test_args[@]}"; then
+            attempt_args=("${swift_test_args[@]}")
+            # Keep the fast first-attempt Blacksmith path parallel, but make
+            # in-job retries serial after any contention-driven failure.
+            if [[ "$SWIFT_TEST_EXECUTION" == "parallel" && "$attempt" -eq 1 ]]; then
+              attempt_args+=(--parallel)
+            else
+              attempt_args+=(--no-parallel)
+            fi
+            if swift test "${attempt_args[@]}"; then
               exit 0
             fi
             echo "swift test failed (attempt $attempt/3). Retrying…"

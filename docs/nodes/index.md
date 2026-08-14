@@ -439,11 +439,17 @@ only while those declarations match, and provisioning requires the node and
 Gateway versions to match exactly. If they differ, update the node before
 retrying.
 
-This setting completes device-environment provisioning and session-host status;
-it does **not** yet make device turn dispatch succeed. The Gateway still returns
-`device-runner-transport-unimplemented` until the local-install chain adds
-supervised launch and workspace transport. Do not treat the status as proof that
-a complete turn can run on the device yet.
+This setting enables supervised session turns on the paired device, including
+Gateway-owned workspace transfer and result reconciliation. Each node runs at
+most two worker processes by default. A third launch waits up to 10 seconds for
+a durable slot; while both slots are occupied, the node remains available for
+status and cancellation but is not selected for a new session turn.
+
+If the device is offline before a turn is dispatched, the Gateway waits up to
+10 seconds and then returns a visible retry/reconnect error while keeping the
+session placement available for a later attempt. Gateway restart likewise
+preserves an idle device placement and reconnects its tunnel lazily on the next
+turn.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.

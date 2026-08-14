@@ -5219,10 +5219,13 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(testStep.run).toContain(
       "swift_test_args=(--package-path apps/macos --enable-code-coverage)",
     );
-    expect(testStep.run).toContain('if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]');
-    expect(testStep.run).toContain("swift_test_args+=(--parallel)");
-    expect(testStep.run).toContain("else\n  swift_test_args+=(--no-parallel)");
-    expect(testStep.run).toContain('swift test "${swift_test_args[@]}"');
+    expect(testStep.run).toContain('attempt_args=("${swift_test_args[@]}")');
+    expect(testStep.run).toContain(
+      'if [[ "$SWIFT_TEST_EXECUTION" == "parallel" && "$attempt" -eq 1 ]]',
+    );
+    expect(testStep.run).toContain("attempt_args+=(--parallel)");
+    expect(testStep.run).toContain("else\n    attempt_args+=(--no-parallel)");
+    expect(testStep.run).toContain('swift test "${attempt_args[@]}"');
     expect(testStep.run).not.toContain(
       "swift test --package-path apps/macos --parallel --enable-code-coverage",
     );

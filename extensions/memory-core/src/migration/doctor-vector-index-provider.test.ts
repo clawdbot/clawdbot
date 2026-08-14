@@ -10,19 +10,14 @@ import {
   type InspectConfiguredProviderStartup,
 } from "./doctor-vector-index-provider-diagnostic.js";
 
-function createDiagnostic(
-  inspectProviderStartup: InspectConfiguredProviderStartup = async () => ({ status: "ready" }),
-) {
-  return createVectorIndexProviderDiagnostic(
-    async () => ({
-      provider: "openai",
-      reason: "OpenAI API key missing",
-    }),
-    inspectProviderStartup,
-  );
-}
+const vectorIndexProviderDiagnostic = createVectorIndexProviderDiagnostic(async () => ({
+  provider: "openai",
+  reason: "OpenAI API key missing",
+}));
 
-const vectorIndexProviderDiagnostic = createDiagnostic();
+function createPreflightDiagnostic(inspectStartup: InspectConfiguredProviderStartup) {
+  return createVectorIndexProviderDiagnostic(async () => null, inspectStartup);
+}
 
 const roots = new Set<string>();
 
@@ -103,7 +98,7 @@ describe("memory vector index provider doctor diagnostic", () => {
   });
 
   it("preflights missing local managed setup without changing config or state", async () => {
-    const diagnostic = createDiagnostic(async () => ({
+    const diagnostic = createPreflightDiagnostic(async () => ({
       status: "blocked",
       issues: [
         {
@@ -136,6 +131,7 @@ describe("memory vector index provider doctor diagnostic", () => {
         stateDir,
         oauthDir: path.join(stateDir, "credentials"),
         resolveSqliteReadOnlyLocation: (pathname) => pathname,
+        resolveEmbeddingProviderStartupInspector: () => undefined,
       }),
     ).resolves.toEqual({
       status: "blocked",
@@ -160,7 +156,7 @@ describe("memory vector index provider doctor diagnostic", () => {
 
   it("reports ready when the selected provider prerequisite is configured", async () => {
     let calls = 0;
-    const diagnostic = createDiagnostic(async () => {
+    const diagnostic = createPreflightDiagnostic(async () => {
       calls += 1;
       return { status: "ready" };
     });
@@ -175,6 +171,7 @@ describe("memory vector index provider doctor diagnostic", () => {
         stateDir,
         oauthDir: path.join(stateDir, "credentials"),
         resolveSqliteReadOnlyLocation: (pathname) => pathname,
+        resolveEmbeddingProviderStartupInspector: () => undefined,
       }),
     ).resolves.toEqual({ status: "ready" });
     expect(calls).toBe(1);
@@ -184,7 +181,7 @@ describe("memory vector index provider doctor diagnostic", () => {
     "does not inspect a provider for a %s semantic index",
     async (indexMode) => {
       let calls = 0;
-      const diagnostic = createDiagnostic(async () => {
+      const diagnostic = createPreflightDiagnostic(async () => {
         calls += 1;
         return { status: "ready" };
       });
@@ -201,15 +198,16 @@ describe("memory vector index provider doctor diagnostic", () => {
           stateDir,
           oauthDir: path.join(stateDir, "credentials"),
           resolveSqliteReadOnlyLocation: (pathname) => pathname,
+          resolveEmbeddingProviderStartupInspector: () => undefined,
         }),
       ).resolves.toEqual({ status: "ready" });
       expect(calls).toBe(0);
     },
   );
 
-  it("preserves the startup migration SecretRef deferral", async () => {
+  it("returns indeterminate for a protected index with an unresolved SecretRef", async () => {
     let calls = 0;
-    const diagnostic = createDiagnostic(async () => {
+    const diagnostic = createPreflightDiagnostic(async () => {
       calls += 1;
       return { status: "indeterminate", reason: "must not inspect" };
     });
@@ -233,13 +231,18 @@ describe("memory vector index provider doctor diagnostic", () => {
         stateDir,
         oauthDir: path.join(stateDir, "credentials"),
         resolveSqliteReadOnlyLocation: (pathname) => pathname,
+        resolveEmbeddingProviderStartupInspector: () => undefined,
       }),
-    ).resolves.toEqual({ status: "ready" });
+    ).resolves.toEqual({
+      status: "indeterminate",
+      reason:
+        "Agent main: Memory provider credentials use a SecretRef that preflight does not resolve.",
+    });
     expect(calls).toBe(0);
   });
 
   it("keeps a non-local provider indeterminate without reporting a llama.cpp blocker", async () => {
-    const diagnostic = createDiagnostic(async () => ({
+    const diagnostic = createPreflightDiagnostic(async () => ({
       status: "indeterminate",
       reason: 'Embedding provider "openai" does not expose startup prerequisite inspection.',
     }));
@@ -253,6 +256,7 @@ describe("memory vector index provider doctor diagnostic", () => {
       stateDir,
       oauthDir: path.join(stateDir, "credentials"),
       resolveSqliteReadOnlyLocation: (pathname) => pathname,
+      resolveEmbeddingProviderStartupInspector: () => undefined,
     });
 
     expect(result).toEqual({
@@ -263,6 +267,7 @@ describe("memory vector index provider doctor diagnostic", () => {
   });
 
   it("returns indeterminate when the protected index cannot be read exactly", async () => {
+    const diagnostic = createPreflightDiagnostic(async () => ({ status: "ready" }));
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-invalid-"));
     roots.add(stateDir);
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -270,12 +275,13 @@ describe("memory vector index provider doctor diagnostic", () => {
     await fs.writeFile(agentPath, "not sqlite");
 
     await expect(
-      vectorIndexProviderDiagnostic.preflightStartup?.({
+      diagnostic.preflightStartup?.({
         config: { memory: { search: { provider: "local", fallback: "none" } } },
         env: { OPENCLAW_STATE_DIR: stateDir },
         stateDir,
         oauthDir: path.join(stateDir, "credentials"),
         resolveSqliteReadOnlyLocation: (pathname) => pathname,
+        resolveEmbeddingProviderStartupInspector: () => undefined,
       }),
     ).resolves.toEqual({
       status: "indeterminate",

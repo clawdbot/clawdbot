@@ -17,6 +17,7 @@ import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-pol
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
 import { trimToUndefined } from "./credentials.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
+import { isLoopbackHost } from "./net.js";
 
 const HOOKS_GATEWAY_AUTH_REUSE_WARNING =
   "Security warning: hooks.token matches active Gateway shared-secret auth. Startup continues for compatibility; rotate hooks.token or Gateway auth. Run openclaw security audit for a full report, and run openclaw doctor --fix when the reused hooks.token is persisted in config.";
@@ -80,7 +81,20 @@ export type GatewayStartupAuthInspection = {
   hasSharedSecret: boolean;
   passwordMissing: boolean;
   activeSecretRefPaths: string[];
+  knownWeakCredentialError?: string;
 };
+
+export function shouldBlockGatewayBindWithoutExplicitAuth(params: {
+  bindHost: string;
+  hasSharedSecret: boolean;
+  resolvedAuthMode: GatewayAuthConfig["mode"];
+}): boolean {
+  return (
+    !isLoopbackHost(params.bindHost) &&
+    !params.hasSharedSecret &&
+    params.resolvedAuthMode !== "trusted-proxy"
+  );
+}
 
 /**
  * Inspect startup auth without resolving SecretRefs or generating credentials.
@@ -128,6 +142,12 @@ export function inspectGatewayStartupAuth(params: {
     const state = states[path];
     return state.active && state.hasSecretRef;
   });
+  let knownWeakCredentialError: string | undefined;
+  try {
+    assertGatewayAuthNotKnownWeak(auth);
+  } catch (error) {
+    knownWeakCredentialError = error instanceof Error ? error.message : String(error);
+  }
   const hasSharedSecret =
     (auth.mode === "token" && tokenConfigured) || (auth.mode === "password" && passwordConfigured);
   return {
@@ -135,6 +155,7 @@ export function inspectGatewayStartupAuth(params: {
     hasSharedSecret,
     passwordMissing: auth.mode === "password" && !passwordConfigured,
     activeSecretRefPaths,
+    ...(knownWeakCredentialError ? { knownWeakCredentialError } : {}),
   };
 }
 

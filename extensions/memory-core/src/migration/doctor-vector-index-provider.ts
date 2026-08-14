@@ -68,7 +68,28 @@ const inspectConfiguredProviderStartup: InspectConfiguredProviderStartup = async
     return { status: "ready" };
   }
   const embeddings = await import("../memory/embeddings.js");
-  return await embeddings.inspectEmbeddingProviderStartupPrerequisites(resolved.options);
+  return await embeddings.inspectEmbeddingProviderStartupPrerequisites(
+    resolved.options,
+    (providerId, config) => {
+      const inspector = params.resolveEmbeddingProviderStartupInspector(providerId, config);
+      if (!inspector?.inspectStartupPrerequisites) {
+        return undefined;
+      }
+      return {
+        ...inspector,
+        inspectStartupPrerequisites: (options) =>
+          inspector.inspectStartupPrerequisites?.({
+            ...options,
+            ...(typeof options.outputDimensionality === "number"
+              ? { dimensions: options.outputDimensionality }
+              : {}),
+          }) ?? {
+            status: "indeterminate",
+            reason: `Embedding provider "${inspector.id}" does not expose startup prerequisite inspection.`,
+          },
+      };
+    },
+  );
 };
 
 export const vectorIndexProviderDiagnostic = createVectorIndexProviderDiagnostic(

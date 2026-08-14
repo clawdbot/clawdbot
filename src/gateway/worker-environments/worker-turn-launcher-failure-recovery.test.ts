@@ -9,7 +9,7 @@ import type { SpawnResult } from "../../process/exec.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerTunnelHandle } from "./tunnel-contract.js";
+import { WorkerRunnerUnavailableError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -159,23 +159,26 @@ describe("worker turn launcher failure recovery", () => {
   it("preserves a terminal workspace result when the worker child later exits nonzero", async () => {
     seedActivePlacement();
     const destroy = vi.fn(async () => attachedEnvironment());
-    const launchTurn = vi.fn(async (): Promise<SpawnResult> => {
-      createWorkerSessionPlacementGate(placements).updateAckCursors({
-        sessionId: SESSION_ID,
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        runId: "run-terminal-child-failure",
-        liveSeq: 1,
-      });
-      return {
-        stdout: "",
-        stderr: "child cleanup failed",
-        code: 1,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
-    });
+    const launchTurn = vi.fn(
+      async (request: Parameters<WorkerTunnelHandle["launchTurn"]>[0]): Promise<SpawnResult> => {
+        request.onDispatchReady?.();
+        createWorkerSessionPlacementGate(placements).updateAckCursors({
+          sessionId: SESSION_ID,
+          environmentId: ENVIRONMENT_ID,
+          ownerEpoch: OWNER_EPOCH,
+          runId: "run-terminal-child-failure",
+          liveSeq: 1,
+        });
+        return {
+          stdout: "",
+          stderr: "child cleanup failed",
+          code: 1,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      },
+    );
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
@@ -306,7 +309,7 @@ describe("worker turn launcher failure recovery", () => {
     expect(environments.destroy).not.toHaveBeenCalled();
   });
 
-  it("fails placement and tears down after an ambiguous remote launch failure", async () => {
+  it("keeps the placement active when launch fails before transport dispatch", async () => {
     seedActivePlacement();
     const teardownStates: string[] = [];
     const observedPlacements: WorkerSessionPlacementStore = {
@@ -328,10 +331,11 @@ describe("worker turn launcher failure recovery", () => {
       teardownStates.push(`destroy:${placements.get(SESSION_ID)?.state ?? "missing"}`);
       return attachedEnvironment();
     });
+    const acknowledgeCredentialDelivery = vi.fn(() => true);
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
+      acknowledgeCredentialDelivery,
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
@@ -341,7 +345,7 @@ describe("worker turn launcher failure recovery", () => {
         })),
         runWorkspaceCommand: vi.fn(),
         launchTurn: vi.fn(async () => {
-          throw new Error("remote launch failed");
+          throw new WorkerRunnerUnavailableError();
         }),
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
@@ -377,21 +381,13 @@ describe("worker turn launcher failure recovery", () => {
         turn("run-failed"),
         runLocal,
       ),
-    ).rejects.toThrow("remote launch failed");
+    ).rejects.toThrow("The device runner is offline");
     expect(runLocal).not.toHaveBeenCalled();
-    expect(placements.get(SESSION_ID)).toMatchObject({
-      state: "failed",
-      turnClaim: null,
-      recoveryError: "remote launch failed",
-    });
-    expect(stopTunnel).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
-    expect(destroy).toHaveBeenCalledWith(ENVIRONMENT_ID);
-    expect(teardownStates).toEqual([
-      "stop:draining",
-      "destroy:draining",
-      "reconcile-before:draining",
-      "reconcile-after:reconciling",
-    ]);
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+    expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
+    expect(stopTunnel).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(teardownStates).toEqual([]);
   });
 
   it("keeps redacted process failure details on a valid UTF-16 boundary", async () => {
@@ -412,16 +408,17 @@ describe("worker turn launcher failure recovery", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         runWorkspaceCommand: vi.fn(),
-        launchTurn: vi.fn(
-          async (): Promise<SpawnResult> => ({
+        launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+          request.onDispatchReady?.();
+          return {
             stdout: "",
             stderr,
             code: 1,
             signal: null,
             killed: false,
             termination: "exit",
-          }),
-        ),
+          };
+        }),
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
         }),

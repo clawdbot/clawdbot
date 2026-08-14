@@ -95,6 +95,23 @@ describe("inspectGatewayStartupAuth", () => {
     });
   });
 
+  it("surfaces a known-weak credential without throwing", () => {
+    expect(
+      inspectGatewayStartupAuth({
+        cfg: gatewayAuthConfig({
+          mode: "token",
+          token: "change-me-now", // pragma: allowlist secret
+        }),
+        env: emptyEnv(),
+      }),
+    ).toMatchObject({
+      passwordMissing: false,
+      hasSharedSecret: true,
+      knownWeakCredentialError: expect.stringMatching(/example placeholder/i),
+      auth: { mode: "token" },
+    });
+  });
+
   it.each([
     {
       name: "plaintext config",

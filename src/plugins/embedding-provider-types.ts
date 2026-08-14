@@ -115,6 +115,11 @@ export type EmbeddingProviderAdapter = {
   formatSetupError?: (err: unknown) => string;
 };
 
+export type EmbeddingProviderStartupInspector = Pick<
+  EmbeddingProviderAdapter,
+  "id" | "defaultModel" | "transport" | "formatSetupError" | "inspectStartupPrerequisites"
+>;
+
 /** Registered embedding provider with optional owning plugin metadata. */
 export type RegisteredEmbeddingProvider = {
   adapter: EmbeddingProviderAdapter;

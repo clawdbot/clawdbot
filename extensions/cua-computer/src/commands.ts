@@ -19,7 +19,9 @@ import {
   type CuaDriverSession,
   type CuaToolResult,
 } from "./driver-client.js";
+import { platformActions } from "./driver-result.js";
 import {
+  adoptGeneration,
   issueFrame,
   verifyFrame,
   verifyReferenceWidth,
@@ -28,26 +30,10 @@ import {
   type CuaLastFrame,
   type CuaScreenSize,
 } from "./frame.js";
+import { handleV2Act, type CuaComputerActParams } from "./v2-actions.js";
 
 const AVAILABILITY_POLL_MS = 5_000;
-const CUA_COORDINATE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(0, 15);
 const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
-type CuaComputerActParams = {
-  action: ComputerActParams["action"];
-  displayFrameId?: string;
-  x?: number;
-  y?: number;
-  fromX?: number;
-  fromY?: number;
-  text?: string;
-  keys?: string;
-  modifiers?: string;
-  scrollDirection?: "up" | "down" | "left" | "right";
-  scrollAmount?: number;
-  durationMs?: number;
-  screenIndex?: number;
-  refWidth?: number;
-};
 // Rastermill enforces inputPixels before resizing, so this must clear the native
 // capture, not the delivered frame. 8K (7680x4320 = ~33.2M) is a valid primary
 // display; budget above it so full-resolution snapshots reach the downscaler.
@@ -244,7 +230,7 @@ async function currentFrame(
   return frame;
 }
 
-async function handleAct(
+async function handleDesktopAct(
   driver: CuaDriverSession,
   frameState: CuaFrameState,
   params: ComputerActParams,
@@ -441,12 +427,14 @@ export function createCuaComputerProvider(
       provider: {
         id: "cua-computer",
         label: "CUA Computer",
-        generation: "cua-computer-coordinate-v1",
+        generation: isSupportedPlatform
+          ? `cua-computer-v2:${driver().generation}`
+          : "cua-computer-v2:unsupported",
       },
-      actions: CUA_COORDINATE_ACTION_NAMES,
-      targets: ["screen"],
-      deliveryModes: ["foreground"],
-      observations: ["image"],
+      actions: platformActions(platform),
+      targets: ["screen", "window", "element"],
+      deliveryModes: ["background", "foreground"],
+      observations: ["image", "accessibility"],
       features: { recording: false, agentCursor: false, multiDisplay: false },
     }),
     isAvailable,
@@ -468,7 +456,7 @@ export function createCuaComputerProvider(
     },
     openExecution: async () => {
       const queue = new PromiseQueue();
-      const frameState: CuaFrameState = { generation: "uninitialized" };
+      const frameState: CuaFrameState = { generation: driver().generation };
       return {
         snapshot: async (paramsJSON, signal) =>
           await queue.run(async () => {
@@ -511,7 +499,7 @@ export function createCuaComputerProvider(
               width = result.width;
               height = result.height;
             }
-            frameState.generation = driver().generation;
+            adoptGeneration(frameState, driver().generation);
             const displayFrameId = issueFrame(frameState, geometry, { width, height });
             return JSON.stringify({
               format,
@@ -529,10 +517,12 @@ export function createCuaComputerProvider(
                 "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports Windows and Linux",
               );
             }
-            return await handleAct(
+            return await handleV2Act(
+              platform,
               driver(),
               frameState,
               parseComputerActParamsJSON(paramsJSON),
+              handleDesktopAct,
               signal,
             );
           }),

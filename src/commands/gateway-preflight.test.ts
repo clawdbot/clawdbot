@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
-  ensureCliPluginRegistryLoaded: vi.fn(),
   collectGatewayStartupPreflight: vi.fn(),
   inspectStartupSessionMigrationPrerequisites: vi.fn(),
   resolveSqliteReadOnlyInspectionLocation: vi.fn((pathname: string) => pathname),
@@ -15,10 +14,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-}));
-
-vi.mock("../cli/plugin-registry-loader.js", () => ({
-  ensureCliPluginRegistryLoaded: mocks.ensureCliPluginRegistryLoaded,
 }));
 
 vi.mock("../infra/startup-preflight.js", () => ({
@@ -70,7 +65,7 @@ describe("gateway startup preflight command", () => {
     delete process.env.JITI_FS_CACHE;
   });
 
-  it("uses an unobserved config read and the memory embedding provider scope", async () => {
+  it("uses an unobserved config read without activating plugin runtime", async () => {
     const config = { memory: { search: { provider: "local", fallback: "none" } } };
     const sourceConfig = structuredClone(config);
     mocks.readConfigFileSnapshot.mockResolvedValue({
@@ -97,12 +92,6 @@ describe("gateway startup preflight command", () => {
     });
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
-    expect(mocks.ensureCliPluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "memory-embedding-providers",
-      routeLogsToStderr: true,
-      config,
-      activationSourceConfig: sourceConfig,
-    });
     expect(mocks.collectGatewayStartupPreflight).toHaveBeenCalledWith({
       config,
       env: process.env,
@@ -172,7 +161,7 @@ describe("gateway startup preflight command", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2, { resetStream: process.stderr });
   });
 
-  it("returns exit 2 for invalid config without loading plugins", async () => {
+  it("returns exit 2 for invalid config without running startup inspections", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       valid: false,
       issues: [{ path: ["memory", "search", "provider"], message: "Invalid provider" }],
@@ -188,7 +177,7 @@ describe("gateway startup preflight command", () => {
       errors: [{ id: "config/validation", code: "invalid-config" }],
     });
     expect(runtime.exit).toHaveBeenCalledWith(2, { resetStream: process.stderr });
-    expect(mocks.ensureCliPluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.collectGatewayStartupPreflight).not.toHaveBeenCalled();
   });
 
   it.each([

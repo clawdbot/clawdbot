@@ -39,6 +39,11 @@ describe("built plugin control-plane module loads", () => {
     write(rootDir, "dist/extensions/demo/contract-api.js", "export const ok = true;\n");
     write(
       rootDir,
+      "dist/extensions/demo/embedding-provider-preflight-api.js",
+      "export const ok = true;\n",
+    );
+    write(
+      rootDir,
       "dist/extensions/demo/provider-contract-api.js",
       "export const ignored = true;\n",
     );
@@ -66,6 +71,11 @@ describe("built plugin control-plane module loads", () => {
         pluginId: "demo",
         kind: "doctor-contract",
         relativePath: "dist/extensions/demo/doctor-contract-api.js",
+      },
+      {
+        pluginId: "demo",
+        kind: "embedding-provider-preflight",
+        relativePath: "dist/extensions/demo/embedding-provider-preflight-api.js",
       },
       {
         pluginId: "demo",

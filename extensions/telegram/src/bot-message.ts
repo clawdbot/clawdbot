@@ -426,7 +426,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
             },
             onAbandoned: () => {
               if (!adopted) {
-                void settle({ kind: "skipped" }, "terminal");
+                void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
               }
               // Generic reply abandonment is synchronous; Telegram has no
               // owner-local resource teardown gated on core claim release.

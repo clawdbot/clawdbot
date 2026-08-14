@@ -188,17 +188,23 @@ stated honestly (revision 1 undersold this):
   credentials, and staged refs. Device-side GC of per-session workspace dirs
   and superseded bundles is a milestone exit gate, not an open question:
   persistent machines otherwise leak the user's own disk.
-- **Placement `runner-offline`.** Heartbeat/presence loss marks the placement
-  with a recorded, operator-visible reason; staged results are preserved by
-  the existing fence machinery; the session offers "continue on gateway"
-  (reclaim) or "wait for device". Never a silent non-outcome.
+- **Placement `runner-offline`.** Pre-dispatch device loss waits up to 10
+  seconds, then returns an operator-visible coordination error without failing
+  the active placement or consuming model fallbacks. Idle active device
+  placements survive Gateway restart and validate their reconnect-scoped
+  tunnel lazily on the next turn. Durable status projection and the explicit
+  "continue on gateway" / "wait for device" actions remain milestone work.
 - **Dispatch target union.** `sessions.dispatch` accepts
   `{ profileId } | { deviceId }`; the device → environment mapping resolves
   server-side. Devices are not smuggled through synthesized
   `cloudWorkers.profiles` entries.
-- **Concurrency slots.** A node declares a session-slot count (default small);
-  the picker shows busy state; a dispatch that no live runner can satisfy
-  fails visibly after a bounded wait instead of queuing forever.
+- **Concurrency slots.** The node supervisor admits two physical worker
+  processes by default. Durable `pending` and `running` launches consume those
+  slots atomically; same-launch replay consumes no additional slot. When full,
+  the node withdraws `workerRuns` from its live inventory while retaining the
+  supervisor dialect, restores it after a durable terminal commit, and gives a
+  third launch up to 10 seconds to acquire capacity before failing visibly.
+  Public inventory does not expose machine counters.
 - **Multi-gateway safety.** The worker install/workspace root on a node is
   namespaced by gateway identity so two gateways pairing one machine cannot
   corrupt each other's state.
@@ -219,9 +225,11 @@ build. Provider eligibility and new launch selection require the exact handshake
 while status and cancellation reacquire only the current supervisor proof and use
 the durable launch identity so an upgrade cannot strand an existing worker.
 Node-local opt-in advertises the current installation; default nodes remain
-non-hosts. Milestone 7 upgrades this to Gateway-pinned, namespaced bundle bytes.
-Slots, isolation, checkouts, workspace transfer, and persistent-runner lifecycle
-remain milestone 6 work.
+non-hosts. The supervisor now owns two atomic durable capacity slots, bounded
+10-second admission, restart reconciliation, and full/free inventory edges.
+Milestone 7 upgrades this to Gateway-pinned, namespaced bundle bytes. Isolation,
+checkout ownership, device dormancy/reaping, and node-host disk GC remain
+milestone 6 work.
 
 ### Trust model (operator-decided, v1)
 
@@ -316,7 +324,7 @@ speak. Additions:
   local gateway, execution-capable nodes, worker environments, and the
   separate cloud profiles list. Device-runner inventory adds `sessionHost`
   without creating another place ontology.
-- **Where picker regrouped** (`ui/src/pages/new-session/place-picker.ts`):
+- **Where picker regrouped** (`ui/src/pages/new-session/place-picker-sections.ts`):
   sections "This gateway" / "Devices" / "Cloud". Device rows intersect the
   environment catalog with execution-capable paired nodes; connected rows are
   selectable, while remembered offline rows stay visible but disabled. Cloud
@@ -332,9 +340,10 @@ speak. Additions:
 - **Placement chip** on the session header: shows quiet current placement;
   active cloud placements reclaim through `sessions.reclaim` with "Bring
   home". Stop-and-continue moves arrive with milestone 8.
-- **Remaining milestone work**: the admin-gated "Connect a machine…" foot and
-  busy/slot state. `runner-offline` then shows a banner with the recorded
-  reason and its recovery verbs.
+- **Remaining milestone work**: the admin-gated "Connect a machine…" foot,
+  busy/slot state, and durable `runner-offline` recovery actions. Pre-dispatch
+  offline attempts already fail visibly after a 10-second grace without
+  terminalizing the placement.
 
 ### Cloud convergence (milestone 10)
 

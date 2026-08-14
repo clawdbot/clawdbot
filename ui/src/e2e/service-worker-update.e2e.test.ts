@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
@@ -26,6 +27,13 @@ type BuildAsset = {
   sha256: string;
 };
 
+type InstallGate = {
+  url: string;
+  requested: Promise<void>;
+  release: () => void;
+  close: () => Promise<void>;
+};
+
 let browser: Browser;
 let outDir: string;
 let server: ControlUiE2eServer;
@@ -47,7 +55,47 @@ async function findBuildAsset(buildId: string, buildDir = outDir): Promise<Build
   throw new Error(`Production Control UI output did not contain build id ${buildId}`);
 }
 
-async function holdReplacementWorkerInstalling(buildDir: string, delayMs: number): Promise<void> {
+async function createInstallGate(): Promise<InstallGate> {
+  let releaseResponse = () => {};
+  let resolveRequested = () => {};
+  const requested = new Promise<void>((resolve) => {
+    resolveRequested = resolve;
+  });
+  const gateServer = createHttpServer((_request, response) => {
+    response.setHeader("Access-Control-Allow-Origin", "*");
+    releaseResponse = () => {
+      if (!response.writableEnded) {
+        response.statusCode = 204;
+        response.end();
+      }
+    };
+    resolveRequested();
+  });
+  await new Promise<void>((resolve, reject) => {
+    gateServer.once("error", reject);
+    gateServer.listen(0, "127.0.0.1", () => {
+      gateServer.off("error", reject);
+      resolve();
+    });
+  });
+  const address = gateServer.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Install gate did not expose a TCP port");
+  }
+  return {
+    url: `http://127.0.0.1:${address.port}/release-install`,
+    requested,
+    release: () => releaseResponse(),
+    close: async () => {
+      releaseResponse();
+      await new Promise<void>((resolve, reject) => {
+        gateServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
+}
+
+async function holdReplacementWorkerInstalling(buildDir: string, gateUrl: string): Promise<void> {
   const workerPath = path.join(buildDir, "sw.js");
   const source = await readFile(workerPath, "utf8");
   const install =
@@ -59,7 +107,7 @@ async function holdReplacementWorkerInstalling(buildDir: string, delayMs: number
     workerPath,
     source.replace(
       install,
-      `event.waitUntil(Promise.all([new Promise((resolve) => setTimeout(resolve, ${delayMs})), caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))]));`,
+      `event.waitUntil(Promise.all([fetch(${JSON.stringify(gateUrl)}), caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))]));`,
     ),
   );
 }
@@ -239,6 +287,7 @@ describe("Control UI service-worker production update E2E", () => {
       },
       terminalEnabled: true,
     });
+    let installGate: InstallGate | null = null;
 
     try {
       expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
@@ -257,8 +306,9 @@ describe("Control UI service-worker production update E2E", () => {
 
       const nextOutDir = `${outDir}-next`;
       const previousOutDir = `${outDir}-previous`;
+      installGate = await createInstallGate();
       await buildProductionControlUiE2e(nextOutDir, buildB);
-      await holdReplacementWorkerInstalling(nextOutDir, 1_200);
+      await holdReplacementWorkerInstalling(nextOutDir, installGate.url);
       const assetB = await findBuildAsset(buildB, nextOutDir);
       expect(assetB.path).not.toBe(assetA.path);
       expect(assetB.sha256).not.toBe(assetA.sha256);
@@ -278,12 +328,37 @@ describe("Control UI service-worker production update E2E", () => {
       await page.evaluate(() => window.history.replaceState(window.history.state, "", "/"));
       const reloaded = page.waitForEvent("domcontentloaded");
       await gateway.setOnline(true);
+      await installGate.requested;
       await page.waitForFunction(async () => {
         const registration = await navigator.serviceWorker.getRegistration();
         return registration?.installing?.state === "installing";
       });
+      await page.waitForFunction(() => {
+        const panel = document.querySelector("openclaw-terminal-panel") as
+          | (HTMLElement & { available: boolean; terminalPanelOpen: boolean })
+          | null;
+        return panel?.available === true && panel.terminalPanelOpen;
+      });
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("openclaw:terminal-toggle", {
+            detail: {
+              open: true,
+              catalog: {
+                catalogId: "codex",
+                hostId: "gateway:local",
+                threadId: "thread-during-worker-refresh",
+              },
+            },
+          }),
+        );
+      });
+      await expect
+        .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
+        .toContain("thread-during-worker-refresh");
       await page.waitForTimeout(300);
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
+      installGate.release();
       await reloaded;
       await ensureControlledPage(page, pageErrors, buildB);
       await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildB);
@@ -311,7 +386,13 @@ describe("Control UI service-worker production update E2E", () => {
         agentId: "research",
         cols: expect.any(Number),
         rows: expect.any(Number),
+        catalog: {
+          catalogId: "codex",
+          hostId: "gateway:local",
+          threadId: "thread-during-worker-refresh",
+        },
       });
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
 
       await expect
         .poll(() => page.evaluate(() => caches.keys()))
@@ -330,6 +411,7 @@ describe("Control UI service-worker production update E2E", () => {
         });
       }
     } finally {
+      await installGate?.close();
       await context.close();
     }
   }, 120_000);

@@ -28,7 +28,6 @@ import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
-  isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -231,18 +230,6 @@ function formatModeErrorList(modes: readonly string[]): string {
     return `${quoted[0]} or ${quoted[1]}`;
   }
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
-}
-
-function shouldBlockGatewayBindWithoutExplicitAuth(params: {
-  bindHost: string;
-  hasSharedSecret: boolean;
-  resolvedAuthMode: GatewayAuthMode;
-}): boolean {
-  return (
-    !isLoopbackHost(params.bindHost) &&
-    !params.hasSharedSecret &&
-    params.resolvedAuthMode !== "trusted-proxy"
-  );
 }
 
 function getGatewayStartGuardErrors(params: {
@@ -1029,7 +1016,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           ...(passwordRaw ? { password: passwordRaw } : {}),
         }
       : undefined;
-  const { inspectGatewayStartupAuth } = await import("../../gateway/startup-auth.js");
+  const { inspectGatewayStartupAuth, shouldBlockGatewayBindWithoutExplicitAuth } =
+    await import("../../gateway/startup-auth.js");
   const authInspection = await startupTrace.measure("cli.auth-resolve", () =>
     inspectGatewayStartupAuth({
       cfg,

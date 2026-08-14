@@ -1,12 +1,13 @@
-import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { defaultGatewayBindMode, resolveGatewayBindHost } from "../gateway/net.js";
 import {
   inspectStartupSessionMigrationPrerequisites,
   type SessionStartupPreflightResult,
 } from "../gateway/server-startup-session-migration.js";
 import {
   inspectGatewayStartupAuth,
+  shouldBlockGatewayBindWithoutExplicitAuth,
   type GatewayStartupAuthInspection,
 } from "../gateway/startup-auth.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -71,6 +72,7 @@ function combineCoreStartupPreflight(
     errors: GatewayStartupPreflightError[];
   },
   authResult: GatewayStartupAuthInspection,
+  bindResult: { mode: string; blocked: boolean },
   sessionResult?: SessionStartupPreflightResult,
 ): {
   checksRun: number;
@@ -92,6 +94,31 @@ function combineCoreStartupPreflight(
         "Set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD for the target Gateway.",
       ],
       configPath: "gateway.auth.password",
+    });
+  }
+  if (authResult.knownWeakCredentialError) {
+    blockers.push({
+      id: `${authInspectionId}/known-weak-credential`,
+      pluginId: CORE_PREFLIGHT_PLUGIN_ID,
+      migrationId: CORE_AUTH_PREFLIGHT_MIGRATION_ID,
+      code: "gateway-auth-known-weak",
+      message: authResult.knownWeakCredentialError,
+      remediation: ["Replace the published example credential before starting the Gateway."],
+      configPath:
+        authResult.auth.mode === "password" ? "gateway.auth.password" : "gateway.auth.token",
+    });
+  }
+  if (bindResult.blocked) {
+    blockers.push({
+      id: `${authInspectionId}/bind-auth-required`,
+      pluginId: CORE_PREFLIGHT_PLUGIN_ID,
+      migrationId: CORE_AUTH_PREFLIGHT_MIGRATION_ID,
+      code: "gateway-bind-auth-required",
+      message: `Refusing to bind gateway to ${bindResult.mode} without auth.`,
+      remediation: [
+        "Set gateway.auth.token/password or the corresponding target environment variable.",
+      ],
+      configPath: "gateway.auth",
     });
   }
   if (authResult.activeSecretRefPaths.length > 0) {
@@ -205,12 +232,20 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
     env: process.env,
   });
   try {
-    await ensureCliPluginRegistryLoaded({
-      scope: "memory-embedding-providers",
-      routeLogsToStderr: true,
-      config: snapshot.config,
-      ...(snapshot.sourceConfig ? { activationSourceConfig: snapshot.sourceConfig } : {}),
-    });
+    const tailscaleMode = snapshot.config.gateway?.tailscale?.mode ?? "off";
+    const bindMode = snapshot.config.gateway?.bind ?? defaultGatewayBindMode(tailscaleMode);
+    const bindHost = await resolveGatewayBindHost(
+      bindMode,
+      snapshot.config.gateway?.customBindHost,
+    );
+    const bindResult = {
+      mode: bindMode,
+      blocked: shouldBlockGatewayBindWithoutExplicitAuth({
+        bindHost,
+        hasSharedSecret: authResult.hasSharedSecret,
+        resolvedAuthMode: authResult.auth.mode,
+      }),
+    };
     const [pluginResult, sessionResult] = await Promise.all([
       collectGatewayStartupPreflight({
         config: snapshot.config,
@@ -222,7 +257,9 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
         env: process.env,
       }),
     ]);
-    return createResult(combineCoreStartupPreflight(pluginResult, authResult, sessionResult));
+    return createResult(
+      combineCoreStartupPreflight(pluginResult, authResult, bindResult, sessionResult),
+    );
   } catch (error) {
     return createResult(
       combineCoreStartupPreflight(
@@ -238,6 +275,7 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
           ],
         },
         authResult,
+        { mode: snapshot.config.gateway?.bind ?? "loopback", blocked: false },
       ),
     );
   }
