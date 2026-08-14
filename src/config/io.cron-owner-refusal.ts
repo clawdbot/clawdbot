@@ -64,11 +64,6 @@ async function assertSafe(
       error,
     );
   });
-  if (active && active.pid !== process.pid) {
-    throw refused(
-      `Config write refused: live external Gateway pid ${active.pid} may write ownerless cron jobs. Stop it.${RETRY}`,
-    );
-  }
   const state = await deps
     .loadLegacyCronRepairState({ cfg: {}, storePath, env, readOnly: true })
     .catch((error: unknown) => {
@@ -88,6 +83,16 @@ async function assertSafe(
       `Config write refused: cron store ${storePath} contains ${unverifiable} corrupt row(s) whose ownership cannot be verified.${RETRY}`,
     );
   }
+  if (ownerless > 0 && !provenOwnerAgentId) {
+    throw refused(
+      `Config write refused: cron store ${storePath} contains ${ownerless} ownerless legacy cron job(s).${RETRY}`,
+    );
+  }
+  if (active && active.pid !== process.pid && active.cronOwnerWrites !== "required") {
+    throw refused(
+      `Config write refused: live external Gateway pid ${active.pid} does not prove that cron writes preserve agent ownership. Restart it with this OpenClaw version, or stop it, then retry.`,
+    );
+  }
   if (ownerless > 0 && provenOwnerAgentId) {
     try {
       deps.materializeLegacyDefaultCronJobOwners({
@@ -102,11 +107,6 @@ async function assertSafe(
       );
     }
     return await assertSafe(storePath, env, deps);
-  }
-  if (ownerless > 0) {
-    throw refused(
-      `Config write refused: cron store ${storePath} contains ${ownerless} ownerless legacy cron job(s).${RETRY}`,
-    );
   }
 }
 

@@ -740,6 +740,28 @@ function createMissedIsolatedJob(now: number): CronJob {
 }
 
 describe("cron service ops seam coverage", () => {
+  it("stamps the prepared default owner on every new job", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+
+    const created = await add(state, {
+      name: "default-owned",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run" },
+    });
+
+    expect(created.agentId).toBe("main");
+    await expect(loadCronStore(storePath)).resolves.toMatchObject({
+      jobs: [expect.objectContaining({ id: created.id, agentId: "main" })],
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
   it("keeps core add paths on SQLite and leaves legacy JSON for doctor migration", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-05-20T08:00:00.000Z");

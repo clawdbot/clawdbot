@@ -6,9 +6,19 @@ import {
 } from "./io.cron-owner-refusal.js";
 import { assertAutomaticBindingsWriteAllowed } from "./io.ownership-write-guard.js";
 
-const state = (rawJobs: Array<Record<string, unknown>>) =>
-  ({ rawJobs, projectedOwnersByJobId: new Map() }) as unknown as LegacyCronRepairState;
-const deps = (activeGateway?: { pid: number; port: number }, jobs?: Record<string, unknown>[]) => ({
+const state = (
+  rawJobs: Array<Record<string, unknown>>,
+  invalidConfigRows: Array<Record<string, unknown>> = [],
+) =>
+  ({
+    rawJobs,
+    invalidConfigRows,
+    projectedOwnersByJobId: new Map(),
+  }) as unknown as LegacyCronRepairState;
+const deps = (
+  activeGateway?: { pid: number; port: number; cronOwnerWrites?: "required" },
+  jobs?: Record<string, unknown>[],
+) => ({
   readActiveGatewayLockIdentity: vi.fn(async () =>
     activeGateway ? { ...activeGateway, createdAt: new Date(0).toISOString() } : undefined,
   ),
@@ -16,28 +26,49 @@ const deps = (activeGateway?: { pid: number; port: number }, jobs?: Record<strin
   materializeLegacyDefaultCronJobOwners: vi.fn(() => 0),
 });
 
-it("refuses unsafe ownership writes and rechecks at commit", async () => {
-  const injected = deps({ pid: process.pid + 1, port: 18_789 });
-  await expect(
-    prepareCronOwnerWriteRefusal({ storePath: "/tmp/cron.json" }, injected),
-  ).rejects.toThrow("live external Gateway");
-  expect(injected.loadLegacyCronRepairState).not.toHaveBeenCalled();
+it("allows an ownership-safe live Gateway with a clean cron store and rechecks at commit", async () => {
+  const injected = deps({ pid: process.pid + 1, port: 18_789, cronOwnerWrites: "required" }, [
+    { id: "owned", agentId: "ops" },
+  ]);
+  const plan = await prepareCronOwnerWriteRefusal({ storePath: "/tmp/cron.json" }, injected);
+  injected.loadLegacyCronRepairState.mockResolvedValueOnce(state([{ id: "ownerless" }]));
+  await expect(plan.recheck()).rejects.toThrow("ownerless legacy cron job");
+});
 
+it("refuses an unproven live Gateway without suggesting doctor", async () => {
+  const injected = deps({ pid: process.pid + 1, port: 18_789 });
+  const refusal = prepareCronOwnerWriteRefusal({ storePath: "/tmp/cron.json" }, injected);
+  await expect(refusal).rejects.toThrow("live external Gateway");
+  await expect(refusal).rejects.not.toThrow("doctor --fix");
+});
+
+it.each([
+  ["without a live Gateway", undefined],
+  [
+    "with an ownership-safe live Gateway",
+    { pid: process.pid + 1, port: 18_789, cronOwnerWrites: "required" as const },
+  ],
+])("refuses ownerless and corrupt cron rows %s", async (_name, activeGateway) => {
   await expect(
     prepareCronOwnerWriteRefusal(
       { storePath: "/tmp/cron.json" },
-      deps(undefined, [
+      deps(activeGateway, [
         { id: "null", agentId: null },
         { id: "blank", agentId: " " },
       ]),
     ),
   ).rejects.toThrow("contains 2 ownerless legacy cron job");
 
-  const commitDeps = deps(undefined, [{ id: "owned", agentId: "ops" }]);
-  const plan = await prepareCronOwnerWriteRefusal({ storePath: "/tmp/cron.json" }, commitDeps);
-  commitDeps.loadLegacyCronRepairState.mockResolvedValueOnce(state([{ id: "ownerless" }]));
-  await expect(plan.recheck()).rejects.toThrow("ownerless legacy cron job");
+  const corrupt = deps(activeGateway);
+  corrupt.loadLegacyCronRepairState.mockResolvedValueOnce(
+    state([], [{ id: "corrupt", reason: "invalid config" }]),
+  );
+  await expect(
+    prepareCronOwnerWriteRefusal({ storePath: "/tmp/cron.json" }, corrupt),
+  ).rejects.toThrow("contains 1 corrupt row");
+});
 
+it("keeps include-owned binding writes fail closed", () => {
   expect(() =>
     assertAutomaticBindingsWriteAllowed({
       bindingsIncludeOwned: true,
