@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import {
   ensureGatewayStartupAuth,
+  inspectGatewayStartupBindAuth,
   inspectGatewayStartupAuth,
   mergeGatewayTailscaleConfig,
 } from "./startup-auth.js";
@@ -181,6 +182,65 @@ describe("inspectGatewayStartupAuth", () => {
       hasSharedSecret: false,
       activeSecretRefPaths: [],
       auth: { mode: "none" },
+    });
+  });
+});
+
+describe("inspectGatewayStartupBindAuth", () => {
+  const unauthenticated = {
+    hasSharedSecret: false,
+    resolvedAuthMode: "none" as const,
+  };
+
+  it.each([
+    { bindMode: "loopback" as const, status: "ready" },
+    { bindMode: "lan" as const, status: "blocked" },
+    { bindMode: "auto" as const, isContainer: true, status: "blocked" },
+    { bindMode: "auto" as const, isContainer: false, status: "indeterminate" },
+    { bindMode: "tailnet" as const, status: "indeterminate" },
+    {
+      bindMode: "custom" as const,
+      customBindHost: "10.0.0.5",
+      status: "blocked",
+    },
+    {
+      bindMode: "custom" as const,
+      customBindHost: "127.0.0.1",
+      status: "indeterminate",
+    },
+  ])("classifies passive bind inspection for $bindMode as $status", (testCase) => {
+    expect(
+      inspectGatewayStartupBindAuth({
+        ...unauthenticated,
+        ...testCase,
+      }),
+    ).toMatchObject({
+      mode: testCase.bindMode,
+      status: testCase.status,
+    });
+  });
+
+  it.each([
+    {
+      name: "shared secret",
+      hasSharedSecret: true,
+      resolvedAuthMode: "token" as const,
+    },
+    {
+      name: "trusted proxy",
+      hasSharedSecret: false,
+      resolvedAuthMode: "trusted-proxy" as const,
+    },
+  ])("does not require bind probing with $name auth", ({ hasSharedSecret, resolvedAuthMode }) => {
+    expect(
+      inspectGatewayStartupBindAuth({
+        bindMode: "tailnet",
+        hasSharedSecret,
+        resolvedAuthMode,
+      }),
+    ).toEqual({
+      mode: "tailnet",
+      status: "ready",
     });
   });
 });

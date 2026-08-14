@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EmbeddingProviderStartupInspector } from "./embedding-provider-types.js";
+import { canStartConfiguredMemoryEmbeddingProviderManifestOwner } from "./gateway-startup-plugin-activation.js";
 import { collectConfiguredMemoryEmbeddingStartupProviderOwners } from "./gateway-startup-plugin-providers.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -91,6 +92,14 @@ export function resolveMemoryEmbeddingProviderStartupInspector(params: {
     return undefined;
   }
   const owner = owners[0];
+  if (
+    !canStartConfiguredMemoryEmbeddingProviderManifestOwner({
+      plugin: owner,
+      config: params.config,
+    })
+  ) {
+    return undefined;
+  }
   return loadStartupInspectors(owner).find((inspector) =>
     ownerIds.has(normalizeProviderId(inspector.id)),
   );

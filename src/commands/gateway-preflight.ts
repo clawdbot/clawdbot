@@ -1,13 +1,14 @@
 import { readConfigFileSnapshot } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { defaultGatewayBindMode, resolveGatewayBindHost } from "../gateway/net.js";
+import { defaultGatewayBindMode } from "../gateway/net.js";
 import {
   inspectStartupSessionMigrationPrerequisites,
   type SessionStartupPreflightResult,
 } from "../gateway/server-startup-session-migration.js";
 import {
+  inspectGatewayStartupBindAuth,
   inspectGatewayStartupAuth,
-  shouldBlockGatewayBindWithoutExplicitAuth,
+  type GatewayStartupBindAuthInspection,
   type GatewayStartupAuthInspection,
 } from "../gateway/startup-auth.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -72,7 +73,7 @@ function combineCoreStartupPreflight(
     errors: GatewayStartupPreflightError[];
   },
   authResult: GatewayStartupAuthInspection,
-  bindResult: { mode: string; blocked: boolean },
+  bindResult: GatewayStartupBindAuthInspection,
   sessionResult?: SessionStartupPreflightResult,
 ): {
   checksRun: number;
@@ -108,7 +109,7 @@ function combineCoreStartupPreflight(
         authResult.auth.mode === "password" ? "gateway.auth.password" : "gateway.auth.token",
     });
   }
-  if (bindResult.blocked) {
+  if (bindResult.status === "blocked") {
     blockers.push({
       id: `${authInspectionId}/bind-auth-required`,
       pluginId: CORE_PREFLIGHT_PLUGIN_ID,
@@ -119,6 +120,14 @@ function combineCoreStartupPreflight(
         "Set gateway.auth.token/password or the corresponding target environment variable.",
       ],
       configPath: "gateway.auth",
+    });
+  } else if (bindResult.status === "indeterminate") {
+    errors.push({
+      id: `${authInspectionId}/bind`,
+      pluginId: CORE_PREFLIGHT_PLUGIN_ID,
+      migrationId: CORE_AUTH_PREFLIGHT_MIGRATION_ID,
+      code: "gateway-bind-inspection-required",
+      message: bindResult.reason ?? `Gateway bind mode ${bindResult.mode} requires inspection.`,
     });
   }
   if (authResult.activeSecretRefPaths.length > 0) {
@@ -234,18 +243,12 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
   try {
     const tailscaleMode = snapshot.config.gateway?.tailscale?.mode ?? "off";
     const bindMode = snapshot.config.gateway?.bind ?? defaultGatewayBindMode(tailscaleMode);
-    const bindHost = await resolveGatewayBindHost(
+    const bindResult = inspectGatewayStartupBindAuth({
       bindMode,
-      snapshot.config.gateway?.customBindHost,
-    );
-    const bindResult = {
-      mode: bindMode,
-      blocked: shouldBlockGatewayBindWithoutExplicitAuth({
-        bindHost,
-        hasSharedSecret: authResult.hasSharedSecret,
-        resolvedAuthMode: authResult.auth.mode,
-      }),
-    };
+      customBindHost: snapshot.config.gateway?.customBindHost,
+      hasSharedSecret: authResult.hasSharedSecret,
+      resolvedAuthMode: authResult.auth.mode,
+    });
     const [pluginResult, sessionResult] = await Promise.all([
       collectGatewayStartupPreflight({
         config: snapshot.config,
@@ -275,7 +278,10 @@ async function evaluateGatewayStartupPreflightWithoutModuleCacheWrites(): Promis
           ],
         },
         authResult,
-        { mode: snapshot.config.gateway?.bind ?? "loopback", blocked: false },
+        {
+          mode: snapshot.config.gateway?.bind ?? "loopback",
+          status: "ready",
+        },
       ),
     );
   }

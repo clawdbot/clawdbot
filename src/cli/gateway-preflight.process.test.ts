@@ -154,6 +154,8 @@ module.exports = { stateMigrations: [migration] };
 async function createFixture(params: {
   config: Record<string, unknown>;
   disableMemorySlot?: boolean;
+  includeFixturePlugin?: boolean;
+  includeSharedStateDatabase?: boolean;
   invalidSessionStore?: boolean;
   vectorModel?: string;
 }) {
@@ -162,7 +164,9 @@ async function createFixture(params: {
   const stateDir = path.join(root, "state");
   const configPath = path.join(stateDir, "openclaw.json");
   const pluginRoot = path.join(root, "plugins", PREFLIGHT_FIXTURE_PLUGIN_ID);
-  await writePreflightFixturePlugin(pluginRoot);
+  if (params.includeFixturePlugin !== false) {
+    await writePreflightFixturePlugin(pluginRoot);
+  }
   const configuredPlugins =
     params.config.plugins && typeof params.config.plugins === "object"
       ? (params.config.plugins as Record<string, unknown>)
@@ -179,15 +183,18 @@ async function createFixture(params: {
     ...params.config,
     plugins: {
       ...configuredPlugins,
-      load: { paths: [pluginRoot] },
+      ...(params.includeFixturePlugin === false ? {} : { load: { paths: [pluginRoot] } }),
       slots:
         params.disableMemorySlot === false
           ? configuredSlots
           : { ...configuredSlots, memory: "none" },
-      entries: {
-        ...configuredEntries,
-        [PREFLIGHT_FIXTURE_PLUGIN_ID]: { enabled: true },
-      },
+      entries:
+        params.includeFixturePlugin === false
+          ? configuredEntries
+          : {
+              ...configuredEntries,
+              [PREFLIGHT_FIXTURE_PLUGIN_ID]: { enabled: true },
+            },
     },
   };
   await fs.mkdir(stateDir, { recursive: true });
@@ -197,16 +204,18 @@ async function createFixture(params: {
     await fs.mkdir(path.dirname(sessionStorePath), { recursive: true });
     await fs.writeFile(sessionStorePath, "{ invalid json\n");
   }
-  const sharedStatePath = path.join(stateDir, "state", "openclaw.sqlite");
-  await fs.mkdir(path.dirname(sharedStatePath), { recursive: true });
-  const sharedStateDatabase = new DatabaseSync(sharedStatePath);
-  sharedStateDatabase.exec(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA wal_autocheckpoint = 0;
-    CREATE TABLE preflight_state_probe (value TEXT PRIMARY KEY);
-    INSERT INTO preflight_state_probe VALUES ('committed-in-wal');
-  `);
-  sharedStateDatabases.add(sharedStateDatabase);
+  if (params.includeSharedStateDatabase !== false) {
+    const sharedStatePath = path.join(stateDir, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(sharedStatePath), { recursive: true });
+    const sharedStateDatabase = new DatabaseSync(sharedStatePath);
+    sharedStateDatabase.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 0;
+      CREATE TABLE preflight_state_probe (value TEXT PRIMARY KEY);
+      INSERT INTO preflight_state_probe VALUES ('committed-in-wal');
+    `);
+    sharedStateDatabases.add(sharedStateDatabase);
+  }
   if (params.vectorModel) {
     const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
@@ -299,8 +308,11 @@ async function runPreflight(
   return runCli(fixture, ["gateway", "preflight", "--json"], envOverrides);
 }
 
-async function runGateway(fixture: Awaited<ReturnType<typeof createFixture>>) {
-  return runCli(fixture, ["gateway", "run", "--port", "39411"]);
+async function runGateway(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  envOverrides: NodeJS.ProcessEnv = {},
+) {
+  return runCli(fixture, ["gateway", "run", "--port", "39411"], envOverrides);
 }
 
 function localMemoryConfig() {
@@ -552,6 +564,50 @@ describe("gateway preflight CLI process", () => {
     expect(startup.stderr).toContain("Refusing to bind gateway to lan without auth.");
   });
 
+  it("never opens a listener while classifying a probe-dependent bind", async () => {
+    const fixture = await createFixture({
+      config: {
+        gateway: { mode: "local", bind: "auto", auth: { mode: "none" } },
+        memory: { search: { provider: "none" } },
+      },
+    });
+    const observerPath = path.join(fixture.root, "observe-listen.cjs");
+    const listenLog = path.join(fixture.root, "listen-events.jsonl");
+    await fs.writeFile(
+      observerPath,
+      [
+        'const fs = require("node:fs");',
+        'const net = require("node:net");',
+        "const original = net.createServer;",
+        "net.createServer = function (...args) {",
+        "  const server = original.apply(this, args);",
+        "  const listen = server.listen;",
+        "  server.listen = function (...listenArgs) {",
+        '    fs.appendFileSync(process.env.OPENCLAW_LISTEN_OBSERVER, JSON.stringify(listenArgs) + "\\n");',
+        "    return listen.apply(this, listenArgs);",
+        "  };",
+        "  return server;",
+        "};",
+        "",
+      ].join("\n"),
+    );
+    const before = await snapshotTree(fixture.root);
+
+    const result = await runPreflight(fixture, {
+      NODE_OPTIONS: `--require=${observerPath}`,
+      OPENCLAW_LISTEN_OBSERVER: listenLog,
+    });
+
+    expect(result.code).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      status: "indeterminate",
+      blockers: [],
+      errors: [expect.objectContaining({ code: "gateway-bind-inspection-required" })],
+    });
+    await expect(fs.access(listenLog)).rejects.toThrow();
+    expect(await snapshotTree(fixture.root)).toEqual(before);
+  });
+
   it("returns indeterminate for protected memory credentials in a SecretRef", async () => {
     const fixture = await createFixture({
       config: {
@@ -678,6 +734,53 @@ describe("gateway preflight CLI process", () => {
       });
       expect(await snapshotTree(fixture.root)).toEqual(before);
     }
+  });
+
+  it("fails closed when the selected embedding provider owner is disabled", async () => {
+    const config = {
+      ...configuredLlamaCppMemoryConfig(),
+      gateway: { mode: "local", auth: { mode: "none" } },
+      plugins: {
+        entries: {
+          "llama-cpp": { enabled: false },
+        },
+      },
+    };
+    const semantic = await createFixture({
+      config,
+      includeFixturePlugin: false,
+      includeSharedStateDatabase: false,
+      vectorModel: "embeddinggemma-300m",
+    });
+    const noIndex = await createFixture({
+      config,
+      includeFixturePlugin: false,
+      includeSharedStateDatabase: false,
+    });
+    const before = await snapshotTree(semantic.root);
+    const env = { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0" };
+
+    const preflight = await runPreflight(semantic, env);
+
+    expect(preflight.code).toBe(2);
+    expect(JSON.parse(preflight.stdout)).toMatchObject({
+      status: "indeterminate",
+      blockers: [],
+      errors: [expect.objectContaining({ code: "inspection-indeterminate" })],
+    });
+    expect(await snapshotTree(semantic.root)).toEqual(before);
+
+    const startup = await runGateway(semantic, env);
+    expect(startup.code).not.toBe(0);
+    expect(startup.stderr).toMatch(/unknown memory embedding provider: local/i);
+
+    const noIndexResult = await runPreflight(noIndex, env);
+    expect(noIndexResult.code).toBe(0);
+    expect(JSON.parse(noIndexResult.stdout)).toMatchObject({
+      status: "ready",
+      blockers: [],
+      errors: [],
+    });
   });
 
   it("returns indeterminate for unsupported selected providers and invalid config", async () => {

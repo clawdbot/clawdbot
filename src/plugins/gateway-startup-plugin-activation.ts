@@ -2,7 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
-import { resolveEffectivePluginActivationState } from "./config-state.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   blocksPluginStartup,
@@ -25,15 +25,21 @@ import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./install
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { manifestOwnsWorkerProvider } from "./worker-provider-manifest.js";
 
+type PluginStartupPolicyRecord = Pick<
+  InstalledPluginIndexRecord,
+  "pluginId" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
+>;
+
 type PluginStartupActivationParams = {
-  plugin: InstalledPluginIndexRecord;
+  plugin: PluginStartupPolicyRecord;
   config: OpenClawConfig;
   pluginsConfig: NormalizedPluginsConfig;
   activationSource: { plugins: NormalizedPluginsConfig; rootConfig?: OpenClawConfig };
   platform?: NodeJS.Platform;
 };
 
-type GatewayStartupActivationParams = PluginStartupActivationParams & {
+type GatewayStartupActivationParams = Omit<PluginStartupActivationParams, "plugin"> & {
+  plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
   requiredAgentHarnessRuntimes: ReadonlySet<string>;
   configuredWorkerProviderIds: ReadonlySet<string>;
@@ -272,6 +278,36 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
 export function canStartGatewayStartupPlugin(params: GatewayStartupActivationParams): boolean {
   return GATEWAY_STARTUP_ACTIVATION_POLICIES.some(
     ({ matches, policy }) => matches(params) && passesPluginStartupPolicy(params, policy),
+  );
+}
+
+/** Applies the Gateway provider activation policy to a manifest-selected memory owner. */
+export function canStartConfiguredMemoryEmbeddingProviderManifestOwner(params: {
+  plugin: Pick<
+    PluginManifestRecord,
+    "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
+  >;
+  config: OpenClawConfig;
+  platform?: NodeJS.Platform;
+}): boolean {
+  const pluginsConfig = normalizePluginsConfig(params.config.plugins);
+  return passesPluginStartupPolicy(
+    {
+      plugin: {
+        pluginId: params.plugin.id,
+        origin: params.plugin.origin,
+        enabledByDefault: params.plugin.enabledByDefault,
+        enabledByDefaultOnPlatforms: params.plugin.enabledByDefaultOnPlatforms,
+      },
+      config: params.config,
+      pluginsConfig,
+      activationSource: {
+        plugins: pluginsConfig,
+        rootConfig: params.config,
+      },
+      platform: params.platform,
+    },
+    "implicit-external",
   );
 }
 

@@ -73,7 +73,10 @@ describe("embedding provider preflight public artifacts", () => {
     const { pluginRoot, sentinelPath } = writeExternalInspector();
     const inspector = resolveMemoryEmbeddingProviderStartupInspector({
       providerId: "local",
-      config: localConfig,
+      config: {
+        ...localConfig,
+        plugins: { entries: { "llama-cpp": { enabled: true } } },
+      },
       manifestRegistry: {
         plugins: [
           {
@@ -96,7 +99,10 @@ describe("embedding provider preflight public artifacts", () => {
     expect(
       resolveMemoryEmbeddingProviderStartupInspector({
         providerId: "local",
-        config: localConfig,
+        config: {
+          ...localConfig,
+          plugins: { entries: { "llama-cpp": { enabled: true } } },
+        },
         manifestRegistry: {
           plugins: [
             {
@@ -110,6 +116,60 @@ describe("embedding provider preflight public artifacts", () => {
       }),
     ).toBeUndefined();
     expect(fs.existsSync(sentinelPath)).toBe(false);
+  });
+
+  it("does not load an inspector for an owner blocked by Gateway startup policy", () => {
+    const { pluginRoot, sentinelPath } = writeExternalInspector();
+    expect(
+      resolveMemoryEmbeddingProviderStartupInspector({
+        providerId: "local",
+        config: {
+          ...localConfig,
+          plugins: { entries: { "llama-cpp": { enabled: false } } },
+        },
+        manifestRegistry: {
+          plugins: [
+            {
+              id: "llama-cpp",
+              origin: "global",
+              rootDir: pluginRoot,
+              trustedOfficialInstall: true,
+              contracts: { embeddingProviders: ["local"] },
+            } as never,
+          ],
+        },
+      }),
+    ).toBeUndefined();
+    expect(fs.existsSync(sentinelPath)).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "entry disabled",
+      plugins: { entries: { "llama-cpp": { enabled: false } } },
+    },
+    {
+      name: "denylisted",
+      plugins: { deny: ["llama-cpp"] },
+    },
+    {
+      name: "excluded by allowlist",
+      plugins: { allow: ["memory-core"] },
+    },
+    {
+      name: "plugins globally disabled",
+      plugins: { enabled: false },
+    },
+  ])("does not expose the bundled inspector when its owner is $name", ({ plugins }) => {
+    expect(
+      resolveMemoryEmbeddingProviderStartupInspector({
+        providerId: "local",
+        config: {
+          ...localConfig,
+          plugins,
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("does not expose unsupported provider runtime through the static path", () => {

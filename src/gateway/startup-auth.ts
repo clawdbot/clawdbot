@@ -2,7 +2,11 @@
 // Merges auth overrides, resolves secret refs, validates weak secrets, and generates fallbacks.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
+import type {
+  GatewayAuthConfig,
+  GatewayBindMode,
+  GatewayTailscaleConfig,
+} from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   GATEWAY_AUTH_SURFACE_PATHS,
@@ -17,7 +21,7 @@ import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-pol
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
 import { trimToUndefined } from "./credentials.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
-import { isLoopbackHost } from "./net.js";
+import { isContainerEnvironment, isLoopbackHost, isValidIPv4 } from "./net.js";
 
 const HOOKS_GATEWAY_AUTH_REUSE_WARNING =
   "Security warning: hooks.token matches active Gateway shared-secret auth. Startup continues for compatibility; rotate hooks.token or Gateway auth. Run openclaw security audit for a full report, and run openclaw doctor --fix when the reused hooks.token is persisted in config.";
@@ -94,6 +98,61 @@ export function shouldBlockGatewayBindWithoutExplicitAuth(params: {
     !params.hasSharedSecret &&
     params.resolvedAuthMode !== "trusted-proxy"
   );
+}
+
+export type GatewayStartupBindAuthInspection = {
+  mode: GatewayBindMode;
+  status: "ready" | "blocked" | "indeterminate";
+  reason?: string;
+};
+
+/** Inspect the bind/auth startup guard without probing a host or opening a socket. */
+export function inspectGatewayStartupBindAuth(params: {
+  bindMode: GatewayBindMode;
+  customBindHost?: string;
+  hasSharedSecret: boolean;
+  resolvedAuthMode: GatewayAuthConfig["mode"];
+  isContainer?: boolean;
+}): GatewayStartupBindAuthInspection {
+  const mode = params.bindMode;
+  if (params.hasSharedSecret || params.resolvedAuthMode === "trusted-proxy") {
+    return { mode, status: "ready" };
+  }
+  if (mode === "loopback") {
+    return { mode, status: "ready" };
+  }
+  if (mode === "lan") {
+    return { mode, status: "blocked" };
+  }
+  if (mode === "auto") {
+    if (params.isContainer ?? isContainerEnvironment()) {
+      return { mode, status: "blocked" };
+    }
+    return {
+      mode,
+      status: "indeterminate",
+      reason:
+        "Gateway bind mode auto requires a runtime availability probe to determine whether the effective host remains loopback.",
+    };
+  }
+  if (mode === "custom") {
+    const host = params.customBindHost?.trim() ?? "";
+    if (!isValidIPv4(host) || !isLoopbackHost(host)) {
+      return { mode, status: "blocked" };
+    }
+    return {
+      mode,
+      status: "indeterminate",
+      reason:
+        "Gateway custom loopback binding requires a runtime availability probe to determine whether startup falls back to an exposed host.",
+    };
+  }
+  return {
+    mode,
+    status: "indeterminate",
+    reason:
+      "Gateway tailnet binding requires a runtime availability probe to determine the effective host.",
+  };
 }
 
 /**
