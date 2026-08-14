@@ -25,6 +25,7 @@ import {
   persistSessionTranscriptTurn,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -487,22 +488,32 @@ export async function persistCliTurnTranscript(params: {
   const gapFill = params.embeddedAssistantGapFill ?? false;
   const skipUserTurn = gapFill || requestedSkipUserTurn === true;
 
-  return await persistTextTurnTranscript({
-    ...transcript,
-    body: skipUserTurn ? "" : transcript.body,
-    transcriptBody: skipUserTurn ? undefined : transcript.transcriptBody,
-    userMessage: skipUserTurn ? undefined : transcript.userMessage,
-    finalText: replyText,
-    embeddedAssistantGapFill: gapFill,
-    assistant: {
-      api: "cli",
-      provider,
-      model,
-      // The marker is terminal for fallback scans: without it, readers could
-      // skip this turn and revive an older cumulative usage record as fresh.
-      usage: resolveCliTranscriptUsage(result.meta.agentMeta?.lastCallUsage),
-    },
-  });
+  const persist = async () =>
+    await persistTextTurnTranscript({
+      ...transcript,
+      body: skipUserTurn ? "" : transcript.body,
+      transcriptBody: skipUserTurn ? undefined : transcript.transcriptBody,
+      userMessage: skipUserTurn ? undefined : transcript.userMessage,
+      finalText: replyText,
+      embeddedAssistantGapFill: gapFill,
+      assistant: {
+        api: "cli",
+        provider,
+        model,
+        // The marker is terminal for fallback scans: without it, readers could
+        // skip this turn and revive an older cumulative usage record as fresh.
+        usage: resolveCliTranscriptUsage(result.meta.agentMeta?.lastCallUsage),
+      },
+    });
+  if (!gapFill) {
+    return await persist();
+  }
+
+  // Embedded gap-fill runs after the embedded attempt has completed and
+  // released its controller. A promise continuation can still inherit that
+  // controller's AsyncLocalStorage context, so explicitly leave it before
+  // the transcript accessor acquires the post-run session lock.
+  return await runWithoutOwnedSessionTranscriptWrites(persist);
 }
 
 export function runAgentAttempt(params: {

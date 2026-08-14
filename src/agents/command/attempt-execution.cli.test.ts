@@ -17,6 +17,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
@@ -2199,6 +2200,54 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("does not reuse a disposed embedded-attempt lock for post-run gap-fill", async () => {
+    const sessionKey = "agent:main:direct:disposed-gap-fill-owner";
+    const sessionEntry = makeSessionEntry("session-disposed-gap-fill-owner");
+    await writeSessionStoreSeed({ [sessionKey]: sessionEntry });
+    const disposedOwnerWrite = vi.fn(async () => {
+      throw new Error("attempt disposed before transcript write");
+    });
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionKey,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: sessionEntry.sessionId,
+          sessionKey,
+          storePath,
+        },
+        withSessionWriteLock: disposedOwnerWrite,
+      },
+      () =>
+        persistCliTurnTranscript({
+          body: "ignored prompt",
+          result: makeCliResult("terminal review result"),
+          sessionId: sessionEntry.sessionId,
+          sessionKey,
+          sessionEntry,
+          storePath,
+          sessionAgentId: "main",
+          sessionCwd: tmpDir,
+          config: {},
+          embeddedAssistantGapFill: true,
+        }),
+    );
+
+    expect(disposedOwnerWrite).not.toHaveBeenCalled();
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "terminal review result" }],
+      }),
+    );
+  });
   it("persists a media-only ACP user turn when the reply is empty", async () => {
     const sessionKey = "agent:main:direct:acp-media-only";
     const sessionFile = path.join(tmpDir, "session-acp-media-only.jsonl");
