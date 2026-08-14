@@ -43,7 +43,11 @@ async function runSystemGatewayCommand(
       defaultRuntime.log(successText);
     }
   } catch (err) {
-    defaultRuntime.error(danger(String(err)));
+    if (opts.json) {
+      defaultRuntime.writeJson({ error: String(err) });
+    } else {
+      defaultRuntime.error(danger(String(err)));
+    }
     defaultRuntime.exit(1);
   }
 }
