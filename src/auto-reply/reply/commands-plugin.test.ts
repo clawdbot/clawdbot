@@ -82,6 +82,12 @@ function buildPluginParams(
       sessionId: "session-plugin-command",
       updatedAt: Date.now(),
     },
+    provider: "openai",
+    model: "gpt-5.4",
+    workspaceDir: "/tmp/openclaw-plugin-command",
+    contextTokens: 10_000,
+    isGroup: false,
+    resolveDefaultThinkingLevel: async () => "medium",
   } as unknown as HandleCommandsParams;
 }
 
@@ -143,12 +149,7 @@ describe("handlePluginCommand", () => {
     const entry = { sessionId: "session-plugin-command", updatedAt: Date.now() };
     params.sessionStore = { [sessionKey]: entry };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
-    params.provider = "openai";
-    params.model = "gpt-5.4";
     params.workspaceDir = tempDir;
-    params.contextTokens = 10_000;
-    params.isGroup = false;
-    params.resolveDefaultThinkingLevel = async () => "medium";
 
     try {
       const response = await handlePluginCommand(params, true);
@@ -224,6 +225,46 @@ describe("handlePluginCommand", () => {
     } as OpenClawConfig);
     params.storePath = storePath;
     params.sessionStore = { [sessionKey]: entry };
+
+    try {
+      const response = await handlePluginCommand(params, true);
+      expect(response?.reply?.text).toBe(
+        JSON.stringify({ compacted: false, reason: "command session changed" }),
+      );
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects session compaction when its lifecycle changes during admission", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-compact-race-"));
+    const sessionKey = "agent:main:whatsapp:direct:test-user";
+    const storePath = path.join(tempDir, "sessions.json");
+    const entry = {
+      sessionId: "session-plugin-command",
+      lifecycleRevision: "revision-1",
+      updatedAt: Date.now(),
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    registerTestCommand(undefined, {
+      handler: async (ctx) => ({
+        text: JSON.stringify(await ctx.runtimeContext?.compactCurrent?.()),
+      }),
+    });
+    const params = buildPluginParams("/card", {
+      commands: { text: true },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    params.storePath = storePath;
+    params.sessionStore = { [sessionKey]: entry };
+    params.resolveDefaultThinkingLevel = async () => {
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { ...entry, lifecycleRevision: "revision-2" },
+      );
+      return "medium";
+    };
 
     try {
       const response = await handlePluginCommand(params, true);

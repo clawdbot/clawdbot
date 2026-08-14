@@ -31,7 +31,7 @@ import { resolveSessionStorePathForScope } from "../../config/sessions/session-s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { CommandHandler } from "./commands-types.js";
+import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
 const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
@@ -84,6 +84,14 @@ function formatCompactionReason(reason?: string): string | undefined {
       ? "context is already under the compaction target"
       : "context is below the compaction threshold"
     : text;
+}
+
+function compactionUnavailable(reason: string, text: string): CommandHandlerResult {
+  return {
+    shouldContinue: false,
+    sessionCompaction: { compacted: false, reason },
+    reply: { text, isStatusNotice: true },
+  };
 }
 
 function resolveManualCompactContextTokenBudget(params: {
@@ -198,13 +206,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   if (!targetSessionEntry?.sessionId) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚙️ Compaction unavailable (missing session id).",
-        isStatusNotice: true,
-      },
-    };
+    return compactionUnavailable(
+      "missing session id",
+      "⚙️ Compaction unavailable (missing session id).",
+    );
   }
   const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
@@ -212,17 +217,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     runtime.abortEmbeddedAgentRun(sessionId);
     const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
     if (!drained) {
-      return {
-        shouldContinue: false,
-        sessionCompaction: {
-          compacted: false,
-          reason: "the previous run is still stopping",
-        },
-        reply: {
-          text: "⚙️ Compaction unavailable: the previous run is still stopping.",
-          isStatusNotice: true,
-        },
-      };
+      return compactionUnavailable(
+        "the previous run is still stopping",
+        "⚙️ Compaction unavailable: the previous run is still stopping.",
+      );
     }
   }
   const sessionAgentId = params.sessionKey
@@ -264,6 +262,20 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       params.storePath ??
       resolveSessionStorePathCore(params.cfg.session?.store, { agentId: sessionAgentId }),
   });
+  const isCurrentSession = () =>
+    runtime.isCurrentSessionEntry({
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      storePath: compactionStorePath,
+      expected: targetSessionEntry,
+    });
+  const thinkLevel = params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel());
+  if (!isCurrentSession()) {
+    return compactionUnavailable(
+      "command session changed",
+      "⚙️ Compaction unavailable: command session changed.",
+    );
+  }
   const result = await runtime.compactEmbeddedAgentSession({
     abortSignal: params.opts?.abortSignal,
     sessionId,
@@ -305,7 +317,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
             ? undefined
             : targetSessionEntry.agentHarnessId)),
     modelSelectionLocked: targetSessionEntry.modelSelectionLocked === true,
-    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+    thinkLevel,
     bashElevated: {
       enabled: false,
       allowed: false,
@@ -319,6 +331,12 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       senderIsOwner: params.command.senderIsOwner,
     }),
   });
+  if (!isCurrentSession()) {
+    return compactionUnavailable(
+      "command session changed",
+      "⚙️ Compaction unavailable: command session changed.",
+    );
+  }
 
   const tokensAfterCompaction = result.result?.tokensAfter;
   const didCompact = result.ok && result.compacted;

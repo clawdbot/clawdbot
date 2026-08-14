@@ -15,6 +15,7 @@ vi.mock("./commands-compact.runtime.js", () => ({
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
   formatTokenCount: vi.fn((value: number) => `${value}`),
   incrementCompactionCount: vi.fn(),
+  isCurrentSessionEntry: vi.fn(() => true),
   isEmbeddedAgentRunAbortableForCompaction: vi.fn().mockReturnValue(false),
   resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
   resolveSessionFilePathOptions: vi.fn(() => ({})),
