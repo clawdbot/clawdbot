@@ -149,8 +149,7 @@ function buildSendSchema(options: {
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({
-        description:
-          'Base64/data-URL attachment for action="send". For upload-file, prefer filePath, path, or media.',
+        description: "Base64/data-URL attachment.",
       }),
     ),
     contentType: Type.Optional(Type.String()),
