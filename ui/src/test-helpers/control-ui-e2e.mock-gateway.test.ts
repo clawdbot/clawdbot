@@ -24,6 +24,30 @@ function waitForMockCycle(): Promise<void> {
 }
 
 describe("mock gateway stateful config", () => {
+  it("takes every mock socket offline before a reconnect", async () => {
+    const script = createControlUiMockGatewayInitScript({});
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Exercises the serialized browser fixture.
+    new Function(script)();
+
+    const first = new WebSocket("ws://mock-gateway/first");
+    const second = new WebSocket("ws://mock-gateway/second");
+    await flushMockTimers();
+    expect(first.readyState).toBe(WebSocket.OPEN);
+    expect(second.readyState).toBe(WebSocket.OPEN);
+
+    const controls = (
+      window as Window & {
+        openclawControlUiE2eGateway?: { setOnline: (online: boolean) => void };
+      }
+    ).openclawControlUiE2eGateway;
+    expect(controls).toBeDefined();
+    controls?.setOnline(false);
+
+    expect(first.readyState).toBe(WebSocket.CLOSED);
+    expect(second.readyState).toBe(WebSocket.CLOSED);
+  });
+
   it("round-trips config.set through config.get with an advancing hash", async () => {
     const raw = '{\n  "logging": {\n    "level": "info"\n  }\n}\n';
     const script = createControlUiMockGatewayInitScript({

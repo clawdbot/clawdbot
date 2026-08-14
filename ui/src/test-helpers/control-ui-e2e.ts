@@ -955,7 +955,12 @@ function installControlUiMockGateway(
   const sessionPatches = new Map<string, Record<string, unknown>>();
   const createdSessions = new Map<string, Record<string, unknown>>();
   const sessionMessageSubscriptions = new Set<string>();
-  const sockets: Array<{ readonly readyState: number; readonly url: string }> = [];
+  const sockets: Array<{
+    readonly readyState: number;
+    readonly url: string;
+    close: (code?: number, reason?: string) => void;
+    openConnection: () => void;
+  }> = [];
   let deviceAuthMigrationPending = scenario.deviceAuthMigrationPending;
   let deviceAuthMigrationDeviceId = "";
   let sessionMessageEventIndex = 0;
@@ -2061,10 +2066,14 @@ function installControlUiMockGateway(
         // The current document can still toggle the in-memory mock.
       }
       if (!online) {
-        MockWebSocket.latest?.close(1006, "mock offline");
+        for (const socket of sockets) {
+          socket.close(1006, "mock offline");
+        }
         return;
       }
-      MockWebSocket.latest?.openConnection();
+      for (const socket of sockets) {
+        socket.openConnection();
+      }
     },
     setServerBuildId(nextBuildId) {
       serverBuildId = nextBuildId;
