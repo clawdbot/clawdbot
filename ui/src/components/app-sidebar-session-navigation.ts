@@ -50,12 +50,13 @@ import {
 } from "./app-sidebar-session-navigation-logic.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
-import { loadStoredHiddenSessionCatalogIds } from "./app-sidebar-session-types.ts";
 import {
+  loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionStatusFilter,
   loadStoredSidebarSessionsGrouping,
   loadStoredSidebarSessionsShowCron,
   loadStoredSidebarSessionsShowSystem,
+  SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -723,6 +724,16 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       agentsList: this.context?.agents.state.agentsList,
       hello: this.context?.gateway.snapshot.hello,
     });
+  }
+
+  resolveHomeSessionAttention(sessionKey: string, row: GatewaySessionRow | null) {
+    const known = this.attention
+      .knownSessionAttention()
+      .find((entry) => areUiSessionKeysEquivalent(entry.sessionKey, sessionKey));
+    return (
+      known?.attention ??
+      (row ? this.attention.resolveSessionAttention(row) : SIDEBAR_SESSION_NO_ATTENTION)
+    );
   }
 
   /** Gateway row backing the identity card (unread/running state), if loaded. */

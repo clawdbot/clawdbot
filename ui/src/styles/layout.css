@@ -3151,7 +3151,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   stroke-linejoin: round;
 }
 
-/* Home carries approval and outbox counts at the row's edge; run/unread state
+/* Home carries outbox and draft counts at the row's edge; run/unread state
    rings the leading icon instead (see .session-glyph). */
 .nav-item__state {
   flex: none;
