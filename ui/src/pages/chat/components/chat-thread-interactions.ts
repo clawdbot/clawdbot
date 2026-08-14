@@ -357,6 +357,8 @@ function createMessageActionContextButton(params: {
 // :focus-visible turns back on at the next keypress, modifiers included, so a
 // bare Shift would ring the whole transcript long after a click put focus there.
 // Record how focus arrived on the scroll container and let the ring key off that.
+// Pointer-down owns the clearing half: a drag can be released or cancelled
+// outside the transcript, so no later pointer event is guaranteed to arrive.
 export function syncTranscriptFocusRing(event: FocusEvent | PointerEvent): void {
   const thread = event.currentTarget;
   if (!(thread instanceof HTMLElement)) {
@@ -368,7 +370,6 @@ export function syncTranscriptFocusRing(event: FocusEvent | PointerEvent): void 
 }
 
 export function handleTranscriptSelection(event: PointerEvent, props: TranscriptInteractionProps) {
-  syncTranscriptFocusRing(event);
   if (
     typeof props.onCompanionQuestion !== "function" ||
     typeof props.onCompanionPrefill !== "function"

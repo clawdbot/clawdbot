@@ -152,6 +152,19 @@ suite.define(() => {
         expect(focusedOutline.outlineColor).toBe(focusedOutline.mutedStrongColor);
         await captureUiProof(page, "02-chat-thread-keyboard-focus.png");
 
+        // A selection dragged out of the transcript releases outside it, so the
+        // ring must go with the pointer press rather than the release.
+        const threadBox = await thread.boundingBox();
+        if (!threadBox) {
+          throw new Error("Expected a visible transcript");
+        }
+        await page.mouse.move(threadBox.x + threadBox.width / 2, threadBox.y + 40);
+        await page.mouse.down();
+        await page.mouse.move(threadBox.x - 120, threadBox.y + 40, { steps: 8 });
+        await page.mouse.up();
+        expect(await readFocusOutline(thread)).toMatchObject({ outlineStyle: "none" });
+        expect(await thread.evaluate((element) => element === document.activeElement)).toBe(true);
+
         await page.setViewportSize({ height: 650, width: 1440 });
         // Appearance renders schema-independent theme/UI sections that overflow
         // 650px even against the mock gateway's tiny config fixture; General

@@ -122,6 +122,7 @@ function renderTranscriptShell(
         transcript.handleFocusOut(event);
         syncTranscriptFocusRing(event);
       }}
+      @pointerdown=${syncTranscriptFocusRing}
       @scroll=${props.onChatScroll}
       @wheel=${props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null}
       @keydown=${(event: KeyboardEvent) => {
