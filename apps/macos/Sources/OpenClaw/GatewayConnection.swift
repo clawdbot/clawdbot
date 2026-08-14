@@ -98,6 +98,13 @@ actor GatewayConnection {
         let stream: AsyncStream<ServerIdentity>
     }
 
+    enum SharedEndpointRecovery: Sendable {
+        case localActivated
+        case localDenied
+        case remote
+        case unconfigured
+    }
+
     enum Method: String {
         case agent
         case status
@@ -151,6 +158,7 @@ actor GatewayConnection {
 
     private let endpointProvider: EndpointProvider
     private let supportsSharedEndpointRecovery: Bool
+    private let sharedEndpointRecovery: @Sendable () async -> SharedEndpointRecovery
     private let activationBindingKeyProvider: @Sendable () -> SymmetricKey?
     private let includeDeviceIdentity: Bool
     private let sessionProvider: SessionProvider
@@ -205,6 +213,8 @@ actor GatewayConnection {
     init(
         endpointProvider: @escaping EndpointProvider = GatewayConnection.defaultEndpointProvider,
         supportsSharedEndpointRecovery: Bool = true,
+        sharedEndpointRecovery: @escaping @Sendable () async -> SharedEndpointRecovery =
+            GatewayConnection.defaultSharedEndpointRecovery,
         activationBindingKeyProvider: @escaping @Sendable () -> SymmetricKey? =
             GatewayConnection.defaultActivationBindingKey,
         sessionBox: WebSocketSessionBox? = nil,
@@ -215,6 +225,7 @@ actor GatewayConnection {
     {
         self.endpointProvider = endpointProvider
         self.supportsSharedEndpointRecovery = supportsSharedEndpointRecovery
+        self.sharedEndpointRecovery = sharedEndpointRecovery
         self.activationBindingKeyProvider = activationBindingKeyProvider
         self.includeDeviceIdentity = true
         self.sessionProvider = Self.resolveSessionProvider(
@@ -241,6 +252,7 @@ actor GatewayConnection {
             try await EndpointSnapshot(config: configProvider(), routeAuthority: nil)
         }
         self.supportsSharedEndpointRecovery = false
+        self.sharedEndpointRecovery = { .unconfigured }
         self.activationBindingKeyProvider = activationBindingKeyProvider
         // Mock WebSocket routes do not exercise device authentication and must not
         // depend on the process-global persisted identity store.
@@ -257,6 +269,7 @@ actor GatewayConnection {
     {
         self.endpointProvider = testEndpointProvider
         self.supportsSharedEndpointRecovery = false
+        self.sharedEndpointRecovery = { .unconfigured }
         self.activationBindingKeyProvider = { GatewayConnection.testingActivationBindingKey }
         // Mock WebSocket routes do not exercise device authentication and must not
         // depend on the process-global persisted identity store.
@@ -340,15 +353,10 @@ actor GatewayConnection {
 
             // Auto-recover in local mode by spawning/attaching a gateway and retrying a few times.
             // Canvas interactions should "just work" even if the local gateway isn't running yet.
-            let mode = await MainActor.run { AppStateStore.shared.connectionMode }
+            let recovery = await self.sharedEndpointRecovery()
             try requireCurrentShutdownGeneration(shutdownGeneration)
-            switch mode {
-            case .local:
-                // Pause is an operator-owned stop, not a transport failure to heal.
-                // The shared policy check and activation stay atomic on MainActor.
-                guard await GatewayAutostartPolicy.activateGatewayForRecovery() else { throw error }
-                try requireCurrentShutdownGeneration(shutdownGeneration)
-
+            switch recovery {
+            case .localActivated:
                 let lastError: Error
                 do {
                     return try await self.retryRequest(
@@ -412,8 +420,26 @@ actor GatewayConnection {
 
                 try requireCurrentShutdownGeneration(shutdownGeneration)
                 throw lastError
-            case .unconfigured:
+            case .localDenied, .unconfigured:
                 throw error
+            }
+        }
+    }
+
+    private static func defaultSharedEndpointRecovery() async -> SharedEndpointRecovery {
+        await MainActor.run {
+            let state = AppStateStore.shared
+            switch state.connectionMode {
+            case .local:
+                // Pause is an operator-owned stop, not a transport failure to heal.
+                // Policy evaluation and activation stay atomic on MainActor.
+                return GatewayAutostartPolicy.activateGatewayForRecovery()
+                    ? .localActivated
+                    : .localDenied
+            case .remote:
+                return .remote
+            case .unconfigured:
+                return .unconfigured
             }
         }
     }

@@ -613,6 +613,36 @@ struct OnboardingConfiguredGatewayProbeTests {
         }())
     }
 
+    @Test func `paused local first-run probe does not recover the gateway`() async throws {
+        let url = try #require(URL(string: "ws://127.0.0.1:18789"))
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { _, _ in
+                throw URLError(.cannotConnectToHost)
+            })
+        })
+        let gateway = GatewayConnection(
+            endpointProvider: {
+                GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: nil, password: nil),
+                    routeAuthority: nil)
+            },
+            sharedEndpointRecovery: { .localDenied },
+            sessionBox: WebSocketSessionBox(session: session))
+        let probe = OnboardingConfiguredGatewayProbe(gateway: gateway, timeoutMs: 1)
+
+        let outcome = await runOnboardingProbe(probe, connectionMode: .local)
+
+        #expect({
+            if case .unavailable = outcome {
+                true
+            } else {
+                false
+            }
+        }())
+        #expect(session.snapshotMakeCount() == 1)
+        #expect(session.latestTask()?.snapshotSendCount() == 0)
+    }
+
     @Test func `route replacement supersedes an in-flight configured model result`() async throws {
         let config = OnboardingProbeGatewayConfig()
         let gate = OnboardingProbeGate()
