@@ -53,13 +53,15 @@ describe("sanitizeForPromptLiteral (OC-19 hardening)", () => {
 });
 
 describe("hasPromptUnsafeControlCharacter", () => {
-  it("rejects C0, DEL, NEL, and Unicode line/paragraph separators", () => {
+  it("rejects every character the shared prompt sanitizer strips", () => {
     expect(hasPromptUnsafeControlCharacter("ok-name.jpg")).toBe(false);
     expect(hasPromptUnsafeControlCharacter("foo\nbar")).toBe(true);
     expect(hasPromptUnsafeControlCharacter("foo\u007fbar")).toBe(true);
     expect(hasPromptUnsafeControlCharacter("foo\u0085bar")).toBe(true);
+    expect(hasPromptUnsafeControlCharacter("foo\u009Bbar")).toBe(true);
     expect(hasPromptUnsafeControlCharacter("foo\u2028bar")).toBe(true);
     expect(hasPromptUnsafeControlCharacter("foo\u2029bar")).toBe(true);
+    expect(hasPromptUnsafeControlCharacter("foo\u202Ebar")).toBe(true);
   });
 });
 

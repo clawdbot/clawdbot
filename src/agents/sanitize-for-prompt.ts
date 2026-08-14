@@ -19,15 +19,9 @@ export function sanitizeForPromptLiteral(value: string): string {
   return value.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
 }
 
-/** True when a string would break prompt line structure if interpolated raw. */
+/** True when the shared prompt sanitizer would strip any character. */
 export function hasPromptUnsafeControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029) {
-      return true;
-    }
-  }
-  return false;
+  return sanitizeForPromptLiteral(value) !== value;
 }
 
 type PromptDataBlockParams = {

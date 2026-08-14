@@ -138,8 +138,10 @@ describe("spawnSubagentDirect filename validation", () => {
 
   it.each([
     ["U+0085 next line", "foo\u0085bar"],
+    ["U+009B C1 CSI", "foo\u009Bbar"],
     ["U+2028 line separator", "foo\u2028bar"],
     ["U+2029 paragraph separator", "foo\u2029bar"],
+    ["U+202E bidi override", "foo\u202Ebar"],
   ])("name with %s returns attachments_invalid_name", async (_label, name) => {
     const result = await spawnWithName(name);
     expect(result.status).toBe("error");
