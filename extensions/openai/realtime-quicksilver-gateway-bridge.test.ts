@@ -55,7 +55,7 @@ type TestableAudioPeer = {
     };
     peer: {
       connectionStateChange: {
-        execute(state: "closed" | "connected" | "disconnected"): void;
+        execute(state: "closed" | "connected" | "disconnected" | "failed"): void;
       };
     };
     transceiver: {
@@ -444,7 +444,25 @@ describe("GPT-Live werift audio peer", () => {
     }
   });
 
-  it.each(["disconnected", "closed"] as const)(
+  it("allows a transient disconnected state to recover", async () => {
+    const onError = vi.fn();
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError },
+      iceServers: [],
+    });
+    try {
+      const testPeer = peer as unknown as TestableAudioPeer;
+      testPeer.state.peer.connectionStateChange.execute("disconnected");
+      expect(onError).not.toHaveBeenCalled();
+
+      testPeer.state.peer.connectionStateChange.execute("connected");
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      peer.close();
+    }
+  });
+
+  it.each(["failed", "closed"] as const)(
     "reports a terminal %s connection state",
     async (connectionState) => {
       const onError = vi.fn();

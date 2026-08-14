@@ -189,13 +189,13 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       if (connectionState === "connected") {
         this.connected = true;
         this.startMediaPump();
-      } else if (["failed", "disconnected", "closed"].includes(connectionState)) {
+      } else {
         this.connected = false;
-        // werift-ice 0.2.2 exits consent polling after setting disconnected
-        // (lib/ice/src/ice.js:289), so recovery requires an explicit ICE restart.
-        this.state.callbacks.onError(
-          new Error(`GPT-Live WebRTC media connection ${connectionState}`),
-        );
+        if (connectionState === "failed" || connectionState === "closed") {
+          this.state.callbacks.onError(
+            new Error(`GPT-Live WebRTC media connection ${connectionState}`),
+          );
+        }
       }
     });
   }
@@ -432,8 +432,8 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       );
       this.sequenceNumber = (this.sequenceNumber + 1) & 0xffff;
       this.timestamp = (this.timestamp + OPUS_FRAME_SAMPLES) >>> 0;
-      // werift queues encrypted UDP synchronously before sendRtp yields
-      // (rtpSender.js:538; transport/dtls.js:455), preserving per-tick order.
+      // werift queues encrypted UDP synchronously before sendRtp yields,
+      // preserving per-tick order.
       void this.state.transceiver.sender.sendRtp(rtp).catch((error: unknown) => {
         this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
       });
