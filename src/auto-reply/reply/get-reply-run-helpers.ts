@@ -1,10 +1,9 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
-import type { PendingSkillSuggestion, SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -15,7 +14,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ThinkingCatalogEntry } from "../thinking.js";
+import type { ElevatedLevel } from "../thinking.js";
 import { isSystemEventProvider } from "./effective-reply-route.js";
 import type { ExecOverrides } from "./get-reply-run.types.js";
 import {
@@ -93,21 +92,26 @@ export function buildPersistedMediaImageLayout(params: {
   };
 }
 
-export function hasResolvedThinkingCatalogEntry(params: {
-  catalog?: readonly ThinkingCatalogEntry[];
-  provider: string;
-  model: string;
-}): boolean {
-  const modelId = normalizeOptionalString(params.model);
-  if (!modelId) {
-    return false;
+/**
+ * Marks prompt-media facts whose original ctx positions are unresolved so every
+ * downstream runner skips them instead of attempting (and failing) hydration.
+ * Uses position identity, not path/URL, so distinct facts sharing the same path
+ * are not conflated.
+ */
+export function suppressUnresolvedPromptMedia(params: {
+  promptMedia: readonly MediaFact[];
+  inboundMediaIndexes: readonly number[];
+  unresolvedSourceIndexes: ReadonlySet<number>;
+}): MediaFact[] {
+  if (params.unresolvedSourceIndexes.size === 0) {
+    return [...params.promptMedia];
   }
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const entry = params.catalog?.find(
-    (candidate) =>
-      normalizeProviderId(candidate.provider) === normalizedProvider && candidate.id === modelId,
+  return params.promptMedia.map((fact, promptIndex) =>
+    params.inboundMediaIndexes[promptIndex] !== undefined &&
+    params.unresolvedSourceIndexes.has(params.inboundMediaIndexes[promptIndex])
+      ? { ...fact, hydrationSuppressed: true }
+      : fact,
   );
-  return entry?.reasoning !== undefined;
 }
 
 export function routeThreadIdsMatch(
@@ -128,24 +132,6 @@ export function normalizeMessageTimestampMs(value: unknown): number | undefined 
   const timestampMs =
     timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
   return asDateTimestampMs(timestampMs);
-}
-
-export function projectSkillSuggestionForTurn(
-  entry: SessionEntry | undefined,
-  suggestion: PendingSkillSuggestion | undefined,
-): SessionEntry | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  if (suggestion) {
-    return { ...entry, pendingSkillSuggestion: suggestion };
-  }
-  if (!entry.pendingSkillSuggestion) {
-    return entry;
-  }
-  const projected = { ...entry };
-  delete projected.pendingSkillSuggestion;
-  return projected;
 }
 
 export async function updateRoomEventAmbientTranscriptWatermark(params: {
@@ -309,6 +295,14 @@ const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-ru
 const sessionUpdatesRuntimeLoader = createLazyImportLoader(
   () => import("./session-updates.runtime.js"),
 );
+
+export async function prewarmReplyRunRuntimes(): Promise<void> {
+  await Promise.all([
+    sessionUpdatesRuntimeLoader.load(),
+    embeddedAgentRuntimeLoader.load(),
+    agentRunnerRuntimeLoader.load(),
+  ]);
+}
 
 export function loadEmbeddedAgentRuntime() {
   return embeddedAgentRuntimeLoader.load();

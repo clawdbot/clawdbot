@@ -6,7 +6,7 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqli
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -77,7 +77,7 @@ describe("SessionManager user idempotency", () => {
       idempotencyKey: "runtime-user-ancestor:user",
       timestamp: 1,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: formatSqliteSessionFileMarker(scope),
       sessionId: scope.sessionId,
       updatedAt: 1,
@@ -111,6 +111,75 @@ describe("SessionManager user idempotency", () => {
     ).toHaveLength(1);
   });
 
+  it("adopts a keyed user persisted after the manager loaded", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-runtime-user-concurrent-ingress",
+      sessionKey: "agent:main:dashboard:sqlite-runtime-user-concurrent-ingress",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const userMessage = {
+      role: "user" as const,
+      content: "question",
+      idempotencyKey: "runtime-user-concurrent-ingress:user",
+      timestamp: 1,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionFile: formatSqliteSessionFileMarker(scope),
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "existing-assistant",
+      message: buildAssistantMessage("previous answer"),
+      now: 1,
+    });
+    const sessionManager = SessionManager.open(scope, dir);
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "ingress-persisted-user",
+      message: userMessage,
+      now: 2,
+      parentId: "existing-assistant",
+    });
+    const modelChangeId = sessionManager.appendModelChange("openai", "gpt-5.5");
+    const thinkingId = sessionManager.appendThinkingLevelChange("off");
+    const metadataId = sessionManager.appendCustomEntry("model-snapshot", {
+      modelApi: "openai-responses",
+      modelId: "gpt-5.5",
+      provider: "openai",
+    });
+
+    expect(sessionManager.appendMessage(userMessage)).toBe("ingress-persisted-user");
+    expect(sessionManager.getAppendParentId()).toBe(metadataId);
+
+    const assistantId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+    const events = await loadTranscriptEvents(scope);
+    expect(events.find((event) => (event as { id?: string }).id === modelChangeId)).toMatchObject({
+      parentId: "ingress-persisted-user",
+    });
+    expect(events.find((event) => (event as { id?: string }).id === thinkingId)).toMatchObject({
+      parentId: modelChangeId,
+    });
+    expect(events.find((event) => (event as { id?: string }).id === metadataId)).toMatchObject({
+      parentId: thinkingId,
+    });
+    expect(events.find((event) => (event as { id?: string }).id === assistantId)).toMatchObject({
+      parentId: metadataId,
+    });
+    expect(
+      events.filter(
+        (event) =>
+          (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
+            "user" &&
+          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+            userMessage.idempotencyKey,
+      ),
+    ).toHaveLength(1);
+  });
+
   it("adopts a persisted user across context-free session setup metadata", async () => {
     const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
     const scope = {
@@ -125,7 +194,7 @@ describe("SessionManager user idempotency", () => {
       idempotencyKey: "runtime-user-setup-metadata:user",
       timestamp: 1,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: formatSqliteSessionFileMarker(scope),
       sessionId: scope.sessionId,
       updatedAt: 1,

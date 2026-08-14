@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginBlobStoreForTests,
@@ -103,14 +104,6 @@ function snapshot(text: string): MemoryWikiCompiledCacheSnapshot {
       },
     ],
   };
-}
-
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 async function publishSnapshot(
@@ -500,8 +493,8 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     });
     const staleSnapshot = snapshot("stale candidate");
     const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(config.vault.path);
-    const callbackEntered = createDeferred();
-    const releaseCallback = createDeferred();
+    const callbackEntered = createDeferred<void>();
+    const releaseCallback = createDeferred<void>();
     const staleWrite = writeMemoryWikiCompiledCache(
       config,
       staleSnapshot,

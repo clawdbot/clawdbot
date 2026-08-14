@@ -128,12 +128,22 @@ function resolveAllowedHostnames(domain?: FeishuDomain): string[] {
   return ["open.feishu.cn"];
 }
 
+function cancelUnreadResponseBody(response: Response): void {
+  // A rejected response leaves its body unread; start cancellation before the
+  // guarded dispatcher is released so the connection is not leaked. Do not
+  // await: debug capture can tee the stream and deadlock a waiter.
+  if (!response.bodyUsed) {
+    void response.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function assertSuccessfulCardKitResponse(
   response: Response,
   auditContext: string,
   action: string,
 ): Promise<void> {
   if (!response.ok) {
+    cancelUnreadResponseBody(response);
     throw new Error(`${action} failed with HTTP ${response.status}`);
   }
   const data = await readFeishuJsonResponse<CardKitResponse>(response, auditContext);
@@ -174,6 +184,7 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
   };
   try {
     if (!response.ok) {
+      cancelUnreadResponseBody(response);
       throw new Error(`Token request failed with HTTP ${response.status}`);
     }
     data = await readFeishuJsonResponse(response, "feishu.streaming-card.token");
@@ -328,6 +339,7 @@ export class FeishuStreamingSession {
     };
     try {
       if (!createRes.ok) {
+        cancelUnreadResponseBody(createRes);
         throw new Error(`Create card request failed with HTTP ${createRes.status}`);
       }
       createData = await readFeishuJsonResponse(createRes, "feishu.streaming-card.create");

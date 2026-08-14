@@ -358,6 +358,41 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_CONFIG_PATH).toBe("/srv/openclaw/custom.json");
   });
 
+  it.each(["openclaw-gateway-main", "openclaw-gateway-main.service"])(
+    "drops inherited canonical service identities when switching profiles (%s)",
+    (systemdUnit) => {
+      const env: Record<string, string | undefined> = {
+        OPENCLAW_PROFILE: "main",
+        OPENCLAW_STATE_DIR: "/home/peter/.openclaw-main",
+        OPENCLAW_CONFIG_PATH: "/home/peter/.openclaw-main/openclaw.json",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.main",
+        OPENCLAW_SYSTEMD_UNIT: systemdUnit,
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (main)",
+      };
+
+      applyCliProfileEnv({ profile: "work", env, homedir: () => "/home/peter" });
+
+      expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
+      expect(env.OPENCLAW_SYSTEMD_UNIT).toBeUndefined();
+      expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBeUndefined();
+    },
+  );
+
+  it("preserves explicit custom service identities when switching profiles", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "main",
+      OPENCLAW_LAUNCHD_LABEL: "com.example.gateway",
+      OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service",
+      OPENCLAW_WINDOWS_TASK_NAME: "Custom Gateway",
+    };
+
+    applyCliProfileEnv({ profile: "work", env, homedir: () => "/home/peter" });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("com.example.gateway");
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("custom-gateway.service");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("Custom Gateway");
+  });
+
   it.each([
     { inheritedProfile: "Main", selectedProfile: "main" },
     { inheritedProfile: "main", selectedProfile: "Main" },

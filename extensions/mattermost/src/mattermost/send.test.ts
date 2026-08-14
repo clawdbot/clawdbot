@@ -1,3 +1,4 @@
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 // Mattermost tests cover send plugin behavior.
 import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
@@ -109,6 +110,34 @@ function directChannelRetryCall() {
   ) as [unknown, unknown, MattermostDirectRetryOptions?];
 }
 
+async function createMattermostProviderFailure(
+  status: number,
+  statusText: string,
+  message: string,
+): Promise<Error> {
+  const { createMattermostClient } =
+    await vi.importActual<typeof import("./client.js")>("./client.js");
+  const client = createMattermostClient({
+    baseUrl: "https://mattermost.example.com",
+    botToken: "test-bot-token",
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ message }), {
+        status,
+        statusText,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  try {
+    await client.request("/teams/team-first/channels/name/release-alerts");
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected the Mattermost provider request to fail");
+}
+
 vi.mock("../../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
@@ -161,7 +190,9 @@ vi.mock("./accounts.js", () => ({
   resolveMattermostAccount: mockState.resolveMattermostAccount,
 }));
 
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async () => ({
+  parseMattermostApiStatus: (await vi.importActual<typeof import("./client.js")>("./client.js"))
+    .parseMattermostApiStatus,
   createMattermostClient: mockState.createMattermostClient,
   createMattermostDirectChannelWithRetry: mockState.createMattermostDirectChannelWithRetry,
   createMattermostPost: mockState.createMattermostPost,
@@ -262,6 +293,90 @@ describe("sendMessageMattermost", () => {
     });
   });
 
+  it("continues searching later teams only when a channel is genuinely absent", async () => {
+    mockState.fetchMattermostUserTeams.mockResolvedValueOnce([
+      { id: "team-first" },
+      { id: "team-second" },
+    ]);
+    mockState.fetchMattermostChannelByName
+      .mockRejectedValueOnce(await createMattermostProviderFailure(404, "Not Found", "missing"))
+      .mockResolvedValueOnce({ id: "channel-second" });
+
+    const result = await sendMessageMattermost("#release-alerts", "hello", { cfg: TEST_CFG });
+
+    expect(result.channelId).toBe("channel-second");
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenNthCalledWith(
+      1,
+      {},
+      "team-first",
+      "release-alerts",
+    );
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenNthCalledWith(
+      2,
+      {},
+      "team-second",
+      "release-alerts",
+    );
+    expect(mockState.createMattermostPost).toHaveBeenCalledOnce();
+  });
+
+  it("reports a missing named channel after every team returns not found", async () => {
+    mockState.fetchMattermostUserTeams.mockResolvedValueOnce([
+      { id: "team-first" },
+      { id: "team-second" },
+    ]);
+    mockState.fetchMattermostChannelByName.mockRejectedValue(
+      await createMattermostProviderFailure(404, "Not Found", "missing channel"),
+    );
+
+    await expect(
+      sendMessageMattermost("#release-alerts", "hello", { cfg: TEST_CFG }),
+    ).rejects.toThrow('Mattermost channel "#release-alerts" not found in any team');
+
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenCalledTimes(2);
+    expect(mockState.createMattermostPost).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "an expired bot token",
+      createError: () => createMattermostProviderFailure(401, "Unauthorized", "bot token expired"),
+    },
+    {
+      name: "missing channel permissions",
+      createError: () => createMattermostProviderFailure(403, "Forbidden", "access denied"),
+    },
+    {
+      name: "provider rate limiting",
+      createError: () => createMattermostProviderFailure(429, "Too Many Requests", "retry later"),
+    },
+    {
+      name: "an outage whose detail mentions a missing resource",
+      createError: () =>
+        createMattermostProviderFailure(503, "Service Unavailable", "upstream returned 404"),
+    },
+    {
+      name: "a network failure",
+      createError: async () => new Error("connect ECONNRESET 192.0.2.12:443"),
+    },
+  ])("preserves $name while resolving a named channel", async ({ createError }) => {
+    const error = await createError();
+    mockState.fetchMattermostUserTeams.mockResolvedValueOnce([
+      { id: "team-first" },
+      { id: "team-second" },
+    ]);
+    mockState.fetchMattermostChannelByName
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce({ id: "channel-second" });
+
+    await expect(sendMessageMattermost("#release-alerts", "hello", { cfg: TEST_CFG })).rejects.toBe(
+      error,
+    );
+
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenCalledOnce();
+    expect(mockState.createMattermostPost).not.toHaveBeenCalled();
+  });
+
   it.each(MATTERMOST_MARKDOWN_GOLDENS)("$name", async ({ input, before, after }) => {
     expect(convertMarkdownTables(input, "code")).toBe(before);
 
@@ -319,7 +434,84 @@ describe("sendMessageMattermost", () => {
     expect(result.receipt.parts).toHaveLength(1);
     expect(result.receipt.parts[0]?.platformMessageId).toBe("post-1");
     expect(result.receipt.parts[0]?.kind).toBe("text");
+    expect(result.content).toBe("hello");
     expect(mockState.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("preserves the provider post when outbound bookkeeping fails afterward", async () => {
+    const events: string[] = [];
+    const onDeliveryResult = vi.fn(() => {
+      events.push("delivery");
+    });
+    mockState.createMattermostPost.mockResolvedValueOnce({
+      id: "post-final",
+      message: "provider-final",
+    });
+    mockState.recordActivity.mockImplementationOnce(() => {
+      events.push("activity");
+      throw new Error("activity store unavailable");
+    });
+
+    let caught: unknown;
+    try {
+      await sendMessageMattermost("channel:town-square", "requested text", {
+        cfg: TEST_CFG,
+        onDeliveryResult,
+      });
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial Mattermost delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["post-final"],
+      visibleReplySent: true,
+      content: "provider-final",
+    });
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "post-final",
+        channelId: "town-square",
+        content: "provider-final",
+      }),
+    );
+    expect(events).toStrictEqual(["delivery", "activity"]);
+  });
+
+  it("preserves the provider post when delivery reporting fails afterward", async () => {
+    const onDeliveryResult = vi.fn(async () => {
+      throw new Error("delivery store unavailable");
+    });
+    mockState.createMattermostPost.mockResolvedValueOnce({
+      id: "post-final",
+      message: "provider-final",
+    });
+
+    let caught: unknown;
+    try {
+      await sendMessageMattermost("channel:town-square", "requested text", {
+        cfg: TEST_CFG,
+        onDeliveryResult,
+      });
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial Mattermost delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["post-final"],
+      visibleReplySent: true,
+      content: "provider-final",
+    });
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(mockState.recordActivity).not.toHaveBeenCalled();
   });
 
   it("loads outbound media with trusted local roots before upload", async () => {

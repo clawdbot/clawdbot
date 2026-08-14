@@ -26,6 +26,7 @@ export {
 export { buildChannelApprovalNativeTargetKey } from "../infra/approval-native-target-key.js";
 export {
   doesApprovalRequestMatchChannelAccount,
+  doesApprovalRequestSelectChannelAccount,
   resolveApprovalRequestAccountId,
   resolveApprovalRequestChannelAccountId,
 } from "../infra/approval-request-account-binding.js";

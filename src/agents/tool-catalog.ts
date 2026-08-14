@@ -19,10 +19,11 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
-  SPAWN_TASK_TOOL_DISPLAY_SUMMARY,
+  SUGGEST_TASK_TOOL_DISPLAY_SUMMARY,
   DISMISS_TASK_TOOL_DISPLAY_SUMMARY,
   UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 /** Built-in tool profile ids exposed in config and UI. */
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
@@ -248,7 +249,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "subagents",
     label: "subagents",
-    description: "Background work: subagents, media gen, cron runs. list/cancel.",
+    description: "Background work: subagents, media gen, automation runs. list/cancel.",
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -262,9 +263,9 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "spawn_task",
-    label: "spawn_task",
-    description: SPAWN_TASK_TOOL_DISPLAY_SUMMARY,
+    id: "suggest_task",
+    label: "suggest_task",
+    description: SUGGEST_TASK_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -310,6 +311,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "portal",
+    label: "portal",
+    description: "Expose local web apps through the gateway",
+    sectionId: "ui",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "canvas",
     label: "canvas",
     description: "Control node Canvas surfaces when the Canvas plugin is enabled",
@@ -341,8 +350,8 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "cron",
-    label: "cron",
+    id: AUTOMATIONS_TOOL_NAME,
+    label: AUTOMATIONS_TOOL_NAME,
     description: CRON_TOOL_DISPLAY_SUMMARY,
     sectionId: "automation",
     profiles: ["coding"],

@@ -156,7 +156,7 @@ describe("openai plugin", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers the native GPT-Live offer route and cleanup lifecycle", () => {
+  it("registers the native GPT-Live offer route and cleanup lifecycle", async () => {
     const registerHttpRoute = vi.fn();
     const registerRuntimeLifecycle = vi.fn();
     plugin.register(
@@ -183,6 +183,72 @@ describe("openai plugin", () => {
         cleanup: expect.any(Function),
       }),
     );
+    await registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup({ reason: "disable" });
+  });
+
+  it("shares one GPT-Live broker across full registrations and ignores late old cleanup", async () => {
+    const register = () => {
+      const registerHttpRoute = vi.fn();
+      const registerRuntimeLifecycle = vi.fn();
+      plugin.register(
+        createTestPluginApi({
+          id: "openai",
+          name: "OpenAI Provider",
+          source: "test",
+          config: {},
+          runtime: { config: { current: vi.fn(() => ({})) } } as never,
+          registerHttpRoute,
+          registerRuntimeLifecycle,
+        }),
+      );
+      return {
+        handler: registerHttpRoute.mock.calls[0]?.[0].handler as unknown,
+        cleanup: registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup as (ctx: {
+          reason: string;
+        }) => Promise<void> | void,
+      };
+    };
+
+    const first = register();
+    const second = register();
+    expect(second.handler).toBe(first.handler);
+
+    await first.cleanup({ reason: "disable" });
+    const replacement = register();
+    expect(replacement.handler).not.toBe(first.handler);
+
+    await second.cleanup({ reason: "disable" });
+    const afterLateCleanup = register();
+    expect(afterLateCleanup.handler).toBe(replacement.handler);
+    await replacement.cleanup({ reason: "disable" });
+  });
+
+  it("only cleans up the GPT-Live broker on plugin disable, not session reset/delete/restart", async () => {
+    const registerRuntimeLifecycle = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "openai",
+        name: "OpenAI Provider",
+        source: "test",
+        config: {},
+        runtime: { config: { current: vi.fn(() => ({})) } } as never,
+        registerHttpRoute: vi.fn(),
+        registerRuntimeLifecycle,
+      }),
+    );
+
+    const lifecycle = registerRuntimeLifecycle.mock.calls[0]?.[0] as {
+      cleanup: (ctx: { reason: string }) => Promise<void> | void;
+    };
+    expect(lifecycle).toBeDefined();
+
+    for (const reason of ["reset", "delete", "restart"]) {
+      const result = lifecycle.cleanup({ reason });
+      expect(result).toBeUndefined();
+    }
+
+    const disableResult = lifecycle.cleanup({ reason: "disable" });
+    await expect(disableResult).resolves.toBeUndefined();
   });
 
   it("generates PNG buffers from the OpenAI Images API", async () => {

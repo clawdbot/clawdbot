@@ -1,7 +1,7 @@
 // Control UI tests cover the Models settings page against a mocked Gateway.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Locator } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -20,6 +20,7 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 const NOW = Date.now();
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
 const artifactDir = path.resolve(".artifacts/control-ui-e2e/model-providers");
+const readinessArtifactDir = path.resolve(".artifacts/control-ui-e2e/models-provider-readiness");
 const redactedConfigValue = "[redacted]";
 const openaiInputValue = ["e2e", "test", "key"].join("-");
 const googleInputValue = ["e2e", "google", "key"].join("-");
@@ -39,6 +40,19 @@ function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
 }
 
+function modelPickerValue(locator: Locator) {
+  return locator.evaluate((element) => String((element as HTMLElement & { value?: string }).value));
+}
+
+async function selectModelPicker(locator: Locator, value: string) {
+  await locator.evaluate(async (element, next) => {
+    const select = element as HTMLElement & { value: string; updateComplete: Promise<unknown> };
+    select.value = next;
+    await select.updateComplete;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+}
+
 describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -48,12 +62,134 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     if (recordVisuals) {
       await mkdir(artifactDir, { recursive: true });
+      await mkdir(readinessArtifactDir, { recursive: true });
     }
   });
 
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("defers live provider discovery until refresh while preserving model setup", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+    });
+    const page = await context.newPage();
+    const config = { auth: { profiles: { "openai:chatgpt": { provider: "openai" } } } };
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "models.probe", "openclaw.setup.detect"],
+      methodResponses: {
+        "config.get": {
+          config,
+          sourceConfig: config,
+          hash: "credential-only-model-provider",
+          issues: [],
+          raw: JSON.stringify(config),
+          valid: true,
+        },
+        "models.list": {
+          cases: [
+            { match: { view: "configured" }, response: { models: [] } },
+            {
+              match: { view: "all", agentId: "main", refresh: true },
+              response: {
+                models: [],
+                providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
+              },
+            },
+          ],
+        },
+        "models.authStatus": {
+          ts: NOW,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              status: "ok",
+              profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
+            },
+          ],
+        },
+        "openclaw.setup.detect": {
+          candidates: [],
+          manualProviders: [{ id: "openai", label: "OpenAI" }],
+          workspace: "/tmp/openclaw-e2e",
+          setupComplete: false,
+        },
+        "usage.status": { updatedAt: NOW, providers: [] },
+        "sessions.usage": { aggregates: { byProvider: [] } },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/model-providers`);
+      expect(response?.status()).toBe(200);
+      const openaiCard = page.locator('[data-provider-id="openai"]');
+      const readiness = page.locator('[data-model-readiness="model-required"]');
+      await readiness.waitFor();
+      await expect
+        .poll(async () => readiness.textContent())
+        .toContain("Connect a verified AI model");
+      await expect.poll(async () => readiness.textContent()).toContain("Model required");
+      await expect.poll(async () => openaiCard.textContent()).toContain("Credentials configured");
+      await expect.poll(async () => openaiCard.textContent()).not.toContain("Signed in");
+      expect(
+        (await gateway.getRequests("models.list")).filter(
+          (request) => (request.params as { view?: string } | undefined)?.view === "all",
+        ),
+      ).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toEqual([
+        expect.objectContaining({
+          params: { agentId: "main", preparedOnly: true, view: "configured" },
+        }),
+      ]);
+      expect(await page.getByRole("heading", { name: "Add provider" }).count()).toBe(0);
+      expect(await page.locator(".model-providers__defaults").count()).toBe(0);
+
+      if (recordVisuals) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(readinessArtifactDir, "after-desktop.png"),
+        });
+        await page.setViewportSize({ height: 844, width: 390 });
+        await expect
+          .poll(() =>
+            page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+          )
+          .toBe(true);
+        const providerTitle = openaiCard.locator(".settings-row__title").first();
+        await expect
+          .poll(() => providerTitle.evaluate((node) => node.getBoundingClientRect().width))
+          .toBeGreaterThan(40);
+        await expect
+          .poll(() => providerTitle.evaluate((node) => node.getBoundingClientRect().height))
+          .toBeLessThan(32);
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(readinessArtifactDir, "after-mobile.png"),
+        });
+        await page.setViewportSize({ height: 1000, width: 1440 });
+      }
+
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await expect.poll(async () => openaiCard.textContent()).toContain("Credentials rejected");
+      expect(
+        (await gateway.getRequests("models.list")).filter(
+          (request) => (request.params as { view?: string } | undefined)?.view === "all",
+        ),
+      ).toHaveLength(1);
+
+      await readiness.getByRole("button", { name: "Connect a verified AI model" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+    } finally {
+      await context.close();
+    }
   });
 
   it("lists configured providers with auth state, quota, billing, and local spend", async () => {
@@ -72,6 +208,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       methodResponses: {
         "models.authStatus": {
           ts: NOW,
+          providerCapabilities: [
+            { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+            { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+            { provider: "google", apiKeySupported: true, quickApiKeySetup: true },
+          ],
           providers: [
             {
               provider: "claude-cli",
@@ -157,7 +298,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .poll(async () => claudeCard.locator(".settings-row__desc").first().textContent())
         .toContain("anthropic");
       await expect.poll(async () => claudeCard.textContent()).toContain("Max 20x");
-      await expect.poll(async () => claudeCard.textContent()).toContain("Connected");
+      await expect.poll(async () => claudeCard.textContent()).toContain("Credentials configured");
       await expect.poll(async () => claudeCard.textContent()).toContain("$4.20");
       await claudeCard.locator(".provider-usage-progress").first().waitFor();
 
@@ -261,7 +402,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       models: { providers: { openai: providerConfig(redactedConfigValue) } },
     };
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "models.probe"],
+      featureMethods: ["chat.metadata", "chat.startup", "config.patch", "models.probe"],
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
         {
@@ -316,7 +457,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               },
             },
             {
-              match: { view: "all", includeProviderCapabilities: true },
+              match: { view: "all", agentId: "main", refresh: true },
               response: {
                 models: [
                   {
@@ -347,6 +488,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         },
         "models.authStatus": {
           ts: NOW,
+          providerCapabilities: [
+            { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+            { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+            { provider: "google", apiKeySupported: true, quickApiKeySetup: true },
+          ],
           providers: [
             {
               provider: "openai",
@@ -378,9 +524,19 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}settings/model-providers`);
       const openaiCard = page.locator('[data-provider-id="openai"]');
       await openaiCard.waitFor();
+      expect(
+        (await gateway.getRequests("models.list")).filter(
+          (request) => (request.params as { view?: string } | undefined)?.view === "all",
+        ),
+      ).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toEqual([
+        expect.objectContaining({
+          params: { agentId: "main", preparedOnly: true, view: "configured" },
+        }),
+      ]);
       await expect.poll(async () => openaiCard.textContent()).toContain("API key set in config");
       await expect
-        .poll(async () => page.locator(".model-providers__defaults select").first().inputValue())
+        .poll(() => modelPickerValue(page.locator(".model-providers__defaults wa-select").first()))
         .toBe("openai/gpt-5.5");
       if (recordVisuals) {
         await page.screenshot({
@@ -407,9 +563,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
       await expect.poll(async () => openaiCard.textContent()).toContain("87 ms");
 
-      const primary = page.locator(".model-providers__defaults select").first();
+      const primary = page.locator(".model-providers__defaults wa-select").first();
       const defaultPatchCount = (await gateway.getRequests("config.patch")).length;
-      await primary.selectOption("anthropic/claude-sonnet-4-5");
+      await selectModelPicker(primary, "anthropic/claude-sonnet-4-5");
       expect((await gateway.getRequests("config.patch")).length).toBe(defaultPatchCount);
       const updatedDefaultsConfig = {
         ...config,
@@ -471,6 +627,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       });
       await gateway.setMethodResponse("models.authStatus", {
         ts: NOW,
+        providerCapabilities: [
+          { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+          { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+          { provider: "google", apiKeySupported: true, quickApiKeySetup: true },
+        ],
         providers: [
           {
             provider: "openai",

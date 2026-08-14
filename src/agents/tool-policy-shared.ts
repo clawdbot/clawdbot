@@ -19,6 +19,8 @@ type ToolProfilePolicy = {
 const TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
   "apply-patch": "apply_patch",
+  // Permanent scheduler-tool alias (owner decision, RFC 0026), like bash -> exec.
+  cron: "automations",
 };
 
 const TOOL_ALLOWLIST_INTERSECTION = Symbol.for("openclaw.toolAllowlistIntersection");
@@ -53,7 +55,7 @@ export function readToolAllowlistIntersection(
 }
 
 /** Normalizes a tool name or alias to the policy id used for matching. */
-export function normalizeToolName(name: string) {
+export function normalizeToolPolicyName(name: string) {
   const normalized = normalizeLowercaseStringOrEmpty(name);
   return TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
@@ -70,7 +72,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
 
   const allowed = new Set<string>();
   for (const toolName of allowedToolNames) {
-    const normalizedToolName = normalizeToolName(toolName);
+    const normalizedToolName = normalizeToolPolicyName(toolName);
     const foldedToolName = normalizeLowercaseStringOrEmpty(toolName);
     if (normalizedToolName) {
       allowed.add(normalizedToolName);
@@ -86,7 +88,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
     }
   }
 
-  const resolvedPrefix = normalizeToolName(normalizedPrefix);
+  const resolvedPrefix = normalizeToolPolicyName(normalizedPrefix);
   if (resolvedPrefix !== normalizedPrefix) {
     for (const toolName of allowed) {
       if (toolName.startsWith(resolvedPrefix)) {
@@ -108,7 +110,7 @@ export function normalizeToolList(list?: string[]) {
   if (!list) {
     return [];
   }
-  return list.map(normalizeToolName).filter(Boolean);
+  return list.map(normalizeToolPolicyName).filter(Boolean);
 }
 
 /** Expands named tool groups into concrete tool ids. */

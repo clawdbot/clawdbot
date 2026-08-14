@@ -100,6 +100,12 @@ export function buildCliMcpGrantContext(params: {
   toolsAllow?: string[];
 }): McpLoopbackRequestContext {
   const sessionKey = resolveCliMcpSessionKey(params.run, params.config, params.agentId);
+  const runtimePolicySessionKey = normalizeOptionalMcpContextValue(
+    params.run.runtimePolicySessionKey,
+  );
+  const runtimePolicyAgentId = runtimePolicySessionKey
+    ? normalizeOptionalMcpContextValue(params.run.agentId)
+    : undefined;
   const clientCaps = uniqueStrings(
     (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
   );
@@ -114,9 +120,21 @@ export function buildCliMcpGrantContext(params: {
   const groupChannel = normalizeOptionalMcpContextValue(params.run.groupChannel ?? undefined);
   const groupSpace = normalizeOptionalMcpContextValue(params.run.groupSpace ?? undefined);
   const spawnedBy = normalizeOptionalMcpContextValue(params.run.spawnedBy ?? undefined);
+  const messageProvider = resolveCliMcpMessageProvider(params.run);
+  const currentChannelId = normalizeOptionalMcpContextValue(params.run.currentChannelId);
+  const grantedToolsAllow = params.run.cliToolAvailability?.openClaw ?? params.toolsAllow;
+  // Trusted message-only completions stay restricted even when source routing
+  // is missing; the message tool must fail closed instead of widening authority.
+  const sourceReplyOnly =
+    params.run.inputProvenance?.kind === "inter_session" &&
+    params.run.inputProvenance.sourceTool === "subagent_announce" &&
+    params.run.sourceReplyDeliveryMode === "message_tool_only" &&
+    grantedToolsAllow?.length === 1 &&
+    grantedToolsAllow[0] === "message";
   return {
     sessionKey,
-    runtimePolicySessionKey: normalizeOptionalMcpContextValue(params.run.runtimePolicySessionKey),
+    runtimePolicySessionKey,
+    ...(runtimePolicyAgentId ? { runtimePolicyAgentId } : {}),
     agentId: params.agentId,
     sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
     runId: normalizeOptionalMcpContextValue(params.run.runId),
@@ -130,9 +148,9 @@ export function buildCliMcpGrantContext(params: {
       : {}),
     modelProvider: params.modelProvider,
     modelId: params.modelId,
-    messageProvider: resolveCliMcpMessageProvider(params.run),
+    messageProvider,
     clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
-    currentChannelId: normalizeOptionalMcpContextValue(params.run.currentChannelId),
+    currentChannelId,
     currentThreadTs: normalizeOptionalMcpContextValue(params.run.currentThreadTs),
     currentMessageId:
       params.run.currentMessageId == null
@@ -142,6 +160,7 @@ export function buildCliMcpGrantContext(params: {
     accountId: normalizeOptionalMcpContextValue(params.run.agentAccountId),
     inboundEventKind: params.run.currentInboundEventKind,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
+    ...(sourceReplyOnly ? { sourceReplyOnly: true } : {}),
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget ? true : undefined,
     senderIsOwner: params.run.senderIsOwner === true,

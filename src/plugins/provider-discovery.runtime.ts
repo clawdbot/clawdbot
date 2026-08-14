@@ -17,7 +17,7 @@ import {
   getCachedPluginModuleLoader,
 } from "./plugin-module-loader-cache.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
-import { resolvePluginProviders } from "./providers.runtime.js";
+import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ProviderDiscoveryModule =
@@ -437,18 +437,22 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
   includeManifestModelCatalogProviders?: boolean;
+  includeSyntheticAuthProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
-  const bundledProviderVitestCompat = params.bundledProviderVitestCompat ?? env.VITEST === "true";
   const entryResult = resolveProviderDiscoveryEntryPlugins({ ...params, env });
-  const entryProviders = entryResult.providers.filter(hasProviderCatalogHook);
+  const entryProviders = entryResult.providers.filter(
+    (provider) =>
+      hasProviderCatalogHook(provider) ||
+      (params.includeSyntheticAuthProviders === true &&
+        typeof provider.resolveSyntheticAuth === "function"),
+  );
   const runtimeEntryProviders = resolveRuntimeEntryProviders(entryResult);
   if (params.discoveryEntriesOnly === true) {
     return entryProviders;
@@ -468,10 +472,9 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
     });
     const fullProviders =
       fullPluginIds.length > 0
-        ? resolvePluginProviders({
+        ? resolvePluginProvidersCore({
             ...params,
             env,
-            bundledProviderVitestCompat,
             onlyPluginIds: fullPluginIds,
           })
         : [];
@@ -487,10 +490,9 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
     ]);
     const fullProviders =
       fullPluginIds.length > 0
-        ? resolvePluginProviders({
+        ? resolvePluginProvidersCore({
             ...params,
             env,
-            bundledProviderVitestCompat,
             onlyPluginIds: fullPluginIds,
           })
         : [];
@@ -501,10 +503,9 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   }
   const runtimeManifestCatalogPluginIds = listRuntimeManifestCatalogPluginIds(entryResult);
   if (runtimeManifestCatalogPluginIds.length > 0) {
-    return resolvePluginProviders({
+    return resolvePluginProvidersCore({
       ...params,
       env,
-      bundledProviderVitestCompat,
       onlyPluginIds: runtimeManifestCatalogPluginIds,
     });
   }
@@ -515,17 +516,15 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
         .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
     );
     if (fullPluginIds.length > 0) {
-      return resolvePluginProviders({
+      return resolvePluginProvidersCore({
         ...params,
         env,
-        bundledProviderVitestCompat,
         onlyPluginIds: fullPluginIds,
       });
     }
   }
-  return resolvePluginProviders({
+  return resolvePluginProvidersCore({
     ...params,
     env,
-    bundledProviderVitestCompat,
   });
 }

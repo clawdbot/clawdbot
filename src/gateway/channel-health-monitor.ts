@@ -1,8 +1,8 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Gateway channel health monitor.
 // Periodically evaluates channel account health and restarts stale runtimes.
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -100,6 +100,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
         return;
       }
 
+      if (channelManager.getAutostartSuppression() !== null) {
+        await channelManager.recoverAutostartSuppression();
+      }
       const snapshot = channelManager.getRuntimeSnapshot();
       const globalAutostartSuppression = channelManager.getAutostartSuppression();
 
@@ -158,9 +161,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (health.healthy) {
             continue;
           }
-          if (health.reason === "terminal-disconnect") {
+          if (health.reason === "terminal-disconnect" || health.reason === "blocked") {
             log.info?.(
-              `[${channelId}:${accountId}] health-monitor: skipping restart, terminal disconnect`,
+              `[${channelId}:${accountId}] health-monitor: skipping restart, ${health.reason}`,
             );
             continue;
           }

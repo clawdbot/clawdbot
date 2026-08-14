@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { SessionCreatedActor as ProtocolSessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { t } from "../i18n/index.ts";
+import { takeGraphemes } from "../lib/graphemes.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import "./viewer-facepile.ts";
@@ -66,8 +67,11 @@ function ownerInitials(createdActor: SessionCreatedActor): string {
     .replace(/@.*$/u, "")
     .split(/[\s._-]+/u)
     .filter(Boolean);
-  const initials = ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase();
-  return initials || source[0]!.toUpperCase();
+  // Grapheme clusters, not UTF-16 units or bare code points: emoji display names
+  // must render their complete visible initial (no lone surrogates or split ZWJ sequences).
+  const firstChar = (value: string | undefined): string => (value ? takeGraphemes(value, 1) : "");
+  const initials = (firstChar(parts[0]) + firstChar(parts[1])).toUpperCase();
+  return initials || firstChar(source).toUpperCase();
 }
 
 // Deterministic hue per identity so a person keeps one color everywhere.

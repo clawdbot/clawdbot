@@ -11,8 +11,9 @@ scenario:
     timeoutMs: 90000
     retryCount: 1
     suiteIsolation: isolated
-    config: { slackScenarioId: slack-reaction-glyph-native }
 flow:
   module: ./live-transports/slack/scenario-runtime.js
-  call: runSlackReactionGlyphNativeScenario
-  args: [{ expr: slackScenarioContext }]
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaReactionGlyphNativeScenario }

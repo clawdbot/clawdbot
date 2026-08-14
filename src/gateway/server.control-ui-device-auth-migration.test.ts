@@ -5,14 +5,15 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import { shouldRetainControlUiDeviceAuthMigrationSession } from "./server-public.js";
 import { CONTROL_UI_CLIENT } from "./server.auth.test-helpers.js";
-import { shouldRetainControlUiDeviceAuthMigrationSession } from "./server.impl.js";
 import {
   connectReq,
   createGatewaySuiteHarness,
@@ -26,10 +27,121 @@ installGatewayTestHooks({ scope: "suite" });
 
 const BROWSER_ORIGIN = "https://control.example.com";
 const SCOPES = ["operator.admin", "operator.pairing"];
+const REMOTE_HEADERS = {
+  origin: BROWSER_ORIGIN,
+  "x-forwarded-for": "203.0.113.50",
+};
+const REMOTE_MIGRATION_GATEWAY = {
+  trustedProxies: ["127.0.0.1"],
+  controlUi: {
+    allowedOrigins: [BROWSER_ORIGIN],
+    dangerouslyDisableDeviceAuth: true,
+  },
+} satisfies NonNullable<OpenClawConfig["gateway"]>;
+const LOCAL_MIGRATION_GATEWAY = {
+  controlUi: {
+    allowedOrigins: [BROWSER_ORIGIN],
+    dangerouslyDisableDeviceAuth: true,
+  },
+} satisfies NonNullable<OpenClawConfig["gateway"]>;
+const TRUSTED_PROXY_MIGRATION_GATEWAY = {
+  auth: {
+    mode: "trusted-proxy",
+    trustedProxy: {
+      userHeader: "x-forwarded-user",
+      requiredHeaders: ["x-forwarded-proto"],
+      allowLoopback: true,
+    },
+  },
+  ...REMOTE_MIGRATION_GATEWAY,
+} satisfies NonNullable<OpenClawConfig["gateway"]>;
+const STATE_ONLY_MIGRATION_GATEWAY = {
+  controlUi: { dangerouslyDisableDeviceAuth: true },
+} satisfies NonNullable<OpenClawConfig["gateway"]>;
+const TOKEN_AUTH = { mode: "token", token: "secret" };
 
-async function signedDevice(ws: WebSocket, identityPath: string, scopes: string[] = SCOPES) {
+type MigrationHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
+type TrackedMigrationHarness = Omit<MigrationHarness, "openWs"> & {
+  openWs: MigrationHarness["openWs"];
+};
+
+function identityPath(label: string): string {
+  return path.join(os.tmpdir(), `openclaw-${label}-${randomUUID()}.sqlite`);
+}
+
+function createIdentity(label: string) {
+  return loadOrCreateDeviceIdentity({ path: identityPath(label) });
+}
+
+async function requestOperatorPairing(label: string, scopes: string[] = SCOPES) {
+  const { requestDevicePairing } = await import("../infra/device-pairing.js");
+  const identityFile = identityPath(label);
+  const identity = loadOrCreateDeviceIdentity({ path: identityFile });
+  const request = await requestDevicePairing({
+    deviceId: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    role: "operator",
+    scopes,
+  });
+  return { identity, path: identityFile, request };
+}
+
+async function approveOperatorPairing(requestId: string, callerScopes: string[] = SCOPES) {
+  const { approveDevicePairing } = await import("../infra/device-pairing.js");
+  return await approveDevicePairing(requestId, { callerScopes });
+}
+
+async function listPairings() {
+  const { listDevicePairing } = await import("../infra/device-pairing.js");
+  return await listDevicePairing();
+}
+
+async function readMigrationState() {
+  const { readControlUiDeviceAuthMigrationState } =
+    await import("../state/control-ui-device-auth-migration.js");
+  return readControlUiDeviceAuthMigrationState({ env: process.env });
+}
+
+async function withMigrationHarness<T, Prepared = void>(
+  run: (harness: TrackedMigrationHarness, prepared: Prepared) => Promise<T>,
+  options: {
+    gateway?: NonNullable<OpenClawConfig["gateway"]>;
+    auth?: Record<string, unknown> | null;
+    prepare?: () => Promise<Prepared>;
+  } = {},
+): Promise<T> {
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile({
+    meta: { lastTouchedVersion: "2026.7.1" },
+    gateway: options.gateway ?? REMOTE_MIGRATION_GATEWAY,
+  });
+  testState.gatewayAuth = options.auth === null ? undefined : (options.auth ?? TOKEN_AUTH);
+  const prepared = options.prepare ? await options.prepare() : (undefined as Prepared);
+  const harness = await createGatewaySuiteHarness();
+  const sockets = new Set<WebSocket>();
+  try {
+    return await run(
+      {
+        ...harness,
+        openWs: async (headers) => {
+          const socket = await harness.openWs(headers);
+          sockets.add(socket);
+          return socket;
+        },
+      },
+      prepared,
+    );
+  } finally {
+    for (const socket of sockets) {
+      socket.close();
+    }
+    await harness.close();
+  }
+}
+
+async function signedDevice(ws: WebSocket, identityFile: string, scopes: string[] = SCOPES) {
   const nonce = await readConnectChallengeNonce(ws);
-  const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+  const identity = loadOrCreateDeviceIdentity({ path: identityFile });
   const signedAt = Date.now();
   const payload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,
@@ -53,14 +165,26 @@ async function signedDevice(ws: WebSocket, identityPath: string, scopes: string[
   };
 }
 
+async function connectMigration(
+  ws: WebSocket,
+  params: {
+    device: Awaited<ReturnType<typeof signedDevice>>["device"] | null;
+    scopes?: string[];
+    trustedProxy?: boolean;
+  },
+) {
+  return await connectReq(ws, {
+    ...(params.trustedProxy ? { skipDefaultAuth: true } : { token: "secret" }),
+    scopes: params.scopes ?? SCOPES,
+    client: CONTROL_UI_CLIENT,
+    device: params.device,
+  });
+}
+
 describe("Control UI device-auth upgrade migration", () => {
   it("retains only the migration session bound to the approved public key", () => {
-    const approvedIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(os.tmpdir(), `openclaw-device-auth-approved-${randomUUID()}.sqlite`),
-    });
-    const otherIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(os.tmpdir(), `openclaw-device-auth-other-${randomUUID()}.sqlite`),
-    });
+    const approvedIdentity = createIdentity("device-auth-approved");
+    const otherIdentity = createIdentity("device-auth-other");
     const approvedPublicKey = publicKeyRawBase64UrlFromPem(approvedIdentity.publicKeyPem);
     const otherPublicKey = publicKeyRawBase64UrlFromPem(otherIdentity.publicKeyPem);
     const approvedDevice = {
@@ -90,32 +214,9 @@ describe("Control UI device-auth upgrade migration", () => {
   });
 
   it("keeps a device-less legacy browser online with secure-context remediation", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        trustedProxies: ["127.0.0.1"],
-        controlUi: {
-          allowedOrigins: [BROWSER_ORIGIN],
-          dangerouslyDisableDeviceAuth: true,
-        },
-      },
-    });
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    const harness = await createGatewaySuiteHarness();
-    const headers = {
-      origin: BROWSER_ORIGIN,
-      "x-forwarded-for": "203.0.113.50",
-    };
-    let ws: WebSocket | undefined;
-    try {
-      ws = await harness.openWs(headers);
-      const connected = await connectReq(ws, {
-        token: "secret",
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: null,
-      });
+    await withMigrationHarness(async (harness) => {
+      const ws = await harness.openWs(REMOTE_HEADERS);
+      const connected = await connectMigration(ws, { device: null });
       expect(connected.ok).toBe(true);
       expect(connected.payload).toMatchObject({
         deviceAuthMigration: { pending: true },
@@ -125,18 +226,9 @@ describe("Control UI device-auth upgrade migration", () => {
         (connected.payload as { auth?: { deviceToken?: string } } | undefined)?.auth?.deviceToken,
       ).toBeUndefined();
 
-      const { requestDevicePairing } = await import("../infra/device-pairing.js");
-      const otherIdentityPath = path.join(
-        os.tmpdir(),
-        `openclaw-device-auth-migration-device-less-target-${randomUUID()}.sqlite`,
+      const { request: otherRequest } = await requestOperatorPairing(
+        "device-auth-migration-device-less-target",
       );
-      const otherIdentity = loadOrCreateDeviceIdentity({ path: otherIdentityPath });
-      const otherRequest = await requestDevicePairing({
-        deviceId: otherIdentity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(otherIdentity.publicKeyPem),
-        role: "operator",
-        scopes: SCOPES,
-      });
       const crossDeviceApproval = await rpcReq(ws, "device.pair.approve", {
         requestId: otherRequest.request.requestId,
       });
@@ -145,310 +237,146 @@ describe("Control UI device-auth upgrade migration", () => {
       const config = await rpcReq(ws, "config.get", {});
       expect(config.ok).toBe(false);
       expect(config.error?.message).toContain("missing scope");
-    } finally {
-      ws?.close();
-      await harness.close();
-    }
+    });
   });
 
   it("preserves trusted-proxy migration access", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        },
-        trustedProxies: ["127.0.0.1"],
-        controlUi: {
-          allowedOrigins: [BROWSER_ORIGIN],
-          dangerouslyDisableDeviceAuth: true,
-        },
+    await withMigrationHarness(
+      async (harness) => {
+        const ws = await harness.openWs({
+          ...REMOTE_HEADERS,
+          "x-forwarded-proto": "https",
+          "x-forwarded-user": "operator@example.com",
+        });
+        const connected = await connectMigration(ws, { device: null, trustedProxy: true });
+        expect(connected.ok).toBe(true);
+        expect(connected.payload).toMatchObject({
+          deviceAuthMigration: { pending: true },
+          auth: { role: "operator", scopes: ["operator.pairing"] },
+        });
+        const config = await rpcReq(ws, "config.get", {});
+        expect(config.ok).toBe(false);
+        expect(config.error?.message).toContain("missing scope");
       },
-    });
-    testState.gatewayAuth = undefined;
-    const harness = await createGatewaySuiteHarness();
-    let ws: WebSocket | undefined;
-    try {
-      ws = await harness.openWs({
-        origin: BROWSER_ORIGIN,
-        "x-forwarded-for": "203.0.113.50",
-        "x-forwarded-proto": "https",
-        "x-forwarded-user": "operator@example.com",
-      });
-      const connected = await connectReq(ws, {
-        skipDefaultAuth: true,
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: null,
-      });
-      expect(connected.ok).toBe(true);
-      expect(connected.payload).toMatchObject({
-        deviceAuthMigration: { pending: true },
-        auth: { role: "operator", scopes: ["operator.pairing"] },
-      });
-      const config = await rpcReq(ws, "config.get", {});
-      expect(config.ok).toBe(false);
-      expect(config.error?.message).toContain("missing scope");
-    } finally {
-      ws?.close();
-      await harness.close();
-    }
+      { gateway: TRUSTED_PROXY_MIGRATION_GATEWAY, auth: null },
+    );
   });
 
   it("preserves trusted-proxy scope caps during migration", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        },
-        trustedProxies: ["127.0.0.1"],
-        controlUi: {
-          allowedOrigins: [BROWSER_ORIGIN],
-          dangerouslyDisableDeviceAuth: true,
-        },
+    await withMigrationHarness(
+      async (harness) => {
+        const ws = await harness.openWs({
+          ...REMOTE_HEADERS,
+          "x-forwarded-proto": "https",
+          "x-forwarded-user": "reader@example.com",
+          "x-openclaw-scopes": "operator.read",
+        });
+        const connected = await connectMigration(ws, { device: null, trustedProxy: true });
+        expect(connected.ok).toBe(true);
+        expect(connected.payload).toMatchObject({
+          auth: { role: "operator", scopes: [] },
+        });
+        expect(connected.payload).not.toHaveProperty("deviceAuthMigration");
+        const pairings = await rpcReq(ws, "device.pair.list", {});
+        expect(pairings.ok).toBe(false);
+        expect(pairings.error?.message).toContain("missing scope");
       },
-    });
-    testState.gatewayAuth = undefined;
-    const harness = await createGatewaySuiteHarness();
-    let ws: WebSocket | undefined;
-    try {
-      ws = await harness.openWs({
-        origin: BROWSER_ORIGIN,
-        "x-forwarded-for": "203.0.113.50",
-        "x-forwarded-proto": "https",
-        "x-forwarded-user": "reader@example.com",
-        "x-openclaw-scopes": "operator.read",
-      });
-      const connected = await connectReq(ws, {
-        skipDefaultAuth: true,
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: null,
-      });
-      expect(connected.ok).toBe(true);
-      expect(connected.payload).toMatchObject({
-        auth: { role: "operator", scopes: [] },
-      });
-      expect(connected.payload).not.toHaveProperty("deviceAuthMigration");
-      const pairings = await rpcReq(ws, "device.pair.list", {});
-      expect(pairings.ok).toBe(false);
-      expect(pairings.error?.message).toContain("missing scope");
-    } finally {
-      ws?.close();
-      await harness.close();
-    }
+      { gateway: TRUSTED_PROXY_MIGRATION_GATEWAY, auth: null },
+    );
   });
 
   it("completes imported migration state when an effective operator already exists", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        controlUi: {
-          dangerouslyDisableDeviceAuth: true,
+    await withMigrationHarness(
+      async (_harness, ownerIdentity) => {
+        expect(await readMigrationState()).toMatchObject({
+          status: "completed",
+          deviceId: ownerIdentity.deviceId,
+        });
+      },
+      {
+        gateway: STATE_ONLY_MIGRATION_GATEWAY,
+        auth: testState.gatewayAuth,
+        prepare: async () => {
+          const { identity, request } = await requestOperatorPairing("migration-existing-owner");
+          await expect(approveOperatorPairing(request.request.requestId)).resolves.toMatchObject({
+            status: "approved",
+          });
+          return identity;
         },
       },
-    });
-    const { approveDevicePairing, requestDevicePairing } =
-      await import("../infra/device-pairing.js");
-    const ownerIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(os.tmpdir(), `openclaw-migration-existing-owner-${randomUUID()}.sqlite`),
-    });
-    const ownerRequest = await requestDevicePairing({
-      deviceId: ownerIdentity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(ownerIdentity.publicKeyPem),
-      role: "operator",
-      scopes: SCOPES,
-    });
-    await expect(
-      approveDevicePairing(ownerRequest.request.requestId, { callerScopes: SCOPES }),
-    ).resolves.toMatchObject({ status: "approved" });
-
-    const harness = await createGatewaySuiteHarness();
-    try {
-      const { readControlUiDeviceAuthMigrationState } =
-        await import("../state/control-ui-device-auth-migration.js");
-      expect(readControlUiDeviceAuthMigrationState({ env: process.env })).toMatchObject({
-        status: "completed",
-        deviceId: ownerIdentity.deviceId,
-      });
-    } finally {
-      await harness.close();
-    }
+    );
   });
 
   it("keeps migration pending when existing operators cannot manage pairings", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        controlUi: {
-          dangerouslyDisableDeviceAuth: true,
+    await withMigrationHarness(
+      async () => {
+        expect(await readMigrationState()).toMatchObject({
+          status: "pending",
+        });
+      },
+      {
+        gateway: STATE_ONLY_MIGRATION_GATEWAY,
+        auth: testState.gatewayAuth,
+        prepare: async () => {
+          const { request } = await requestOperatorPairing("migration-read-only-owner", [
+            "operator.read",
+          ]);
+          await expect(
+            approveOperatorPairing(request.request.requestId, ["operator.read"]),
+          ).resolves.toMatchObject({ status: "approved" });
         },
       },
-    });
-    const { approveDevicePairing, requestDevicePairing } =
-      await import("../infra/device-pairing.js");
-    const ownerIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(os.tmpdir(), `openclaw-migration-read-only-owner-${randomUUID()}.sqlite`),
-    });
-    const ownerRequest = await requestDevicePairing({
-      deviceId: ownerIdentity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(ownerIdentity.publicKeyPem),
-      role: "operator",
-      scopes: ["operator.read"],
-    });
-    await expect(
-      approveDevicePairing(ownerRequest.request.requestId, {
-        callerScopes: ["operator.read"],
-      }),
-    ).resolves.toMatchObject({ status: "approved" });
-
-    const harness = await createGatewaySuiteHarness();
-    try {
-      const { readControlUiDeviceAuthMigrationState } =
-        await import("../state/control-ui-device-auth-migration.js");
-      expect(readControlUiDeviceAuthMigrationState({ env: process.env })).toMatchObject({
-        status: "pending",
-      });
-    } finally {
-      await harness.close();
-    }
+    );
   });
 
   it("rejects an in-flight migration handshake completed before registration", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        trustedProxies: ["127.0.0.1"],
-        controlUi: {
-          allowedOrigins: [BROWSER_ORIGIN],
-          dangerouslyDisableDeviceAuth: true,
-        },
-      },
-    });
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    const harness = await createGatewaySuiteHarness();
-    const connectNodeSession = await import("./server/ws-connection/connect-node-session.js");
-    const originalPrepare = connectNodeSession.prepareGatewayNodeConnect;
-    let releasePrepare: () => void = () => {};
-    const prepareReleased = new Promise<void>((resolve) => {
-      releasePrepare = resolve;
-    });
-    let markPrepareEntered: () => void = () => {};
-    const prepareEntered = new Promise<void>((resolve) => {
-      markPrepareEntered = resolve;
-    });
-    const prepareSpy = vi
-      .spyOn(connectNodeSession, "prepareGatewayNodeConnect")
-      .mockImplementationOnce(async (context, state) => {
-        markPrepareEntered();
-        await prepareReleased;
-        return await originalPrepare(context, state);
+    await withMigrationHarness(async (harness) => {
+      const connectNodeSession = await import("./server/ws-connection/connect-node-session.js");
+      const originalPrepare = connectNodeSession.prepareGatewayNodeConnect;
+      let releasePrepare: () => void = () => {};
+      const prepareReleased = new Promise<void>((resolve) => {
+        releasePrepare = resolve;
       });
-    let ws: WebSocket | undefined;
-    try {
-      ws = await harness.openWs({
-        origin: BROWSER_ORIGIN,
-        "x-forwarded-for": "203.0.113.50",
+      let markPrepareEntered: () => void = () => {};
+      const prepareEntered = new Promise<void>((resolve) => {
+        markPrepareEntered = resolve;
       });
-      const connected = connectReq(ws, {
-        token: "secret",
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: null,
-      });
-      await prepareEntered;
+      const prepareSpy = vi
+        .spyOn(connectNodeSession, "prepareGatewayNodeConnect")
+        .mockImplementationOnce(async (context, state) => {
+          markPrepareEntered();
+          await prepareReleased;
+          return await originalPrepare(context, state);
+        });
+      try {
+        const ws = await harness.openWs(REMOTE_HEADERS);
+        const connected = connectMigration(ws, { device: null });
+        await prepareEntered;
+        const { request } = await requestOperatorPairing("migration-race-owner");
+        await expect(approveOperatorPairing(request.request.requestId)).resolves.toMatchObject({
+          status: "approved",
+        });
+        releasePrepare();
 
-      const { approveDevicePairing, requestDevicePairing } =
-        await import("../infra/device-pairing.js");
-      const ownerIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(os.tmpdir(), `openclaw-migration-race-owner-${randomUUID()}.sqlite`),
-      });
-      const ownerRequest = await requestDevicePairing({
-        deviceId: ownerIdentity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(ownerIdentity.publicKeyPem),
-        role: "operator",
-        scopes: SCOPES,
-      });
-      await expect(
-        approveDevicePairing(ownerRequest.request.requestId, { callerScopes: SCOPES }),
-      ).resolves.toMatchObject({ status: "approved" });
-      releasePrepare();
-
-      const result = await connected;
-      expect(result.ok).toBe(false);
-      expect((result.error?.details as { code?: string } | undefined)?.code).toBe(
-        ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
-      );
-    } finally {
-      releasePrepare();
-      prepareSpy.mockRestore();
-      ws?.close();
-      await harness.close();
-    }
+        const result = await connected;
+        expect(result.ok).toBe(false);
+        expect((result.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+        );
+      } finally {
+        releasePrepare();
+        prepareSpy.mockRestore();
+      }
+    });
   });
 
   it("keeps only the signed legacy browser online until it explicitly pairs", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        trustedProxies: ["127.0.0.1"],
-        controlUi: {
-          allowedOrigins: [BROWSER_ORIGIN],
-          dangerouslyDisableDeviceAuth: true,
-        },
-      },
-    });
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    const harness = await createGatewaySuiteHarness();
-    const { requestDevicePairing } = await import("../infra/device-pairing.js");
-    const otherIdentityPath = path.join(
-      os.tmpdir(),
-      `openclaw-other-pending-${randomUUID()}.sqlite`,
-    );
-    const otherIdentity = loadOrCreateDeviceIdentity({ path: otherIdentityPath });
-    await requestDevicePairing({
-      deviceId: otherIdentity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(otherIdentity.publicKeyPem),
-      role: "operator",
-      scopes: SCOPES,
-    });
-    const identityPath = path.join(
-      os.tmpdir(),
-      `openclaw-device-auth-migration-${randomUUID()}.sqlite`,
-    );
-    const headers = {
-      origin: BROWSER_ORIGIN,
-      "x-forwarded-for": "203.0.113.50",
-    };
-    let firstWs: WebSocket | undefined;
-    let competingWs: WebSocket | undefined;
-    let secondWs: WebSocket | undefined;
-    try {
-      firstWs = await harness.openWs(headers);
-      const first = await signedDevice(firstWs, identityPath);
-      const firstConnect = await connectReq(firstWs, {
-        token: "secret",
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: first.device,
-      });
+    await withMigrationHarness(async (harness) => {
+      const other = await requestOperatorPairing("other-pending");
+      const firstIdentityPath = identityPath("device-auth-migration");
+      const firstWs = await harness.openWs(REMOTE_HEADERS);
+      const first = await signedDevice(firstWs, firstIdentityPath);
+      const firstConnect = await connectMigration(firstWs, { device: first.device });
       expect(firstConnect.ok).toBe(true);
       expect(firstConnect.payload).toMatchObject({
         deviceAuthMigration: { pending: true },
@@ -462,14 +390,9 @@ describe("Control UI device-auth upgrade migration", () => {
       expect(unrelatedAdminCall.ok).toBe(false);
       expect(unrelatedAdminCall.error?.message).toContain("missing scope");
 
-      competingWs = await harness.openWs(headers);
-      const competing = await signedDevice(competingWs, otherIdentityPath);
-      const competingConnect = await connectReq(competingWs, {
-        token: "secret",
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: competing.device,
-      });
+      const competingWs = await harness.openWs(REMOTE_HEADERS);
+      const competing = await signedDevice(competingWs, other.path);
+      const competingConnect = await connectMigration(competingWs, { device: competing.device });
       expect(competingConnect.ok).toBe(true);
       expect(competingConnect.payload).toMatchObject({
         auth: { scopes: ["operator.pairing"] },
@@ -505,24 +428,15 @@ describe("Control UI device-auth upgrade migration", () => {
       expect([firstWon, competingWon].filter(Boolean)).toHaveLength(1);
       if (firstWon) {
         await expect(competingClosed).resolves.toBe(4001);
-        competingWs = undefined;
       } else {
         await expect(firstClosed).resolves.toBe(4001);
-        firstWs = undefined;
       }
 
-      firstWs?.close();
-      firstWs = undefined;
-      competingWs?.close();
-      competingWs = undefined;
-      secondWs = await harness.openWs(headers);
-      const second = await signedDevice(secondWs, firstWon ? identityPath : otherIdentityPath);
-      const secondConnect = await connectReq(secondWs, {
-        token: "secret",
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: second.device,
-      });
+      firstWs.close();
+      competingWs.close();
+      const secondWs = await harness.openWs(REMOTE_HEADERS);
+      const second = await signedDevice(secondWs, firstWon ? firstIdentityPath : other.path);
+      const secondConnect = await connectMigration(secondWs, { device: second.device });
       expect(secondConnect.ok).toBe(true);
       expect(
         (secondConnect.payload as { deviceAuthMigration?: unknown } | undefined)
@@ -535,244 +449,119 @@ describe("Control UI device-auth upgrade migration", () => {
       expect(
         (secondConnect.payload as { auth?: { scopes?: string[] } } | undefined)?.auth?.scopes,
       ).toEqual(expect.arrayContaining(SCOPES));
-    } finally {
-      firstWs?.close();
-      competingWs?.close();
-      secondWs?.close();
-      await harness.close();
-    }
+    });
   });
 
   it("does not silently auto-approve a local signed migration browser", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        controlUi: {
-          allowedOrigins: [BROWSER_ORIGIN],
-          dangerouslyDisableDeviceAuth: true,
-        },
-      },
-    });
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    const harness = await createGatewaySuiteHarness();
-    const identityPath = path.join(
-      os.tmpdir(),
-      `openclaw-device-auth-migration-local-explicit-${randomUUID()}.sqlite`,
-    );
-    let ws: WebSocket | undefined;
-    try {
-      ws = await harness.openWs({ origin: BROWSER_ORIGIN });
-      const signed = await signedDevice(ws, identityPath);
-      const connected = await connectReq(ws, {
-        token: "secret",
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: signed.device,
-      });
-      expect(connected.ok).toBe(true);
-      expect(connected.payload).toMatchObject({
-        deviceAuthMigration: { pending: true },
-        auth: { role: "operator", scopes: ["operator.pairing"] },
-      });
-      expect(
-        (connected.payload as { auth?: { deviceToken?: string } } | undefined)?.auth?.deviceToken,
-      ).toBeUndefined();
+    await withMigrationHarness(
+      async (harness) => {
+        const ws = await harness.openWs({ origin: BROWSER_ORIGIN });
+        const signed = await signedDevice(ws, identityPath("device-auth-migration-local-explicit"));
+        const connected = await connectMigration(ws, { device: signed.device });
+        expect(connected.ok).toBe(true);
+        expect(connected.payload).toMatchObject({
+          deviceAuthMigration: { pending: true },
+          auth: { role: "operator", scopes: ["operator.pairing"] },
+        });
+        expect(
+          (connected.payload as { auth?: { deviceToken?: string } } | undefined)?.auth?.deviceToken,
+        ).toBeUndefined();
 
-      const list = await rpcReq<{
-        pending: Array<{ requestId: string; deviceId: string }>;
-      }>(ws, "device.pair.list", {});
-      expect(list.payload?.pending).toContainEqual(
-        expect.objectContaining({ deviceId: signed.identity.deviceId }),
-      );
-    } finally {
-      ws?.close();
-      await harness.close();
-    }
+        const list = await rpcReq<{
+          pending: Array<{ requestId: string; deviceId: string }>;
+        }>(ws, "device.pair.list", {});
+        expect(list.payload?.pending).toContainEqual(
+          expect.objectContaining({ deviceId: signed.identity.deviceId }),
+        );
+      },
+      { gateway: LOCAL_MIGRATION_GATEWAY },
+    );
   });
 
   it("adds pairing capability when a migrating browser requested read-only access", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        controlUi: {
-          allowedOrigins: [BROWSER_ORIGIN],
-          dangerouslyDisableDeviceAuth: true,
-        },
+    await withMigrationHarness(
+      async (harness) => {
+        const ws = await harness.openWs({ origin: BROWSER_ORIGIN });
+        const signed = await signedDevice(ws, identityPath("device-auth-migration-read-only"), [
+          "operator.read",
+        ]);
+        const connected = await connectMigration(ws, {
+          device: signed.device,
+          scopes: ["operator.read"],
+        });
+        expect(connected.ok).toBe(true);
+        expect(connected.payload).toMatchObject({
+          deviceAuthMigration: { pending: true },
+          auth: { role: "operator", scopes: ["operator.pairing"] },
+        });
+
+        const list = await rpcReq<{
+          pending: Array<{ requestId: string; deviceId: string; scopes?: string[] }>;
+        }>(ws, "device.pair.list", {});
+        const ownRequest = list.payload?.pending.find(
+          (request) => request.deviceId === signed.identity.deviceId,
+        );
+        expect(ownRequest?.scopes).toEqual(
+          expect.arrayContaining(["operator.read", "operator.pairing"]),
+        );
+        const approved = await rpcReq(ws, "device.pair.approve", {
+          requestId: ownRequest?.requestId,
+        });
+        expect(approved.ok).toBe(true);
+
+        const paired = (await listPairings()).paired.find(
+          (device) => device.deviceId === signed.identity.deviceId,
+        );
+        expect(paired?.tokens?.operator?.scopes).toEqual(
+          expect.arrayContaining(["operator.read", "operator.pairing"]),
+        );
+        expect(await readMigrationState()).toMatchObject({
+          status: "completed",
+          deviceId: signed.identity.deviceId,
+        });
       },
-    });
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    const harness = await createGatewaySuiteHarness();
-    const identityPath = path.join(
-      os.tmpdir(),
-      `openclaw-device-auth-migration-read-only-${randomUUID()}.sqlite`,
+      { gateway: LOCAL_MIGRATION_GATEWAY },
     );
-    let ws: WebSocket | undefined;
-    try {
-      ws = await harness.openWs({ origin: BROWSER_ORIGIN });
-      const signed = await signedDevice(ws, identityPath, ["operator.read"]);
-      const connected = await connectReq(ws, {
-        token: "secret",
-        scopes: ["operator.read"],
-        client: CONTROL_UI_CLIENT,
-        device: signed.device,
-      });
-      expect(connected.ok).toBe(true);
-      expect(connected.payload).toMatchObject({
-        deviceAuthMigration: { pending: true },
-        auth: { role: "operator", scopes: ["operator.pairing"] },
-      });
-
-      const list = await rpcReq<{
-        pending: Array<{ requestId: string; deviceId: string; scopes?: string[] }>;
-      }>(ws, "device.pair.list", {});
-      const ownRequest = list.payload?.pending.find(
-        (request) => request.deviceId === signed.identity.deviceId,
-      );
-      expect(ownRequest?.scopes).toEqual(
-        expect.arrayContaining(["operator.read", "operator.pairing"]),
-      );
-      const approved = await rpcReq(ws, "device.pair.approve", {
-        requestId: ownRequest?.requestId,
-      });
-      expect(approved.ok).toBe(true);
-
-      const { listDevicePairing } = await import("../infra/device-pairing.js");
-      const paired = (await listDevicePairing()).paired.find(
-        (device) => device.deviceId === signed.identity.deviceId,
-      );
-      expect(paired?.tokens?.operator?.scopes).toEqual(
-        expect.arrayContaining(["operator.read", "operator.pairing"]),
-      );
-      const { readControlUiDeviceAuthMigrationState } =
-        await import("../state/control-ui-device-auth-migration.js");
-      expect(readControlUiDeviceAuthMigrationState({ env: process.env })).toMatchObject({
-        status: "completed",
-        deviceId: signed.identity.deviceId,
-      });
-    } finally {
-      ws?.close();
-      await harness.close();
-    }
   });
 
   it("rejects a device-less migration handshake when an operator is already paired", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        trustedProxies: ["127.0.0.1"],
-        controlUi: {
-          allowedOrigins: [BROWSER_ORIGIN],
-          dangerouslyDisableDeviceAuth: true,
-        },
-      },
-    });
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    const harness = await createGatewaySuiteHarness();
-    const { approveDevicePairing, requestDevicePairing } =
-      await import("../infra/device-pairing.js");
-    const ownerIdentityPath = path.join(
-      os.tmpdir(),
-      `openclaw-device-auth-migration-existing-owner-${randomUUID()}.sqlite`,
-    );
-    const ownerIdentity = loadOrCreateDeviceIdentity({ path: ownerIdentityPath });
-    const ownerRequest = await requestDevicePairing({
-      deviceId: ownerIdentity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(ownerIdentity.publicKeyPem),
-      role: "operator",
-      scopes: SCOPES,
-    });
-    await expect(
-      approveDevicePairing(ownerRequest.request.requestId, { callerScopes: SCOPES }),
-    ).resolves.toMatchObject({ status: "approved" });
-
-    let ws: WebSocket | undefined;
-    try {
-      ws = await harness.openWs({
-        origin: BROWSER_ORIGIN,
-        "x-forwarded-for": "203.0.113.50",
+    await withMigrationHarness(async (harness) => {
+      const { request } = await requestOperatorPairing("device-auth-migration-existing-owner");
+      await expect(approveOperatorPairing(request.request.requestId)).resolves.toMatchObject({
+        status: "approved",
       });
-      const connected = await connectReq(ws, {
-        token: "secret",
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: null,
-      });
+      const ws = await harness.openWs(REMOTE_HEADERS);
+      const connected = await connectMigration(ws, { device: null });
       expect(connected.ok).toBe(false);
       expect(connected.error?.message).toContain("requires device identity");
-    } finally {
-      ws?.close();
-      await harness.close();
-    }
+    });
   });
 
   it("closes competing migration sessions and keeps the winner self-only until reconnect", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        trustedProxies: ["127.0.0.1"],
-        controlUi: {
-          allowedOrigins: [BROWSER_ORIGIN],
-          dangerouslyDisableDeviceAuth: true,
-        },
-      },
-    });
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    const harness = await createGatewaySuiteHarness();
-    const headers = {
-      origin: BROWSER_ORIGIN,
-      "x-forwarded-for": "203.0.113.50",
-    };
-    const identityPath = path.join(
-      os.tmpdir(),
-      `openclaw-device-auth-migration-secure-completion-${randomUUID()}.sqlite`,
-    );
-    let deviceLessWs: WebSocket | undefined;
-    let signedWs: WebSocket | undefined;
-    try {
-      deviceLessWs = await harness.openWs(headers);
-      const deviceLessConnect = await connectReq(deviceLessWs, {
-        token: "secret",
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: null,
-      });
+    await withMigrationHarness(async (harness) => {
+      const deviceLessWs = await harness.openWs(REMOTE_HEADERS);
+      const deviceLessConnect = await connectMigration(deviceLessWs, { device: null });
       expect(deviceLessConnect.ok).toBe(true);
       const deviceLessClosed = new Promise<number>((resolve, reject) => {
         const timer = setTimeout(() => {
           reject(new Error("device-less migration session remained open after completion"));
         }, 5_000);
-        deviceLessWs!.once("close", (code) => {
+        deviceLessWs.once("close", (code) => {
           clearTimeout(timer);
           resolve(code);
         });
       });
 
-      signedWs = await harness.openWs(headers);
-      const signed = await signedDevice(signedWs, identityPath);
-      const signedConnect = await connectReq(signedWs, {
-        token: "secret",
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: signed.device,
-      });
+      const signedWs = await harness.openWs(REMOTE_HEADERS);
+      const signed = await signedDevice(
+        signedWs,
+        identityPath("device-auth-migration-secure-completion"),
+      );
+      const signedConnect = await connectMigration(signedWs, { device: signed.device });
       expect(signedConnect.ok).toBe(true);
-      const { requestDevicePairing } = await import("../infra/device-pairing.js");
-      const otherIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(
-          os.tmpdir(),
-          `openclaw-device-auth-migration-other-pending-${randomUUID()}.sqlite`,
-        ),
-      });
-      const otherRequest = await requestDevicePairing({
-        deviceId: otherIdentity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(otherIdentity.publicKeyPem),
-        role: "operator",
-        scopes: SCOPES,
-      });
+      const { request: otherRequest } = await requestOperatorPairing(
+        "device-auth-migration-other-pending",
+      );
       const list = await rpcReq<{
         pending: Array<{ requestId: string; deviceId: string }>;
       }>(signedWs, "device.pair.list", {});
@@ -785,7 +574,6 @@ describe("Control UI device-auth upgrade migration", () => {
       });
       expect(approval.ok).toBe(true);
       await expect(deviceLessClosed).resolves.toBe(4001);
-      deviceLessWs = undefined;
 
       const postApprovalList = await rpcReq<{
         pending: Array<{ requestId: string; deviceId: string }>;
@@ -800,79 +588,37 @@ describe("Control UI device-auth upgrade migration", () => {
         requestId: otherRequest.request.requestId,
       });
       expect(crossDeviceRejection.ok).toBe(false);
-    } finally {
-      deviceLessWs?.close();
-      signedWs?.close();
-      await harness.close();
-    }
+    });
   });
 
   it("denies a stale migration session after another operator is paired", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      meta: { lastTouchedVersion: "2026.7.1" },
-      gateway: {
-        trustedProxies: ["127.0.0.1"],
-        controlUi: {
-          allowedOrigins: [BROWSER_ORIGIN],
-          dangerouslyDisableDeviceAuth: true,
-        },
-      },
-    });
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    const harness = await createGatewaySuiteHarness();
-    const headers = {
-      origin: BROWSER_ORIGIN,
-      "x-forwarded-for": "203.0.113.50",
-    };
-    const migrationIdentityPath = path.join(
-      os.tmpdir(),
-      `openclaw-device-auth-migration-stale-${randomUUID()}.sqlite`,
-    );
-    let migrationWs: WebSocket | undefined;
-    try {
-      migrationWs = await harness.openWs(headers);
-      const migration = await signedDevice(migrationWs, migrationIdentityPath);
-      const migrationConnect = await connectReq(migrationWs, {
-        token: "secret",
-        scopes: SCOPES,
-        client: CONTROL_UI_CLIENT,
-        device: migration.device,
-      });
+    await withMigrationHarness(async (harness) => {
+      const migrationWs = await harness.openWs(REMOTE_HEADERS);
+      const migration = await signedDevice(
+        migrationWs,
+        identityPath("device-auth-migration-stale"),
+      );
+      const migrationConnect = await connectMigration(migrationWs, { device: migration.device });
       expect(migrationConnect.ok).toBe(true);
       expect(migrationConnect.payload).toMatchObject({
         deviceAuthMigration: { pending: true },
         auth: { role: "operator", scopes: ["operator.pairing"] },
       });
       const migrationClosed = new Promise<number>((resolve) => {
-        migrationWs!.once("close", resolve);
+        migrationWs.once("close", resolve);
       });
 
-      const { approveDevicePairing, listDevicePairing, requestDevicePairing } =
-        await import("../infra/device-pairing.js");
-      const ownerIdentityPath = path.join(
-        os.tmpdir(),
-        `openclaw-device-auth-migration-owner-${randomUUID()}.sqlite`,
+      const { identity: ownerIdentity, request: ownerRequest } = await requestOperatorPairing(
+        "device-auth-migration-owner",
       );
-      const ownerIdentity = loadOrCreateDeviceIdentity({ path: ownerIdentityPath });
-      const ownerRequest = await requestDevicePairing({
-        deviceId: ownerIdentity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(ownerIdentity.publicKeyPem),
-        role: "operator",
-        scopes: SCOPES,
+      await expect(approveOperatorPairing(ownerRequest.request.requestId)).resolves.toMatchObject({
+        status: "approved",
       });
-      await expect(
-        approveDevicePairing(ownerRequest.request.requestId, { callerScopes: SCOPES }),
-      ).resolves.toMatchObject({ status: "approved" });
       await expect(migrationClosed).resolves.toBe(4001);
-      migrationWs = undefined;
 
-      const paired = (await listDevicePairing()).paired;
+      const paired = (await listPairings()).paired;
       expect(paired.some((device) => device.deviceId === ownerIdentity.deviceId)).toBe(true);
       expect(paired.some((device) => device.deviceId === migration.identity.deviceId)).toBe(false);
-    } finally {
-      migrationWs?.close();
-      await harness.close();
-    }
+    });
   });
 });

@@ -16,7 +16,7 @@ export function registerMatrixClientBridge(params: {
   emitter: EventEmitter;
   emitMembershipForRoom: (room: Room) => void;
   getSelfUserId: () => string;
-  setCurrentSyncState: (state: MatrixSyncState) => void;
+  setCurrentSyncState: (state: MatrixSyncState, error?: unknown) => void;
 }): void {
   params.client.on(ClientEvent.Event, (event: MatrixEvent) => {
     const roomId = event.getRoomId();
@@ -57,11 +57,11 @@ export function registerMatrixClientBridge(params: {
   params.client.on(
     ClientEvent.Sync,
     (state: MatrixSyncState, prevState: string | null, data?: unknown) => {
-      params.setCurrentSyncState(state);
       const error =
         data && typeof data === "object" && "error" in data
           ? (data as { error?: unknown }).error
           : undefined;
+      params.setCurrentSyncState(state, error);
       params.emitter.emit("sync.state", state, prevState, error);
     },
   );

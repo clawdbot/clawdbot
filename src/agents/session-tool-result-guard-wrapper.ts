@@ -218,11 +218,15 @@ export function guardSessionManager(
     suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
     onMessagePersisted: opts?.onMessagePersisted,
     withCompactionPersistence: opts?.withCompactionPersistence,
-    onUserMessagePersisted: async (message) => {
+    onUserMessagePersisted: async (message, persistence) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      recorder?.markRuntimePersisted(message);
+      if (persistence.anchor) {
+        recorder?.markRuntimePersisted(message, persistence.anchor);
+      } else {
+        recorder?.markRuntimePersisted(message);
+      }
       await opts?.onUserMessagePersisted?.(message, runtimeMessage);
     },
     onUserMessagePersistenceSuppressed: async (message) => {

@@ -6,7 +6,10 @@ import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import type { Command } from "commander";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { assertOkOrThrowHttpError } from "../../agents/provider-http-errors.js";
+import {
+  assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
+} from "../../agents/provider-http-errors.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,7 +30,7 @@ import {
 import type { VideoGenerationResolution } from "../../video-generation/types.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
-import { writeOutputAsset } from "./media-output.js";
+import { publishOutputFileAtomically, writeOutputAsset } from "../media-output.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import {
   emitJsonOrText,
@@ -90,6 +93,11 @@ async function fetchGeneratedVideoDownload(params: {
       result.response,
       `${params.provider} generated video download failed`,
     );
+    assertProviderBinaryResponseContent(
+      result.response,
+      `${params.provider} generated video download`,
+      "video",
+    );
     return result;
   } catch (error) {
     await result.release();
@@ -148,20 +156,30 @@ async function runVideoGenerate(params: {
             const ext =
               extensionForMime(mimeType) ||
               path.extname(video.fileName ?? "") ||
-              path.extname(params.output ?? "");
+              path.extname(params.output);
             const resolvedOutput = path.resolve(params.output);
             const parsed = path.parse(resolvedOutput);
             const filePath =
               result.videos.length <= 1
                 ? path.join(parsed.dir, `${parsed.name}${ext}`)
                 : path.join(parsed.dir, `${parsed.name}-${String(index + 1)}${ext}`);
-            await fs.mkdir(path.dirname(filePath), { recursive: true });
-            await pipeline(
-              Readable.fromWeb(response.body as import("node:stream/web").ReadableStream),
-              createWriteStream(filePath),
-            );
-            const stat = await fs.stat(filePath);
-            return { path: filePath, mimeType: video.mimeType, size: stat.size };
+            const size = await publishOutputFileAtomically({
+              filePath,
+              writeTemp: async (tempPath) => {
+                await pipeline(
+                  Readable.fromWeb(
+                    response.body as import("node:stream/web").ReadableStream<Uint8Array>,
+                  ),
+                  createWriteStream(tempPath, { flags: "wx" }),
+                );
+                const writtenSize = (await fs.stat(tempPath)).size;
+                if (writtenSize === 0) {
+                  throw new Error("Generated media output is empty.");
+                }
+                return writtenSize;
+              },
+            });
+            return { path: filePath, mimeType: video.mimeType, size };
           }
           // Provider-supplied video URLs are untrusted external sources, and the
           // in-memory fallback (no --output) must not buffer an unbounded body:
@@ -181,6 +199,9 @@ async function runVideoGenerate(params: {
                 `${result.provider} generated video download exceeds ${maxBytes} bytes; pass --output to stream large videos to disk`,
               ),
           });
+          if (videoBuffer.byteLength === 0) {
+            throw new Error("Generated media output is empty.");
+          }
         } finally {
           await download.release();
         }

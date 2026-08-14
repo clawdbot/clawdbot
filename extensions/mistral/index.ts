@@ -22,7 +22,7 @@ function buildMistralReplayPolicy() {
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Mistral Provider",
-  description: "Bundled Mistral provider plugin",
+  description: "Official Mistral provider plugin",
   manifest,
   provider: {
     label: "Mistral",

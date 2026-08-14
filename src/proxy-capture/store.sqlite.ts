@@ -17,7 +17,11 @@ import {
   registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import type {
   CaptureBlobRecord,
   CaptureEventRecord,
@@ -197,6 +201,24 @@ function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimensi
     .toSorted((left, right) => right.count - left.count || left.value.localeCompare(right.value));
 }
 
+type SharedDebugProxyCaptureState = {
+  database: OpenClawStateDatabase;
+  env?: NodeJS.ProcessEnv;
+};
+
+const sharedDebugProxyCaptureStates = new WeakMap<object, SharedDebugProxyCaptureState>();
+
+function runSharedDebugProxyCaptureWrite<T>(owner: object, operation: () => T): T {
+  const shared = sharedDebugProxyCaptureStates.get(owner);
+  if (!shared) {
+    throw new Error("shared debug proxy capture state is unavailable");
+  }
+  return runOpenClawStateWriteTransaction(() => operation(), {
+    database: shared.database,
+    env: shared.env ?? process.env,
+  });
+}
+
 class DebugProxyCaptureStoreImpl {
   readonly db: DatabaseSync;
   readonly dbPath: string;
@@ -220,6 +242,7 @@ class DebugProxyCaptureStoreImpl {
       return;
     }
     const database = openOpenClawStateDatabase({ env: optionsOrDbPath.env });
+    sharedDebugProxyCaptureStates.set(this, { database, env: optionsOrDbPath.env });
     this.db = database.db;
     this.dbPath = database.path;
     // Retain the shipped public property while shared-state blobs live in this DB.
@@ -269,36 +292,44 @@ class DebugProxyCaptureStoreImpl {
         );
       return;
     }
-    this.db
-      .prepare(
-        `INSERT INTO capture_sessions (
-          id, started_at, ended_at, mode, source_scope, source_process, proxy_url
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          started_at=MIN(capture_sessions.started_at, excluded.started_at),
-          ended_at=excluded.ended_at,
-          mode=CASE
-            WHEN capture_sessions.mode = 'implicit' THEN excluded.mode
-            ELSE capture_sessions.mode
-          END,
-          proxy_url=excluded.proxy_url,
-          source_process=excluded.source_process`,
-      )
-      .run(
-        session.id,
-        session.startedAt,
-        session.endedAt ?? null,
-        session.mode,
-        session.sourceScope,
-        session.sourceProcess,
-        session.proxyUrl ?? null,
-      );
+    runSharedDebugProxyCaptureWrite(this, () =>
+      this.db
+        .prepare(
+          `INSERT INTO capture_sessions (
+            id, started_at, ended_at, mode, source_scope, source_process, proxy_url
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            started_at=MIN(capture_sessions.started_at, excluded.started_at),
+            ended_at=excluded.ended_at,
+            mode=CASE
+              WHEN capture_sessions.mode = 'implicit' THEN excluded.mode
+              ELSE capture_sessions.mode
+            END,
+            proxy_url=excluded.proxy_url,
+            source_process=excluded.source_process`,
+        )
+        .run(
+          session.id,
+          session.startedAt,
+          session.endedAt ?? null,
+          session.mode,
+          session.sourceScope,
+          session.sourceProcess,
+          session.proxyUrl ?? null,
+        ),
+    );
   }
 
   endSession(sessionId: string, endedAt = Date.now()): void {
-    this.db
-      .prepare(`UPDATE capture_sessions SET ended_at = ? WHERE id = ?`)
-      .run(endedAt, sessionId);
+    const update = () =>
+      this.db
+        .prepare(`UPDATE capture_sessions SET ended_at = ? WHERE id = ?`)
+        .run(endedAt, sessionId);
+    if (this.pathBased) {
+      update();
+      return;
+    }
+    runSharedDebugProxyCaptureWrite(this, update);
   }
 
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord {
@@ -325,21 +356,23 @@ class DebugProxyCaptureStoreImpl {
         ...(contentType ? { contentType } : {}),
       };
     }
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO capture_blobs (
-          blob_id, content_type, encoding, size_bytes, sha256, data, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        blobId,
-        contentType ?? null,
-        "gzip",
-        data.byteLength,
-        sha256,
-        gzipSync(data),
-        Date.now(),
-      );
+    runSharedDebugProxyCaptureWrite(this, () =>
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO capture_blobs (
+            blob_id, content_type, encoding, size_bytes, sha256, data, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          blobId,
+          contentType ?? null,
+          "gzip",
+          data.byteLength,
+          sha256,
+          gzipSync(data),
+          Date.now(),
+        ),
+    );
     return {
       blobId,
       encoding: "gzip",
@@ -354,7 +387,7 @@ class DebugProxyCaptureStoreImpl {
       this.insertEvent(event, event.dataBlobId ?? null);
       return;
     }
-    runSqliteImmediateTransactionSync(this.db, () => {
+    runSharedDebugProxyCaptureWrite(this, () => {
       // Capture can be invoked directly by provider seams before the top-level
       // runtime initializes. Keep the shared-schema foreign key valid without
       // making diagnostics break the request they are observing.
@@ -616,7 +649,9 @@ class DebugProxyCaptureStoreImpl {
       const eventCount =
         (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_events`).get() as { count: number })
           .count ?? 0;
-      this.db.exec(`DELETE FROM capture_events; DELETE FROM capture_sessions;`);
+      runSqliteImmediateTransactionSync(this.db, () => {
+        this.db.exec(`DELETE FROM capture_events; DELETE FROM capture_sessions;`);
+      });
       let blobs = 0;
       if (fs.existsSync(this.pathBased.blobDir)) {
         for (const entry of fs.readdirSync(this.pathBased.blobDir)) {
@@ -626,7 +661,7 @@ class DebugProxyCaptureStoreImpl {
       }
       return { sessions: sessionCount, events: eventCount, blobs };
     }
-    return runSqliteImmediateTransactionSync(this.db, () => {
+    return runSharedDebugProxyCaptureWrite(this, () => {
       const sessionCount =
         (
           this.db.prepare(`SELECT COUNT(*) AS count FROM capture_sessions`).get() as {
@@ -654,7 +689,7 @@ class DebugProxyCaptureStoreImpl {
     if (this.pathBased) {
       return this.deletePathBasedSessions(uniqueSessionIds);
     }
-    return runSqliteImmediateTransactionSync(this.db, () => {
+    return runSharedDebugProxyCaptureWrite(this, () => {
       const placeholders = uniqueSessionIds.map(() => "?").join(", ");
       const blobRows = this.db
         .prepare(
@@ -764,12 +799,14 @@ class DebugProxyCaptureStoreImpl {
           )
           .get(...sessionIds) as { count: number }
       ).count ?? 0;
-    this.db
-      .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
-      .run(...sessionIds);
-    this.db
-      .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
-      .run(...sessionIds);
+    runSqliteImmediateTransactionSync(this.db, () => {
+      this.db
+        .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
+        .run(...sessionIds);
+      this.db
+        .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
+        .run(...sessionIds);
+    });
     const candidateBlobIds = blobRows
       .map((row) => row.blobId?.trim())
       .filter((blobId): blobId is string => Boolean(blobId));

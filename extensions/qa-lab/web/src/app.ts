@@ -1,7 +1,8 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 // Qa Lab plugin module implements app behavior.
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
-import { formatErrorMessage } from "./errors.js";
 import { getJson, getJsonNoStore, postJson, QaLabHttpError } from "./http.js";
 import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
 import {
@@ -11,7 +12,6 @@ import {
   type ReportEnvelope,
   type RunnerResolvedPlan,
   type RunnerSelection,
-  type Snapshot,
   type TabId,
   type CaptureEventsEnvelope,
   type CaptureCoverageEnvelope,
@@ -342,7 +342,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     try {
       const [bootstrap, snapshot, report, outcomes] = await Promise.all([
         getJson<Bootstrap>("/api/bootstrap"),
-        getJson<Snapshot>("/api/state"),
+        getJson<QaBusStateSnapshot>("/api/state"),
         getJson<ReportEnvelope>("/api/report"),
         getJson<OutcomesEnvelope>("/api/outcomes"),
       ]);
@@ -579,23 +579,29 @@ export async function createQaLabApp(root: HTMLDivElement) {
         state.selectedConversationKey,
       );
       const accountId = selectedConversation?.accountId ?? "default";
+      const selectedThreadId =
+        selectedConversation?.id === conversationId &&
+        selectedConversation.kind === state.composer.conversationKind
+          ? state.selectedThreadId
+          : null;
       await postJson("/api/inbound/message", {
         accountId,
         conversation: {
           id: conversationId,
           kind: state.composer.conversationKind,
-          ...(state.composer.conversationKind === "channel" ? { title: conversationId } : {}),
+          ...(state.composer.conversationKind !== "direct" ? { title: conversationId } : {}),
         },
         senderId: state.composer.senderId.trim() || "alice",
         senderName: state.composer.senderName.trim() || undefined,
         text,
-        ...(state.selectedThreadId ? { threadId: state.selectedThreadId } : {}),
+        ...(selectedThreadId ? { threadId: selectedThreadId } : {}),
       });
       state.selectedConversationKey = conversationSelectionKey({
         accountId,
         id: conversationId,
         kind: state.composer.conversationKind,
       });
+      state.selectedThreadId = selectedThreadId;
       state.composer.text = "";
       chatScrollLocked = true;
       await refresh();
@@ -1737,8 +1743,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
     /* Composer form */
     root.querySelector<HTMLSelectElement>("#conversation-kind")?.addEventListener("change", (e) => {
+      const selectedKind = (e.currentTarget as HTMLSelectElement).value;
       state.composer.conversationKind =
-        (e.currentTarget as HTMLSelectElement).value === "channel" ? "channel" : "direct";
+        selectedKind === "channel" || selectedKind === "group" ? selectedKind : "direct";
     });
     root.querySelector<HTMLInputElement>("#conversation-id")?.addEventListener("input", (e) => {
       state.composer.conversationId = (e.currentTarget as HTMLInputElement).value;

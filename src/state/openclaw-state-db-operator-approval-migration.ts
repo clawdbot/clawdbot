@@ -2,7 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const COLUMNS = [
   "approval_id",

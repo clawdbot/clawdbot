@@ -94,8 +94,7 @@ export const discordConfigAdapter = createScopedChannelConfigAdapter<
 });
 
 export function createDiscordPluginBase(params: {
-  setup: NonNullable<ChannelPlugin<ResolvedDiscordAccount>["setup"]>;
-  setupContract?: NonNullable<ChannelPlugin<ResolvedDiscordAccount>["setupContract"]>;
+  setupContract: NonNullable<ChannelPlugin<ResolvedDiscordAccount>["setupContract"]>;
   setupWizard?: ChannelPlugin<ResolvedDiscordAccount>["setupWizard"];
 }): Pick<
   ChannelPlugin<ResolvedDiscordAccount>,
@@ -109,7 +108,6 @@ export function createDiscordPluginBase(params: {
   | "reload"
   | "configSchema"
   | "config"
-  | "setup"
   | "setupContract"
   | "messaging"
   | "security"
@@ -117,7 +115,7 @@ export function createDiscordPluginBase(params: {
 > {
   return {
     id: DISCORD_CHANNEL,
-    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
+    setupContract: params.setupContract,
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
     meta: { ...getChatChannelMeta(DISCORD_CHANNEL) },
     capabilities: {
@@ -174,7 +172,6 @@ export function createDiscordPluginBase(params: {
       collectUnsupportedSecretRefConfigCandidates,
       collectRuntimeConfigAssignments,
     },
-    setup: params.setup,
   } as Pick<
     ChannelPlugin<ResolvedDiscordAccount>,
     | "id"
@@ -187,7 +184,7 @@ export function createDiscordPluginBase(params: {
     | "reload"
     | "configSchema"
     | "config"
-    | "setup"
+    | "setupContract"
     | "messaging"
     | "security"
     | "secrets"

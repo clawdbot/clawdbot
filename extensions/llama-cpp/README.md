@@ -1,9 +1,10 @@
 # @openclaw/llama-cpp-provider
 
-Official llama.cpp text-inference and embedding provider for OpenClaw.
+Official managed llama.cpp provider for OpenClaw GGUF chat and embeddings.
 
-This plugin runs local GGUF chat and embedding models in-process through
-`node-llama-cpp`.
+The plugin installs a pinned, integrity-verified `llama-server` and configures
+OpenClaw's existing `localService` supervisor. Model traffic uses the normal
+OpenAI-compatible chat and embedding transports.
 
 ## Install
 
@@ -11,30 +12,28 @@ This plugin runs local GGUF chat and embedding models in-process through
 openclaw plugins install @openclaw/llama-cpp-provider
 ```
 
-Restart the Gateway after installing or updating the plugin. Use Node 24 for
-native installs and updates.
+Restart the Gateway after installing or updating the plugin, then choose
+**llama.cpp** once during interactive onboarding or configuration.
 
 ## Configure text inference
 
-Choose **Local model (llama.cpp)** during onboarding. After explicit consent,
-OpenClaw downloads Gemma 4 E4B IT Q4_K_M (approximately 5.0 GB) as the default.
-The bundled download is offered only on machines with at least 16 GiB of RAM.
-Discovery never downloads a model.
+After explicit consent, OpenClaw installs the matching server build and
+downloads Gemma 4 E4B IT Q4_K_M (approximately 5.0 GB) plus EmbeddingGemma
+(approximately 0.3 GB). The default chat download is offered only on machines
+with at least 16 GiB of RAM.
 
-On smaller machines, use Ollama or LM Studio with a smaller model, use a cloud
-provider, or configure any custom GGUF through `params.modelPath`. The 16 GiB
-gate applies only to OpenClaw's bundled default download; custom GGUF models
-remain available on any machine.
+Custom GGUF models remain supported through `params.modelPath`. Rerun llama.cpp
+setup after changing the model so OpenClaw can verify the file and regenerate
+the managed router preset.
 
 See the [llama.cpp provider guide](https://docs.openclaw.ai/plugins/llama-cpp)
-for custom GGUF model configuration and hardware guidance.
+for platform requirements, custom GGUF configuration, diagnostics, and repair.
 
 ## Configure embeddings
 
-Set `memory.search.provider` to `local`. By default, the plugin
-downloads and uses the EmbeddingGemma GGUF model. Configure
-`memory.search.local.modelPath` to use another local path, Hugging
-Face model URI, or HTTPS model URL.
+Set `memory.search.provider` to `local`. The plugin preserves the historical
+`local` embedding provider and index identity while serving requests through
+the managed server's `/v1/embeddings` endpoint.
 
 ## Package
 

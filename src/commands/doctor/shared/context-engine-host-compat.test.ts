@@ -38,10 +38,6 @@ vi.mock("../../../context-engine/init.js", () => ({
   ensureContextEnginesInitialized: vi.fn(),
 }));
 
-vi.mock("../../../plugins/runtime/runtime-registry-loader.js", () => ({
-  ensurePluginRegistryLoaded: vi.fn(),
-}));
-
 let engineCounter = 0;
 
 function uniqueEngineId(): string {

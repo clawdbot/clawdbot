@@ -1,5 +1,6 @@
 // Nextcloud Talk plugin module implements monitor behavior.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createAuthRateLimiter,
@@ -26,13 +27,6 @@ const WEBHOOK_ERRORS = {
   payloadTooLarge: "Payload too large",
   internalServerError: "Internal server error",
 } as const;
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return typeof err === "string" ? err : JSON.stringify(err);
-}
 
 function writeJsonResponse(
   res: ServerResponse,
@@ -206,7 +200,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
           writeWebhookError(res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
           return;
         }
-        const error = err instanceof Error ? err : new Error(formatError(err));
+        const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
         onError?.(error);
         writeWebhookError(res, 500, WEBHOOK_ERRORS.internalServerError);
       }

@@ -1,6 +1,8 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { ChannelGatewayContext } from "../runtime-api.js";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
@@ -22,6 +24,10 @@ const RECONNECT_BACKOFF = {
 } as const;
 const RECONNECT_STABLE_MS = 60_000;
 const RECONNECT_LOOKBACK_SECONDS = 24 * 60 * 60;
+
+export function getActiveBuzzBus(accountId: string): BuzzBus | undefined {
+  return activeBuses.get(accountId);
+}
 
 function resolveBuzzProfileName(params: {
   cfg: OpenClawConfig;
@@ -54,6 +60,8 @@ function resolveBuzzProfileName(params: {
 }
 
 export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<ResolvedBuzzAccount>) {
+  const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
+  const buildContext = channelRuntime?.inbound.buildContext;
   const account = resolveBuzzAccount({
     cfg: ctx.cfg,
     accountId: ctx.account.accountId,
@@ -93,12 +101,19 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         channelIds,
         since: sessionSince,
         signal: ctx.abortSignal,
-        onMessage: async (message, sessionBus) => {
+        onMessage: async (message, sessionBus, signal) => {
           // Subscription filters reduce traffic, but relay events remain untrusted.
           if (!isConfiguredBuzzChannel(configuredChannelIds, message.channelId)) {
             return;
           }
-          await handleBuzzInbound({ account, cfg: ctx.cfg, bus: sessionBus, message });
+          await handleBuzzInbound({
+            account,
+            cfg: ctx.cfg,
+            bus: sessionBus,
+            message,
+            signal,
+            buildContext,
+          });
         },
         onMessageError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz message failed: ${error.message}`);
@@ -109,6 +124,11 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         },
         onDedupeError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz replay state failed: ${error.message}`);
+        },
+        onHistoryError: (error) => {
+          ctx.log?.warn?.(
+            `[${account.accountId}] Buzz history recovery incomplete: ${error.message}`,
+          );
         },
         onPresenceError: (error) => {
           ctx.log?.warn?.(
@@ -121,20 +141,25 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         onProfileError: (error) => {
           ctx.log?.warn?.(`[${account.accountId}] Buzz bot profile sync failed: ${error.message}`);
         },
+        onDirectoryError: (error) => {
+          ctx.log?.warn?.(`[${account.accountId}] Buzz directory refresh failed: ${error.message}`);
+        },
+        onRoomDirectoryChanged: ctx.invalidateDirectoryCache,
       });
+      ctx.invalidateDirectoryCache?.();
       connectedAt = Date.now();
       activeBuses.set(account.accountId, bus);
-      ctx.setStatus({
-        accountId: account.accountId,
-        running: true,
-        configured: true,
-        enabled: account.enabled,
-        baseUrl: account.relayUrl,
-        publicKey: bus.publicKey,
-        lastError: null,
-      });
+      ctx.setStatus(
+        channelReadyPatch({
+          accountId: account.accountId,
+          configured: true,
+          enabled: account.enabled,
+          baseUrl: account.relayUrl,
+          publicKey: bus.publicKey,
+        }),
+      );
       ctx.log?.info?.(
-        `[${account.accountId}] Buzz connected to ${account.relayUrl} for ${channelIds.length} channel(s)`,
+        `[${account.accountId}] Buzz connected to ${account.relayUrl} for ${bus.directory.activeRoomIds().length} channel(s)`,
       );
       const fatalError = await Promise.race([
         waitUntilAbort(ctx.abortSignal).then(() => undefined),
@@ -156,6 +181,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       ctx.setStatus({
         accountId: account.accountId,
         running: false,
+        ...(cycleError ? { lifecycle: "recovering" as const } : {}),
         ...(cycleError ? { lastError: cycleError.message } : {}),
       });
     }
@@ -240,3 +266,20 @@ export const buzzOutboundAdapter = {
     return attachChannelToResult("buzz", { to: channelId, messageId });
   },
 };
+
+export async function sendBuzzTyping(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number | null;
+}): Promise<void> {
+  const resolvedAccountId = params.accountId ?? resolveDefaultBuzzAccountId(params.cfg);
+  const bus = activeBuses.get(resolvedAccountId);
+  if (!bus) {
+    return;
+  }
+  await bus.sendTyping({
+    channelId: parseBuzzTarget(params.to),
+    threadId: params.threadId == null ? undefined : String(params.threadId),
+  });
+}

@@ -51,7 +51,7 @@ const ensureSupportedRuntimeVersion = () => {
   if (process.versions.bun) {
     // Bun >=1.4 (Rust rewrite) ships node:sqlite; feature-probe instead of
     // rejecting Bun outright so capable Bun builds can run OpenClaw.
-    let hasNodeSqlite = false;
+    let hasNodeSqlite;
     try {
       hasNodeSqlite = Boolean(process.getBuiltinModule?.("node:sqlite"));
     } catch {
@@ -463,8 +463,7 @@ const hasLauncherContainerTarget = (argv) => {
     return true;
   }
   const args = argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  for (const arg of args) {
     if (!arg || arg === "--") {
       return false;
     }

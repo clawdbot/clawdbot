@@ -193,4 +193,34 @@ describe("remote model catalog refresh", () => {
       }),
     ).resolves.toMatchObject({ status: "error" });
   });
+
+  it("preserves the previous catalog when a newer bundle contains invalid UTF-8", async () => {
+    const databaseOptions = options();
+    const previous = {
+      bundle_json: JSON.stringify(bundle),
+      generated_at: bundle.generatedAt,
+      min_version: bundle.minVersion,
+      source_url: DEFAULT_REMOTE_MODEL_CATALOG_URL,
+      etag: '"previous"',
+      last_modified: "Wed, 23 Jul 2025 00:00:00 GMT",
+      checked_at: 10_000,
+    };
+    writeRemoteModelCatalog(previous, databaseOptions);
+
+    const corrupt = Buffer.from(JSON.stringify({ ...bundle, generatedAt: bundle.generatedAt + 1 }));
+    const modelIdOffset = corrupt.indexOf("claude-test");
+    expect(modelIdOffset).toBeGreaterThanOrEqual(0);
+    corrupt[modelIdOffset + "claude-".length] = 0xff;
+
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(corrupt, { status: 200 }));
+    await expect(
+      refreshRemoteModelCatalog({
+        config: {},
+        fetchImpl,
+        databaseOptions,
+        force: true,
+      }),
+    ).resolves.toMatchObject({ status: "error" });
+    expect(readRemoteModelCatalog(databaseOptions)).toMatchObject(previous);
+  });
 });

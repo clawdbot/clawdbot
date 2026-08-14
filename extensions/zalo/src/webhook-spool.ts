@@ -8,6 +8,7 @@ import {
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { ZaloApiError, type ZaloUpdate } from "./api.js";
@@ -111,10 +112,6 @@ function parseClaimedUpdate(payload: ZaloWebhookSpoolPayload, claimedId: string)
   return facts.update as unknown as ZaloUpdate;
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function isZaloAuthenticationFailure(error: unknown): boolean {
   let current: unknown = error;
   const seen = new Set<unknown>();
@@ -194,14 +191,15 @@ function createZaloWebhookIngress(options: {
           return { reason: "invalid-event", message: error.message };
         }
         if (isZaloAuthenticationFailure(error)) {
-          return { reason: "authentication-failed", message: errorText(error) };
+          return { reason: "authentication-failed", message: formatErrorMessage(error) };
         }
         return null;
       },
       onLog: (message) => options.runtime.error?.(`zalo ingress: ${message}`),
     },
     createStoppedError: () => new Error("Zalo ingress stopped."),
-    onError: (error) => options.runtime.error?.(`zalo ingress drain failed: ${errorText(error)}`),
+    onError: (error) =>
+      options.runtime.error?.(`zalo ingress drain failed: ${formatErrorMessage(error)}`),
   });
 
   return {

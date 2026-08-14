@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
@@ -61,7 +61,11 @@ export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((c
         continue;
       }
       const agentId = (binding as { agentId?: unknown }).agentId;
-      if (typeof agentId === "string" && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
+      if (
+        typeof agentId === "string" &&
+        agentId !== DEFAULT_AGENT_ID &&
+        !effectiveAgentIds.has(normalizeAgentId(agentId))
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["bindings", idx, "agentId"],

@@ -34,7 +34,7 @@ Create a Discord application with a bot, add the bot to your server, and pair it
   <Step title="Enable privileged intents">
     Still on the **Bot** page, under **Privileged Gateway Intents** enable:
 
-    - **Message Content Intent** (required)
+    - **Message Content Intent** (required for normal guild messages)
     - **Server Members Intent** (recommended; required for role allowlists, name-to-ID matching, and channel-audience access groups)
     - **Presence Intent** (optional; only for presence updates)
 
@@ -150,7 +150,7 @@ openclaw gateway
 DISCORD_BOT_TOKEN=...
 ```
 
-        For scripted or remote setup, write the same JSON5 block with `openclaw config patch --file ./discord.patch.json5 --dry-run`, then rerun without `--dry-run`. Plaintext `token` strings work too, and SecretRef values are supported for `channels.discord.token` across env/file/exec providers. See [Secrets Management](/gateway/secrets).
+        For scripted or remote setup, write the same JSON5 block with `openclaw config patch --file ./discord.patch.json5 --dry-run`, then rerun without `--dry-run`. Plaintext `token` strings work too, and SecretRef values are supported for `channels.discord.token` across env/file/exec/store providers. See [Secrets Management](/gateway/secrets).
 
         For multiple Discord bots, keep each bot token and application ID under its account. A top-level `channels.discord.applicationId` is inherited by accounts, so only set it there when every account uses the same application ID.
 
@@ -202,6 +202,12 @@ openclaw pairing approve discord <CODE>
 
   </Step>
 </Steps>
+
+If Discord cannot grant Message Content Intent, OpenClaw can still operate in DMs and in
+guild channels where users explicitly mention the bot. Set
+`channels.discord.intents.messageContent: false` so the Gateway does not request the
+unavailable privileged intent, and keep `requireMention: true` on every configured guild
+channel. Discord omits user-authored content from other guild messages in this mode.
 
 <Note>
 Token resolution is account-aware. Config token values win over the env fallback, and `DISCORD_BOT_TOKEN` is only used for the default account.
@@ -564,7 +570,7 @@ Example:
 
     The legacy per-channel `allow` key is migrated to `enabled` by `openclaw doctor --fix`.
 
-    If you only set `DISCORD_BOT_TOKEN` and do not create a `channels.discord` block, runtime fallback is `groupPolicy="allowlist"` (with a warning in logs), even if `channels.defaults.groupPolicy` is `open`.
+    Without a `channels.discord` block, the Gateway does not auto-start Discord from `DISCORD_BOT_TOKEN`. Once the block exists, `DISCORD_BOT_TOKEN` remains the default-account token fallback. Passing `--ambient-channels` opts into env-only auto-configuration; that path uses `groupPolicy="allowlist"` and logs a warning, even if `channels.defaults.groupPolicy` is `open`.
 
   </Tab>
 
@@ -694,7 +700,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
   </Accordion>
 
   <Accordion title="Live stream preview">
-    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. `channels.discord.streaming.mode` takes `off` | `partial` | `block` | `progress` (default when no `streaming`/legacy `streamMode` key is set). `streamMode` is a legacy alias; run `openclaw doctor --fix` to rewrite persisted config to the canonical nested `streaming` shape.
+    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. Discord preview streaming defaults to `off`; set `channels.discord.streaming.mode` to `partial`, `block`, or `progress` to opt in. `streamMode` is a legacy alias; run `openclaw doctor --fix` to rewrite persisted config to the canonical nested `streaming` shape.
 
 ```json5
 {
@@ -716,14 +722,13 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 
     - `off` disables Discord preview edits.
     - `partial` edits a single preview message as tokens arrive.
-    - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. When block streaming is explicitly enabled, OpenClaw skips the preview stream to avoid double-streaming.
-    - `progress` keeps one editable status draft until final delivery. By default it shows one line of the agent's latest preamble or narration, with no generated label, spacer, or tool rows.
+    - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. An explicit non-`off` preview mode overrides inherited `agents.defaults.blockStreamingDefault: "on"`; explicit `streaming.block.enabled: true` overrides the preview. If a turn cannot use previews, inherited block delivery still applies.
+    - `progress` keeps one editable status draft until final delivery. It shows the agent's latest preamble or narration as a status headline, with the compact tool rows underneath and no generated label.
     - Media, error, and explicit-reply finals cancel pending preview edits.
-    - `streaming.preview.toolProgress` defaults to `true` in `partial`/`block` mode. Discord progress mode defaults to no tool rows; set `streaming.progress.toolProgress: true` to opt in.
-    - Set `streaming.progress.toolProgress: true` to add compact tool/progress rows such as `🛠️ Bash: run tests` or `🔎 Web Search: for "query"`. For compatibility, an existing `progress.label` or `progress.labels` configuration retains the prior tool-row default; set `toolProgress: false` for a custom label without rows.
+    - `streaming.preview.toolProgress` and `streaming.progress.toolProgress` both default to `true` when preview streaming is active. Tool rows such as `🛠️ Bash: run tests` or `🔎 Web Search: for "query"` need no additional progress config; set either key to `false` to keep the status headline only.
     - `streaming.progress.commentary` (default `false`) opts into raw assistant commentary in the temporary progress draft. The default preamble/narration status line is independent of this option. Commentary is cleaned before display, stays transient, and does not change final answer delivery.
     - `streaming.progress.maxLineChars` controls the per-line progress preview budget. Prose is shortened on word boundaries; command and path details keep useful suffixes.
-    - `streaming.preview.commandText` / `streaming.progress.commandText` controls command/exec detail in compact progress lines: `raw` (default) or `status` (tool label only).
+    - `streaming.preview.commandText` / `streaming.progress.commandText` controls command/exec detail in compact progress lines: `status` (default, tool label only) or `raw` (explicit command text).
 
     Hide raw command/exec text while keeping compact progress lines:
 
@@ -810,25 +815,6 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 
   </Accordion>
 
-  <Accordion title="Subagent progress on the source message">
-    Set `channels.discord.subagentProgress: true` to show background child activity on the Discord message that started the parent run.
-
-```json5
-{
-  channels: {
-    discord: {
-      subagentProgress: true,
-    },
-  },
-}
-```
-
-    While child runs are active, OpenClaw keeps Discord typing active for up to one hour and replaces one count reaction (`1️⃣` through `🔟`) as the concurrent count changes; `🔟` also represents 10 or more. The count reaction is removed after the final child ends. A failed, timed-out, or killed child leaves a `🔴` reaction.
-
-    This is opt-in and uses fixed internal timing and emoji defaults. The bot needs **Add Reactions** permission for reaction feedback. Account-level `channels.discord.accounts.<id>.subagentProgress` overrides the top-level value.
-
-  </Accordion>
-
   <Accordion title="Persistent ACP channel bindings">
     For stable "always-on" ACP workspaces, configure top-level typed ACP bindings targeting Discord conversations.
 
@@ -839,7 +825,6 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
   agents: {
     entries: {
       codex: {
-        default: true,
         runtime: {
           type: "acp",
           acp: {
@@ -1114,18 +1099,13 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
         enabled: true,
         intervalMs: 30000,
         minUpdateIntervalMs: 15000,
-        exhaustedText: "token exhausted",
       },
     },
   },
 }
 ```
 
-    Auto presence maps runtime availability to Discord status: healthy => online, degraded or unknown => idle, exhausted or unavailable => dnd. Defaults: `intervalMs` 30000, `minUpdateIntervalMs` 15000 (must be less than or equal to `intervalMs`). Optional text overrides:
-
-    - `autoPresence.healthyText`
-    - `autoPresence.degradedText`
-    - `autoPresence.exhaustedText` (supports `{reason}` placeholder)
+    Auto presence maps runtime availability to Discord status: healthy => online, degraded or unknown => idle, exhausted or unavailable => dnd. Defaults: `intervalMs` 30000, `minUpdateIntervalMs` 15000 (must be less than or equal to `intervalMs`).
 
   </Accordion>
 
@@ -1182,26 +1162,9 @@ Default gate behavior:
 
 OpenClaw uses Discord components v2 for exec approvals and cross-context markers. Discord message actions can also accept `components` for custom UI (advanced; requires constructing a component payload via the discord tool), while legacy `embeds` remain available but are not recommended.
 
-- `channels.discord.ui.components.accentColor` sets the accent color used by Discord component containers (hex). Per account: `channels.discord.accounts.<id>.ui.components.accentColor`.
 - `channels.discord.agentComponents.ttlMs` controls how long sent Discord component callbacks remain registered (default `1800000`, maximum `86400000`). Per account: `channels.discord.accounts.<id>.agentComponents.ttlMs`.
 - `embeds` are ignored when components v2 are present.
 - Plain URL previews are suppressed by default. Set `suppressEmbeds: false` on a message action when a single outbound link should expand.
-
-Example:
-
-```json5
-{
-  channels: {
-    discord: {
-      ui: {
-        components: {
-          accentColor: "#5865F2",
-        },
-      },
-    },
-  },
-}
-```
 
 ## Voice
 
@@ -1720,7 +1683,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 
 - startup/auth: `enabled`, `token`, `applicationId`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dmPolicy`, `allowFrom`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
-- command: `commands.native`, `commands.useAccessGroups` (global), `configWrites`, `slashCommand.ephemeral`
+- command: `commands.native`, `commands.allowFrom` (global), `configWrites`, `slashCommand.ephemeral`
 - gateway: `proxy`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit` (default `2000`), `maxLinesPerMessage` (default `17`)
@@ -1728,8 +1691,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - media: `mediaMaxMb` (caps outbound Discord uploads, default `100`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`, `autoPresence.*`
-- UI: `ui.components.accentColor`
-- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents.enabled`, `agentComponents.ttlMs`, `activities`, `heartbeat`, `responsePrefix`
+- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents.enabled`, `agentComponents.ttlMs`, `activities`, `heartbeatVisibility`, `responsePrefix`
 
 </Accordion>
 

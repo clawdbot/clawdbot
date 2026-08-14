@@ -75,6 +75,54 @@ describe("codex plugin", () => {
     expect(openSyncKeyedStore).not.toHaveBeenCalled();
   });
 
+  it("proactively monitors an explicitly configured remote websocket app-server", () => {
+    const registerService = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://127.0.0.1:39175",
+          },
+        },
+        runtime: createCodexTestRuntime(),
+        registerService,
+      }),
+    );
+
+    expect(registerService).toHaveBeenCalledOnce();
+    expect(mockCallArg(registerService)).toMatchObject({
+      id: "codex-app-server-connection-health",
+      start: expect.any(Function),
+      stop: expect.any(Function),
+    });
+  });
+
+  it("does not start remote connection monitoring for local Codex transports", () => {
+    for (const appServer of [undefined, { transport: "stdio" }, { transport: "unix" }]) {
+      const registerService = vi.fn();
+
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: appServer ? { appServer } : {},
+          runtime: createCodexTestRuntime(),
+          registerService,
+        }),
+      );
+
+      expect(registerService).not.toHaveBeenCalled();
+    }
+  });
+
   it("registers the agent harness, native thread tool, and hosted web search", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
@@ -149,11 +197,15 @@ describe("codex plugin", () => {
     expect(migrationRegistration?.id).toBe("codex");
     expect(migrationRegistration?.label).toBe("Codex");
     expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_threads" });
+    expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_plugins" });
     expect(registerTool).not.toHaveBeenCalledWith(expect.any(Function), {
       names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES],
     });
     expect(registerToolMetadata).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "codex_threads", risk: "high" }),
+    );
+    expect(registerToolMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "codex_plugins", risk: "low" }),
     );
     expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
     expect(typeof inboundClaimRegistration?.[1]).toBe("function");

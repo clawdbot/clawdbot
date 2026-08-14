@@ -11,11 +11,7 @@ import {
   getPreparedMessageToolCatalogForRegistry,
   settlePreparedMessageToolCatalog,
 } from "./prepared-message-tool-catalog.js";
-import {
-  pinActivePluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "./runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
 function channel(id: string, reconcilesUnknownSend = false): ChannelPlugin {
   return {
@@ -88,28 +84,31 @@ describe("prepared message-tool catalog", () => {
     );
   });
 
-  it("settles the exact runtime registry while another channel registry is pinned", () => {
-    const pinned = createTestRegistry([
+  it("retains catalogs by registry across a root swap", () => {
+    const first = createTestRegistry([
       { pluginId: "alpha", source: "test", plugin: channel("alpha") },
     ]);
     const runtime = createTestRegistry([
       { pluginId: "beta", source: "test", plugin: channel("beta") },
     ]);
-    setActivePluginRegistry(pinned);
-    pinActivePluginChannelRegistry(pinned);
+    setActivePluginRegistry(first);
+    const firstCatalog = getPreparedMessageToolCatalog();
     setActivePluginRegistry(runtime);
 
-    const pinnedCatalog = getPreparedMessageToolCatalog();
     const runtimeCatalog = getPreparedMessageToolCatalogForRegistry(runtime);
 
-    expect(pinnedCatalog?.channels.map((entry) => entry.id)).toEqual(["alpha"]);
+    expect(firstCatalog?.channels.map((entry) => entry.id)).toEqual(["alpha"]);
     expect(runtimeCatalog?.channels.map((entry) => entry.id)).toEqual(["beta"]);
-    expect(listMessageActionDiscoveryChannels().map((entry) => entry.id)).toEqual(["alpha"]);
+    expect(listMessageActionDiscoveryChannels().map((entry) => entry.id)).toEqual(["beta"]);
     expect(listMessageActionDiscoveryChannels(runtimeCatalog).map((entry) => entry.id)).toEqual([
       "beta",
     ]);
-    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("alpha")?.pluginId).toBe("alpha");
-    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("beta")).toBeNull();
+    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("alpha")).toBeNull();
+    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("beta")?.pluginId).toBe("beta");
+    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("alpha", firstCatalog)?.pluginId).toBe(
+      "alpha",
+    );
+    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("beta", firstCatalog)).toBeNull();
     expect(resolveCurrentChannelMessageToolDiscoveryAdapter("beta", runtimeCatalog)?.pluginId).toBe(
       "beta",
     );

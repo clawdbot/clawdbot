@@ -33,7 +33,7 @@ import {
   voteMatrixPoll,
   verifyMatrixRecoveryKey,
 } from "./matrix/actions.js";
-import type { MatrixMessageSummary } from "./matrix/actions/types.js";
+import type { MatrixActionClientOpts, MatrixMessageSummary } from "./matrix/actions/types.js";
 import { withAuthorizedMatrixReadTarget, type MatrixReadContext } from "./matrix/read-policy.js";
 import type { MatrixClient } from "./matrix/sdk.js";
 import { reactMatrixMessage } from "./matrix/send.js";
@@ -164,7 +164,9 @@ function readPositiveIntegerArrayParam(params: Record<string, unknown>, key: str
 export async function handleMatrixAction(
   params: Record<string, unknown>,
   cfg: CoreConfig,
-  opts: { mediaLocalRoots?: readonly string[]; readContext?: MatrixReadContext } = {},
+  opts: Pick<MatrixActionClientOpts, "mediaAccess" | "mediaLocalRoots"> & {
+    readContext?: MatrixReadContext;
+  } = {},
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId") ?? undefined;
@@ -271,6 +273,7 @@ export async function handleMatrixAction(
         const content = readStringParam(params, "content", {
           required: !mediaUrl,
           allowEmpty: true,
+          trim: false,
         });
         const replyToId =
           readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
@@ -283,6 +286,7 @@ export async function handleMatrixAction(
               : undefined;
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
+          ...(opts.mediaAccess ? { mediaAccess: opts.mediaAccess } : {}),
           mediaLocalRoots: opts.mediaLocalRoots,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
@@ -294,7 +298,7 @@ export async function handleMatrixAction(
       case "editMessage": {
         const roomId = readRoomId(params);
         const messageId = readStringParam(params, "messageId", { required: true });
-        const content = readStringParam(params, "content", { required: true });
+        const content = readStringParam(params, "content", { required: true, trim: false });
         const result = await withReadTarget(roomId, async (target) => {
           return await editMatrixMessage(target.roomId, messageId, content, {
             ...clientOpts,

@@ -1,15 +1,23 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
+import {
+  OpenAIQuicksilverPendingAudio,
+  OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
+} from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
   OpenAIQuicksilverAudioPeer,
+  type OpenAIQuicksilverAudioPeerCallbacks,
   type OpenAIQuicksilverAudioPeerContract,
 } from "./realtime-quicksilver-peer.runtime.js";
 import {
   releaseOpenAIQuicksilverSession,
   reserveOpenAIQuicksilverSession,
 } from "./realtime-quicksilver-session-limit.js";
-import { connectOpenAIQuicksilverSideband } from "./realtime-quicksilver-sideband.js";
+import {
+  connectOpenAIQuicksilverSideband,
+  type OpenAIQuicksilverSocketFactory,
+} from "./realtime-quicksilver-sideband.js";
 import {
   createCallResponse,
   emitSideband,
@@ -31,7 +39,8 @@ function createRelayTone(): Buffer {
 type TestableAudioPeer = {
   connected: boolean;
   handleInboundRtp(packet: unknown): void;
-  pendingAudio: Buffer;
+  mediaTimer: ReturnType<typeof setInterval> | undefined;
+  pendingAudio: OpenAIQuicksilverPendingAudio;
   sequenceNumber: number;
   timestamp: number;
   sendNextAudioFrame(): void;
@@ -41,9 +50,12 @@ type TestableAudioPeer = {
       decode(packet: Uint8Array | null, options?: { maxFrameSize?: number }): Int16Array;
       decodePacketLoss(frameSize?: number): Int16Array;
     };
+    encoder: {
+      encode(pcm: Int16Array, options?: { frameSize?: number }): Uint8Array;
+    };
     peer: {
       connectionStateChange: {
-        execute(state: "closed" | "disconnected"): void;
+        execute(state: "closed" | "connected" | "disconnected"): void;
       };
     };
     transceiver: {
@@ -55,52 +67,17 @@ type TestableAudioPeer = {
 };
 
 type TestableGatewayBridge = {
-  sideband?: {
-    socket: FakeSocket;
-    requestIds: { realtimeSessionId: string; sessionId: string; threadId: string };
-  };
-  runDelegation(params: {
-    delegationId: string;
-    prompt: string;
-    runAgentConsult: (params: {
-      prompt: string;
-      signal?: AbortSignal;
-    }) => Promise<{ text: string }>;
-    signal: AbortSignal;
-  }): Promise<void>;
+  pendingAudio: OpenAIQuicksilverPendingAudio;
 };
 
-function createDelegationBridge(
-  runAgentConsult: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>,
-) {
-  const logger = { debug: vi.fn(), warn: vi.fn() };
-  const bridge = new OpenAIQuicksilverGatewayBridge({
-    providerConfig: {},
-    model: "gpt-live-1-codex",
-    voice: "marin",
-    audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-    onAudio: vi.fn(),
-    onClearAudio: vi.fn(),
-    runAgentConsult,
-    logger,
-    resolveAuth: vi.fn(async () => ({
-      type: "oauth" as const,
-      token: "oauth-token",
-      accountId: "account-1",
-    })),
-  });
-  const socket = new FakeSocket("manual");
-  socket.readyState = 1;
-  const testBridge = bridge as unknown as TestableGatewayBridge;
-  testBridge.sideband = {
-    socket,
-    requestIds: {
-      realtimeSessionId: "realtime-session",
-      sessionId: "session",
-      threadId: "thread",
-    },
-  };
-  return { bridge, logger, socket, testBridge };
+function readPendingAudio(pending: OpenAIQuicksilverPendingAudio): Buffer {
+  const length = pending.length;
+  const audio = Buffer.alloc(length);
+  const readBytes = pending.readInto(audio);
+  if (readBytes !== length) {
+    throw new Error(`Expected to read ${length} pending audio bytes, got ${readBytes}`);
+  }
+  return audio;
 }
 
 async function createInboundAudioHarness(params?: { onRtpPacket?: () => void }) {
@@ -331,7 +308,9 @@ describe("GPT-Live werift audio peer", () => {
 
       for (let index = 0; index < frames.length; index += 1) {
         testPeer.sendNextAudioFrame();
-        expect(testPeer.pendingAudio).toEqual(Buffer.concat(frames.slice(index + 1)));
+        expect(testPeer.pendingAudio).toHaveLength(
+          (frames.length - index - 1) * OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
+        );
       }
 
       expect(sendRtp).toHaveBeenCalledTimes(3);
@@ -348,6 +327,58 @@ describe("GPT-Live werift audio peer", () => {
         (initialSequenceNumber + 1) & 0xffff,
         (initialSequenceNumber + 2) & 0xffff,
       ]);
+    } finally {
+      peer.close();
+    }
+  });
+
+  it("retains only the newest five seconds and releases it on close", async () => {
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError: vi.fn() },
+      iceServers: [],
+    });
+    const testPeer = peer as unknown as TestableAudioPeer;
+    const maxPendingAudioBytes = OPENAI_QUICKSILVER_RELAY_FRAME_BYTES * 250;
+    const source = Buffer.alloc(maxPendingAudioBytes + OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
+    source.fill(0x11, 0, OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
+    source.fill(0x22, OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
+    const expectedTail = Buffer.from(source.subarray(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES));
+
+    peer.sendAudio(source);
+    source.fill(0xff);
+    expect(testPeer.pendingAudio).toHaveLength(expectedTail.length);
+    expect(testPeer.takeNextRelayFrame()).toEqual(
+      expectedTail.subarray(0, OPENAI_QUICKSILVER_RELAY_FRAME_BYTES),
+    );
+
+    peer.close();
+    expect(testPeer.pendingAudio).toHaveLength(0);
+    peer.sendAudio(Buffer.from([0x01, 0x02]));
+    expect(testPeer.pendingAudio).toHaveLength(0);
+  });
+
+  it("rejects adoption over existing peer audio and clears adoption after close", async () => {
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError: vi.fn() },
+      iceServers: [],
+    });
+    const testPeer = peer as unknown as TestableAudioPeer;
+    const existing = Buffer.from([0x01, 0x02]);
+    const rejected = new OpenAIQuicksilverPendingAudio();
+    rejected.append(Buffer.from([0x03, 0x04]));
+    try {
+      peer.sendAudio(existing);
+      expect(() => peer.adoptPendingAudio(rejected)).toThrow(
+        "GPT-Live WebRTC peer already owns pending audio",
+      );
+      expect(rejected).toHaveLength(0);
+      expect(testPeer.takeNextRelayFrame().subarray(0, existing.length)).toEqual(existing);
+
+      peer.close();
+      const afterClose = new OpenAIQuicksilverPendingAudio();
+      afterClose.append(Buffer.from([0x05, 0x06]));
+      peer.adoptPendingAudio(afterClose);
+      expect(afterClose).toHaveLength(0);
     } finally {
       peer.close();
     }
@@ -378,6 +409,38 @@ describe("GPT-Live werift audio peer", () => {
       expect(producedFrame?.subarray(tail.length).every((byte) => byte === 0)).toBe(true);
     } finally {
       peer.close();
+    }
+  });
+
+  it("clears the media pump when the first encoder tick synchronously closes the peer", async () => {
+    const encodeError = new Error("encoder failed");
+    const peerRef: { current?: OpenAIQuicksilverAudioPeer } = {};
+    const onError = vi.fn((_error: Error) => peerRef.current?.close());
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError },
+      iceServers: [],
+    });
+    peerRef.current = peer;
+    const testPeer = peer as unknown as TestableAudioPeer;
+    const encode = vi.spyOn(testPeer.state.encoder, "encode").mockImplementation(() => {
+      throw encodeError;
+    });
+    vi.useFakeTimers();
+    try {
+      testPeer.state.peer.connectionStateChange.execute("connected");
+
+      expect(encode).toHaveBeenCalledOnce();
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onError).toHaveBeenCalledWith(encodeError);
+      expect(testPeer.mediaTimer).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(encode).toHaveBeenCalledOnce();
+      expect(onError).toHaveBeenCalledOnce();
+    } finally {
+      peer.close();
+      vi.useRealTimers();
     }
   });
 
@@ -518,6 +581,168 @@ describe("GPT-Live werift audio peer", () => {
 });
 
 describe("GPT-Live gateway relay bridge", () => {
+  function createPendingPeerBridge(params?: {
+    onClose?: (reason: "completed" | "error") => void;
+    onError?: (error: Error) => void;
+  }) {
+    let resolvePeer: ((peer: OpenAIQuicksilverAudioPeerContract) => void) | undefined;
+    let rejectPeer: ((error: Error) => void) | undefined;
+    let peerCallbacks: OpenAIQuicksilverAudioPeerCallbacks | undefined;
+    const peerPromise = new Promise<OpenAIQuicksilverAudioPeerContract>((resolve, reject) => {
+      resolvePeer = resolve;
+      rejectPeer = reject;
+    });
+    const peer = {
+      createOffer: vi.fn(async () => "v=offer\r\n"),
+      applyAnswer: vi.fn(async () => undefined),
+      adoptPendingAudio: vi.fn(),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+    } satisfies OpenAIQuicksilverAudioPeerContract;
+    const onClose = vi.fn();
+    const bridge = new OpenAIQuicksilverGatewayBridge({
+      providerConfig: {},
+      model: "gpt-live-1-codex",
+      voice: "marin",
+      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onClose: params?.onClose ?? onClose,
+      onError: params?.onError,
+      runAgentConsult: vi.fn(async () => ({ text: "done" })),
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      resolveAuth: vi.fn(async () => ({
+        type: "oauth" as const,
+        token: "oauth-token",
+        accountId: "account-1",
+      })),
+      createPeer: vi.fn((callbacks) => {
+        peerCallbacks = callbacks;
+        return peerPromise;
+      }),
+      fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
+      webSocketFactory: () => new FakeSocket(),
+    });
+    const connection = bridge.connect();
+    return {
+      bridge,
+      connection,
+      onClose,
+      peer,
+      rejectPeer: (error: Error) => rejectPeer?.(error),
+      resolvePeer: () => resolvePeer?.(peer),
+      triggerPeerError: (error: Error) => peerCallbacks?.onError(error),
+    };
+  }
+
+  it("preserves caller-owned microphone frames while the media peer is starting", async () => {
+    const { bridge, connection, peer, resolvePeer } = createPendingPeerBridge();
+    const testBridge = bridge as unknown as TestableGatewayBridge;
+    try {
+      expect(bridge.connect()).toBe(connection);
+      const source = Buffer.from([0x7f, 0x41]);
+      bridge.sendAudio(source);
+      source.fill(0);
+      bridge.sendAudio(Buffer.from([0x22, 0x23]));
+      const pendingAudio = testBridge.pendingAudio;
+
+      resolvePeer();
+      await connection;
+
+      expect(peer.adoptPendingAudio).toHaveBeenCalledOnce();
+      expect(peer.adoptPendingAudio).toHaveBeenCalledWith(pendingAudio);
+      expect(testBridge.pendingAudio).not.toBe(pendingAudio);
+      expect(testBridge.pendingAudio).toHaveLength(0);
+      expect(readPendingAudio(pendingAudio)).toEqual(Buffer.from([0x7f, 0x41, 0x22, 0x23]));
+      bridge.sendAudio(Buffer.from([0x30, 0x31]));
+      expect(peer.sendAudio).toHaveBeenCalledOnce();
+      expect(peer.sendAudio).toHaveBeenCalledWith(Buffer.from([0x30, 0x31]));
+    } finally {
+      bridge.close();
+    }
+  });
+
+  it("discards queued microphone audio when closed before the media peer resolves", async () => {
+    const { bridge, connection, onClose, peer, resolvePeer } = createPendingPeerBridge();
+    const testBridge = bridge as unknown as TestableGatewayBridge;
+    bridge.sendAudio(Buffer.from([0x41, 0x42]));
+    bridge.close();
+    bridge.close();
+
+    expect(testBridge.pendingAudio).toHaveLength(0);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("completed");
+    resolvePeer();
+
+    await expect(connection).rejects.toThrow("GPT-Live gateway relay bridge closed");
+    await vi.waitFor(() => expect(peer.close).toHaveBeenCalledOnce());
+    expect(peer.sendAudio).not.toHaveBeenCalled();
+    bridge.sendAudio(Buffer.from([0x43, 0x44]));
+    expect(peer.sendAudio).not.toHaveBeenCalled();
+  });
+
+  it("discards queued microphone audio when media peer creation fails", async () => {
+    const { bridge, connection, peer, rejectPeer } = createPendingPeerBridge();
+    const pendingAudioState = bridge as unknown as {
+      pendingAudio: OpenAIQuicksilverPendingAudio;
+    };
+    bridge.sendAudio(Buffer.from([0x41, 0x42]));
+    rejectPeer(new Error("media peer unavailable"));
+
+    await expect(connection).rejects.toThrow("media peer unavailable");
+    expect(pendingAudioState.pendingAudio).toHaveLength(0);
+    bridge.sendAudio(Buffer.from([0x43, 0x44]));
+    expect(pendingAudioState.pendingAudio).toHaveLength(0);
+    expect(peer.sendAudio).not.toHaveBeenCalled();
+  });
+
+  it("keeps error precedence when onError reentrantly closes the bridge", async () => {
+    const onClose = vi.fn();
+    const bridgeRef: { current?: OpenAIQuicksilverGatewayBridge } = {};
+    const harness = createPendingPeerBridge({
+      onClose,
+      onError: () => bridgeRef.current?.close(),
+    });
+    bridgeRef.current = harness.bridge;
+    const connectionRejected = expect(harness.connection).rejects.toThrow(
+      "GPT-Live gateway relay bridge closed",
+    );
+
+    harness.triggerPeerError(new Error("media peer failed"));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+    await connectionRejected;
+  });
+
+  it("releases queued audio and rejects a late peer when onError throws", async () => {
+    const callbackError = new Error("error callback failed");
+    const onClose = vi.fn();
+    const harness = createPendingPeerBridge({
+      onClose,
+      onError: () => {
+        throw callbackError;
+      },
+    });
+    const testBridge = harness.bridge as unknown as TestableGatewayBridge;
+    harness.bridge.sendAudio(Buffer.from([0x41, 0x42]));
+    const connectionRejected = expect(harness.connection).rejects.toThrow(
+      "GPT-Live gateway relay bridge closed",
+    );
+
+    expect(() => harness.triggerPeerError(new Error("media peer failed"))).toThrow(callbackError);
+    const retainedAudioBytes = testBridge.pendingAudio.length;
+    const closeReason = onClose.mock.calls[0]?.[0];
+    harness.bridge.close();
+    harness.resolvePeer();
+
+    await connectionRejected;
+    await vi.waitFor(() => expect(harness.peer.close).toHaveBeenCalledOnce());
+    expect(retainedAudioBytes).toBe(0);
+    expect(closeReason).toBe("error");
+    expect(harness.peer.sendAudio).not.toHaveBeenCalled();
+  });
+
   it("closes a sideband that opens in the abort handoff", async () => {
     const controller = new AbortController();
     const socket = new FakeSocket("manual");
@@ -540,56 +765,34 @@ describe("GPT-Live gateway relay bridge", () => {
     expect(socket.closed).toBe(true);
   });
 
-  it("does not append failure text when the host cancels a delegation", async () => {
-    const abortError = new Error("The operation was aborted");
-    abortError.name = "AbortError";
-    const runAgentConsult = vi.fn(async () => {
-      throw abortError;
+  it("bounds sideband frames and aggregate pre-open buffering", async () => {
+    const controller = new AbortController();
+    const socket = new FakeSocket("manual");
+    let socketOptions: Parameters<OpenAIQuicksilverSocketFactory>[1] | undefined;
+    socket.once("close", () => controller.abort(new Error("sideband overflow observed")));
+    const connection = connectOpenAIQuicksilverSideband({
+      auth: { type: "api-key", token: "platform-key" },
+      createSocket: (_url, options) => {
+        socketOptions = options;
+        return socket;
+      },
+      requestIds: {
+        realtimeSessionId: "realtime-session",
+        sessionId: "session",
+        threadId: "thread",
+      },
+      signal: controller.signal,
+      url: "wss://api.openai.com/v1/live/rtc_test",
     });
-    const { bridge, logger, socket, testBridge } = createDelegationBridge(runAgentConsult);
-    try {
-      await testBridge.runDelegation({
-        delegationId: "delegation-cancelled",
-        prompt: "stop this",
-        runAgentConsult,
-        signal: new AbortController().signal,
-      });
 
-      expect(socket.sent).toEqual([]);
-      expect(logger.warn).not.toHaveBeenCalled();
-    } finally {
-      bridge.close();
-    }
-  });
+    expect(socketOptions?.maxPayload).toBe(16 * 1024 * 1024);
+    socket.emit("message", Buffer.alloc(512 * 1024), false);
+    socket.emit("message", Buffer.alloc(512 * 1024), false);
+    socket.emit("message", Buffer.from([0]), false);
 
-  it("keeps the speakable failure response for genuine delegation errors", async () => {
-    const runAgentConsult = vi.fn(async () => {
-      throw new Error("workspace unavailable");
-    });
-    const { bridge, logger, socket, testBridge } = createDelegationBridge(runAgentConsult);
-    try {
-      await testBridge.runDelegation({
-        delegationId: "delegation-failed",
-        prompt: "do work",
-        runAgentConsult,
-        signal: new AbortController().signal,
-      });
-
-      expect(parseSent(socket)).toContainEqual({
-        type: "delegation.context.append",
-        delegation_item_id: "delegation-failed",
-        channel: "speakable",
-        content: [
-          {
-            type: "input_text",
-            text: "The agent task failed. Tell the user it did not complete and offer to try again.",
-          },
-        ],
-      });
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("workspace unavailable"));
-    } finally {
-      bridge.close();
-    }
+    await expect(connection).rejects.toThrow("sideband overflow observed");
+    expect(socket.closeCode).toBe(1009);
+    expect(socket.closeReason).toBe("sideband startup buffer exceeded");
   });
 
   it("bounds peer creation and closes a peer that resolves after the deadline", async () => {
@@ -630,6 +833,7 @@ describe("GPT-Live gateway relay bridge", () => {
     resolvePeer?.({
       createOffer: vi.fn(async () => "v=offer\r\n"),
       applyAnswer: vi.fn(async () => undefined),
+      adoptPendingAudio: vi.fn(),
       sendAudio: vi.fn(),
       close: closePeer,
     });
@@ -641,9 +845,11 @@ describe("GPT-Live gateway relay bridge", () => {
     const applyAnswer = vi.fn(async () => undefined);
     const closePeer = vi.fn();
     const createOffer = vi.fn(async () => "v=offer\r\n");
+    const adoptPendingAudio = vi.fn();
     const peer: OpenAIQuicksilverAudioPeerContract = {
       createOffer,
       applyAnswer,
+      adoptPendingAudio,
       sendAudio: vi.fn(),
       close: closePeer,
     };
@@ -686,6 +892,7 @@ describe("GPT-Live gateway relay bridge", () => {
     const connectedSocket = socket;
     expect(createOffer).toHaveBeenCalledOnce();
     expect(applyAnswer).toHaveBeenCalledWith("v=answer\r\n");
+    expect(adoptPendingAudio).not.toHaveBeenCalled();
     emitSideband(connectedSocket, {
       type: "session.started",
       session: { id: "rtc_bridge", expires_at: Math.floor(Date.now() / 1000) + 60 },
@@ -747,6 +954,7 @@ describe("GPT-Live gateway relay bridge", () => {
       createPeer: vi.fn(async () => ({
         createOffer: vi.fn(async () => "v=offer\r\n"),
         applyAnswer: vi.fn(async () => undefined),
+        adoptPendingAudio: vi.fn(),
         sendAudio: vi.fn(),
         close: vi.fn(),
       })),

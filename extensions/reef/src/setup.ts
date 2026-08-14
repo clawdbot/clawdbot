@@ -38,7 +38,7 @@ type Prompt = {
   }): Promise<T>;
 };
 
-export const reefSetupAdapter = {
+const reefSetupAdapter = {
   applyAccountConfig: ({
     cfg,
     input,

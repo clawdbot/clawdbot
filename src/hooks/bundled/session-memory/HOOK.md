@@ -24,7 +24,7 @@ When a manual or automatic reset starts a fresh session:
 
 1. **Finds the previous session** - Uses the pre-reset session entry to locate the correct transcript
 2. **Extracts conversation** - Reads the last N user/assistant messages from the session (default: 15, configurable)
-3. **Chooses filename slug** - Uses a local timestamp by default, or an LLM-generated description when `llmSlug` is enabled
+3. **Chooses filename slug** - Uses a timestamp in `agents.defaults.userTimezone` by default, or an LLM-generated description when `llmSlug` is enabled
 4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-HHMM.md` in the background
 
 ## Output Format
@@ -32,7 +32,7 @@ When a manual or automatic reset starts a fresh session:
 Memory files are created with the following format:
 
 ```markdown
-# Session: 2026-01-16 14:30:00 EST
+# Session: 2026-01-16 14:30:00 America/New_York
 
 - **Session Key**: agent:main:main
 - **Session ID**: abc123def456
@@ -45,7 +45,7 @@ Automatic reset files use `Reason: daily` or `Reason: idle` instead of a command
 
 Timestamp slugs are the default so reset handling stays fast:
 
-- `2026-01-16-1430.md` - Default local timestamp slug
+- `2026-01-16-1430.md` - Default configured-timezone timestamp slug
 
 With `llmSlug: true`, the configured model can generate descriptive slugs based on your conversation:
 
@@ -92,6 +92,7 @@ The hook automatically:
 
 - Uses your workspace directory (`~/.openclaw/workspace` by default)
 - Uses timestamp slugs by default so reset handling stays fast
+- Uses `agents.defaults.userTimezone` for artifact dates and timestamps, with the host timezone as fallback
 - Runs memory capture in the background so replacement sessions are not delayed
 - Uses your configured LLM for slug generation only when `llmSlug` is `true`
 - Resolves configured aliases such as `sonnet`; bare model IDs use the agent's default provider, while `provider/model` selects another provider

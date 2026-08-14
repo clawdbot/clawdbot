@@ -4,12 +4,20 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  validateJsonSchemaValue,
+  type JsonSchemaObject,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCodexAppServerHomeDir } from "./app-server/auth-start-options.js";
+import { resolveCodexAppServerUserHomeDir } from "./app-server/config.js";
 import type { CodexThread } from "./app-server/protocol.js";
 import { sessionBindingIdentity } from "./app-server/session-binding.js";
 import {
@@ -22,12 +30,13 @@ import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
   requireCatalogEligibleThread,
+  type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
   codexSessionCatalogRuntime,
   createCodexSessionCatalogControl,
-  createCodexSessionCatalogNodeHostCommands,
+  createCodexSessionCatalogNodeHostCommands as createCodexSessionCatalogNodeHostCommandsRuntime,
   createCodexSessionCatalogNodeInvokePolicies,
 } from "./session-catalog.js";
 
@@ -47,7 +56,28 @@ const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
 const continueLocalCodexSession = codexSessionCatalogRuntime.continueLocal;
 const listCodexSessionCatalog = codexSessionCatalogRuntime.list;
 const readCodexSessionTranscript = codexSessionCatalogRuntime.readTranscript;
-const registerCodexSessionCatalog = codexSessionCatalogRuntime.register;
+const registerCodexSessionCatalogRuntime = codexSessionCatalogRuntime.register;
+
+function registerCodexSessionCatalog(
+  params: Omit<Parameters<typeof registerCodexSessionCatalogRuntime>[0], "getPluginConfig"> & {
+    getPluginConfig?: () => unknown;
+  },
+) {
+  return registerCodexSessionCatalogRuntime({
+    ...params,
+    getPluginConfig: params.getPluginConfig ?? (() => undefined),
+  });
+}
+
+function createCodexSessionCatalogNodeHostCommands(
+  control: CodexSessionCatalogControl,
+  configSources: CodexTerminalConfigSources = {
+    getPluginConfig: () => undefined,
+    getRuntimeConfig: () => config,
+  },
+) {
+  return createCodexSessionCatalogNodeHostCommandsRuntime(control, configSources);
+}
 
 const commandRpcMocks = vi.hoisted(() => ({
   codexControlRequest: vi.fn(),
@@ -66,6 +96,7 @@ const transcriptMirrorMocks = vi.hoisted(() => ({
 }));
 const nodeHostMocks = vi.hoisted(() => ({
   runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
+  userShellPaths: new Map<string, string>(),
 }));
 
 vi.mock("./command-rpc.js", () => ({
@@ -92,15 +123,33 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
         env?: NodeJS.ProcessEnv;
         pathEnv?: string;
         includeExtensionless?: boolean;
+        strategy: "direct" | "fallback" | "prefer";
       },
     ) => {
       const env = options.env ?? process.env;
-      return actual.resolveNodeHostExecutable(command, {
+      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
+      const direct = actual.resolveNodeHostExecutable(command, {
         env,
-        pathEnv: options.pathEnv ?? env.PATH ?? env.Path ?? "",
+        pathEnv,
         includeExtensionless: options.includeExtensionless,
         strategy: "direct",
       });
+      if (direct && options.strategy !== "prefer") {
+        return direct;
+      }
+      const shellPath = nodeHostMocks.userShellPaths.get(command);
+      if (!shellPath) {
+        return direct;
+      }
+      const shellExecutable = actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv: shellPath,
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+      return shellExecutable
+        ? { executable: shellExecutable.executable, pathEnv: shellPath }
+        : direct;
     },
   };
 });
@@ -119,6 +168,24 @@ type SessionEntrySummary = ReturnType<
 >[number];
 
 const config = {} as OpenClawConfig;
+
+async function normalizeCodexManifestConfig(value: unknown): Promise<Record<string, unknown>> {
+  const manifest = JSON.parse(
+    await fs.readFile(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as { configSchema: JsonSchemaObject };
+  const result = validateJsonSchemaValue({
+    cacheKey: "codex.session-catalog.manifest-config",
+    schema: manifest.configSchema,
+    value,
+    applyDefaults: true,
+  });
+  if (!result.ok) {
+    throw new Error(
+      `Expected valid Codex manifest config: ${result.errors.map((error) => error.text).join(", ")}`,
+    );
+  }
+  return result.value as Record<string, unknown>;
+}
 
 function idleThread(overrides: Partial<CodexThread> = {}): CodexThread {
   return {
@@ -377,6 +444,7 @@ function createGatewayApi(runtime: PluginRuntime, apiConfig: OpenClawConfig = {}
 
 beforeEach(() => {
   nodeHostMocks.runNodePtyCommand.mockClear();
+  nodeHostMocks.userShellPaths.clear();
   commandRpcMocks.codexControlRequest.mockReset();
   pinnedConnectionMocks.getClient.mockReset();
   pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
@@ -429,7 +497,11 @@ describe("Codex session catalog errors", () => {
 
 describe("Codex supervision catalog", () => {
   it("lists non-archived interactive threads without probing transcript previews", async () => {
-    const pluginConfig = { supervision: { enabled: true } };
+    const pluginConfig = await normalizeCodexManifestConfig({
+      supervision: { enabled: true },
+      appServer: { command: "codex-catalog" },
+    });
+    expect((pluginConfig.appServer as Record<string, unknown>).homeScope).toBeUndefined();
     commandRpcMocks.codexControlRequest.mockResolvedValue({
       data: [
         {
@@ -1092,16 +1164,10 @@ describe("Codex supervision catalog", () => {
       config,
       runtime,
       control,
+      includeLocal: false,
     });
 
     expect(result.hosts).toEqual([
-      {
-        hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        label: "Local Codex",
-        kind: "gateway",
-        connected: true,
-        sessions: [{ threadId: "local", status: "idle", archived: false }],
-      },
       {
         hostId: "node:devbox",
         label: "Dev Box",
@@ -1112,9 +1178,7 @@ describe("Codex supervision catalog", () => {
         sessions: [{ threadId: "remote", name: "Remote task", status: "idle", archived: false }],
       },
     ]);
-    expect(control.listPage).toHaveBeenCalledWith(
-      expect.not.objectContaining({ archived: expect.anything() }),
-    );
+    expect(control.listPage).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "devbox",
@@ -1160,6 +1224,51 @@ describe("Codex supervision catalog", () => {
         }),
       ],
     });
+  });
+
+  it("omits the Gateway's same-install node host from native discovery", async () => {
+    const control = createControl({
+      listPage: vi.fn(async () => ({
+        sessions: [{ threadId: "local", status: "idle", archived: false }],
+      })),
+    });
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ nodeId }) => ({
+      payloadJSON: JSON.stringify({
+        sessions: [{ threadId: `remote-${nodeId}`, status: "idle", archived: false }],
+      }),
+    }));
+    const { runtime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "gateway-node",
+          displayName: "Gateway node",
+          gatewayLocal: true,
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+        {
+          nodeId: "remote-node",
+          displayName: "Remote node",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+        },
+      ],
+      invoke,
+    });
+
+    const result = await listCodexSessionCatalog({
+      bindingStore: createCodexTestBindingStore(),
+      config,
+      runtime,
+      control,
+    });
+
+    expect(result.hosts.map((host) => host.hostId)).toEqual([
+      CODEX_LOCAL_SESSION_HOST_ID,
+      "node:remote-node",
+    ]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "remote-node" }));
   });
 
   it("isolates federated host failures while preserving selected healthy hosts", async () => {
@@ -1447,6 +1556,9 @@ describe("Codex supervision catalog", () => {
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-node-terminal-"));
     tempDirs.push(binDir);
     const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+    if (process.platform === "win32") {
+      await fs.writeFile(path.join(binDir, "codex"), "#!/bin/sh\n");
+    }
     await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
     if (process.platform !== "win32") {
       await fs.chmod(executable, 0o755);
@@ -1466,6 +1578,10 @@ describe("Codex supervision catalog", () => {
           ],
         })),
       }),
+      {
+        getPluginConfig: () => ({ appServer: { homeScope: "agent" } }),
+        getRuntimeConfig: () => config,
+      },
     ).find((candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND);
     if (!command || command.duplex !== true) {
       throw new Error("Codex terminal command was not registered as duplex");
@@ -1479,7 +1595,13 @@ describe("Codex supervision catalog", () => {
 
     expect(command.dangerous).toBe(false);
     expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ file: executable, cwd: "/node/catalog/cwd" }),
+      expect.objectContaining({
+        file: executable,
+        cwd: "/node/catalog/cwd",
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(resolveDefaultAgentDir(config)),
+        },
+      }),
       expect.any(Object),
     );
   });
@@ -3233,6 +3355,38 @@ describe("Codex supervision actions", () => {
       model: "openai/gpt-5.6-sol",
       agentRuntime: "codex",
     });
+    await withEnvAsync({ CODEX_HOME: undefined }, async () => {
+      await expect(
+        provider?.continueSession?.({
+          allowProcessHomeFallback: false,
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          threadId: "thread-1",
+          clientScopes: ["operator.admin"],
+        }),
+      ).rejects.toThrow("local Codex sessions are unavailable in isolated state");
+      await expect(
+        provider?.archive?.({
+          allowProcessHomeFallback: false,
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          threadId: "thread-1",
+          confirmNoOtherRunner: true,
+        }),
+      ).rejects.toThrow("local Codex sessions are unavailable in isolated state");
+      await expect(
+        provider?.openTerminal?.({
+          allowProcessHomeFallback: false,
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          threadId: "thread-1",
+        }),
+      ).rejects.toThrow("local Codex sessions are unavailable in isolated state");
+      await expect(
+        provider?.startTerminalSession?.({
+          allowProcessHomeFallback: false,
+          agentId: "main",
+          cwd: process.cwd(),
+        }),
+      ).rejects.toThrow("local Codex sessions are unavailable in isolated state");
+    });
     await expect(
       provider?.archive?.({
         hostId: CODEX_LOCAL_SESSION_HOST_ID,
@@ -3249,6 +3403,7 @@ describe("Codex supervision actions", () => {
     ).resolves.toEqual({ ok: true });
     await expect(
       provider?.archive?.({
+        allowProcessHomeFallback: false,
         hostId: "node:devbox",
         threadId: "thread-remote",
         confirmNoOtherRunner: true,
@@ -3256,6 +3411,7 @@ describe("Codex supervision actions", () => {
     ).rejects.toThrow("paired-node Codex sessions are view-only");
     await expect(
       provider?.continueSession?.({
+        allowProcessHomeFallback: false,
         hostId: "node:devbox",
         threadId: "thread-remote",
         clientScopes: ["operator.admin"],
@@ -3637,7 +3793,8 @@ describe("Codex supervision actions", () => {
     const threadId = "123e4567-e89b-12d3-a456-426614174000";
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-terminal-"));
     tempDirs.push(binDir);
-    process.env.PATH = binDir;
+    process.env.PATH = "";
+    nodeHostMocks.userShellPaths.set("codex", binDir);
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
@@ -3689,10 +3846,12 @@ describe("Codex supervision actions", () => {
     };
     const { runtime } = createRuntime({ nodes: [node], invoke });
     const { api, getProvider } = createGatewayApi(runtime);
+    let pluginConfig: unknown = { appServer: { homeScope: "agent" } };
     registerCodexSessionCatalog({
       api,
       bindingStore: createCodexTestBindingStore(),
       control,
+      getPluginConfig: () => pluginConfig,
       getRuntimeConfig: () => config,
     });
 
@@ -3711,6 +3870,20 @@ describe("Codex supervision actions", () => {
     await expect(
       getProvider()?.openTerminal?.({ hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId }),
     ).rejects.toThrow("Codex CLI is unavailable");
+    await expect(
+      getProvider()?.startTerminalSession?.({
+        agentId: "main",
+        cwd: "/workspace/new",
+        initialMessage: "--help",
+      }),
+    ).rejects.toThrow("install Codex or add codex to PATH");
+    await expect(
+      getProvider()?.startTerminalSession?.({
+        agentId: "main",
+        cwd: "/workspace/node-new",
+        nodeId: "devbox",
+      }),
+    ).rejects.toThrow("omit hostId to start on the gateway host");
 
     await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
     if (process.platform !== "win32") {
@@ -3735,6 +3908,42 @@ describe("Codex supervision actions", () => {
       kind: "local",
       argv: [executable, "resume", threadId],
       cwd: "/workspace/local",
+      pathEnv: binDir,
+      env: {
+        CODEX_HOME: resolveCodexAppServerHomeDir(resolveDefaultAgentDir(config)),
+      },
+    });
+    await expect(
+      getProvider()?.startTerminalSession?.({
+        agentId: "main",
+        cwd: "/workspace/new",
+        initialMessage: "Fix A&B and 100%",
+      }),
+    ).resolves.toEqual({
+      kind: "local",
+      argv: [executable, "--", "Fix A&B and 100%"],
+      cwd: "/workspace/new",
+      env: {
+        CODEX_HOME: resolveCodexAppServerHomeDir(resolveDefaultAgentDir(config)),
+      },
+      pathEnv: binDir,
+      title: "codex",
+    });
+    await expect(
+      getProvider()?.startTerminalSession?.({
+        agentId: "main",
+        cwd: "/workspace/command-prompt",
+        initialMessage: "resume",
+      }),
+    ).resolves.toMatchObject({ argv: [executable, "--", "resume"] });
+    await expect(
+      getProvider()?.startTerminalSession?.({ agentId: "main", cwd: "/workspace/blank" }),
+    ).resolves.toMatchObject({ argv: [executable], cwd: "/workspace/blank" });
+    pluginConfig = { appServer: { homeScope: "user" } };
+    await expect(
+      getProvider()?.openTerminal?.({ hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId }),
+    ).resolves.toMatchObject({
+      env: { CODEX_HOME: resolveCodexAppServerUserHomeDir(process.env) },
     });
     await expect(
       getProvider()?.openTerminal?.({ hostId: "node:devbox", threadId }),

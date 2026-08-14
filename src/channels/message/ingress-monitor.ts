@@ -52,7 +52,7 @@ export function createChannelIngressError(
 }
 
 /** Stable identity and serialization lane extracted before durable admission. */
-type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
+export type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
 
 /** Versioned body presented to a channel's persisted-payload encoder. */
 type ChannelIngressPayloadEnvelope<TBody> = { version: number; body: TBody };
@@ -65,6 +65,7 @@ export type ChannelIngressMonitorLifecycle = {
   onDeferred: () => void;
   onAdoptionFinalizing: () => void;
   onFailed?: (error: unknown) => void | Promise<void>;
+  onCancelled?: () => void | Promise<void>;
   onAbandoned: () => void | Promise<void>;
 };
 
@@ -84,7 +85,7 @@ type ChannelIngressMonitorInspectionContext =
 
 type ChannelIngressMonitorClaimErrorKind = "invalid-version" | "identity-mismatch";
 
-type ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata> = {
+export type ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata> = {
   version: number;
   serialize: (
     raw: TRaw,
@@ -129,12 +130,12 @@ export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
   failedMaxEntries: 20_000,
 } satisfies ChannelIngressMonitorRetention);
 
-type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
+export type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
   CreateChannelIngressDrainOptions<TStoredPayload, TMetadata>,
   "queue" | "dispatchClaimedEvent" | "abortSignal" | "now" | "ownerId" | "claimLeaseMs"
 >;
 
-type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> = {
+export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> = {
   queue:
     | ChannelIngressQueue<TStoredPayload, TMetadata>
     | (() => ChannelIngressQueue<TStoredPayload, TMetadata>);
@@ -185,7 +186,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   options: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata>,
 ) {
   const now = options.now ?? Date.now;
-  const appendRetryDelaysMs = options.appendRetryDelaysMs ?? DEFAULT_APPEND_RETRY_DELAYS_MS;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
   const retention =
     options.retention === "standard"
@@ -369,6 +369,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             settleDeferredClaim();
           }
         }
+        const settleDeferredLifecycle = async (settle: () => void | Promise<void>) => {
+          handedOff = true;
+          deferredHandoff = true;
+          try {
+            await settle();
+            requestDrain();
+          } finally {
+            settleDeferredClaim();
+          }
+        };
         const wrappedLifecycle: ChannelIngressMonitorLifecycle = {
           ...lifecycle,
           admission: "exclusive",
@@ -394,26 +404,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             deferredHandoff = true;
             lifecycle.onAdoptionFinalizing();
           },
-          onFailed: async (error) => {
-            handedOff = true;
-            deferredHandoff = true;
-            try {
-              await lifecycle.onFailed?.(error);
-              requestDrain();
-            } finally {
-              settleDeferredClaim();
-            }
-          },
-          onAbandoned: async () => {
-            handedOff = true;
-            deferredHandoff = true;
-            try {
-              await lifecycle.onAbandoned();
-              requestDrain();
-            } finally {
-              settleDeferredClaim();
-            }
-          },
+          onFailed: (error) => settleDeferredLifecycle(() => lifecycle.onFailed?.(error)),
+          onCancelled: () => settleDeferredLifecycle(() => lifecycle.onCancelled?.()),
+          onAbandoned: () => settleDeferredLifecycle(() => lifecycle.onAbandoned()),
         };
 
         // Adoption can complete before delivery returns; track both lifetimes so stop
@@ -583,7 +576,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     receivedAt: number;
   }): Promise<Awaited<ReturnType<Queue["enqueue"]>>> => {
     let lastError: unknown;
-    for (const delayMs of appendRetryDelaysMs) {
+    for (const delayMs of options.appendRetryDelaysMs ?? DEFAULT_APPEND_RETRY_DELAYS_MS) {
       if (delayMs > 0) {
         await sleep(delayMs);
       }

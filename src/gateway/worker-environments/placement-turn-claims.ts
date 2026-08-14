@@ -13,6 +13,21 @@ import {
 } from "./placement-record.js";
 import { ensureLocal, find, getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import {
+  assertNoRunningWorkerSessionToolOperations,
+  clearWorkerTurnToolState,
+  createPlacementSessionToolOperationOps,
+} from "./placement-session-tool-operations.js";
+import {
+  removeTurnClaimReleaseWaiter,
+  signalTurnClaimRelease,
+  signalWorkerTurnClaimClosed,
+  waitersFor,
+} from "./placement-turn-claim-events.js";
+export {
+  registerWorkerTurnClaimClosedHandler,
+  signalWorkerTurnClaimClosed,
+} from "./placement-turn-claim-events.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import {
   clearWorkerWorkspacePendingResult,
@@ -25,13 +40,11 @@ import {
   serializeWorkerWorkspaceReconciliationPlan,
 } from "./workspace-reconcile.js";
 
-type TurnClaimReleaseWaiter = () => void;
 type WorkerTurnClaimInput = WorkerSessionPlacementIdentity & {
   owner: WorkerSessionTurnOwner;
   claimId: string;
   runId: string;
 };
-const turnClaimReleaseWaiters = new Map<string, Map<string, Set<TurnClaimReleaseWaiter>>>();
 const workspaceJournalQuery = (db: DatabaseSync) =>
   getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_reconciliations">>(db);
 
@@ -39,35 +52,6 @@ export class ActiveTurnClaimError extends Error {
   constructor(sessionId: string) {
     super(`Session ${sessionId} already has an active turn claim`);
     this.name = "ActiveTurnClaimError";
-  }
-}
-
-function waitersFor(path: string, sessionId: string): Set<TurnClaimReleaseWaiter> {
-  let bySession = turnClaimReleaseWaiters.get(path);
-  if (!bySession) {
-    bySession = new Map();
-    turnClaimReleaseWaiters.set(path, bySession);
-  }
-  let waiters = bySession.get(sessionId);
-  if (!waiters) {
-    waiters = new Set();
-    bySession.set(sessionId, waiters);
-  }
-  return waiters;
-}
-
-export function signalTurnClaimRelease(path: string, sessionId: string): void {
-  const bySession = turnClaimReleaseWaiters.get(path);
-  const waiters = bySession?.get(sessionId);
-  if (!waiters) {
-    return;
-  }
-  bySession?.delete(sessionId);
-  if (bySession?.size === 0) {
-    turnClaimReleaseWaiters.delete(path);
-  }
-  for (const resolve of waiters) {
-    resolve();
   }
 }
 
@@ -154,6 +138,8 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       });
     },
 
+    ...createPlacementSessionToolOperationOps(runtime),
+
     releaseTurn(claim: WorkerSessionTurnClaim): WorkerSessionPlacementRecord {
       const sessionId = required(claim.sessionId, "session id");
       const claimId = required(claim.claimId, "turn claim id");
@@ -179,6 +165,8 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         ) {
           throw new Error(`Session ${sessionId} turn claim changed before release`);
         }
+        assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
+        clearWorkerTurnToolState(db, { sessionId, claimId });
         const result = executeSqliteQuerySync(
           db,
           query(db)
@@ -201,7 +189,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         return getRequired(db, sessionId);
       });
-      signalTurnClaimRelease(path, sessionId);
+      signalWorkerTurnClaimClosed(path, claim);
       return released;
     },
 
@@ -235,6 +223,8 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         ) {
           throw new Error(`Session ${sessionId} workspace result owner changed before release`);
         }
+        assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
+        clearWorkerTurnToolState(db, { sessionId, claimId });
         const values = options.reclaim
           ? transitionValues(current, "reclaimed", {}, now())
           : {
@@ -262,7 +252,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         return getRequired(db, sessionId);
       });
-      signalTurnClaimRelease(path, sessionId);
+      signalWorkerTurnClaimClosed(path, claim);
       return released;
     },
 
@@ -310,6 +300,8 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             `Session ${sessionId} workspace result owner changed before cancellation`,
           );
         }
+        assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
+        clearWorkerTurnToolState(db, { sessionId, claimId });
         clearWorkerWorkspacePendingResult(db, sessionId);
         const result = executeSqliteQuerySync(
           db,
@@ -334,7 +326,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         return getRequired(db, sessionId);
       });
-      signalTurnClaimRelease(path, sessionId);
+      signalWorkerTurnClaimClosed(path, claim);
       return released;
     },
 
@@ -393,21 +385,14 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           settled = true;
           clearTimeout(timer);
           waitOptions.signal?.removeEventListener("abort", onAbort);
-          waiters.delete(onRelease);
-          if (waiters.size === 0) {
-            const bySession = turnClaimReleaseWaiters.get(path);
-            bySession?.delete(sessionId);
-            if (bySession?.size === 0) {
-              turnClaimReleaseWaiters.delete(path);
-            }
-          }
+          removeTurnClaimReleaseWaiter(path, sessionId, onRelease);
           if (error) {
             reject(error);
           } else {
             resolve();
           }
         };
-        const onRelease = () => finish();
+        const onRelease = (error?: Error) => finish(error);
         const onAbort = () => finish(new Error(`Turn claim wait aborted for session ${sessionId}`));
         const timer = setTimeout(
           () => finish(new Error(`Timed out waiting for session ${sessionId} turn claim release`)),
@@ -446,6 +431,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       claim: WorkerSessionTurnClaim;
       transcript?: number;
       liveEvent?: number;
+      /** @deprecated Workspace result fencing is implied by a live event cursor. */
       workspaceResultPending?: boolean;
     }): WorkerSessionPlacementRecord {
       const sessionId = required(input.claim.sessionId, "session id");
@@ -514,7 +500,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker session placement ${sessionId} changed during ACK`);
         }
-        if (input.workspaceResultPending) {
+        if (input.liveEvent !== undefined) {
           // The terminal event is not ACKed until crash recovery has a durable
           // fence protecting remote workspace results from stale-claim teardown.
           insertWorkerWorkspacePendingResult(db, input.claim, now(), instanceId);

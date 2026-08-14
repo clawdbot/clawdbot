@@ -4,6 +4,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  readMessageToolSourceReplyText,
 } from "./embedded-agent-message-tool-source-reply.js";
 import {
   isMessagingToolDeliveryAction,
@@ -340,6 +341,61 @@ describe("isDeliveredMessagingToolResult", () => {
 });
 
 describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
+  it("accepts a confirmed adopted-thread reply outside message-tool-only mode", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "automatic",
+        toolName: "message",
+        args: { action: "thread-reply", threadId: "thread-1", message: "done" },
+        result: {
+          details: {
+            ok: true,
+            sourceReplyRoute: "current-source",
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an unconfirmed thread reply outside message-tool-only mode", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "automatic",
+        toolName: "message",
+        args: { action: "thread-reply", threadId: "thread-1", message: "done" },
+        result: { details: { ok: true } },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts a confirmed current-source poll delivery", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: { action: "poll", pollQuestion: "Preferred default?", pollOption: ["a", "b"] },
+        result: {
+          details: {
+            ok: true,
+            pollId: "poll-1",
+            sourceReplyRoute: "current-source",
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an unconfirmed poll delivery", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: { action: "poll", pollQuestion: "Preferred default?", pollOption: ["a", "b"] },
+        result: { details: { ok: true, pollId: "poll-1" } },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts only confirmed implicit message sends", () => {
     expect(
       isDeliveredMessageToolOnlySourceReplyResult({
@@ -446,5 +502,38 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("readMessageToolSourceReplyText", () => {
+  it.each([
+    {
+      name: "reply",
+      args: { action: "reply", message: "Visible reply" },
+      expected: "Visible reply",
+    },
+    {
+      name: "thread reply",
+      args: { action: "thread-reply", text: "Visible thread reply" },
+      expected: "Visible thread reply",
+    },
+    {
+      name: "poll",
+      args: { action: "poll", pollQuestion: "Preferred default?" },
+      expected: "Preferred default?",
+    },
+    {
+      name: "snake-case poll",
+      args: { action: "poll", poll_question: "Ready?" },
+      expected: "Ready?",
+    },
+  ])("reads $name visible text", ({ args, expected }) => {
+    expect(readMessageToolSourceReplyText(args)).toBe(expected);
+  });
+
+  it("ignores non-source-reply actions", () => {
+    expect(readMessageToolSourceReplyText({ action: "react", message: "not a reply" })).toBe(
+      undefined,
+    );
   });
 });

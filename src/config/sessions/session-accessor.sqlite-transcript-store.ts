@@ -12,15 +12,15 @@ import type {
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  findSqliteTranscriptEventInDatabase,
-  loadSqliteTranscriptEventsFromDatabase,
+  findTranscriptEventInDatabase,
+  loadTranscriptEventsFromDatabase,
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
   advanceTranscriptMutationAtInTransaction,
-  deleteSqliteTranscriptEventsInTransaction,
+  deleteTranscriptEventsInTransaction,
   ensureTranscriptGenerationInTransaction,
   ensureTranscriptSessionRoot,
   readTranscriptGenerationInTransaction,
@@ -47,6 +47,7 @@ export function appendTranscriptEventInTransaction(
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
   options: {
+    allowStoredAlias?: boolean;
     dedupeByMessageIdempotency?: boolean;
     onProjectionReconcileNeeded?: () => void;
     scheduleProjectionReconcile?: boolean;
@@ -56,7 +57,9 @@ export function appendTranscriptEventInTransaction(
   const persistedEvent = canonicalizeTranscriptEventMedia(event);
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
-  ensureTranscriptSessionRoot(database, scope, createdAt);
+  ensureTranscriptSessionRoot(database, scope, createdAt, {
+    allowStoredAlias: options.allowStoredAlias === true,
+  });
   ensureTranscriptGenerationInTransaction(database, scope.sessionId);
   const identity = readTranscriptEventIdentity(persistedEvent);
   if (identity && readTranscriptIdentityByEventId(database, scope.sessionId, identity.eventId)) {
@@ -285,7 +288,7 @@ export function readActiveTranscriptAppendParentId(
     const treeEntry = parseSessionTranscriptTreeEntry(event);
     if (!treeEntry) {
       return resolveVisibleTranscriptAppendParentId(
-        loadSqliteTranscriptEventsFromDatabase(database, sessionId),
+        loadTranscriptEventsFromDatabase(database, sessionId),
       );
     }
     if (latest.event_type !== "leaf") {
@@ -302,7 +305,7 @@ export function readActiveTranscriptAppendParentId(
     // Fall through to the tolerant full-tree resolver.
   }
   return resolveVisibleTranscriptAppendParentId(
-    loadSqliteTranscriptEventsFromDatabase(database, sessionId),
+    loadTranscriptEventsFromDatabase(database, sessionId),
   );
 }
 
@@ -331,7 +334,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
       ? readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt
       : undefined;
   const previousGeneration = readTranscriptGenerationInTransaction(database, resolved.sessionId);
-  const deleted = deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
+  const deleted = deleteTranscriptEventsInTransaction(database, resolved.sessionId);
   if (events.length === 0) {
     if (deleted || previousGeneration) {
       rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
@@ -529,7 +532,7 @@ export function readTranscriptMessageByScopedIdempotencyKey(
   if (lookup !== "scan-assistant") {
     return readTranscriptMessageByIdempotencyKey(database, scope, idempotencyKey);
   }
-  const found = findSqliteTranscriptEventInDatabase(database, scope.sessionId, (event) => {
+  const found = findTranscriptEventInDatabase(database, scope.sessionId, (event) => {
     const message = readTranscriptEventMessage(event);
     return message?.role === "assistant" && message.idempotencyKey === idempotencyKey;
   });

@@ -11,6 +11,10 @@ vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => activeChannelPlugins,
   getLoadedChannelPlugin: (id: string) => activeChannelPlugins.find((plugin) => plugin.id === id),
   getChannelPlugin: (id: string) => activeChannelPlugins.find((plugin) => plugin.id === id),
+  normalizeChannelId: (value: string) => {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "wa" || normalized === "whatsapp" ? "whatsapp" : null;
+  },
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
@@ -25,12 +29,18 @@ async function formatLocalStatusSummary(
   cfg: unknown,
   options?: {
     sourceConfig?: unknown;
+    channel?: string;
   },
 ) {
   const lines = await formatConfigChannelsStatusLines(
     cfg as never,
     { mode: "local" },
-    options?.sourceConfig ? { sourceConfig: options.sourceConfig as never } : undefined,
+    options
+      ? {
+          ...(options.sourceConfig ? { sourceConfig: options.sourceConfig as never } : {}),
+          ...(options.channel !== undefined ? { channel: options.channel } : {}),
+        }
+      : undefined,
   );
   return lines.join("\n");
 }
@@ -193,6 +203,68 @@ function requireReadOnlyPluginListCall(): unknown[] {
 }
 
 describe("config-only channels status output", () => {
+  it.each([
+    {
+      label: "unregistered external channels",
+      channel: "token-only",
+      included: ["TokenOnly"],
+      excluded: ["WhatsApp"],
+    },
+    {
+      label: "case-insensitive external channels",
+      channel: "TOKEN-ONLY",
+      included: ["TokenOnly"],
+      excluded: ["WhatsApp"],
+    },
+    {
+      label: "bundled channel aliases",
+      channel: "wa",
+      included: ["WhatsApp"],
+      excluded: ["TokenOnly"],
+    },
+    {
+      label: "unknown channels",
+      channel: "missing-channel",
+      included: [],
+      excluded: ["TokenOnly", "WhatsApp"],
+    },
+    {
+      label: "no channel filter",
+      channel: undefined,
+      included: ["TokenOnly", "WhatsApp"],
+      excluded: [],
+    },
+    {
+      label: "blank channel filters",
+      channel: "   ",
+      included: ["TokenOnly", "WhatsApp"],
+      excluded: [],
+    },
+  ])(
+    "preserves exact config-only status filtering for $label",
+    async ({ channel, included, excluded }) => {
+      activeChannelPlugins.splice(
+        0,
+        activeChannelPlugins.length,
+        makeUnavailableTokenPlugin(),
+        makeIndeterminateLinkPlugin(),
+      );
+
+      const summary = await formatLocalStatusSummary(
+        { channels: { "token-only": {}, whatsapp: {} } },
+        { channel },
+      );
+
+      expect(summary).toContain("Gateway not reachable; showing config-only status.");
+      for (const label of included) {
+        expect(summary).toContain(label);
+      }
+      for (const label of excluded) {
+        expect(summary).not.toContain(label);
+      }
+    },
+  );
+
   it("uses setup fallback plugins so configured external channels can be shown", async () => {
     registerSingleTestPlugin("token-only", makeUnavailableTokenPlugin());
     listReadOnlyChannelPluginsForConfig.mockClear();

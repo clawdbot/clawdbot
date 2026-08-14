@@ -5,6 +5,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
+  readWhatsAppBaileysCacheEntry,
   rememberWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
 } from "./baileys-cache.js";
@@ -153,10 +154,24 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
       return cached;
     }
     try {
-      const meta = await (params.getCurrentSock() ?? params.sock).groupMetadata(jid);
-      rememberWhatsAppBaileysCacheEntry(params.baileysCache, jid, meta, GROUP_META_TTL_MS);
+      const hydratedEntry = params.baileysCache?.get(jid);
+      const providerMetadata = params.baileysCache
+        ? readWhatsAppBaileysCacheEntry(params.baileysCache, jid)
+        : undefined;
+      const hydratedMetadata = providerMetadata?.participants?.length
+        ? providerMetadata
+        : undefined;
+      const meta =
+        hydratedMetadata ?? (await (params.getCurrentSock() ?? params.sock).groupMetadata(jid));
+      if (!hydratedMetadata) {
+        rememberWhatsAppBaileysCacheEntry(params.baileysCache, jid, meta, GROUP_META_TTL_MS);
+      }
       publishedJids.add(jid);
       const entry = await summarize(meta);
+      if (hydratedMetadata && hydratedEntry) {
+        // Reusing provider-owned membership must not extend its authoritative freshness window.
+        entry.expires = hydratedEntry.expiresAt;
+      }
       rememberGroupMetadataCacheEntry(reconnectCache, jid, {
         subject: entry.subject,
         expires: entry.expires,

@@ -105,6 +105,7 @@ export function isCompletionReportInputProvenance(value: unknown): boolean {
 
 const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = new Set([
   ...AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS,
+  "exec_approval_followup",
   "subagent_announce",
   "subagent_interrupted_resume",
 ]);

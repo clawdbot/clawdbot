@@ -35,7 +35,11 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
 import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
-import type { DiscordRetryRunner } from "./retry.js";
+import {
+  classifyDiscordDeliveryFailure,
+  recordDiscordMessageCreateAmbiguity,
+  type DiscordRetryRunner,
+} from "./retry.js";
 import { createDiscordMessageNonce } from "./send.message-request.js";
 
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
@@ -483,14 +487,27 @@ export async function sendDiscordVoiceMessage(
     };
   }
 
-  const res = (await request(
-    () =>
-      rest.post(`/channels/${channelId}/messages`, {
-        body: messagePayload,
-      }) as Promise<{ id: string; channel_id: string }>,
-    "voice-message",
-    { safety: "nonce-protected-create" },
-  )) as { id: string; channel_id: string };
-
-  return res;
+  let messageCreateMayHaveCommitted = false;
+  try {
+    return (await request(
+      async () => {
+        try {
+          return (await rest.post(`/channels/${channelId}/messages`, {
+            body: messagePayload,
+          })) as { id: string; channel_id: string };
+        } catch (error) {
+          messageCreateMayHaveCommitted ||= classifyDiscordDeliveryFailure(error) === "ambiguous";
+          throw error;
+        }
+      },
+      "voice-message",
+      { safety: "nonce-protected-create" },
+    )) as { id: string; channel_id: string };
+  } catch (error) {
+    // Only this final request can commit a message; upload/preflight failures cannot.
+    if (messageCreateMayHaveCommitted) {
+      recordDiscordMessageCreateAmbiguity(error);
+    }
+    throw error;
+  }
 }

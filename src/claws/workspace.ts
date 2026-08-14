@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { root as fsSafeRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
 import {
   openOpenClawStateDatabase,
@@ -10,6 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { parseClawMarkdown } from "./reader.js";
 import type { ClawAddPlan, ClawAddPlanAction, ClawDiagnostic } from "./types.js";
+import { CLAW_ADOPTED_WORKSPACE_MARKER_PATH } from "./workspace-origin.js";
 
 export const CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION =
   "openclaw.clawWorkspaceFileRecord.v1" as const;
@@ -318,10 +320,10 @@ export function readClawWorkspaceFiles(
         `SELECT schema_version, agent_id, workspace, target_path, source_path,
               content_digest, status, created_at_ms, updated_at_ms
          FROM claw_workspace_files
-        WHERE agent_id = ?
+        WHERE agent_id = ? AND target_path <> ?
         ORDER BY target_path`,
       )
-      .all(agentId) as WorkspaceFileRow[];
+      .all(agentId, CLAW_ADOPTED_WORKSPACE_MARKER_PATH) as WorkspaceFileRow[];
   return rows.map(rowToWorkspaceFile);
 }
 
@@ -542,7 +544,7 @@ export async function createClawWorkspaceFiles(
             ? `workspace_file_${error.code}`
             : "workspace_file_io_error";
       throw new ClawWorkspaceWriteError(
-        [diagnostic(action, code, error instanceof Error ? error.message : String(error))],
+        [diagnostic(action, code, coerceErrorMessage(error))],
         createdFiles,
       );
     }

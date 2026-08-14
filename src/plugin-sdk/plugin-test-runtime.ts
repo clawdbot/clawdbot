@@ -1,5 +1,45 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
+import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
+import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
+
+type AgentHarnessHostTestAttempt = Omit<
+  EmbeddedRunAttemptParams,
+  "admittedRunContext" | "hostCapabilities"
+>;
+
+/** Builds the production admitted-run host boundary for plugin integration tests. */
+export async function createAgentHarnessHostCapabilitiesForTest(params: {
+  attempt: AgentHarnessHostTestAttempt;
+  pluginId: string;
+}) {
+  const admission = prepareAgentRunAdmission({
+    cfg: params.attempt.config ?? {},
+    facts: {
+      runId: params.attempt.runId,
+      agentId: params.attempt.agentId ?? "main",
+      ingress: { kind: "system", boundary: "plugin-test-runtime", state: "present" },
+    },
+    operationalRunInstance: createOperationalRunInstanceRef(params.attempt.runId),
+  });
+  const admittedRunContext = await admission.admit("plugin-harness", params.pluginId);
+  const host = createAgentHarnessHostCapabilities({
+    attempt: { ...params.attempt, admittedRunContext },
+    pluginId: params.pluginId,
+  });
+  return {
+    capabilities: host.capabilities,
+    close: () => {
+      host.close();
+      admission.close();
+    },
+  };
+}
+
 export { setDefaultChannelPluginRegistryForTests } from "../commands/channel-test-registry.js";
 export {
   createEmptyPluginRegistry,
@@ -13,12 +53,13 @@ export {
   resolveWebFetchProviderContractEntriesForPluginId,
   resolveWebSearchProviderContractEntriesForPluginId,
 } from "../plugins/contracts/registry.js";
-export { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+export { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 export {
   emitDiagnosticEventWithTrustedTraceContext,
   emitInternalDiagnosticEvent as emitInternalDiagnosticEventForTest,
   emitTrustedSecurityEvent,
 } from "../infra/diagnostic-events.js";
+export { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
 export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
@@ -34,7 +75,6 @@ export {
 } from "../plugins/web-provider-public-artifacts.explicit.js";
 export {
   getActivePluginRegistry,
-  releasePinnedPluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -103,6 +143,7 @@ export {
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+export { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
 export { buildPluginApi } from "../plugins/api-builder.js";
 export {
   createCapturedPluginRegistration,

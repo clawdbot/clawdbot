@@ -5,7 +5,15 @@ import { runWorkerDescriptor } from "./worker.runtime.js";
 
 type RunWorkerCommandOptions = {
   input: Readable;
+  lifetime?: WorkerCommandLifetime;
   output: Writable;
+};
+
+export type WorkerCommandLifetime = {
+  dispose: () => void;
+  signal: AbortSignal;
+  started: Promise<boolean>;
+  terminateOwnedTree: () => void;
 };
 
 async function readLaunchDescriptor(input: Readable): Promise<WorkerLaunchDescriptor> {
@@ -41,16 +49,39 @@ async function readLaunchDescriptor(input: Readable): Promise<WorkerLaunchDescri
 
 /** Process shell for `openclaw worker`: stdin descriptor in, JSON result out, signals abort the run. */
 export async function runWorkerCommand(options: RunWorkerCommandOptions): Promise<void> {
-  const descriptor = await readLaunchDescriptor(options.input);
   const abortController = new AbortController();
   const stop = () => abortController.abort(new Error("worker interrupted"));
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
+  let lifetimeEnded = false;
+  const stopForLifetime = () => {
+    if (lifetimeEnded || !options.lifetime) {
+      return;
+    }
+    lifetimeEnded = true;
+    abortController.abort(
+      options.lifetime.signal.reason ?? new Error("worker supervisor lifetime ended"),
+    );
+    options.lifetime.terminateOwnedTree();
+  };
   try {
+    const [descriptor, started] = await Promise.all([
+      readLaunchDescriptor(options.input),
+      options.lifetime?.started ?? Promise.resolve(true),
+    ]);
+    if (!started) {
+      return;
+    }
+    options.lifetime?.signal.addEventListener("abort", stopForLifetime, { once: true });
+    if (options.lifetime?.signal.aborted) {
+      stopForLifetime();
+    }
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
     const result = await runWorkerDescriptor(descriptor, { signal: abortController.signal });
     const encoded = `${JSON.stringify(result)}\n`;
     options.output.write(encoded);
   } finally {
+    options.lifetime?.signal.removeEventListener("abort", stopForLifetime);
+    options.lifetime?.dispose();
     process.off("SIGINT", stop);
     process.off("SIGTERM", stop);
   }

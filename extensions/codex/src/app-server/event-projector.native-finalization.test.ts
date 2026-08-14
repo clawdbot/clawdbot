@@ -23,6 +23,35 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector native tool finalization", () => {
+  it("marks only explicitly completed native tool metadata with false", async () => {
+    const projector = await createProjector();
+    const command = {
+      type: "commandExecution",
+      command: "pnpm test extensions/codex",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null,
+    };
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { ...command, id: "cmd-started-only", status: "inProgress" },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { ...command, id: "cmd-completed", status: "completed" },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.toolMetas.map((meta) => meta.isError)).toEqual([undefined, false]);
+  });
+
   it("keeps raw open-page status unknown until explicit completion", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
@@ -347,7 +376,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     expect(toolResult.status).toBe("completed");
     expect(toolResult.isError).toBe(false);
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ `run tests (workspace)`",
+      text: "🛠️ Bash",
     });
     expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.call", {
       threadId: THREAD_ID,

@@ -27,7 +27,7 @@ import { normalizeAnyChannelId } from "../channels/registry.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveAgentMainSessionKey,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   type SessionEntry,
 } from "../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
@@ -174,7 +174,7 @@ export async function sandboxExplainCommand(
   });
   const mainSessionKey = sandboxRuntime.mainSessionKey;
   const sessionIsSandboxed = sandboxRuntime.sandboxed;
-  const storePath = resolveStorePath(cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: resolvedAgentId,
   });
   // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
@@ -199,6 +199,7 @@ export async function sandboxExplainCommand(
     normalizeOptionalString(sessionEntry?.spawnedCwd) ?? effectiveAgentWorkspaceDir;
   const workspaceLayout = resolveSandboxWorkspaceLayoutPaths({
     cfg: sandboxCfg,
+    agentId: resolvedAgentId,
     rawSessionKey:
       sessionKey === "global"
         ? buildAgentMainSessionKey({
@@ -221,8 +222,10 @@ export async function sandboxExplainCommand(
     : workspaceLayout.agentWorkspaceDir;
   const runtimeWorkdir = sessionIsSandboxed ? sandboxWorkdir : directRuntimeCwd;
   const workspaceSource = sessionIsSandboxed ? workspaceLayout.workspaceSource : "direct";
+  const usesLocalContainerMounts =
+    sandboxCfg.backend.toLowerCase() === "docker" || sandboxCfg.backend.toLowerCase() === "podman";
   const workspaceMounts =
-    sessionIsSandboxed && sandboxCfg.backend === "docker" && sandboxWorkdir
+    sessionIsSandboxed && usesLocalContainerMounts && sandboxWorkdir
       ? buildSandboxFsMounts({
           workspaceDir: workspaceLayout.workspaceDir,
           agentWorkspaceDir: workspaceLayout.agentWorkspaceDir,

@@ -16,6 +16,7 @@ const SmsAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
     accountSid: z.string().optional(),
     authToken: SecretInputSchema.optional(),
     fromNumber: z.string().optional(),
@@ -47,7 +48,7 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
   uiHints: {
     "": {
       label: "SMS",
-      help: "Twilio SMS channel configuration for inbound webhooks and outbound text replies.",
+      help: "Twilio SMS/MMS channel configuration for inbound webhooks and outbound replies.",
     },
     accountSid: {
       label: "Twilio Account SID",
@@ -59,7 +60,7 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
     },
     fromNumber: {
       label: "SMS From Number",
-      help: "Twilio SMS-capable phone number in E.164 format, for example +15551234567.",
+      help: "Twilio SMS-capable phone number in E.164 format; outbound attachments also require MMS capability.",
       presentation: "phone-number",
     },
     messagingServiceSid: {
@@ -73,7 +74,7 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
     },
     publicWebhookUrl: {
       label: "SMS Public Webhook URL",
-      help: "Public URL configured in Twilio for incoming messages. Must match Twilio's signed URL exactly.",
+      help: "Public URL configured in Twilio for incoming messages. Must match Twilio's signed URL exactly; outbound MMS also requires this same path to be reachable over HTTPS.",
     },
     webhookPath: {
       label: "SMS Webhook Path",

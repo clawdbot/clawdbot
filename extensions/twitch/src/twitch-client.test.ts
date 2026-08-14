@@ -13,7 +13,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
-import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelLogSink,
+  TwitchAccountConfig,
+  TwitchChatMessage,
+} from "./types.js";
 
 // Mock @twurple dependencies
 const mockConnect = vi.fn(() => {
@@ -112,6 +117,9 @@ vi.mock("./token.js", () => ({
 describe("TwitchClientManager", () => {
   let manager: TwitchClientManager;
   let mockLogger: ChannelLogSink;
+  let statusSink: ReturnType<
+    typeof vi.fn<(patch: Omit<ChannelAccountSnapshot, "accountId">) => void>
+  >;
   let resolveTwitchTokenMock: ReturnType<typeof vi.mocked<typeof resolveTwitchToken>>;
 
   const testAccount: TwitchAccountConfig = {
@@ -159,7 +167,8 @@ describe("TwitchClientManager", () => {
     };
 
     // Create manager instance
-    manager = new TwitchClientManager(mockLogger);
+    statusSink = vi.fn<(patch: Omit<ChannelAccountSnapshot, "accountId">) => void>();
+    manager = new TwitchClientManager(mockLogger, statusSink);
   });
 
   afterEach(() => {
@@ -168,6 +177,28 @@ describe("TwitchClientManager", () => {
   });
 
   describe("getClient", () => {
+    it("publishes ready and recovering from authentication and disconnect events", async () => {
+      await manager.getClient(testAccount);
+      expect(statusSink).toHaveBeenCalledWith(
+        expect.objectContaining({ lifecycle: "ready", connected: true }),
+      );
+
+      authFailureHandlers.at(-1)?.("retrying auth", 1);
+      expect(statusSink).toHaveBeenLastCalledWith(
+        expect.objectContaining({ lifecycle: "recovering", lastError: "retrying auth" }),
+      );
+
+      disconnectHandlers.at(-1)?.(false, new Error("connection lost"));
+      expect(statusSink).toHaveBeenLastCalledWith(
+        expect.objectContaining({ lifecycle: "recovering", lastError: "connection lost" }),
+      );
+
+      authSuccessHandlers.at(-1)?.();
+      expect(statusSink).toHaveBeenLastCalledWith(
+        expect.objectContaining({ lifecycle: "ready", terminalDisconnect: undefined }),
+      );
+    });
+
     it("should create a new client connection", async () => {
       const ignoredClientForTest = await manager.getClient(testAccount);
       void ignoredClientForTest;

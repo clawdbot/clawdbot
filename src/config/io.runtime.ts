@@ -151,6 +151,7 @@ export async function readConfigFileSnapshot(
 export async function readConfigFileSnapshotWithPluginMetadata(
   options?: Pick<
     ConfigSnapshotReadOptions,
+    | "allowCurrentPluginMetadata"
     | "allowSuspiciousRecovery"
     | "isolateEnv"
     | "lowerPrecedenceEnv"
@@ -165,6 +166,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
     ...(options?.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
     ...(options?.lowerPrecedenceEnv ? { lowerPrecedenceEnv: options.lowerPrecedenceEnv } : {}),
   }).readConfigFileSnapshotWithPluginMetadata({
+    allowCurrentPluginMetadata: options?.allowCurrentPluginMetadata,
     recoverSuspicious: options?.recoverSuspicious === true,
     allowSuspiciousRecovery: options?.allowSuspiciousRecovery,
   });

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginModuleLoaderFactory } from "./plugin-module-loader-cache.js";
 
@@ -38,12 +38,7 @@ function asPluginModuleLoaderFactory(factory: unknown): PluginModuleLoaderFactor
   return factory as PluginModuleLoaderFactory;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -280,7 +275,7 @@ describe("getCachedPluginModuleLoader", () => {
       tryNative: false,
     });
     expect(options.fsCache).toEqual(expect.any(String));
-    expect(String(options.fsCache)).toContain(`${path.sep}jiti${path.sep}openclaw${path.sep}`);
+    expect(String(options.fsCache)).toContain(`${path.sep}openclaw${path.sep}jiti${path.sep}`);
     expect(options.alias).toEqual({
       alpha: "/repo/alpha.js",
       zeta: "/repo/zeta.js",

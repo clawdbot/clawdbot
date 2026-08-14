@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { listAgentIds } from "../agents/agent-scope.js";
 import {
   isSessionSqliteMigrationWarning,
@@ -10,6 +11,7 @@ import {
   type SessionStartupMigrationLogger,
 } from "../config/sessions/startup-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 
 type SessionSqliteStartupImportRunner = (params: {
   allAgents: true;
@@ -28,10 +30,16 @@ type SessionSqliteStartupFailureReportWriter = (
   params: { reason: string },
 ) => { jsonPath: string; markdownPath: string };
 
+type SessionSqliteDatabaseExists = (params: {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+}) => boolean;
+
 type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"] & {
   reconcileSessionTranscriptIndexes?: typeof import("../config/sessions/session-transcript-reconcile.js").reconcileSessionTranscriptIndexes;
   restoreSessionSqliteMigrationRun?: SessionSqliteStartupRestoreRunner;
   runDoctorSessionSqlite?: SessionSqliteStartupImportRunner;
+  sessionSqliteDatabaseExists?: SessionSqliteDatabaseExists;
   writeSessionSqliteMigrationFailureReports?: SessionSqliteStartupFailureReportWriter;
 };
 
@@ -47,8 +55,9 @@ export async function runStartupSessionMigration(params: {
   log: SessionStartupMigrationLogger;
   deps?: SessionMigrationDeps;
 }): Promise<void> {
-  await runSessionStartupMigration(params);
-  await runStartupSessionSqliteImport(params);
+  if (await runSessionStartupMigration(params)) {
+    await runStartupSessionSqliteImport(params);
+  }
   await reconcileStartupSessionTranscriptIndexes(params);
 }
 
@@ -58,12 +67,27 @@ async function reconcileStartupSessionTranscriptIndexes(params: {
   log: SessionStartupMigrationLogger;
   deps?: SessionMigrationDeps;
 }): Promise<void> {
+  const databaseExists =
+    params.deps?.sessionSqliteDatabaseExists ??
+    ((input: Parameters<SessionSqliteDatabaseExists>[0]) =>
+      fs.existsSync(resolveOpenClawAgentSqlitePath(input)));
+  const agentIds = listAgentIds(params.cfg).filter((agentId) =>
+    databaseExists({
+      agentId,
+      ...(params.env ? { env: params.env } : {}),
+    }),
+  );
+  if (agentIds.length === 0) {
+    // No durable session rows can need projection repair when the agent DB is absent.
+    // Avoid creating and schema-registering one empty DB per configured agent at startup.
+    return;
+  }
   const reconcile =
     params.deps?.reconcileSessionTranscriptIndexes ??
     (await import("../config/sessions/session-transcript-reconcile.js"))
       .reconcileSessionTranscriptIndexes;
   let reconciledSessions = 0;
-  for (const agentId of listAgentIds(params.cfg)) {
+  for (const agentId of agentIds) {
     const result = await reconcile({
       agentId,
       ...(params.env ? { env: params.env } : {}),

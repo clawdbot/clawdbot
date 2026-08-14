@@ -207,10 +207,3 @@ export function estimateMessageCharsCached(
   cache.set(msg, estimated);
   return estimated;
 }
-
-export function invalidateMessageCharsCacheEntry(
-  cache: MessageCharEstimateCache,
-  msg: AgentMessage,
-): void {
-  cache.delete(msg);
-}

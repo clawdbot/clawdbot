@@ -8,13 +8,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveDefaultAgentId,
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
+import { resolveUserTimezone } from "../../../agents/date-time.js";
 import { resolveStateDir } from "../../../config/paths.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadTranscriptEvents,
   readSessionTranscriptBoundedMessageTailPage,
@@ -26,11 +27,7 @@ import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
-import {
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-  toAgentStoreSessionKey,
-} from "../../../routing/session-key.js";
+import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
@@ -50,27 +47,16 @@ function pickDateTimePart(
   return parts.find((part) => part.type === type)?.value;
 }
 
-function resolveLocalTimeZone(): string | undefined {
-  const timeZone = process.env.TZ?.trim();
-  if (!timeZone) {
-    return undefined;
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
-    return timeZone;
-  } catch {
-    return undefined;
-  }
-}
-
-function formatLocalSessionTimestamp(date: Date): {
+function formatLocalSessionTimestamp(
+  date: Date,
+  timeZone: string,
+): {
   date: string;
   time: string;
   timeSlug: string;
-  timeZoneName?: string;
 } {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: resolveLocalTimeZone(),
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -78,7 +64,6 @@ function formatLocalSessionTimestamp(date: Date): {
     minute: "2-digit",
     second: "2-digit",
     hourCycle: "h23",
-    timeZoneName: "short",
   }).formatToParts(date);
 
   const year = pickDateTimePart(parts, "year") ?? String(date.getFullYear()).padStart(4, "0");
@@ -87,16 +72,10 @@ function formatLocalSessionTimestamp(date: Date): {
   const hour = pickDateTimePart(parts, "hour") ?? String(date.getHours()).padStart(2, "0");
   const minute = pickDateTimePart(parts, "minute") ?? String(date.getMinutes()).padStart(2, "0");
   const second = pickDateTimePart(parts, "second") ?? String(date.getSeconds()).padStart(2, "0");
-  const timeZoneName = [...parts]
-    .toReversed()
-    .find((part) => part.type === "timeZoneName")
-    ?.value?.trim();
-
   return {
     date: `${year}-${month}-${day}`,
     time: `${hour}:${minute}:${second}`,
     timeSlug: `${hour}${minute}`,
-    timeZoneName,
   };
 }
 
@@ -224,12 +203,21 @@ function resolveDisplaySessionKey(params: {
 
 const pendingSessionMemoryWrites = new Set<Promise<void>>();
 
+function requireSessionMemoryAgentId(event: Parameters<HookHandler>[0]): string {
+  const agentId = normalizeOptionalString(event.context?.agentId);
+  if (!agentId) {
+    throw new Error("Session memory hook contract requires context.agentId");
+  }
+  return agentId;
+}
+
 export async function flushSessionMemoryWritesForTest(): Promise<void> {
   await Promise.allSettled(pendingSessionMemoryWrites);
 }
 
 async function saveSessionMemoryNow(
   event: Parameters<HookHandler>[0],
+  agentId: string,
   capturedEvents?: TranscriptEvent[],
 ): Promise<void> {
   try {
@@ -241,10 +229,6 @@ async function saveSessionMemoryNow(
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
         ? context.workspaceDir
         : undefined;
-    const agentId =
-      typeof context.agentId === "string" && context.agentId.trim()
-        ? context.agentId.trim()
-        : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
     const contextStorePath =
       typeof context.storePath === "string" && context.storePath.trim()
         ? context.storePath.trim()
@@ -262,9 +246,10 @@ async function saveSessionMemoryNow(
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Use the user's local timezone for memory artifact names and headings.
+    // Session-memory artifacts share the same configured user-day boundary as daily memory files.
     const now = new Date(event.timestamp);
-    const localTimestamp = formatLocalSessionTimestamp(now);
+    const userTimezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone ?? process.env.TZ);
+    const localTimestamp = formatLocalSessionTimestamp(now, userTimezone);
     const dateStr = localTimestamp.date;
 
     // Manual commands carry the prior entry separately; automatic rollover
@@ -300,7 +285,8 @@ async function saveSessionMemoryNow(
           agentId,
           sessionId: currentSessionId,
           sessionKey: event.sessionKey,
-          storePath: contextStorePath ?? resolveStorePath(cfg?.session?.store, { agentId }),
+          storePath:
+            contextStorePath ?? resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
         },
         messageCount,
         capturedEvents,
@@ -318,7 +304,7 @@ async function saveSessionMemoryNow(
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
         const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
-        slug = await generateSlugViaLLM({ sessionContent, cfg, model: slugModel });
+        slug = await generateSlugViaLLM({ sessionContent, cfg, agentId, model: slugModel });
         log.debug("Generated slug", { slug });
       }
     }
@@ -338,7 +324,6 @@ async function saveSessionMemoryNow(
     });
 
     const timeStr = localTimestamp.time;
-    const timeZoneSuffix = localTimestamp.timeZoneName ? ` ${localTimestamp.timeZoneName}` : "";
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
@@ -349,7 +334,7 @@ async function saveSessionMemoryNow(
 
     // Build Markdown entry
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr}${timeZoneSuffix}`,
+      `# Session: ${dateStr} ${timeStr} ${userTimezone}`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
@@ -397,6 +382,7 @@ const saveSessionToMemory: HookHandler = (event) => {
   if ((event.type !== "command" || !isResetCommand) && !isAutoReset) {
     return undefined;
   }
+  const agentId = requireSessionMemoryAgentId(event);
 
   let capturedEvents: TranscriptEvent[] | undefined;
   try {
@@ -412,14 +398,10 @@ const saveSessionToMemory: HookHandler = (event) => {
         : undefined;
     if (sessionId) {
       const cfg = context.cfg as OpenClawConfig | undefined;
-      const agentId =
-        typeof context.agentId === "string" && context.agentId.trim()
-          ? context.agentId.trim()
-          : resolveAgentIdFromSessionKey(event.sessionKey, resolveDefaultAgentId(cfg ?? {}));
       const storePath =
         typeof context.storePath === "string" && context.storePath.trim()
           ? context.storePath.trim()
-          : resolveStorePath(cfg?.session?.store, { agentId });
+          : resolveSessionStorePathCore(cfg?.session?.store, { agentId });
       const hookConfig = resolveHookConfig(cfg, "session-memory");
       const messageCount =
         typeof hookConfig?.messages === "number" && hookConfig.messages > 0
@@ -436,9 +418,9 @@ const saveSessionToMemory: HookHandler = (event) => {
     // so the async writer falls back to the authoritative transcript rows.
   }
   const writePromise = isAutoReset
-    ? saveSessionMemoryNow(event, capturedEvents)
+    ? saveSessionMemoryNow(event, agentId, capturedEvents)
     : runWithGatewayIndependentRootWorkContinuation(() =>
-        saveSessionMemoryNow(event, capturedEvents),
+        saveSessionMemoryNow(event, agentId, capturedEvents),
       );
   pendingSessionMemoryWrites.add(writePromise);
   void writePromise.finally(() => {

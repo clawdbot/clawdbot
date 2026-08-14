@@ -1,4 +1,5 @@
 // Defines gateway runtime and networking configuration types.
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { SecretInput } from "./types.secrets.js";
 
 /** Gateway bind-address policy for local server startup. */
@@ -225,6 +226,8 @@ export type GatewayAuthConfig = {
   password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /** Operator scopes granted to verified trusted-proxy or Tailscale identities. */
+  identityScopes?: Record<string, OperatorScope[]>;
   /** Rate-limit configuration for failed authentication attempts. */
   rateLimit?: GatewayAuthRateLimitConfig;
   /**
@@ -267,9 +270,9 @@ export type GatewayTailscaleConfig = {
 export type GatewayRemoteConfig = {
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
-  /** Transport for macOS remote connections (ssh tunnel or direct WS). */
+  /** macOS app-only transport (SSH tunnel or direct WS); core validates/preserves but does not read it. */
   transport?: "ssh" | "direct";
-  /** Gateway port on the remote SSH host. Defaults to 18789. */
+  /** macOS app-only remote SSH port (default 18789); core validates/preserves but does not read it. */
   remotePort?: number;
   /** Token for remote auth (when the gateway requires token auth). */
   token?: SecretInput;
@@ -281,7 +284,7 @@ export type GatewayRemoteConfig = {
   sshTarget?: string;
   /** SSH identity file path for tunneling remote Gateway. */
   sshIdentity?: string;
-  /** macOS SSH host-key policy. Defaults to strict; openssh delegates to effective SSH config. */
+  /** macOS app-only; core validates/preserves but does not read it. Defaults to strict; see docs/platforms/mac/remote.md. */
   sshHostKeyPolicy?: "strict" | "openssh";
 };
 
@@ -309,6 +312,12 @@ export type GatewayTerminalConfig = {
    * immediately. Default: 300.
    */
   detachedSessionTimeoutSeconds?: number;
+};
+
+/** Labs-gated external CLI session targets in the Control UI. */
+export type GatewayCliAgentsConfig = {
+  /** Show catalog-backed CLI agents in the new-session model picker. Default: false. */
+  enabled?: boolean;
 };
 
 /** Gateway config reload strategy for managed installs. */
@@ -548,7 +557,10 @@ export type GatewayConfig = {
   bind?: GatewayBindMode;
   /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
+  /** Externally reachable HTTPS origin for Gateway callback routes; HTTP only on loopback. */
+  publicOrigin?: string;
   controlUi?: GatewayControlUiConfig;
+  cliAgents?: GatewayCliAgentsConfig;
   terminal?: GatewayTerminalConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;

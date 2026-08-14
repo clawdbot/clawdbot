@@ -7,11 +7,12 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
-import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChatChannelId } from "../../channels/registry.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import {
   getAgentRuntimeCommandSecretTargetIds,
+  getAgentRuntimeOptionalCommandSecretPaths,
   getScopedChannelsCommandSecretTargets,
 } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
@@ -73,6 +74,7 @@ export async function resolveQueuedReplyExecutionConfig(
     config: runtimeConfig,
     commandName: "reply",
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
+    optionalActivePaths: getAgentRuntimeOptionalCommandSecretPaths(runtimeConfig),
   });
   const baseResolvedConfig = resolvedConfig ?? runtimeConfig;
 
@@ -142,7 +144,7 @@ export function buildThreadingToolContext(params: {
       currentSourceTurnId,
     };
   }
-  const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
+  const provider = normalizeChatChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
   // Fallback for unrecognized/plugin channels (e.g., iMessage before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {

@@ -400,6 +400,52 @@ struct OpenClawTypographyTests {
         #expect(offenders.isEmpty, Comment(rawValue: offenders.joined(separator: "\n")))
     }
 
+    @Test func `font boundary scanner permits inheritance and rejects system overrides`() {
+        let source = """
+        Text("Inherited")
+        Text("Branded")
+            .padding()
+            .font(OpenClawType.body)
+        Text("System")
+            .padding()
+            .font(.body)
+        Button("System") {}
+            .font(.headline)
+        VStack {
+            Text("Inherited system")
+        }
+        .font(.body)
+        Text("Trailing closure")
+            .background { Color.clear }
+            .font(.caption)
+        Text("Later override")
+            .font(OpenClawType.body)
+            .font(.title)
+        NavigationStack {
+            Text("Custom boundary")
+        }
+        .font(.footnote)
+        Button {
+            action()
+        } label: {
+            Text("Closure-only control")
+        }
+        .font(.headline)
+        Image(systemName: "checkmark")
+            .font(.system(size: 14))
+        """
+
+        let offenders = Self.unbrandedTextCallOffenders(in: source, relativePath: "Sample.swift")
+        #expect(offenders.count == 7)
+        #expect(offenders[0].contains(".font(.body)"))
+        #expect(offenders[1].contains(".font(.headline)"))
+        #expect(offenders[2].contains(".font(.body)"))
+        #expect(offenders[3].contains(".font(.caption)"))
+        #expect(offenders[4].contains(".font(.title)"))
+        #expect(offenders[5].contains(".font(.footnote)"))
+        #expect(offenders[6].contains(".font(.headline)"))
+    }
+
     @Test func `accessibility metadata text does not require visual typography`() throws {
         let accessibilityTextSamples = [
             ".accessibilityLabel(Text(title))",
@@ -532,41 +578,38 @@ struct OpenClawTypographyTests {
     }
 
     private static func unbrandedTextCallOffenders() throws -> [String] {
-        let fontTokens = ["OpenClawType", "OpenClawChatTypography"]
-        // Accessibility-only Text is spoken, never rendered, so no branded font applies.
-        let allowedFragments = [".navigationTitle(", ".alert(\"", ".tabItem { Label("]
-        return try self.swiftSourcesForTypographyAudit().flatMap { url -> [String] in
+        try self.swiftSourcesForTypographyAudit().flatMap { url -> [String] in
             let source = try String(contentsOf: url, encoding: .utf8)
-            let lines = source.components(separatedBy: .newlines)
-            let accessibilityMetadataTextLines = self.accessibilityMetadataTextLines(in: lines)
-            return lines.indices.compactMap { idx -> String? in
-                let rawLine = lines[idx]
-                let line = rawLine.trimmingCharacters(in: .whitespaces)
-                guard !line.hasPrefix("//") else { return nil }
-                guard !allowedFragments.contains(where: rawLine.contains) else { return nil }
-
-                let window = lines[idx..<min(lines.count, idx + 12)].joined(separator: "\n")
-                let hasLocalFont = fontTokens.contains { window.contains($0) }
-                    || self.hasAllowedBrandedFontParameter(window, line: rawLine, in: url)
-
-                if self.isTextOrLabelCall(rawLine),
-                   !accessibilityMetadataTextLines.contains(idx),
-                   !hasLocalFont
-                {
-                    return "\(self.relativePath(url)):\(idx + 1): \(line)"
-                }
-
-                if self.isShorthandControlCall(rawLine), !hasLocalFont {
-                    return "\(self.relativePath(url)):\(idx + 1): \(line)"
-                }
-
-                return nil
-            }
+            return self.unbrandedTextCallOffenders(in: source, relativePath: self.relativePath(url))
         }
     }
 
+    private static func unbrandedTextCallOffenders(in source: String, relativePath: String) -> [String] {
+        let fontTokens = ["OpenClawType", "OpenClawChatTypography", "typography."]
+        let sourceBytes = Array(source.utf8)
+        let code = self.maskedSwiftCode(source)
+        let imageFontRanges = Set(self.directImageFontModifierRanges(in: code))
+        var offenders: [String] = []
+
+        for fontRange in self.fontModifierRanges(in: code) {
+            let fontCall = String(decoding: sourceBytes[fontRange], as: UTF8.self)
+            let hasBrandedFont = fontTokens.contains { fontCall.contains($0) }
+                || self.hasAllowedBrandedFontParameter(fontCall, relativePath: relativePath)
+            guard !hasBrandedFont, !imageFontRanges.contains(fontRange) else { continue }
+
+            let fontLine = code[..<fontRange.lowerBound].count(where: { $0 == 10 })
+            offenders.append(
+                "\(relativePath):\(fontLine + 1): \(fontCall.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+        return offenders
+    }
+
+    private static let textOrLabelCallPattern = try! NSRegularExpression(pattern: #"\b(Text|Label)\s*\("#)
+
     private static func isTextOrLabelCall(_ line: String) -> Bool {
-        line.range(of: #"\b(Text|Label)\s*\("#, options: .regularExpression) != nil
+        self.textOrLabelCallPattern.firstMatch(
+            in: line,
+            range: NSRange(line.startIndex..<line.endIndex, in: line)) != nil
     }
 
     private static func isAccessibilityMetadataTextCall(at idx: Int, in lines: [String]) -> Bool {
@@ -623,9 +666,11 @@ struct OpenClawTypographyTests {
         at offset: Int,
         in code: [UInt8]) -> Int?
     {
-        guard offset + token.count <= code.count,
+        guard let firstByte = token.first,
+              offset + token.count <= code.count,
+              code[offset] == firstByte,
               code[offset..<(offset + token.count)].elementsEqual(token),
-              token.first == 46 || offset == 0 || !self.isSwiftIdentifierByte(code[offset - 1])
+              firstByte == 46 || offset == 0 || !self.isSwiftIdentifierByte(code[offset - 1])
         else { return nil }
         let afterToken = offset + token.count
         guard afterToken == code.count || !self.isSwiftIdentifierByte(code[afterToken]) else { return nil }
@@ -642,11 +687,20 @@ struct OpenClawTypographyTests {
     }
 
     private static func matchingParenthesis(in code: [UInt8], openingAt offset: Int) -> Int? {
+        self.matchingDelimiter(in: code, openingAt: offset, opening: 40, closing: 41)
+    }
+
+    private static func matchingDelimiter(
+        in code: [UInt8],
+        openingAt offset: Int,
+        opening: UInt8,
+        closing: UInt8) -> Int?
+    {
         var depth = 0
         for cursor in offset..<code.count {
-            if code[cursor] == 40 {
+            if code[cursor] == opening {
                 depth += 1
-            } else if code[cursor] == 41 {
+            } else if code[cursor] == closing {
                 depth -= 1
                 if depth == 0 { return cursor }
             }
@@ -733,22 +787,47 @@ struct OpenClawTypographyTests {
         return code
     }
 
-    private static func isShorthandControlCall(_ line: String) -> Bool {
-        line.range(
-            of: #"\b(Button|Link|Picker|Toggle|TextField|SecureField|Menu|DisclosureGroup|LabeledContent)\s*\(""#,
-            options: .regularExpression) != nil
+    private static func fontModifierRanges(in code: [UInt8]) -> [Range<Int>] {
+        let token = Array(".font".utf8)
+        return code.indices.compactMap { offset in
+            guard let opening = self.callOpeningParenthesis(after: token, at: offset, in: code),
+                  let closing = self.matchingParenthesis(in: code, openingAt: opening)
+            else { return nil }
+            return offset..<(closing + 1)
+        }
     }
 
-    private static func hasAllowedBrandedFontParameter(_ window: String, line: String, in url: URL) -> Bool {
-        switch self.relativePath(url) {
+    private static func directImageFontModifierRanges(in code: [UInt8]) -> [Range<Int>] {
+        let imageToken = Array("Image".utf8)
+        let fontToken = Array(".font".utf8)
+        return code.indices.compactMap { offset in
+            guard let imageOpening = self.callOpeningParenthesis(after: imageToken, at: offset, in: code),
+                  let imageClosing = self.matchingParenthesis(in: code, openingAt: imageOpening)
+            else { return nil }
+            let fontStart = self.skippingWhitespace(in: code, from: imageClosing + 1)
+            guard let fontOpening = self.callOpeningParenthesis(after: fontToken, at: fontStart, in: code),
+                  let fontClosing = self.matchingParenthesis(in: code, openingAt: fontOpening)
+            else { return nil }
+            return fontStart..<(fontClosing + 1)
+        }
+    }
+
+    private static func skippingWhitespace(in code: [UInt8], from offset: Int) -> Int {
+        var cursor = offset
+        while cursor < code.count, code[cursor] == 9 || code[cursor] == 10 || code[cursor] == 13 || code[cursor] == 32 {
+            cursor += 1
+        }
+        return cursor
+    }
+
+    private static func hasAllowedBrandedFontParameter(_ fontCall: String, relativePath: String) -> Bool {
+        switch relativePath {
         case "apps/ios/Sources/Design/OpenClawProComponents.swift":
-            line.contains("Text(key)") ||
-                line.contains("Text(verbatim: value)") ||
-                window.contains(".font(self.titleFont)") ||
-                window.contains(".font(self.subtitleFont)")
+            fontCall.contains(".font(self.titleFont)") ||
+                fontCall.contains(".font(self.subtitleFont)")
         case "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift":
             // Qualified values are composed here, then styled at the prose render boundary.
-            line.contains("SwiftUI.Text(") || window.contains(".font(self.font)")
+            fontCall.contains(".font(self.font)") || fontCall.contains(".font(font)")
         default:
             false
         }

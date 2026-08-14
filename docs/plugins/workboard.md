@@ -375,6 +375,7 @@ Diagnostics are computed from local card metadata. Built-in checks flag:
 | `repeated_failures`         | Card's tracked failure count reaches 2 or more.                                |
 | `missing_proof`             | `done` card with no proof, artifacts, or attachments.                          |
 | `orphaned_session`          | `running` card with a `sessionKey` but no `execution` metadata.                |
+| `archived_but_active`       | Archived card remains in any non-`done` lifecycle status.                      |
 
 ## Permissions
 

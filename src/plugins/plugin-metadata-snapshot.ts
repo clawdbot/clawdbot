@@ -5,19 +5,18 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import {
-  loadInstalledPluginIndexWithDiscovery,
-  type InstalledPluginIndex,
-} from "./installed-plugin-index.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -25,7 +24,7 @@ import type {
   ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
+import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 
 const PLUGIN_METADATA_ENV_KEYS = [
@@ -43,14 +42,8 @@ const PLUGIN_METADATA_ENV_KEYS = [
   "XDG_CONFIG_HOME",
 ] as const;
 export type {
-  LoadPluginMetadataSnapshotParams,
-  PluginMetadataManifestView,
-  PluginMetadataRegistryView,
   PluginMetadataSnapshot,
-  PluginMetadataSnapshotMetrics,
   PluginMetadataSnapshotOwnerMaps,
-  PluginMetadataSnapshotRegistryDiagnostic,
-  ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
 
 function pickPluginMetadataEnv(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -63,7 +56,10 @@ function pickPluginMetadataEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 export function resolvePluginMetadataEnvFingerprint(env: NodeJS.ProcessEnv): string {
-  return hashJson(pickPluginMetadataEnv(env));
+  return hashJson({
+    env: pickPluginMetadataEnv(env),
+    installRoots: resolveActivePluginInstallRoots(env),
+  });
 }
 
 function throwReadonlyPluginMetadataMutation(): never {
@@ -118,26 +114,6 @@ function indexesMatch(
     resolveInstalledManifestRegistryIndexFingerprint(left) ===
     resolveInstalledManifestRegistryIndexFingerprint(right)
   );
-}
-
-function cloneSnapshotInput<T>(value: T): T {
-  return value && typeof value === "object" ? structuredClone(value) : value;
-}
-
-function normalizeInstalledPluginIndex(index: InstalledPluginIndex): InstalledPluginIndex {
-  return {
-    version: index.version ?? 1,
-    hostContractVersion: index.hostContractVersion ?? "",
-    compatRegistryVersion: index.compatRegistryVersion ?? "",
-    migrationVersion: index.migrationVersion ?? 1,
-    policyHash: index.policyHash ?? "",
-    generatedAtMs: index.generatedAtMs ?? 0,
-    installRecords: cloneSnapshotInput(index.installRecords ?? {}),
-    plugins: (index.plugins ?? []).map(cloneSnapshotInput),
-    diagnostics: (index.diagnostics ?? []).map(cloneSnapshotInput),
-    ...(index.warning ? { warning: index.warning } : {}),
-    ...(index.refreshReason ? { refreshReason: index.refreshReason } : {}),
-  } as InstalledPluginIndex;
 }
 
 function resolvePluginMetadataSnapshotPluginIds(params: {
@@ -285,6 +261,28 @@ export function listPluginOriginsFromMetadataSnapshot(
   return new Map(snapshot.plugins.map((record) => [record.id, record.origin]));
 }
 
+/** Rebuilds every manifest-derived snapshot fact from one authoritative registry. */
+export function rebasePluginMetadataSnapshotManifestRegistry(
+  snapshot: PluginMetadataSnapshot,
+  manifestRegistry: PluginManifestRegistry,
+): PluginMetadataSnapshot {
+  const plugins = manifestRegistry.plugins;
+  return {
+    ...snapshot,
+    manifestRegistry,
+    plugins,
+    diagnostics: manifestRegistry.diagnostics,
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: snapshot.index
+      ? createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry })
+      : snapshot.normalizePluginId,
+    owners: buildPluginMetadataOwnerMaps(plugins),
+    ...(snapshot.metrics
+      ? { metrics: { ...snapshot.metrics, manifestPluginCount: plugins.length } }
+      : {}),
+  };
+}
+
 export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
@@ -317,6 +315,25 @@ export function loadPluginMetadataSnapshot(
   );
 }
 
+/** Promotes a planning-scoped graph to the complete process-lifecycle metadata snapshot. */
+export function completePluginMetadataSnapshot(params: {
+  snapshot?: PluginMetadataSnapshot;
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+}): PluginMetadataSnapshot | undefined {
+  if (!params.snapshot || params.snapshot.pluginIds === undefined) {
+    return params.snapshot;
+  }
+  const workspaceDir = params.workspaceDir ?? params.snapshot.workspaceDir;
+  return loadPluginMetadataSnapshot({
+    config: params.config,
+    env: params.env ?? process.env,
+    index: params.snapshot.index,
+    ...(workspaceDir ? { workspaceDir } : {}),
+  });
+}
+
 export function resolvePluginMetadataSnapshot(
   params: ResolvePluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
@@ -328,6 +345,7 @@ export function resolvePluginMetadataSnapshot(
     const current = getCurrentPluginMetadataSnapshot({
       config: params.config,
       env: params.env,
+      ...(params.config === undefined ? { requireDefaultDiscoveryContext: true } : {}),
       ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
       ...(params.pluginIdScope !== undefined ? { pluginIdScope: params.pluginIdScope } : {}),
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
@@ -336,6 +354,43 @@ export function resolvePluginMetadataSnapshot(
         : {}),
     });
     if (!current) {
+      const lifecycleSnapshot = getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        env: params.env,
+        ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
+        ...(params.pluginIdScope !== undefined ? { pluginIdScope: params.pluginIdScope } : {}),
+        allowWorkspaceScopedSnapshot: true,
+      });
+      const targetWorkspace = params.workspaceDir;
+      const hasWorkspacePlugin = lifecycleSnapshot?.index.plugins.some(
+        (plugin) => plugin.origin === "workspace",
+      );
+      // Gateway metadata is lifecycle-stable. A workspace with no plugin root can reuse the
+      // published graph without polling every bundled/global artifact on its first turn.
+      if (
+        lifecycleSnapshot &&
+        targetWorkspace &&
+        targetWorkspace !== lifecycleSnapshot.workspaceDir &&
+        !hasWorkspacePlugin &&
+        params.workspacePluginRootPresent === false
+      ) {
+        const index = Object.freeze({
+          ...lifecycleSnapshot.index,
+          workspaceDir: targetWorkspace,
+        });
+        return Object.freeze({
+          ...lifecycleSnapshot,
+          configFingerprint: resolvePluginControlPlaneFingerprint({
+            config: params.config,
+            env: params.env,
+            index,
+            policyHash: lifecycleSnapshot.policyHash,
+            workspaceDir: targetWorkspace,
+          }),
+          index,
+          workspaceDir: targetWorkspace,
+        });
+      }
       return loadPluginMetadataSnapshot(params);
     }
     if (!params.index) {
@@ -364,23 +419,27 @@ function loadPluginMetadataSnapshotImpl(
 ): PluginMetadataSnapshot {
   const totalStartedAt = performance.now();
   const registryStartedAt = performance.now();
-  const registryResult =
-    loadPluginRegistrySnapshotWithMetadata({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-      env: params.env,
-      ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
-      ...(params.index ? { index: params.index } : {}),
-    }) ?? deriveBootstrapPluginRegistrySnapshot(params);
+  const registryResult = loadPluginRegistrySnapshotWithMetadata({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+    env: params.env,
+    ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
+    ...(params.allowCurrent !== undefined ? { allowCurrent: params.allowCurrent } : {}),
+    ...(params.index ? { index: params.index } : {}),
+  });
   const registrySnapshotMs = performance.now() - registryStartedAt;
-  const index = normalizeInstalledPluginIndex(registryResult.snapshot);
+  const index = structuredClone(registryResult.snapshot);
+  index.diagnostics ??= [];
   const pluginIds = resolvePluginMetadataSnapshotPluginIds({ params, index });
   const manifestStartedAt = performance.now();
   // Empty installed indexes are authoritative; bootstrap first derives a real
   // index so every manifest and scope follows the same immutable graph.
   const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
     index,
+    ...(registryResult.manifestRegistry
+      ? { manifestRegistry: registryResult.manifestRegistry }
+      : {}),
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
@@ -427,12 +486,7 @@ function loadPluginMetadataSnapshotImpl(
   };
 }
 
-function deriveBootstrapPluginRegistrySnapshot(params: LoadPluginMetadataSnapshotParams): {
-  source: "derived";
-  snapshot: InstalledPluginIndex;
-  diagnostics: [];
-  discovery: ReturnType<typeof loadInstalledPluginIndexWithDiscovery>["discovery"];
-} {
-  const { index, discovery } = loadInstalledPluginIndexWithDiscovery(params);
-  return { source: "derived", snapshot: index, diagnostics: [], discovery };
-}
+// Light bridges (plugin-metadata-snapshot.runtime.ts) serve loads through this
+// instance whenever the metadata system is loaded; the require fallback only
+// covers cold processes.
+registerPluginMetadataSnapshotReaders({ resolvePluginMetadataSnapshot });

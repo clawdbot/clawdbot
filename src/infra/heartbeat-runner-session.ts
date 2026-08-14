@@ -1,11 +1,10 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isSubagentSessionKey,
@@ -14,9 +13,9 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
-import type { HeartbeatConfig } from "./heartbeat-runner-config.js";
+import { resolveAmbientHeartbeatAgentId, type HeartbeatConfig } from "./heartbeat-runner-config.js";
 
-export function resolveHeartbeatSession(
+export function resolveHeartbeatSessionKey(
   cfg: OpenClawConfig,
   agentId?: string,
   heartbeat?: HeartbeatConfig,
@@ -25,35 +24,29 @@ export function resolveHeartbeatSession(
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
-  const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
+  const resolvedAgentId = normalizeAgentId(agentId ?? resolveAmbientHeartbeatAgentId(cfg));
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
-  const storePath = resolveStorePath(sessionCfg?.store, {
+  const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
     // A literal `global` row is global only inside the selected agent's store.
     // Falling back here leaks the default agent's route into secondary heartbeats.
     agentId: resolvedAgentId,
     env,
   });
-  const mainEntry = loadSessionEntry({ storePath, sessionKey: mainSessionKey, env });
+  const mainSession = (suppressOriginatingContext = false) => ({
+    sessionKey: mainSessionKey,
+    storePath,
+    suppressOriginatingContext,
+  });
 
   if (scope === "global") {
-    return {
-      sessionKey: mainSessionKey,
-      storePath,
-      entry: mainEntry,
-      suppressOriginatingContext: false,
-    };
+    return mainSession();
   }
 
   // Guard: never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
-    return {
-      sessionKey: mainSessionKey,
-      storePath,
-      entry: mainEntry,
-      suppressOriginatingContext: true,
-    };
+    return mainSession(true);
   }
 
   if (forced && !isSubagentSessionKey(forced)) {
@@ -80,7 +73,6 @@ export function resolveHeartbeatSession(
           return {
             sessionKey: routedSessionKey,
             storePath,
-            entry: loadSessionEntry({ storePath, sessionKey: routedSessionKey, env }),
             suppressOriginatingContext: false,
           };
         }
@@ -90,22 +82,12 @@ export function resolveHeartbeatSession(
 
   const trimmed = heartbeat?.session?.trim() ?? "";
   if (!trimmed || isSubagentSessionKey(trimmed)) {
-    return {
-      sessionKey: mainSessionKey,
-      storePath,
-      entry: mainEntry,
-      suppressOriginatingContext: false,
-    };
+    return mainSession();
   }
 
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "main" || normalized === "global") {
-    return {
-      sessionKey: mainSessionKey,
-      storePath,
-      entry: mainEntry,
-      suppressOriginatingContext: false,
-    };
+    return mainSession();
   }
 
   const candidate = toAgentStoreSessionKey({
@@ -114,12 +96,7 @@ export function resolveHeartbeatSession(
     mainKey: cfg.session?.mainKey,
   });
   if (isSubagentSessionKey(candidate)) {
-    return {
-      sessionKey: mainSessionKey,
-      storePath,
-      entry: mainEntry,
-      suppressOriginatingContext: false,
-    };
+    return mainSession();
   }
   const canonical = canonicalizeMainSessionAlias({
     cfg,
@@ -132,26 +109,56 @@ export function resolveHeartbeatSession(
       return {
         sessionKey: canonical,
         storePath,
-        entry: loadSessionEntry({ storePath, sessionKey: canonical, env }),
         suppressOriginatingContext: false,
       };
     }
   }
 
+  return mainSession();
+}
+
+export function resolveHeartbeatSession(
+  cfg: OpenClawConfig,
+  agentId?: string,
+  heartbeat?: HeartbeatConfig,
+  forcedSessionKey?: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const resolved = resolveHeartbeatSessionKey(cfg, agentId, heartbeat, forcedSessionKey, env);
   return {
-    sessionKey: mainSessionKey,
-    storePath,
-    entry: mainEntry,
-    suppressOriginatingContext: false,
+    ...resolved,
+    entry: loadSessionEntry({
+      storePath: resolved.storePath,
+      sessionKey: resolved.sessionKey,
+      env,
+    }),
   };
 }
 
 export function resolveIsolatedHeartbeatSessionKey(params: {
+  agentId: string;
   sessionKey: string;
   configuredSessionKey: string;
   sessionEntry?: { heartbeatIsolatedBaseSessionKey?: string };
 }) {
   const storedBaseSessionKey = params.sessionEntry?.heartbeatIsolatedBaseSessionKey?.trim();
+  if (params.configuredSessionKey === "global") {
+    // The base global row stays literal inside its agent store; its isolated sibling
+    // must be agent-qualified so ordinary session writes remain canonical.
+    const isolatedSessionKey = toAgentStoreSessionKey({
+      agentId: params.agentId,
+      requestKey: "global:heartbeat",
+    });
+    const suffix = params.sessionKey.slice(isolatedSessionKey.length);
+    if (
+      params.sessionKey === "global" ||
+      (storedBaseSessionKey === "global" &&
+        (params.sessionKey === isolatedSessionKey ||
+          (params.sessionKey.startsWith(isolatedSessionKey) && /^(:heartbeat)+$/.test(suffix))))
+    ) {
+      return { isolatedSessionKey, isolatedBaseSessionKey: "global" };
+    }
+  }
   if (storedBaseSessionKey) {
     const suffix = params.sessionKey.slice(storedBaseSessionKey.length);
     if (
@@ -225,7 +232,7 @@ export async function restoreHeartbeatUpdatedAt(params: {
   if (entry.updatedAt === nextUpdatedAt) {
     return;
   }
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath, sessionKey },
     (nextEntry, context) => {
       if (!context.existingEntry) {

@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
@@ -140,6 +141,8 @@ async function withHttpPokeAccountApi<T>(
 
 export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  chunker: chunkTextForOutbound,
+  chunkerMode: "markdown",
   textChunkLimit: 10000,
   resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
   deliveryCapabilities: {
@@ -236,11 +239,6 @@ export async function probeTlonAccount(account: ConfiguredTlonAccount, timeoutMs
         }
         return { ok: true };
       } finally {
-        // Guard release does not settle unread response streams; cancel first so
-        // the probe cannot leave its pinned connection open.
-        if (!response.bodyUsed) {
-          await response.body?.cancel().catch(() => undefined);
-        }
         await release();
       }
     },

@@ -17,17 +17,19 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
+import { AgentHarnessPreflightError, resolveAgentHarnessPreflightOwner } from "./errors.js";
 import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
 import type {
   AgentHarness,
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
+  AgentHarnessSettledTurnFinalizationAttemptParams,
 } from "./types.js";
 
-function createAttemptParams(): AgentHarnessAttemptParams {
+function createAttemptParams(): AgentHarnessAttemptParamsV2 {
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -45,7 +47,12 @@ function createAttemptParams(): AgentHarnessAttemptParams {
     thinkLevel: "low",
     messageChannel: "qa",
     trigger: "manual",
-  } as AgentHarnessAttemptParams;
+  } as unknown as AgentHarnessAttemptParamsV2;
+}
+
+function createFinalizationParams(): AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2> {
+  const { hostCapabilities: _hostCapabilities, ...params } = createAttemptParams();
+  return params;
 }
 
 function createDiagnosticTrace() {
@@ -173,8 +180,77 @@ describe("AgentHarness lifecycle runner", () => {
     expect(runAttempt).toHaveBeenCalledWith(params);
   });
 
-  it("runs isolated finalization through the narrow lifecycle contract", async () => {
+  it("backfills omitted current-attempt provenance from the harness assistant", async () => {
+    const assistant = createFinalAssistant();
+    const result = { ...createAttemptResult(), lastAssistant: assistant };
+    const harness: AgentHarness = {
+      id: "legacy-harness",
+      label: "Legacy Harness",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => result,
+    };
+
+    const attemptResult = await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
+
+    expect(attemptResult.currentAttemptAssistant).toBe(assistant);
+  });
+
+  it("preserves explicit undefined current-attempt provenance", async () => {
+    const assistant = createFinalAssistant();
+    const result = {
+      ...createAttemptResult(),
+      lastAssistant: assistant,
+      currentAttemptAssistant: undefined,
+    };
+    const harness: AgentHarness = {
+      id: "current-harness",
+      label: "Current Harness",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => result,
+    };
+
+    const attemptResult = await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
+
+    expect(attemptResult).toHaveProperty("currentAttemptAssistant", undefined);
+  });
+
+  it("records the selected harness for harness-scoped preflight failures", async () => {
     const params = createAttemptParams();
+    const preflightError = new AgentHarnessPreflightError("Codex preflight failed", {
+      scope: "harness",
+    });
+    const harness: AgentHarness = {
+      id: "custom-codex",
+      label: "Custom Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw preflightError;
+      },
+    };
+
+    await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toBe(preflightError);
+    expect(resolveAgentHarnessPreflightOwner(preflightError)).toBe("custom-codex");
+    expect(preflightError).not.toHaveProperty("harnessId");
+  });
+
+  it("does not scope a legacy preflight failure without explicit opt-in", async () => {
+    const params = createAttemptParams();
+    const preflightError = new AgentHarnessPreflightError("Global preflight failed");
+    const harness: AgentHarness = {
+      id: "custom-codex",
+      label: "Custom Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw preflightError;
+      },
+    };
+
+    await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toBe(preflightError);
+    expect(resolveAgentHarnessPreflightOwner(preflightError)).toBeUndefined();
+  });
+
+  it("runs isolated finalization through the narrow lifecycle contract", async () => {
+    const params = createFinalizationParams();
     const harness: AgentHarness = {
       id: "codex",
       label: "Codex",
@@ -189,7 +265,39 @@ describe("AgentHarness lifecycle runner", () => {
     await flushDiagnosticEvents();
     diagnostics.unsubscribe();
 
-    expect(result.assistant.content).toEqual([{ type: "text", text: "done" }]);
+    expect(result.outcome).toBe("answered");
+    if (result.outcome === "answered") {
+      expect(result.result.assistant.content).toEqual([{ type: "text", text: "done" }]);
+    }
+    expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+      "harness.run.started",
+      "harness.run.completed",
+    ]);
+  });
+
+  it("records a normally completed empty finalization without emitting an error", async () => {
+    const params = createFinalizationParams();
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      pluginId: "codex-plugin",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => createAttemptResult(),
+    };
+    const diagnostics = captureDiagnosticEvents();
+    const emptyAssistant = { ...createFinalAssistant(), content: [] };
+
+    const result = await runAgentHarnessLifecycleFinalization(harness, params, async () => ({
+      assistant: emptyAssistant,
+      usage: { input: 1, output: 0, total: 1 },
+    }));
+    await flushDiagnosticEvents();
+    diagnostics.unsubscribe();
+
+    expect(result).toMatchObject({
+      outcome: "empty",
+      result: { assistant: emptyAssistant, usage: { input: 1, output: 0, total: 1 } },
+    });
     expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
       "harness.run.started",
       "harness.run.completed",
@@ -197,7 +305,7 @@ describe("AgentHarness lifecycle runner", () => {
   });
 
   it("reports narrow finalization validation failures in the resolve phase", async () => {
-    const params = createAttemptParams();
+    const params = createFinalizationParams();
     const harness: AgentHarness = {
       id: "codex",
       label: "Codex",

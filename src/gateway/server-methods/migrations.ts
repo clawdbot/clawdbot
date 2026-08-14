@@ -1,5 +1,6 @@
 // Gateway handlers expose reviewed, memory-only migration plans to trusted operators.
 import crypto from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   ErrorCodes,
   errorShape,
@@ -11,7 +12,6 @@ import {
   validateMigrationsMemoryPlanParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { stableStringify } from "../../agents/stable-stringify.js";
 import {
   applyProviderMemoryImport,
   listMemoryMigrationProviders,

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
@@ -111,7 +112,7 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
 }
 
 function normalizeStatNumber(value: number | null | undefined): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(value) ?? null;
 }
 
 function normalizeStatId(value: number | bigint | null | undefined): string | null {

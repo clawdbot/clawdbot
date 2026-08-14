@@ -6,7 +6,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/provider-thinking.js", () => ({
-  resolveProviderThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
+  resolveEffectiveThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
 }));
 
 const {
@@ -28,6 +28,10 @@ beforeEach(() => {
 });
 
 describe("normalizeThinkLevel", () => {
+  it("normalizes the documented none alias to off", () => {
+    expect(normalizeThinkLevel("none")).toBe("off");
+  });
+
   it("accepts mid as medium", () => {
     expect(normalizeThinkLevel("mid")).toBe("medium");
   });

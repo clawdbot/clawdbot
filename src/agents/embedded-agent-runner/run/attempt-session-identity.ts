@@ -3,7 +3,10 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntries, loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
@@ -36,7 +39,7 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
             storePath: marker.storePath,
           })
         : undefined;
-      const markerMatches = listSessionEntries({
+      const markerMatches = listSessionEntriesCore({
         agentId: marker.agentId,
         storePath: marker.storePath,
       }).filter(({ entry }) => entry.sessionId === marker.sessionId);

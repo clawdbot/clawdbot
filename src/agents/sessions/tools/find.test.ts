@@ -1,7 +1,7 @@
 // find tool tests cover custom search operation wiring and result-limit
 // normalization for session file discovery.
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createFindToolDefinition, type FindOperations } from "./find.js";
 
 function operations(results: string[]): FindOperations {
@@ -53,4 +53,38 @@ describe("find tool", () => {
     expect(textContent(result)).toBe("a.ts\nb.ts");
     expect(result.details).toBeUndefined();
   });
+
+  it.each([
+    {
+      name: "keeps an exact-size result complete",
+      results: ["/workspace/a.ts", "/workspace/b.ts"],
+      expectedText: "a.ts\nb.ts",
+      expectedLimitReached: undefined,
+    },
+    {
+      name: "uses one extra result as the truncation sentinel",
+      results: ["/workspace/a.ts", "/workspace/b.ts", "/workspace/c.ts"],
+      expectedText: "a.ts\nb.ts\n\n[2 results limit reached]",
+      expectedLimitReached: 2,
+    },
+  ])(
+    "$name for custom glob operations",
+    async ({ results, expectedText, expectedLimitReached }) => {
+      const glob = vi.fn((_pattern: string, _cwd: string, options: { limit: number }) =>
+        results.slice(0, options.limit),
+      );
+      const tool = createFindToolDefinition("/workspace", {
+        operations: { exists: () => true, glob },
+      });
+
+      const result = await execute(tool, 2);
+
+      expect(glob).toHaveBeenCalledWith("*.ts", "/workspace", {
+        ignore: ["**/node_modules/**", "**/.git/**"],
+        limit: 3,
+      });
+      expect(textContent(result)).toBe(expectedText);
+      expect(result.details?.resultLimitReached).toBe(expectedLimitReached);
+    },
+  );
 });

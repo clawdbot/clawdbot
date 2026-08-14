@@ -2,8 +2,10 @@
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
+import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import type { DetachedTaskLifecycleRuntimeRegistration } from "../tasks/detached-task-runtime-contract.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
@@ -12,7 +14,7 @@ import type {
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-state.js";
-import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
+import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
@@ -37,8 +39,18 @@ import type {
   PluginManifestDashboardDataBinding,
   PluginManifestMcpServer,
 } from "./manifest.js";
-import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import type {
+  ContextEngineRegistration,
+  MemoryCorpusSupplementRegistration,
+  MemoryEmbeddingProviderAdapter,
+  MemoryPluginCapabilityRegistration,
+  MemoryPromptPreparationRegistration,
+  MemoryPromptSupplementRegistration,
+  RegisteredCompactionProvider,
+  ResolvedPluginRuntimeArtifact,
+  SessionDiscussionProvider,
+} from "./registry-contribution-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type { PluginDependencyStatus } from "./status-dependencies-core.js";
@@ -140,6 +152,8 @@ export type PluginChannelRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
+  /** Exact record-bound runtime resolver captured when the active plugin registered the channel. */
+  resolveChannelRuntime?: () => PluginRuntime["channel"];
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */
   origin?: PluginOrigin;
   source: string;
@@ -337,6 +351,19 @@ export type PluginCommandRegistration = {
   command: OpenClawPluginCommandDefinition;
   source: string;
   rootDir?: string;
+  trustedOwnerStatusExposure?: true;
+};
+
+type PluginLegacyInternalHookRegistration = {
+  pluginId: string;
+  name: string;
+  event: string;
+  handler: InternalHookHandler;
+};
+
+type PluginSessionDiscussionRegistration = {
+  pluginId: string;
+  provider: SessionDiscussionProvider;
 };
 
 type PluginInteractiveHandlerRegistryRegistration = PluginInteractiveHandlerRegistration & {
@@ -515,6 +542,16 @@ export type PluginRegistry = {
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
+  pluginRuntimeArtifacts: Map<string, ResolvedPluginRuntimeArtifact>;
+  compactionProviders: RegisteredCompactionProvider[];
+  detachedTaskRuntimes: DetachedTaskLifecycleRuntimeRegistration[];
+  legacyInternalHooks: PluginLegacyInternalHookRegistration[];
+  memoryCapabilities: MemoryPluginCapabilityRegistration[];
+  memoryCorpusSupplements: MemoryCorpusSupplementRegistration[];
+  memoryPromptPreparations: MemoryPromptPreparationRegistration[];
+  memoryPromptSupplements: MemoryPromptSupplementRegistration[];
+  sessionDiscussionProviders: Map<string, PluginSessionDiscussionRegistration>;
+  contextEngines: Map<string, ContextEngineRegistration>;
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
   dashboardDataBindings: Map<string, PluginDashboardDataBindingRegistration>;
@@ -549,6 +586,8 @@ export type PluginRegistryParams = {
   coreGatewayHandlers?: GatewayRequestHandlers;
   coreGatewayMethodNames?: readonly string[];
   runtime: PluginRuntime;
+  /** Process-owner policy for registering catalogs that may fall back to HOME. */
+  allowProcessHomeSessionCatalogs?: boolean;
   hostServices?: {
     /** May be a live accessor; plugin APIs must read it at call time. */
     cron?: import("../cron/service-contract.js").CronServiceContract;

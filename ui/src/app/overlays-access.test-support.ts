@@ -3,7 +3,11 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts"
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
-export type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+export type RequestFn = (
+  method: string,
+  params?: unknown,
+  options?: { timeoutMs?: number | null },
+) => Promise<unknown>;
 
 const SYSTEM_APPROVAL_TITLE = "OpenClaw change";
 const SYSTEM_APPROVAL_COMMAND = "Set gateway.port to 19001";
@@ -68,6 +72,12 @@ export function createGatewayHarness(
     },
   } satisfies ApplicationGateway;
   return {
+    emitEvent(event: string, payload: unknown) {
+      const frame = { event, payload, type: "event" } as GatewayEventFrame;
+      for (const listener of eventListeners) {
+        listener(frame);
+      }
+    },
     emitApproval(id: string, createdAtMs: number) {
       const event: GatewayEventFrame = {
         event: "exec.approval.requested",

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
-import { getActiveSecretsRuntimeSnapshotRevision } from "../secrets/runtime-state.js";
+import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
+import { resetSkillSnapshotConfigFingerprintCache } from "../skills/runtime/snapshot-config-fingerprint.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import {
   startGatewayConfigReloader,
@@ -70,26 +71,26 @@ export function startManagedGatewayConfigReloader(
     if (!transactionOwnership.isCurrent()) {
       throw new GatewayConfigReloadSupersededError();
     }
-    const expectedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const expectedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     try {
       const snapshot = await params.activateRuntimeSecrets(config, {
         ...activationParams,
         activate: false,
         canPublishFailureAsDegraded: () =>
           transactionOwnership.isCurrent() &&
-          getActiveSecretsRuntimeSnapshotRevision() === expectedRevision,
+          getActiveSecretsRuntimeSnapshotRevisionState() === expectedRevision,
       });
       if (!transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
       }
-      return getActiveSecretsRuntimeSnapshotRevision() === expectedRevision
+      return getActiveSecretsRuntimeSnapshotRevisionState() === expectedRevision
         ? { snapshot, expectedRevision }
         : null;
     } catch (error) {
       if (!transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
       }
-      if (getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision) {
+      if (getActiveSecretsRuntimeSnapshotRevisionState() !== expectedRevision) {
         return null;
       }
       throw error;
@@ -147,6 +148,11 @@ export function startManagedGatewayConfigReloader(
     ...(params.requestRecoveryRestart
       ? { requestRecoveryRestart: params.requestRecoveryRestart }
       : {}),
+    assertRestartReady: () =>
+      import("../state/openclaw-database-preflight.js").then(
+        ({ assertOpenClawDatabasesReadyForRestart }) =>
+          assertOpenClawDatabasesReadyForRestart({ env: process.env }),
+      ),
     restartRecoveryAvailable,
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({
@@ -437,7 +443,12 @@ export function startManagedGatewayConfigReloader(
         throw error;
       }
     },
-    onConfigApplied: (_plan, nextConfig) => params.commitTerminalConfig(nextConfig),
+    onConfigApplied: (_plan, nextConfig) => {
+      // Applied runtime identity owns config-derived process memos; accepted
+      // source-only changes must not evict caches for the still-active config.
+      resetSkillSnapshotConfigFingerprintCache();
+      params.commitTerminalConfig(nextConfig);
+    },
     onConfigRevisionApplied: publishAppliedConfigHash,
     onEffectiveConfigUnchanged,
     onNoopConfigCommit,

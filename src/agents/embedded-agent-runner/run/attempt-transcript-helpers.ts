@@ -1,15 +1,16 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  resolveSessionTranscriptRuntimeReadTarget,
+  resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
@@ -91,7 +92,7 @@ export function normalizeCompactionRecoveryTranscriptTail(params: {
   );
   params.activeSession.agent.state.messages =
     removedEntries > 0
-      ? params.sessionManager.buildSessionContext().messages
+      ? sanitizeCompactionReplayMessages(params.sessionManager.buildSessionContext().messages)
       : continuableMessages.length === messages.length
         ? messages
         : continuableMessages;
@@ -100,10 +101,12 @@ export function normalizeCompactionRecoveryTranscriptTail(params: {
 
 // Applies quota-resume TTL maintenance to only the active attempt session.
 export async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
+  agentId: string;
   storePath: string;
   sessionKey: string;
 }): Promise<ConfigSessionEntry | undefined> {
   const entry = loadSessionEntry({
+    agentId: params.agentId,
     storePath: params.storePath,
     sessionKey: params.sessionKey,
   });
@@ -117,6 +120,7 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
   }
   const updated = await updateSessionEntry(
     {
+      agentId: params.agentId,
       storePath: params.storePath,
       sessionKey: params.sessionKey,
     },
@@ -143,12 +147,12 @@ export async function resolveAttemptTrajectorySessionFile(params: {
 }): Promise<string> {
   const storePath =
     params.sessionTarget?.storePath ??
-    resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: params.agentId });
   if (!storePath || !params.sessionKey) {
     return params.sessionFile;
   }
   return (
-    await resolveSessionTranscriptRuntimeReadTarget({
+    await resolveSessionTranscriptRuntimeTarget({
       agentId: params.agentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -181,7 +185,7 @@ export async function resolveExistingAttemptTranscriptState(params: {
   const agentId = normalizeOptionalString(params.sessionTarget?.agentId) ?? params.agentId;
   const storePath =
     normalizeOptionalString(params.sessionTarget?.storePath) ??
-    resolveStorePath(params.config?.session?.store, { agentId });
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId });
   const sessionId = normalizeOptionalString(params.sessionTarget?.sessionId) ?? params.sessionId;
   const sessionKey =
     normalizeOptionalString(params.sessionTarget?.sessionKey) ??

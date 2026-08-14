@@ -126,18 +126,15 @@ export async function resolveSlackThreadStarter(params: {
   channelId: string;
   threadTs: string;
   client: SlackWebClient;
-  /** Enterprise cache partition. Omit to preserve workspace-install cache identity. */
-  workspaceScope?: { accountId: string; teamId: string };
+  workspaceScope: { accountId: string; teamId: string };
 }): Promise<SlackThreadStarter | null> {
   evictThreadStarterCache();
-  const cacheKey = params.workspaceScope
-    ? JSON.stringify([
-        params.workspaceScope.accountId,
-        params.workspaceScope.teamId,
-        params.channelId,
-        params.threadTs,
-      ])
-    : `${params.channelId}:${params.threadTs}`;
+  const cacheKey = JSON.stringify([
+    params.workspaceScope.accountId,
+    params.workspaceScope.teamId,
+    params.channelId,
+    params.threadTs,
+  ]);
   const cached = THREAD_STARTER_CACHE.get(cacheKey);
   if (cached) {
     const now = asDateTimestampMs(Date.now());

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -10,7 +11,7 @@ import {
   workboardCardSessionKey,
 } from "./card-state.ts";
 import { loadWorkboard } from "./loading.ts";
-import { formatError, isRecord } from "./normalization-utils.ts";
+import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload } from "./normalization.ts";
 import {
   getWorkboardState,
@@ -146,7 +147,7 @@ function buildSessionCaptureNotes(params: {
   recentUserText: string | null;
   lastAssistantText: string | null;
 }): string {
-  const lines = [`Thread: ${params.session.key}`];
+  const lines = [`Session: ${params.session.key}`];
   if (params.recentUserText) {
     lines.push("", `Recent user prompt: ${clampSessionCaptureText(params.recentUserText)}`);
   }

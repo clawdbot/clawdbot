@@ -16,7 +16,7 @@ import {
 } from "../../sessions/session-key-utils.js";
 import {
   resolveTargetPrefixedChannel,
-  stripTargetKindPrefix,
+  stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
 } from "./channel-target-prefix.js";
 import {
@@ -26,14 +26,14 @@ import {
 } from "./deliver-types.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 type OutboundAuditDeliveryContext = {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   to: string;
   accountId?: string;
-  payloads: readonly ReplyPayload[];
+  payloads?: readonly ReplyPayload[];
   replyPayloadSendingHook?: { runId?: string };
+  preparedBatch?: { runId?: string };
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
 };
@@ -223,7 +223,7 @@ function resolveOutboundTargetFacts(context: OutboundAuditDeliveryContext): {
   const withoutProvider = stripTargetProviderPrefix(context.to, ...providerPrefixes);
   const kindPrefix = TARGET_PREFIX_RE.exec(withoutProvider)?.[1]?.toLowerCase();
   const allowedRouteKinds = kindPrefix ? TARGET_KIND_TO_ROUTE_KINDS[kindPrefix] : undefined;
-  const conversationId = stripTargetKindPrefix(
+  const conversationId = stripOutboundTargetKindPrefix(
     withoutProvider,
     Object.keys(TARGET_KIND_TO_ROUTE_KINDS),
   );
@@ -381,8 +381,8 @@ function emitOutboundAuditTerminal(params: {
       actorType: agentId ? "agent" : "system",
       actorId: agentId ?? "gateway",
       ...(agentId ? { agentId } : {}),
-      ...(context.replyPayloadSendingHook?.runId
-        ? { runId: context.replyPayloadSendingHook.runId }
+      ...((context.preparedBatch?.runId ?? context.replyPayloadSendingHook?.runId)
+        ? { runId: context.preparedBatch?.runId ?? context.replyPayloadSendingHook?.runId }
         : {}),
       direction: "outbound",
       channel: context.channel,

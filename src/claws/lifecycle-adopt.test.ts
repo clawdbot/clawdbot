@@ -1,13 +1,19 @@
 // Tests for planning Claw adds that adopt an existing workspace directory.
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { link, mkdir, rmdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
+import { makeProvenancePlan, readInstallRow, stateEnv } from "./provenance.test-helpers.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawManifest, ClawSourceIdentity } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 function requireManifest(): ClawManifest {
   const result = parseClawManifest({
@@ -94,6 +100,57 @@ describe("buildClawAddPlan workspace adoption", () => {
     );
   });
 
+  it("blocks adoption of a hardlinked declared file before consent", async () => {
+    const { source, workspace } = await createPlanSource();
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "origin.md"), "# Agent\n", "utf8");
+    await link(join(workspace, "origin.md"), join(workspace, "AGENTS.md"));
+
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      context: { workspace, adoptExistingWorkspace: true },
+    });
+
+    expect(plan.blockers).toContainEqual(
+      expect.objectContaining({ code: "workspace_file_conflict" }),
+    );
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({ kind: "workspaceFile", id: "AGENTS.md", blocked: true }),
+    );
+    expect(plan.actions).not.toContainEqual(
+      expect.objectContaining({ kind: "workspaceFile", id: "AGENTS.md", action: "adopt" }),
+    );
+  });
+
+  it("blocks an existing package bootstrap instead of claiming operator-owned content", async () => {
+    const { source, workspace } = await createPlanSource();
+    const bootstrap = Buffer.from("Package setup\n");
+    const bootstrapPath = join(source.packageRoot, "BOOTSTRAP.md");
+    await writeFile(bootstrapPath, bootstrap);
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "BOOTSTRAP.md"), bootstrap);
+
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      packageBootstrap: {
+        sourcePath: "BOOTSTRAP.md",
+        realPath: bootstrapPath,
+        byteLength: bootstrap.byteLength,
+        digest: `sha256:${createHash("sha256").update(bootstrap).digest("hex")}`,
+      },
+      context: { workspace, adoptExistingWorkspace: true },
+    });
+
+    expect(plan.blockers).toContainEqual(
+      expect.objectContaining({ code: "workspace_file_conflict", path: "$packageBootstrap" }),
+    );
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({ kind: "bootstrap", id: "BOOTSTRAP.md", blocked: true }),
+    );
+  });
+
   it("still blocks adoption of a workspace configured for another agent", async () => {
     const { source, workspace } = await createPlanSource();
     await mkdir(workspace, { recursive: true });
@@ -122,5 +179,44 @@ describe("buildClawAddPlan workspace adoption", () => {
     });
 
     expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "workspace_collision" }));
+  });
+});
+
+describe("applyClawAddPlan workspace adoption", () => {
+  it("revalidates an adopted workspace before realizing shared plugin requirements", async () => {
+    const root = tempDirs.make("openclaw-claw-adopt-add-");
+    const workspace = join(root, "existing-workspace");
+    await mkdir(workspace);
+    const { plan } = await makeProvenancePlan(
+      root,
+      {
+        schemaVersion: 1,
+        agent: { id: "worker" },
+        packages: [{ kind: "plugin", source: "clawhub", ref: "@acme/audit", version: "1.0.0" }],
+      },
+      {
+        workspace,
+        adoptExistingWorkspace: true,
+        packagePreflight: async () => ({
+          ok: true,
+          action: "install",
+          integrity: `sha256:${"a".repeat(64)}`,
+          installId: "audit",
+        }),
+      },
+    );
+    expect(plan.blockers).toEqual([]);
+    await rmdir(workspace);
+    const installPackages = vi.fn();
+
+    await expect(
+      applyClawAddPlan(plan, {
+        consentPlanIntegrity: plan.planIntegrity,
+        env: stateEnv(root),
+        installPackages,
+      }),
+    ).rejects.toMatchObject({ code: "workspace_collision" });
+    expect(installPackages).not.toHaveBeenCalled();
+    expect(readInstallRow("worker", root)).toBeUndefined();
   });
 });

@@ -79,7 +79,7 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store in `~/.ope
     **Result:**
 
     - `main` agent: runs on host, full tool access.
-    - `family` agent: runs in Docker (one container per agent), only `read` and current-conversation message sends.
+    - `family` agent: runs in the configured container sandbox backend (one container per agent), only `read` and current-conversation message sends.
 
   </Accordion>
   <Accordion title="Example 2: Work agent with shared sandbox">
@@ -189,7 +189,7 @@ agents.entries.*.sandbox.prune.* > agents.defaults.sandbox.prune.*
 ```
 
 <Note>
-`agents.entries.*.sandbox.{docker,browser,prune}.*` overrides `agents.defaults.sandbox.{docker,browser,prune}.*` for that agent (ignored when sandbox scope resolves to `"shared"`).
+`agents.entries.*.sandbox.{docker,browser,prune}.*` overrides `agents.defaults.sandbox.{docker,browser,prune}.*` for that agent (ignored when sandbox scope resolves to `"shared"`). The `docker` block configures both built-in container backends.
 </Note>
 
 ### Tool restrictions
@@ -228,7 +228,7 @@ The filtering order is:
     - Each level can further restrict tools, but cannot grant back denied tools from earlier levels.
     - If `agents.entries.*.tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
     - If `agents.entries.*.tools.profile` is set, it overrides `tools.profile` for that agent.
-    - Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.4`).
+    - Provider tool keys accept either `provider` (e.g. `anthropic`) or `provider/model` (e.g. `openai/gpt-5.4`).
 
   </Accordion>
   <Accordion title="Empty allowlist behavior">

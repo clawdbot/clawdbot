@@ -19,6 +19,11 @@ import {
 } from "./internal/rest-errors.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
+import { createDiscordRetryRunner } from "./retry.js";
+import {
+  resolveDiscordMessageFlags,
+  resolveDiscordSuppressEmbeds,
+} from "./send.message-request.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import type { DiscordSendResult } from "./send.types.js";
 
@@ -35,6 +40,7 @@ type DiscordWebhookSendOpts = {
   username?: string;
   avatarUrl?: string;
   wait?: boolean;
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 function resolveWebhookExecutionUrl(params: {
@@ -77,12 +83,14 @@ async function throwWebhookResponseError(
   response: Response,
   signal: AbortSignal | undefined,
 ): Promise<never> {
-  const raw = await readResponseTextLimited(response, DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES).catch(
-    () => {
-      throwIfWebhookDeadlineExpired(signal);
-      return "";
-    },
-  );
+  const raw = await readResponseTextLimited(response, DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES, {
+    // The request deadline owns every body read; a shorter shared idle bound
+    // would turn a stalled Discord response into the wrong error class.
+    chunkTimeoutMs: DISCORD_WEBHOOK_TIMEOUT_MS,
+  }).catch(() => {
+    throwIfWebhookDeadlineExpired(signal);
+    return "";
+  });
   const parsed = coerceWebhookErrorBody(raw);
   if (response.status === 429) {
     throw new RateLimitError(response, {
@@ -118,6 +126,9 @@ export async function sendWebhookMessageDiscord(
     accountId: account.accountId,
     mentionAliases: account.config.mentionAliases,
   });
+  const flags = resolveDiscordMessageFlags({
+    suppressEmbeds: resolveDiscordSuppressEmbeds({ configured: account.config.suppressEmbeds }),
+  });
   const threadConversationId = opts.threadId == null ? "" : String(opts.threadId).trim();
   if (threadConversationId) {
     // Reserve the webhook source before the request so an immediate gateway echo
@@ -140,23 +151,35 @@ export async function sendWebhookMessageDiscord(
     timeoutMs: DISCORD_WEBHOOK_TIMEOUT_MS,
     operation: "discord.webhook.send",
   });
+  const request = createDiscordRetryRunner({ signal: deadline.signal });
   try {
-    const response = await (proxyFetch ?? fetch)(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
+    const response = await request(
+      async () => {
+        await opts.onPlatformSendDispatch?.();
+        const attemptResponse = await (proxyFetch ?? fetch)(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            content: rewrittenText,
+            username: normalizeOptionalString(opts.username),
+            avatar_url: normalizeOptionalString(opts.avatarUrl),
+            ...(flags ? { flags } : {}),
+            ...(messageReference ? { message_reference: messageReference } : {}),
+          }),
+          signal: deadline.signal,
+        });
+        if (!attemptResponse.ok) {
+          await throwWebhookResponseError(attemptResponse, deadline.signal);
+        }
+        return attemptResponse;
       },
-      body: JSON.stringify({
-        content: rewrittenText,
-        username: normalizeOptionalString(opts.username),
-        avatar_url: normalizeOptionalString(opts.avatarUrl),
-        ...(messageReference ? { message_reference: messageReference } : {}),
-      }),
-      signal: deadline.signal,
-    });
-    if (!response.ok) {
-      await throwWebhookResponseError(response, deadline.signal);
-    }
+      "webhook",
+      // Webhooks cannot enforce a Discord nonce, so replay only explicit 429s
+      // and proven pre-connect failures; an ambiguous 5xx could duplicate delivery.
+      { safety: "non-idempotent-create" },
+    );
 
     const payload: {
       id?: string;

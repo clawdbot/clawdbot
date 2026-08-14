@@ -156,6 +156,31 @@ describe("diagnostics timeline", () => {
     expect(attributes.ignored).toBeUndefined();
   });
 
+  it("writes provider response status as a top-level field", async () => {
+    const { env, path } = await createTimelineEnv();
+
+    emitDiagnosticsTimelineEvent(
+      {
+        type: "provider.request",
+        name: "provider.request",
+        provider: "openai",
+        operation: "openai-responses",
+        ok: true,
+        status: 200,
+      },
+      { env },
+    );
+
+    const [event] = await readTimeline(path);
+    expect(event).toMatchObject({
+      type: "provider.request",
+      provider: "openai",
+      operation: "openai-responses",
+      ok: true,
+      status: 200,
+    });
+  });
+
   it("routes timeline write failures through the captured console boundary once", async () => {
     const { env, path } = await createTimelineEnv();
     await mkdir(dirname(path), { recursive: true });

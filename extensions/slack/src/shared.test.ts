@@ -8,7 +8,7 @@ import { createSlackPluginBase, slackConfigAdapter } from "./shared.js";
 describe("createSlackPluginBase", () => {
   it("owns Slack native command name overrides", () => {
     const plugin = createSlackPluginBase({
-      setup: {} as never,
+      setupContract: {} as never,
       setupWizard: {} as never,
     });
 
@@ -34,7 +34,7 @@ describe("createSlackPluginBase", () => {
 
   it("exposes security checks on the setup surface", () => {
     const plugin = createSlackPluginBase({
-      setup: {} as never,
+      setupContract: {} as never,
       setupWizard: {} as never,
     });
 

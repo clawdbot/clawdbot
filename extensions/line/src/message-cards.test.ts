@@ -1,4 +1,6 @@
 // Line tests cover message cards plugin behavior.
+import { createServer } from "node:http";
+import { messagingApi } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
@@ -14,7 +16,6 @@ import { registerLineCardCommand } from "./card-command.js";
 import {
   createActionCard,
   createAppleTvRemoteCard,
-  createCarousel,
   createDeviceControlCard,
   createEventCard,
   createImageCard,
@@ -28,12 +29,128 @@ import {
   createButtonTemplate,
   createTemplateCarousel,
   createCarouselColumn,
-  createImageCarousel,
-  createImageCarouselColumn,
-  createProductCarousel,
 } from "./template-messages.js";
 
 const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+const lineFlexCardCommandScenarios = [
+  {
+    kind: "info",
+    args: (body: string) => `info "Title" "${body}"`,
+    expectedAltText: (body: string) => `Title: ${body}`,
+  },
+  {
+    kind: "image",
+    args: (body: string) => `image "Title" "${body}" --url https://example.test/image.png`,
+    expectedAltText: (body: string) => `Title: ${body}`,
+  },
+  {
+    kind: "action",
+    args: (body: string) => `action "Title" "${body}" --actions "Open|ok"`,
+    expectedAltText: (body: string) => `Title: ${body}`,
+  },
+  {
+    kind: "list",
+    args: (body: string) => `list "Title" "${body}|Description"`,
+    expectedAltText: (body: string) => `Title: ${body}`,
+  },
+  {
+    kind: "receipt",
+    args: (body: string) => `receipt "Title" "${body}:$1" --total "$1"`,
+    expectedAltText: (body: string) => `Title: ${body} $1`,
+  },
+] as const;
+
+const lineTemplateMessageScenarios = [
+  {
+    kind: "confirm",
+    create: (altText: string) =>
+      createConfirmTemplate("q".repeat(300), messageAction("Yes"), messageAction("No"), altText),
+    bodyLimit: 240,
+  },
+  {
+    kind: "buttons",
+    create: (altText: string) =>
+      createButtonTemplate("Menu", "b".repeat(200), [messageAction("Open")], { altText }),
+    bodyLimit: 60,
+  },
+  {
+    kind: "carousel",
+    create: (altText: string) =>
+      createTemplateCarousel(
+        [createCarouselColumn({ text: "c".repeat(150), actions: [messageAction("Open")] })],
+        { altText },
+      ),
+    bodyLimit: 120,
+  },
+] as const;
+
+async function runLineFlexCardCommand(
+  args: string,
+): Promise<{ altText: string; contents: messagingApi.FlexContainer }> {
+  const result = (await registerCommandWithHandler((command: unknown) => {
+    const { handler } = command as {
+      handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
+    };
+    return handler({ channel: "line", args });
+  })) as {
+    channelData: {
+      line: { flexMessage: { altText: string; contents: messagingApi.FlexContainer } };
+    };
+  };
+  return result.channelData.line.flexMessage;
+}
+
+type LineProviderRequest = {
+  path: string;
+  authenticated: boolean;
+  type: string;
+  altText: string;
+};
+
+async function withLineProvider(
+  run: (client: messagingApi.MessagingApiClient, requests: LineProviderRequest[]) => Promise<void>,
+): Promise<void> {
+  const requests: LineProviderRequest[] = [];
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    request.once("end", () => {
+      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        messages: Array<{ type: string; altText: string }>;
+      };
+      requests.push({
+        path: request.url ?? "",
+        authenticated: request.headers.authorization === "Bearer isolated-test-token",
+        type: payload.messages[0]?.type ?? "",
+        altText: payload.messages[0]?.altText ?? "",
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ sentMessages: [{ id: `card-${requests.length}` }] }));
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("LINE card provider did not bind a TCP port");
+    }
+    const client = new messagingApi.MessagingApiClient({
+      channelAccessToken: "isolated-test-token",
+      baseURL: `http://127.0.0.1:${address.port}`,
+    });
+    await run(client, requests);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
 
 describe("createConfirmTemplate", () => {
   it("truncates text to 240 characters", () => {
@@ -45,12 +162,12 @@ describe("createConfirmTemplate", () => {
 
   it("drops a surrogate-pair emoji from fallback altText instead of splitting it", () => {
     const template = createConfirmTemplate(
-      `${"x".repeat(399)}😀`,
+      `${"x".repeat(1499)}😀`,
       messageAction("Yes"),
       messageAction("No"),
     );
 
-    expect(template.altText).toBe("x".repeat(399));
+    expect(template.altText).toBe("x".repeat(1499));
     expect(loneHighSurrogate.test(template.altText)).toBe(false);
   });
 });
@@ -96,10 +213,10 @@ describe("createButtonTemplate", () => {
 
   it("drops a surrogate-pair emoji from explicit altText instead of splitting it", () => {
     const template = createButtonTemplate("Title", "Text", [messageAction("OK")], {
-      altText: `${"x".repeat(399)}😀`,
+      altText: `${"x".repeat(1499)}😀`,
     });
 
-    expect(template.altText).toBe("x".repeat(399));
+    expect(template.altText).toBe("x".repeat(1499));
     expect(loneHighSurrogate.test(template.altText)).toBe(false);
   });
 
@@ -211,97 +328,13 @@ describe("createCarouselColumn", () => {
 });
 
 describe("carousel column limits", () => {
-  it.each([
-    {
-      createTemplate: () =>
-        createTemplateCarousel(
-          Array.from({ length: 15 }, () =>
-            createCarouselColumn({ text: "Text", actions: [messageAction("OK")] }),
-          ),
-        ),
-    },
-    {
-      createTemplate: () =>
-        createImageCarousel(
-          Array.from({ length: 15 }, (_, i) =>
-            createImageCarouselColumn(`https://example.com/${i}.jpg`, messageAction("View")),
-          ),
-        ),
-    },
-  ])("limits columns to 10", ({ createTemplate }) => {
-    const template = createTemplate();
-    expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
-  });
-
-  it("drops a surrogate-pair emoji from image-carousel altText instead of splitting it", () => {
-    const template = createImageCarousel(
-      [createImageCarouselColumn("https://example.com/0.jpg", messageAction("View"))],
-      `${"x".repeat(399)}😀`,
-    );
-
-    expect(template.altText).toBe("x".repeat(399));
-    expect(loneHighSurrogate.test(template.altText)).toBe(false);
-  });
-
-  it("keeps unavailable action labels within the image-carousel cap", () => {
-    const template = createImageCarousel([
-      createImageCarouselColumn(
-        "https://example.com/0.jpg",
-        uriAction("Open", `https://example.com/?q=${"x".repeat(1200)}`),
+  it("limits columns to 10", () => {
+    const template = createTemplateCarousel(
+      Array.from({ length: 15 }, () =>
+        createCarouselColumn({ text: "Text", actions: [messageAction("OK")] }),
       ),
-    ]);
-    const column = (
-      template.template as {
-        columns: Array<{ action: { label?: string; text?: string; type: string } }>;
-      }
-    ).columns[0];
-
-    expect(column?.action).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Link unavailable: URL exceeds LINE's limit.",
-    });
-    expect(column?.action.label).toHaveLength(11);
-  });
-});
-
-describe("createProductCarousel", () => {
-  it.each([
-    {
-      title: "Product",
-      description: "Desc",
-      actionLabel: "Buy",
-      actionUrl: "https://shop.com/buy",
-      expectedType: "uri",
-    },
-    {
-      title: "Product",
-      description: "Desc",
-      actionLabel: "Select",
-      actionData: "product_id=123",
-      expectedType: "postback",
-    },
-  ])("uses expected action type for product action", ({ expectedType, ...item }) => {
-    const template = createProductCarousel([item]);
-    const columns = (template.template as { columns: Array<{ actions: Array<{ type: string }> }> })
-      .columns;
-    const column = expectDefined(columns[0], "product carousel column");
-    expect(expectDefined(column.actions[0], "product carousel action").type).toBe(expectedType);
-  });
-
-  it("preserves the complete price when truncating a long description", () => {
-    const template = createProductCarousel([
-      {
-        title: "Product",
-        description: "x".repeat(59),
-        price: "$12.99",
-      },
-    ]);
-    const columns = (template.template as { columns: Array<{ text: string }> }).columns;
-
-    const column = expectDefined(columns[0], "priced product carousel column");
-    expect(column.text).toBe(`${"x".repeat(53)}\n$12.99`);
-    expect(column.text.length).toBe(60);
+    );
+    expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
   });
 });
 
@@ -339,13 +372,6 @@ describe("flex cards", () => {
 
     const footer = card.footer as { contents: unknown[] };
     expect(footer.contents.length).toBe(4);
-  });
-
-  it("limits carousels to 12 bubbles", () => {
-    const bubbles = Array.from({ length: 15 }, (_, i) => createInfoCard(`Card ${i}`, `Body ${i}`));
-    const carousel = createCarousel(bubbles);
-
-    expect(carousel.contents.length).toBe(12);
   });
 
   it("limits device controls to 6", () => {
@@ -488,9 +514,99 @@ describe("action label/data surrogate-safe truncation", () => {
     });
   });
 
-  it("/card receipt altText truncates on a surrogate boundary", async () => {
-    // The emoji's surrogate pair straddles the 400-char altText cap; a raw
-    // slice used to leave a lone high surrogate in the receipt flex altText.
+  it.each(lineFlexCardCommandScenarios)(
+    "/card $kind preserves provider-valid Flex alternative text",
+    async (scenario) => {
+      const body = "a".repeat(1200);
+      const message = await runLineFlexCardCommand(scenario.args(body));
+
+      expect(message.altText).toBe(scenario.expectedAltText(body));
+    },
+  );
+
+  it.each(lineFlexCardCommandScenarios)(
+    "/card $kind bounds alternative text without splitting a Unicode surrogate pair",
+    async (scenario) => {
+      const body = `${"a".repeat(1492)}😀 overflow`;
+      const { altText } = await runLineFlexCardCommand(scenario.args(body));
+
+      expect(altText).toBe(`Title: ${"a".repeat(1492)}`);
+      expect(loneHighSurrogate.test(altText)).toBe(false);
+    },
+  );
+
+  it("preserves every Flex card command through the real LINE provider SDK", async () => {
+    await withLineProvider(async (client, received) => {
+      const body = "a".repeat(1200);
+
+      for (const scenario of lineFlexCardCommandScenarios) {
+        const message = await runLineFlexCardCommand(scenario.args(body));
+        await client.pushMessage({
+          to: "U123",
+          messages: [{ type: "flex", altText: message.altText, contents: message.contents }],
+        });
+      }
+
+      expect(received).toHaveLength(lineFlexCardCommandScenarios.length);
+      expect(received.every((request) => request.authenticated)).toBe(true);
+      expect(received.every((request) => request.type === "flex")).toBe(true);
+      expect(received.map((request) => request.altText)).toEqual(
+        lineFlexCardCommandScenarios.map((scenario) => scenario.expectedAltText(body)),
+      );
+    });
+  });
+
+  it.each(lineTemplateMessageScenarios)(
+    "preserves provider-valid $kind alternative text without changing inner text limits",
+    (scenario) => {
+      const altText = "a".repeat(1200);
+      const message = scenario.create(altText);
+
+      expect(message.altText).toBe(altText);
+      if ("bodyLimit" in scenario) {
+        const template = message.template as {
+          text?: string;
+          columns?: Array<{ text?: string }>;
+        };
+        expect((template.text ?? template.columns?.[0]?.text)?.length).toBe(scenario.bodyLimit);
+      }
+    },
+  );
+
+  it.each(lineTemplateMessageScenarios)(
+    "bounds $kind alternative text at the provider's Unicode-safe 1500-unit limit",
+    (scenario) => {
+      const message = scenario.create(`${"a".repeat(1499)}😀 overflow`);
+
+      expect(message.altText).toBe("a".repeat(1499));
+      expect(loneHighSurrogate.test(message.altText)).toBe(false);
+    },
+  );
+
+  it("preserves all template families through real SDK push and reply requests", async () => {
+    await withLineProvider(async (client, received) => {
+      const altText = "a".repeat(1200);
+
+      for (const scenario of lineTemplateMessageScenarios) {
+        const message = scenario.create(altText);
+        await client.pushMessage({ to: "U123", messages: [message] });
+        await client.replyMessage({ replyToken: "reply-token", messages: [message] });
+      }
+
+      expect(received).toHaveLength(lineTemplateMessageScenarios.length * 2);
+      expect(received.every((request) => request.authenticated)).toBe(true);
+      expect(received.every((request) => request.type === "template")).toBe(true);
+      expect(received.every((request) => request.altText === altText)).toBe(true);
+      expect(received.filter((request) => request.path.endsWith("/push"))).toHaveLength(
+        lineTemplateMessageScenarios.length,
+      );
+      expect(received.filter((request) => request.path.endsWith("/reply"))).toHaveLength(
+        lineTemplateMessageScenarios.length,
+      );
+    });
+  });
+
+  it("/card receipt preserves a provider-valid Unicode alternative-text boundary", async () => {
     const registerCommand = (command: unknown) => {
       const { handler } = command as {
         handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
@@ -505,7 +621,7 @@ describe("action label/data surrogate-safe truncation", () => {
     };
     const altText = result.channelData.line.flexMessage.altText;
 
-    expect(altText.length).toBeLessThanOrEqual(400);
+    expect(altText).toBe(`R: ${"a".repeat(395)} 😀x`);
     expect(loneHighSurrogate.test(altText)).toBe(false);
   });
 
@@ -626,11 +742,6 @@ describe("action label/data surrogate-safe truncation", () => {
     };
     expect(carousel.columns[0]?.actions).toEqual([unavailableAction]);
     expect(carousel.columns[0]?.defaultAction).toEqual(unavailableLink);
-
-    const imageCarousel = createImageCarousel([
-      { imageUrl: "https://e.example/image.jpg", action: oversizedPostback },
-    ]).template as { columns: Array<{ action: Action }> };
-    expect(imageCarousel.columns[0]?.action).toEqual(unavailableAction);
   });
 
   it("normalizes every length-constrained raw action field", () => {

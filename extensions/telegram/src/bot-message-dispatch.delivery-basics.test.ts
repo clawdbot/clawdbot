@@ -25,6 +25,29 @@ import type {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
+  it("forwards cfg to direct reply delivery", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    const cfg = {
+      session: { store: "/tmp/telegram-custom-store.json" },
+    } as Parameters<typeof dispatchWithContext>[0]["cfg"];
+
+    await dispatchWithContext({
+      context: createContext(),
+      cfg,
+      streamMode: "off",
+      telegramDeps: {
+        ...telegramDepsForTest,
+        deliverInboundReplyWithMessageSendContext: undefined,
+      },
+    });
+
+    expectDeliverRepliesParams({ cfg });
+  });
+
   it("queues final Telegram replies through outbound delivery when available", async () => {
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
       status: "handled_visible",
@@ -54,7 +77,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
 
     const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
       channel: "telegram",
-      to: "123",
+      to: "telegram:123",
       accountId: "default",
       info: { kind: "final" },
       replyToMode: "first",

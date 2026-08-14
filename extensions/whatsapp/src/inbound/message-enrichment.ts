@@ -5,6 +5,9 @@ import {
   formatLocationText,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { getStatusCode } from "../session-errors.js";
 import {
   describeReplyContext,
   extractContactContext,
@@ -15,6 +18,53 @@ import {
 } from "./extract.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
+
+const inboundMediaLogger = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
+const MAX_MEDIA_ERROR_MESSAGE_CHARS = 256;
+
+function sanitizeMediaErrorMessage(error: unknown): string {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const redacted = redactToolPayloadText(rawMessage)
+    .replace(/https?:\/\/\S+/giu, "[redacted-url]")
+    .replace(/\b[^@\s]+@[a-z][a-z\d.-]*\b/giu, "[redacted-jid]")
+    .replace(/\+?\d[\d ().-]{6,}\d/gu, "[redacted-phone]");
+  return truncateUtf16Safe(
+    redacted.split("\n", 1)[0]?.trim() || "unknown error",
+    MAX_MEDIA_ERROR_MESSAGE_CHARS,
+  );
+}
+
+function logMediaMaterializationFailure(params: {
+  messageId?: string | null;
+  mediaKind?: string;
+  mimeType?: string;
+  failureStage: "direct" | "quoted";
+  error: unknown;
+}): void {
+  const errorClass =
+    params.error instanceof Error && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(params.error.name)
+      ? params.error.name
+      : "Error";
+  const statusCode = getStatusCode(params.error);
+  const errorMessage = sanitizeMediaErrorMessage(params.error);
+  const failureDetails = [
+    `stage=${params.failureStage}`,
+    ...(params.mediaKind ? [`kind=${params.mediaKind}`] : []),
+    ...(typeof statusCode === "number" ? [`status=${statusCode}`] : []),
+  ].join(" ");
+  // One subsystem event keeps the Gateway console and structured file log in sync.
+  inboundMediaLogger.warn("WhatsApp inbound media materialization failed", {
+    channel: "whatsapp",
+    messageId: params.messageId ?? undefined,
+    mediaKind: params.mediaKind,
+    mimeType: params.mimeType,
+    failureStage: params.failureStage,
+    errorClass,
+    ...(typeof statusCode === "number" ? { statusCode } : {}),
+    errorMessage,
+    consoleMessage: `WhatsApp inbound media materialization failed (${failureDetails}): ${errorMessage}`,
+  });
+}
 
 export type WhatsAppEnrichedInboundMessage = {
   body: string;
@@ -77,6 +127,13 @@ export async function enrichWhatsAppInboundMessage(params: {
       await downloadInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes),
     );
   } catch (error) {
+    logMediaMaterializationFailure({
+      messageId: msg.key?.id,
+      mediaKind,
+      mimeType: mediaType,
+      failureStage: "direct",
+      error,
+    });
     params.logVerbose(`Inbound media download failed: ${String(error)}`);
     body = formatInboundMediaUnavailableText({
       body,
@@ -91,6 +148,13 @@ export async function enrichWhatsAppInboundMessage(params: {
       mediaKind = replyContext.media.kind ?? undefined;
       mediaType = mediaType ?? replyContext.media.contentType ?? undefined;
     } catch (error) {
+      logMediaMaterializationFailure({
+        messageId: msg.key?.id,
+        mediaKind: replyContext.media.kind ?? undefined,
+        mimeType: replyContext.media.contentType ?? undefined,
+        failureStage: "quoted",
+        error,
+      });
       params.logVerbose(`Quoted media download failed: ${String(error)}`);
       body = formatInboundMediaUnavailableText({
         body,

@@ -218,6 +218,7 @@ export const synologyChatSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Synology Chat environment credentials" },
+      envVars: ["SYNOLOGY_CHAT_TOKEN"],
     },
   },
   legacyAdapter: synologyChatSetupAdapter,
@@ -294,8 +295,9 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         t("wizard.synologyChat.incomingWebhookHelpUseUrl"),
         t("wizard.synologyChat.incomingWebhookHelpReplies"),
       ],
+      sensitive: true,
       currentValue: ({ cfg, accountId }) => getRawAccountConfig(cfg, accountId).incomingUrl?.trim(),
-      keepPrompt: (value) => t("wizard.synologyChat.incomingWebhookKeep", { value }),
+      keepPrompt: t("wizard.synologyChat.incomingWebhookKeep"),
       validate: ({ value }) => validateWebhookUrl(value),
       applySet: async ({ cfg, accountId, value }) =>
         patchSynologyChatAccountConfig({

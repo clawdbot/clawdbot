@@ -3,10 +3,11 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
-// Host directory browsing for the new-session folder picker. Admin-only on the
-// gateway; listing stays directories-only so the picker never leaks file names.
+// Host directory browsing for the new-session folder picker. Gateway-local
+// write-scope browsing stays inside configured agent workspaces; node and
+// arbitrary host browsing require admin.
 export const FsListDirParamsSchema = closedObject({
-  /** Absolute directory to list; omitted means the selected host's home directory. */
+  /** Absolute directory to list; for non-admin Gateway callers, omission means the first configured agent workspace. */
   path: Type.Optional(NonEmptyString),
   /** Connected node host to browse; omitted means the Gateway host. */
   nodeId: Type.Optional(NonEmptyString),

@@ -24,14 +24,18 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
     return;
   }
-  const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
-    await import("../commands/doctor-gateway-services.js");
+  const {
+    maybeRepairGatewayServiceConfig,
+    maybeResolveDuelingSystemdGatewayScopes,
+    maybeScanExtraGatewayServices,
+  } = await import("../commands/doctor-gateway-services.js");
   const {
     noteMacLaunchAgentOverrides,
     noteMacLaunchctlGatewayEnvOverrides,
     noteMacStaleOpenClawUpdateLaunchdJobs,
   } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
+  await maybeResolveDuelingSystemdGatewayScopes(ctx.runtime, ctx.prompter);
   const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
   ctx.cfg = await maybeRepairGatewayServiceConfig(
     ctx.cfg,
@@ -50,6 +54,11 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
   await noteMacLaunchAgentOverrides();
   await noteMacStaleOpenClawUpdateLaunchdJobs();
   await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
+}
+
+export async function runHostDesktopHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteHostDesktopHealth } = await import("../commands/doctor-host-desktop.js");
+  await noteHostDesktopHealth(ctx.cfg, { prompter: ctx.prompter });
 }
 
 export async function runStartupChannelMaintenanceHealth(
@@ -78,6 +87,16 @@ export async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Prom
   }
   const { noteWebFetchProxyDiagnostic } = await import("../commands/doctor-web-fetch-proxy.js");
   await noteWebFetchProxyDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+}
+
+export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { githubApiToken } = await import("../gateway/control-ui-github-api.js");
+  if (!githubApiToken(ctx.env ?? process.env)) {
+    note(
+      "Set GH_TOKEN in the Gateway environment to enable authenticated GitHub project search, including private repositories.",
+      "GitHub projects",
+    );
+  }
 }
 
 export async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {

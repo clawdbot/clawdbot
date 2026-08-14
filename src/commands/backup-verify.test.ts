@@ -837,6 +837,11 @@ describe("backupVerifyCommand", () => {
             archivePath: `${stateAssetArchivePath}/memory/main.sqlite.reindex-lock.sqlite`,
           },
           {
+            fileName: "reindex-lock.sqlite-wal",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.reindex-lock.sqlite-wal`,
+          },
+          {
             fileName: "reindex-tmp",
             contents: invalidSqlite,
             archivePath: `${stateAssetArchivePath}/memory/main.sqlite.tmp-${transientId}`,

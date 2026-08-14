@@ -1,7 +1,10 @@
 // Provides SQLite transaction helpers with nested savepoints.
 import type { DatabaseSync } from "node:sqlite";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync.js";
+// The cache-state module keeps this lifecycle edge off the kysely value graph
+// so cold control-plane paths using transactions do not load kysely.
+import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 
 const transactionDepthByDatabase = new WeakMap<DatabaseSync, number>();
 
@@ -33,10 +36,6 @@ type SqliteTransactionMode = "deferred" | "immediate";
 function nextSavepointName(): string {
   nextSavepointId += 1;
   return `openclaw_tx_${nextSavepointId}`;
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return Boolean(value && typeof (value as { then?: unknown }).then === "function");
 }
 
 function assertSyncTransactionResult(value: unknown): void {
@@ -79,10 +78,10 @@ export function isSqliteCorruptionError(error: unknown): boolean {
 }
 
 function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined): number {
-  if (options?.busyTimeoutMs === undefined) {
+  if (options?.busyTimeoutMs === undefined || options.busyTimeoutMs <= 0) {
     return DEFAULT_SLOW_BUSY_WAIT_MS;
   }
-  return Math.min(DEFAULT_SLOW_BUSY_WAIT_MS, Math.max(1, options.busyTimeoutMs));
+  return Math.min(DEFAULT_SLOW_BUSY_WAIT_MS, options.busyTimeoutMs);
 }
 
 function slowTransactionHoldThresholdMs(options: SqliteTransactionOptions | undefined): number {

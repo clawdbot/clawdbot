@@ -44,15 +44,15 @@ const EXPECTED_FEATURED_MODELS = [
     contextWindow: 262_144,
     maxTokens: 16_384,
   },
+] as const;
+
+const EXPECTED_DEPRECATED_MODELS = [
   {
     id: "qwen/qwen3.5-397b-a17b",
     name: "Qwen3.5 397B A17B",
     contextWindow: 262_144,
     maxTokens: 32_768,
   },
-] as const;
-
-const EXPECTED_DEPRECATED_MODELS = [
   {
     id: "moonshotai/kimi-k2.5",
     name: "Kimi K2.5",
@@ -152,11 +152,6 @@ describe("nvidia provider catalog", () => {
         reasoning: true,
       },
       { id: "deepseek-ai/deepseek-v4-pro", input: ["text"], reasoning: true },
-      {
-        id: "qwen/qwen3.5-397b-a17b",
-        input: ["text", "image"],
-        reasoning: true,
-      },
     ]);
     expect(provider.models[0]).toMatchObject({
       contextWindow: 1_048_576,
@@ -175,8 +170,11 @@ describe("nvidia provider catalog", () => {
     expect(
       manifest.modelCatalog.providers.nvidia.models
         .filter((model) => "status" in model && model.status === "deprecated")
-        .map((model) => ({ id: model.id, replacedBy: model.replacedBy })),
+        .map((model) =>
+          "replacedBy" in model ? { id: model.id, replacedBy: model.replacedBy } : { id: model.id },
+        ),
     ).toEqual([
+      { id: "qwen/qwen3.5-397b-a17b" },
       { id: "moonshotai/kimi-k2.5", replacedBy: "moonshotai/kimi-k2.6" },
       { id: "z-ai/glm-5.1", replacedBy: "z-ai/glm-5.2" },
       { id: "z-ai/glm5", replacedBy: "z-ai/glm-5.2" },
@@ -283,7 +281,7 @@ describe("nvidia provider catalog", () => {
     ]);
   });
 
-  it("keeps every deprecated exact-reference row out of live catalogs", async () => {
+  it("restores bundled legacy models when NVIDIA republishes them in its featured catalog", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
@@ -303,12 +301,16 @@ describe("nvidia provider catalog", () => {
 
     const live = await buildLiveNvidiaProvider();
     const selectableLive = await buildSelectableLiveNvidiaProvider();
+    const republishedIds = [
+      "minimaxai/minimax-m3",
+      ...EXPECTED_DEPRECATED_MODELS.map((model) => model.id),
+    ];
 
-    expect(live.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
-    expect(selectableLive.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
+    expect(live.models.map((model) => model.id)).toEqual(republishedIds);
+    expect(selectableLive.models.map((model) => model.id)).toEqual(republishedIds);
   });
 
-  it("maps current featured feed metadata for MiniMax, DeepSeek, and Qwen", async () => {
+  it("maps a republished Qwen model from NVIDIA's current featured catalog", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
@@ -485,7 +487,10 @@ describe("nvidia provider catalog", () => {
 
     const provider = await buildLiveNvidiaProvider();
 
-    expect(provider.models.map((model) => model.id)).toEqual(["nvidia/nemotron-3-ultra-550b-a55b"]);
+    expect(provider.models.map((model) => model.id)).toEqual([
+      "nvidia/nemotron-3-ultra-550b-a55b",
+      "minimaxai/minimax-m2.7",
+    ]);
     expect(provider.models[0]).toMatchObject({
       name: "Nemotron 3 Ultra 550B",
       contextWindow: 1_048_576,

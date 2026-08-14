@@ -35,6 +35,8 @@ function mockCronShowPages(readPage: (params: { offset?: number }) => unknown): 
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, params?: { id?: string; offset?: number }) => {
       if (method === "cron.get") {
+        // Mirrors the gateway's stable wire wording; older shipped CLI matchers
+        // parse exactly this form, so the server must not reword it.
         throw Object.assign(new Error(`cron job not found: ${params?.id ?? ""}`), {
           name: "GatewayClientRequestError",
           gatewayCode: "INVALID_REQUEST",
@@ -161,7 +163,7 @@ describe("cron show pagination guard (regression for #83856)", () => {
     }));
     await expect(runCronShow("missing")).rejects.toThrow("exit 1");
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("cron job not found: missing"),
+      expect.stringContaining("automation not found: missing"),
     );
   });
 });
@@ -201,6 +203,40 @@ describe("cron disable hint", () => {
       expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining("openclaw cron list --all"));
     } else {
       expect(stderrWrite).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("cron scheduler status warnings", () => {
+  beforeEach(() => {
+    callGatewayFromCli.mockReset();
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { status: undefined, disabled: false },
+    { status: null, disabled: false },
+    { status: {}, disabled: false },
+    { status: { enabled: true }, disabled: false },
+    { status: { enabled: false }, disabled: true },
+  ])("warns only when scheduler disabled is known ($status)", async ({ status, disabled }) => {
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "cron.status" ? status : { ok: true },
+    );
+
+    await runCronToggle("enable");
+
+    if (disabled) {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("scheduler is disabled"),
+      );
+    } else {
+      expect(defaultRuntime.error).not.toHaveBeenCalled();
     }
   });
 });

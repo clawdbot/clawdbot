@@ -15,9 +15,10 @@ import {
   type OAuthCredentials,
   type OAuthProviderId,
 } from "../../llm/oauth.js";
+import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
-  refreshProviderOAuthCredentialWithPlugin,
+  resolveProviderOAuthCredentialWithPlugin,
 } from "../../plugins/provider-runtime.runtime.js";
 import { secretRefKey } from "../../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
@@ -26,7 +27,6 @@ import {
   SecretSurfaceUnavailableError,
 } from "../../secrets/runtime-degraded-state.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
-import { refreshChutesTokens } from "../chutes-oauth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
   evaluateStoredCredentialEligibility,
@@ -40,7 +40,7 @@ import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import {
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
   hasRuntimeAuthProfileStoreSnapshot,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
@@ -188,19 +188,19 @@ type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
 async function refreshOAuthCredential(
   credential: OAuthCredential,
+  context: { cfg?: OpenClawConfig } = {},
 ): Promise<OAuthCredentials | null> {
-  const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
+  const pluginResult = await resolveProviderOAuthCredentialWithPlugin({
     provider: credential.provider,
-    context: credential,
+    config: context.cfg,
+    credential,
+    refresh: true,
   });
-  if (pluginRefreshed) {
-    return pluginRefreshed;
+  if (pluginResult.status === "available") {
+    return pluginResult.credential;
   }
-
-  if (credential.provider === "chutes") {
-    // Chutes refresh shipped before provider hooks and still covers registry-load
-    // windows where the synchronous hook resolver intentionally returns no owner.
-    return await refreshChutesTokens({ credential });
+  if (pluginResult.status === "configured-unavailable") {
+    throw new OAuthProviderConfiguredUnavailableError(credential.provider);
   }
 
   const oauthProvider = resolveOAuthProvider(credential.provider);
@@ -216,8 +216,9 @@ async function refreshOAuthCredential(
 /** Refresh one OAuth credential and merge provider-returned token fields. */
 export async function refreshOAuthCredentialForRuntime(params: {
   credential: OAuthCredential;
+  cfg?: OpenClawConfig;
 }): Promise<OAuthCredential | null> {
-  const refreshed = await refreshOAuthCredential(params.credential);
+  const refreshed = await refreshOAuthCredential(params.credential, { cfg: params.cfg });
   return refreshed
     ? {
         ...params.credential,
@@ -310,7 +311,7 @@ function resolveRuntimeAuthProfile(params: {
   profile: AuthProfileCredential;
   defaults: SecretDefaults | undefined;
 }): { profile: AuthProfileCredential; published: boolean } {
-  const runtimeProfile = getRuntimeAuthProfileStoreSnapshot(params.agentDir)?.profiles[
+  const runtimeProfile = getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)?.profiles[
     params.profileId
   ];
   const inputRefKey = authProfileSecretRefKey(params.profile, params.defaults);
@@ -513,7 +514,7 @@ export async function resolveApiKeyForProfile(
         params.agentDir !== ownerAgentDir &&
         hasRuntimeAuthProfileStoreSnapshot(params.agentDir)
       ) {
-        const snapshot = getRuntimeAuthProfileStoreSnapshot(params.agentDir);
+        const snapshot = getRuntimeAuthProfileStoreSnapshotCore(params.agentDir);
         const providerKey = resolveProviderIdForAuth(cred.provider);
         if (snapshot?.lastGood?.[providerKey] === profileId) {
           delete snapshot.lastGood[providerKey];

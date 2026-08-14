@@ -18,6 +18,7 @@ import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { runMigrationApply } from "./migrate/apply.js";
+import { applyMigrationItemSelection } from "./migrate/item-selection.js";
 import { formatMigrationPreview } from "./migrate/output.js";
 import { createMigrationPlan, resolveMigrationProvider } from "./migrate/providers.js";
 import {
@@ -49,9 +50,9 @@ import type {
 } from "./migrate/types.js";
 
 function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
-  return applyMigrationPluginSelection(
-    applyMigrationSkillSelection(plan, opts.skills),
-    opts.plugins,
+  return applyMigrationItemSelection(
+    applyMigrationPluginSelection(applyMigrationSkillSelection(plan, opts.skills), opts.plugins),
+    opts.itemIds,
   );
 }
 

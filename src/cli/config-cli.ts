@@ -278,10 +278,15 @@ export async function runConfigUnset(opts: {
   }
 }
 
-async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
+async function runConfigFile(opts: { json?: boolean; runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    runtime.log(resolveConfigPath());
+    const path = resolveConfigPath();
+    if (opts.json) {
+      writeRuntimeJson(runtime, { path });
+      return;
+    }
+    writeRuntimeStdout(runtime, `${path}\n`);
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);
@@ -430,9 +435,9 @@ export function registerConfigCli(program: Command) {
       false,
     )
     .option("--ref-provider <alias>", "SecretRef builder: provider alias")
-    .option("--ref-source <source>", "SecretRef builder: source (env|file|exec)")
+    .option("--ref-source <source>", "SecretRef builder: source (env|file|exec|store)")
     .option("--ref-id <id>", "SecretRef builder: ref id")
-    .option("--provider-source <source>", "Provider builder: source (env|file|exec)")
+    .option("--provider-source <source>", "Provider builder: source (env|file|exec|store)")
     .option(
       "--provider-allowlist <envVar>",
       "Provider builder (env): allowlist entry (repeatable)",
@@ -470,16 +475,6 @@ export function registerConfigCli(program: Command) {
       "Provider builder (exec): trusted directory (repeatable)",
       collectOption,
       [] as string[],
-    )
-    .option(
-      "--provider-allow-insecure-path",
-      "Provider builder (file|exec): bypass strict path permission checks",
-      false,
-    )
-    .option(
-      "--provider-allow-symlink-command",
-      "Provider builder (exec): allow command symlink path",
-      false,
     )
     .option("--batch-json <json>", "Batch mode: JSON array of set operations")
     .option("--batch-file <path>", "Batch mode: read JSON array of set operations from file")
@@ -524,10 +519,15 @@ export function registerConfigCli(program: Command) {
       await runConfigUnset({ path, cliOptions: options });
     });
 
-  cmd.command("file").description("Print the active config file path").action(runConfigFile);
+  cmd
+    .command("file")
+    .description("Print the active config file path")
+    .option("--json", "Output JSON", false)
+    .action((opts: { json?: boolean }) => runConfigFile(opts));
   cmd
     .command("schema")
     .description("Print the JSON schema for openclaw.json")
+    .option("--json", "Output JSON", false)
     .action(runConfigSchema);
   cmd
     .command("validate")

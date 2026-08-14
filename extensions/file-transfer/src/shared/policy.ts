@@ -50,6 +50,7 @@ import path from "node:path";
 import { minimatch } from "minimatch";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type FilePolicyKind = "read" | "write";
 type FilePolicyAskMode = "off" | "on-miss" | "always";
@@ -85,10 +86,7 @@ type NodeFilePolicyConfig = {
 type FilePolicyConfig = Record<string, NodeFilePolicyConfig>;
 
 function asFilePolicyConfig(value: unknown): FilePolicyConfig | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as FilePolicyConfig;
+  return asNullableRecord(value) as FilePolicyConfig | null;
 }
 
 function readFilePolicyConfigFromPluginConfig(pluginConfig: unknown): FilePolicyConfig | null {

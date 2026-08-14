@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { DraftNode } from "./discovery.ts";
 
 type RecentPlaceSource = {
@@ -17,6 +17,7 @@ export function recentPlaces(
   opts: {
     workspace: string;
     execNodes: readonly Pick<DraftNode, "nodeId">[];
+    allowGatewayFolder: (folder: string) => boolean;
   },
 ): RecentPlace[] {
   const knownNodes = new Set(opts.execNodes.map((node) => node.nodeId));
@@ -30,6 +31,7 @@ export function recentPlaces(
     if (
       !folder ||
       (folder === opts.workspace && !execNode) ||
+      (!execNode && !opts.allowGatewayFolder(folder)) ||
       (execNode && !knownNodes.has(execNode))
     ) {
       continue;

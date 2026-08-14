@@ -21,7 +21,11 @@ vi.mock("openclaw/plugin-sdk/state-paths", () => ({
 }));
 
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/core";
-import { fetchCopilotModelCatalog, resolveCopilotForwardCompatModel } from "./models.js";
+import {
+  fetchCopilotModelCatalog,
+  resolveCopilotForwardCompatModel,
+  selectCopilotStarterModel,
+} from "./models.js";
 
 function createMockCtx(
   modelId: string,
@@ -604,6 +608,90 @@ describe("fetchCopilotModelCatalog", () => {
       },
     ],
   };
+
+  function selectableModelEntry(params: {
+    id: string;
+    category?: string;
+    contextWindow?: number;
+    maxTokens?: number;
+    pickerEnabled?: boolean;
+    policyState?: string;
+    preview?: boolean;
+    streaming?: boolean | "omit";
+    toolCalls?: boolean;
+  }) {
+    return {
+      id: params.id,
+      name: params.id,
+      object: "model",
+      model_picker_enabled: params.pickerEnabled ?? true,
+      model_picker_category: params.category ?? "versatile",
+      policy: { state: params.policyState ?? "enabled" },
+      preview: params.preview ?? false,
+      capabilities: {
+        type: "chat",
+        limits: {
+          max_context_window_tokens: params.contextWindow ?? 200_000,
+          max_output_tokens: params.maxTokens ?? 64_000,
+        },
+        supports: {
+          ...(params.streaming === "omit" ? {} : { streaming: params.streaming ?? true }),
+          tool_calls: params.toolCalls ?? true,
+        },
+      },
+    };
+  }
+
+  async function fetchSelectionFixture(data: unknown[]) {
+    return await fetchCopilotModelCatalog({
+      copilotApiToken: "tid=test",
+      baseUrl: "https://api.githubcopilot.com",
+      fetchImpl: vi.fn().mockResolvedValue(makeResponse(200, { data })) as unknown as typeof fetch,
+    });
+  }
+
+  it("selects the preferred model only when the authenticated catalog marks it eligible", async () => {
+    const models = await fetchSelectionFixture([
+      selectableModelEntry({ id: "fallback", contextWindow: 1_000_000 }),
+      selectableModelEntry({ id: "preferred", category: "powerful" }),
+    ]);
+
+    expect(selectCopilotStarterModel(models, "preferred")?.id).toBe("preferred");
+  });
+
+  it("uses a deterministic eligible fallback when the preferred model is policy-disabled", async () => {
+    const entries = [
+      selectableModelEntry({ id: "preferred", policyState: "disabled" }),
+      selectableModelEntry({ id: "preview", preview: true, contextWindow: 1_000_000 }),
+      selectableModelEntry({ id: "powerful", category: "powerful", contextWindow: 1_000_000 }),
+      selectableModelEntry({ id: "versatile-b", contextWindow: 400_000 }),
+      selectableModelEntry({ id: "versatile-a", contextWindow: 400_000 }),
+    ];
+    const forward = await fetchSelectionFixture(entries);
+    const reversed = await fetchSelectionFixture(entries.toReversed());
+
+    expect(selectCopilotStarterModel(forward, "preferred")?.id).toBe("versatile-a");
+    expect(selectCopilotStarterModel(reversed, "preferred")?.id).toBe("versatile-a");
+  });
+
+  it("rejects hidden, unconfigured, non-streaming, and tool-less setup candidates", async () => {
+    const models = await fetchSelectionFixture([
+      selectableModelEntry({ id: "hidden", pickerEnabled: false }),
+      selectableModelEntry({ id: "unconfigured", policyState: "unconfigured" }),
+      selectableModelEntry({ id: "no-stream", streaming: false }),
+      selectableModelEntry({ id: "no-tools", toolCalls: false }),
+    ]);
+
+    expect(selectCopilotStarterModel(models, "hidden")).toBeUndefined();
+  });
+
+  it("does not treat omitted streaming metadata as an explicit lack of support", async () => {
+    const models = await fetchSelectionFixture([
+      selectableModelEntry({ id: "omitted-streaming", streaming: "omit" }),
+    ]);
+
+    expect(selectCopilotStarterModel(models, "omitted-streaming")?.id).toBe("omitted-streaming");
+  });
 
   it("maps Copilot /models entries to ModelDefinitionConfig with real context windows", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, sampleApiResponse));

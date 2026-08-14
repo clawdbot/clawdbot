@@ -1,8 +1,9 @@
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
+import { recordTaskActivityEvent } from "./task-registry-activity.js";
 import {
   appendTaskEvent,
-  buildTaskLifecycleTerminalOutcome,
   mapAgentRunTerminalOutcomeToTaskStatus,
   resolveTaskLifecycleTerminalError,
 } from "./task-registry-common.js";
@@ -19,6 +20,9 @@ import {
   setTaskRegistryListenerStop,
 } from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
+
+// Keep durable liveness well inside the 30-minute stale-task audit without writing every delta.
+const ACTIVITY_LIVENESS_WRITE_MS = 60_000;
 
 function ensureListener() {
   if (!claimTaskRegistryListenerStart()) {
@@ -38,6 +42,13 @@ function ensureListener() {
       if (isTerminalTaskStatus(current.status)) {
         continue;
       }
+      if (recordTaskActivityEvent(current, evt)) {
+        const lastEventAt = current.lastEventAt ?? current.startedAt ?? current.createdAt;
+        if (now - lastEventAt >= ACTIVITY_LIVENESS_WRITE_MS) {
+          updateTask(current.taskId, { lastEventAt: now });
+        }
+        continue;
+      }
       const patch: Partial<TaskRecord> = {
         lastEventAt: now,
       };
@@ -55,7 +66,7 @@ function ensureListener() {
         if (phase === "start") {
           patch.status = "running";
         } else if (phase === "end") {
-          const terminal = buildTaskLifecycleTerminalOutcome({
+          const terminal = buildAgentRunTerminalOutcomeFromLifecycleEvent({
             phase,
             data: evt.data,
             startedAt,
@@ -66,13 +77,14 @@ function ensureListener() {
           const error = resolveTaskLifecycleTerminalError({
             runtime: current.runtime,
             status: patch.status,
+            terminalReason: terminal.reason,
             error: terminal.error,
           });
           if (error) {
             patch.error = error;
           }
         } else if (phase === "error") {
-          const terminal = buildTaskLifecycleTerminalOutcome({
+          const terminal = buildAgentRunTerminalOutcomeFromLifecycleEvent({
             phase,
             data: evt.data,
             startedAt,
@@ -84,6 +96,7 @@ function ensureListener() {
             resolveTaskLifecycleTerminalError({
               runtime: current.runtime,
               status: patch.status,
+              terminalReason: terminal.reason,
               error: terminal.error,
             }) ?? current.error;
         }

@@ -13,15 +13,12 @@ import {
 } from "../cli/program/command-descriptor-utils.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
+  isPrivateNodeInvokeCommand,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
+  NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
-import {
-  isReservedCommandName,
-  registerPluginCommand,
-  validatePluginCommandDefinition,
-} from "./command-registration.js";
-import { pluginCommands } from "./command-registry-state.js";
+import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import type {
@@ -60,7 +57,7 @@ function canClaimReservedCommandOwnership(
 }
 
 export function createOperationRegistrars(state: PluginRegistryState) {
-  const { registry, registryParams, pushDiagnostic } = state;
+  const { registry, pushDiagnostic } = state;
 
   const registerCli = (
     record: PluginRecord,
@@ -191,6 +188,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     ...NODE_SYSTEM_RUN_COMMANDS,
     ...NODE_EXEC_APPROVALS_COMMANDS,
     NODE_SYSTEM_NOTIFY_COMMAND,
+    ...NODE_WORKER_PRIVATE_COMMANDS,
   ]);
 
   const registerNodeHostCommand = (
@@ -253,6 +251,16 @@ export function createOperationRegistrars(state: PluginRegistryState) {
         pluginId: record.id,
         source: record.source,
         message: "node invoke policy registration missing commands",
+      });
+      return;
+    }
+    const reservedCommand = commands.find(isPrivateNodeInvokeCommand);
+    if (reservedCommand) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `node invoke policy command reserved by core: ${reservedCommand}`,
       });
       return;
     }
@@ -403,56 +411,36 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (!registryParams.activateGlobalSideEffects) {
-      const validationError = validatePluginCommandDefinition(command, {
+    const { ownership: _ownership, ...commandForRegistration } = command;
+    void _ownership;
+    const result = registerPluginCommandInRegistry(
+      registry,
+      record.id,
+      allowReservedCommandNames ? commandForRegistration : command,
+      {
+        pluginName: record.name,
+        pluginRoot: record.rootDir,
         allowReservedCommandNames,
+        allowOwnerStatusExposure: canClaimReservedCommandOwnership(record),
+      },
+    );
+    if (!result.ok) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `command registration failed: ${result.error}`,
       });
-      if (validationError) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `command registration failed: ${validationError}`,
-        });
-        return;
-      }
-    } else {
-      const { ownership: _ownership, ...commandForRegistration } = command;
-      void _ownership;
-      const result = registerPluginCommand(
-        record.id,
-        allowReservedCommandNames ? commandForRegistration : command,
-        {
-          pluginName: record.name,
-          pluginRoot: record.rootDir,
-          allowReservedCommandNames,
-          allowOwnerStatusExposure: canClaimReservedCommandOwnership(record),
-        },
-      );
-      if (!result.ok) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `command registration failed: ${result.error}`,
-        });
-        return;
-      }
+      return;
+    }
+    const registered = registry.commands.at(-1);
+    if (registered?.pluginId === record.id) {
+      registered.source = record.source;
       if (allowReservedCommandNames) {
-        const registeredCommand = pluginCommands.get(`/${name.toLowerCase()}`);
-        if (registeredCommand?.pluginId === record.id) {
-          registeredCommand.ownership = "reserved";
-        }
+        registered.command.ownership = "reserved";
       }
     }
     record.commands.push(name);
-    registry.commands.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      command,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
   };
 
   return {

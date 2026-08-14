@@ -12,7 +12,6 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
@@ -48,6 +47,7 @@ import {
 import { bindSimpleCompletionModelResolverWorkspace } from "../../agents/simple-completion-scope.js";
 import { normalizeUsage, hasNonzeroUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
@@ -68,6 +68,7 @@ import type {
 } from "../../llm/types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import {
   projectWorkerInferenceTerminalMessage,
   type WorkerInferenceModelIdentity,
@@ -145,11 +146,12 @@ const ERROR_MESSAGES = {
 function inferenceError(
   reason: Extract<WorkerInferenceTerminalOutcome, { type: "error" }>["reason"],
   usage?: Usage,
+  message: string = ERROR_MESSAGES[reason],
 ): WorkerInferenceTerminalOutcome {
   return {
     type: "error",
     reason,
-    message: ERROR_MESSAGES[reason],
+    message,
     ...(usage ? { usage: structuredClone(usage) } : {}),
   };
 }
@@ -365,10 +367,7 @@ function resolveReturnedProfileSource(
   if (entry.authProfileOverride?.trim() !== profileId) {
     return "auto";
   }
-  return (
-    entry.authProfileOverrideSource ??
-    (typeof entry.authProfileOverrideCompactionCount === "number" ? "auto" : "user")
-  );
+  return resolveSessionAuthProfileOverrideSource(entry);
 }
 
 async function resolveApprovedModel(params: {
@@ -397,7 +396,6 @@ async function resolveApprovedModel(params: {
     config,
     agentId: target.agentId,
     agentDir: resolveAgentDir(config, target.agentId),
-    inheritedAuthDir: resolveDefaultAgentDir(config),
   });
   const runtimeSnapshot = runtimeLease.snapshot;
   try {
@@ -768,14 +766,31 @@ export function createWorkerInferenceExecutor(
             if (!toolCalls.matchesTerminal(event.message)) {
               return inferenceError("provider-error");
             }
-            return {
-              type: "done",
-              message: projectWorkerInferenceTerminalMessage({
-                message: event.message,
-                modelIdentity,
-                stopReason: event.reason,
-              }),
-            };
+            const terminal = projectWorkerInferenceTerminalMessage({
+              message: event.message,
+              modelIdentity,
+              stopReason: event.reason,
+            });
+            if (terminal.kind === "provider-replay-unavailable") {
+              if (isDiagnosticsEnabled(approved.config)) {
+                const { bytes, limitBytes, reason } = terminal.details;
+                emitTrustedDiagnosticEvent({
+                  type: "payload.large",
+                  surface: "worker.provider-replay",
+                  action: "rejected",
+                  bytes,
+                  limitBytes,
+                  reason,
+                  trace: freezeDiagnosticTraceContext(trace),
+                });
+              }
+              return inferenceError(
+                "provider-error",
+                event.message.usage,
+                WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
+              );
+            }
+            return { type: "done", message: terminal.message };
           }
           if (event.type === "error") {
             recordUsage(event.error.usage);

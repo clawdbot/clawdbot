@@ -20,35 +20,29 @@ import {
   ctx,
   repairCtx,
   runPolicyChecks,
+  runPolicyChecksFixture,
   runDeniedChannelRepair,
   runPolicyRepairCheck,
-  describe0BeforeEach0,
-  describe0AfterEach1,
+  setupPolicyDoctorTest,
+  teardownPolicyDoctorTest,
+  writePolicyFixture,
 } from "./register.test-harness.js";
 
 describe("registerPolicyDoctorChecks", () => {
-  beforeEach(describe0BeforeEach0);
+  beforeEach(setupPolicyDoctorTest);
 
-  afterEach(describe0AfterEach1);
+  afterEach(teardownPolicyDoctorTest);
 
   it("allows scoped overrides that are stricter than top-level policy", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        tools: { exec: { allowHosts: ["sandbox", "node"] } },
-        scopes: {
-          sebby: {
-            agentIds: ["sebby"],
-            tools: { exec: { allowHosts: ["sandbox"] } },
-          },
+    const result = await runPolicyChecksFixture({
+      tools: { exec: { allowHosts: ["sandbox", "node"] } },
+      scopes: {
+        sebby: {
+          agentIds: ["sebby"],
+          tools: { exec: { allowHosts: ["sandbox"] } },
         },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+      },
+    });
 
     expect(result.findings).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ checkId: "policy/policy-jsonc-invalid" })]),
@@ -56,23 +50,15 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("allows scoped allowlists when an empty top-level allowlist is disabled", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        tools: { exec: { allowHosts: [] } },
-        scopes: {
-          sebby: {
-            agentIds: ["sebby"],
-            tools: { exec: { allowHosts: ["sandbox"] } },
-          },
+    const result = await runPolicyChecksFixture({
+      tools: { exec: { allowHosts: [] } },
+      scopes: {
+        sebby: {
+          agentIds: ["sebby"],
+          tools: { exec: { allowHosts: ["sandbox"] } },
         },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+      },
+    });
 
     expect(result.findings).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ checkId: "policy/policy-jsonc-invalid" })]),
@@ -80,23 +66,15 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("allows scoped denyTools groups that cover top-level required denies", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        tools: { denyTools: ["exec"] },
-        scopes: {
-          sebby: {
-            agentIds: ["sebby"],
-            tools: { denyTools: ["group:runtime"] },
-          },
+    const result = await runPolicyChecksFixture({
+      tools: { denyTools: ["exec"] },
+      scopes: {
+        sebby: {
+          agentIds: ["sebby"],
+          tools: { denyTools: ["group:runtime"] },
         },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+      },
+    });
 
     expect(result.findings).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ checkId: "policy/policy-jsonc-invalid" })]),
@@ -104,23 +82,15 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("allows scoped sandbox container requirements that match top-level policy", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        sandbox: { containers: { denyHostNetwork: true } },
-        scopes: {
-          sebby: {
-            agentIds: ["sebby"],
-            sandbox: { containers: { denyHostNetwork: true } },
-          },
+    const result = await runPolicyChecksFixture({
+      sandbox: { containers: { denyHostNetwork: true } },
+      scopes: {
+        sebby: {
+          agentIds: ["sebby"],
+          sandbox: { containers: { denyHostNetwork: true } },
         },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+      },
+    });
 
     expect(result.findings).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ checkId: "policy/policy-jsonc-invalid" })]),
@@ -128,23 +98,15 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("rejects scoped sandbox container policies weaker than top-level requirements", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        sandbox: { containers: { denyHostNetwork: true } },
-        scopes: {
-          sebby: {
-            agentIds: ["sebby"],
-            sandbox: { containers: { denyHostNetwork: false } },
-          },
+    const result = await runPolicyChecksFixture({
+      sandbox: { containers: { denyHostNetwork: true } },
+      scopes: {
+        sebby: {
+          agentIds: ["sebby"],
+          sandbox: { containers: { denyHostNetwork: false } },
         },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+      },
+    });
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -157,23 +119,15 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("rejects scoped overrides that are weaker than top-level policy", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        tools: { exec: { allowHosts: ["sandbox"] } },
-        scopes: {
-          sebby: {
-            agentIds: ["sebby"],
-            tools: { exec: { allowHosts: ["sandbox", "node"] } },
-          },
+    const result = await runPolicyChecksFixture({
+      tools: { exec: { allowHosts: ["sandbox"] } },
+      scopes: {
+        sebby: {
+          agentIds: ["sebby"],
+          tools: { exec: { allowHosts: ["sandbox", "node"] } },
         },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+      },
+    });
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -186,26 +140,18 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("allows overlapping scoped fields when later scopes are stricter", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        scopes: {
-          team: {
-            agentIds: ["sebby"],
-            tools: { exec: { allowHosts: ["sandbox", "node"] } },
-          },
-          lockdown: {
-            agentIds: ["sebby"],
-            tools: { exec: { allowHosts: ["sandbox"] } },
-          },
+    const result = await runPolicyChecksFixture({
+      scopes: {
+        team: {
+          agentIds: ["sebby"],
+          tools: { exec: { allowHosts: ["sandbox", "node"] } },
         },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+        lockdown: {
+          agentIds: ["sebby"],
+          tools: { exec: { allowHosts: ["sandbox"] } },
+        },
+      },
+    });
 
     expect(result.findings).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ checkId: "policy/policy-jsonc-invalid" })]),
@@ -213,26 +159,18 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("rejects overlapping scoped fields when later scopes are weaker", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        scopes: {
-          lockdown: {
-            agentIds: ["sebby"],
-            tools: { exec: { allowHosts: ["sandbox"] } },
-          },
-          team: {
-            agentIds: ["sebby"],
-            tools: { exec: { allowHosts: ["sandbox", "node"] } },
-          },
+    const result = await runPolicyChecksFixture({
+      scopes: {
+        lockdown: {
+          agentIds: ["sebby"],
+          tools: { exec: { allowHosts: ["sandbox"] } },
         },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+        team: {
+          agentIds: ["sebby"],
+          tools: { exec: { allowHosts: ["sandbox", "node"] } },
+        },
+      },
+    });
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -359,11 +297,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports invalid policy files as errors", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(join(workspaceDir, "policy.jsonc"), "{ channels: ", "utf-8");
-
-    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+    const result = await runPolicyChecksFixture("{ channels: ");
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -375,15 +309,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports malformed channel deny rules as policy errors", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ channels: { denyRules: [{ when: {} }] } }),
-      "utf-8",
-    );
-
-    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+    const result = await runPolicyChecksFixture({ channels: { denyRules: [{ when: {} }] } });
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -750,11 +676,7 @@ describe("registerPolicyDoctorChecks", () => {
     ["auth array", { auth: [] }, "oc://policy.jsonc/auth"],
     ["auth profiles array", { auth: { profiles: [] } }, "oc://policy.jsonc/auth/profiles"],
   ])("reports malformed policy shape for %s", async (_label, policy, target) => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
-
-    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+    const result = await runPolicyChecksFixture(policy);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -942,13 +864,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports a policy hash mismatch when expectedHash is configured", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ channels: { denyRules: [] } }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({ channels: { denyRules: [] } });
 
     const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ expectedHash: "sha256:not-the-policy" })),
@@ -964,21 +880,15 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not emit repairable channel findings when the policy hash is not accepted", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ expectedHash: "sha256:not-the-policy", workspaceRepairs: true }),
       channels: { telegram: { enabled: true } },
     } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        channels: {
-          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-        },
-      }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({
+      channels: {
+        denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
+      },
+    });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
@@ -988,10 +898,8 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("accepts a policy file that matches the configured expectedHash", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const policy = { channels: { denyRules: [] } };
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+    const configPath = await writePolicyFixture(policy);
 
     const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ expectedHash: policyDocumentHash(policy) })),
@@ -1001,13 +909,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports an attestation mismatch when expectedAttestationHash is configured", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ channels: { denyRules: [] } }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({ channels: { denyRules: [] } });
 
     const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ expectedAttestationHash: "sha256:not-current" })),
@@ -1023,13 +925,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports policy validation errors before attestation drift", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ channels: { denyRules: [{ when: {} }] } }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({ channels: { denyRules: [{ when: {} }] } });
 
     const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ expectedAttestationHash: "sha256:not-current" })),
@@ -1044,21 +940,15 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not emit repairable channel findings when the accepted attestation changed", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ expectedAttestationHash: "sha256:not-current", workspaceRepairs: true }),
       channels: { telegram: { enabled: true } },
     } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        channels: {
-          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-        },
-      }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({
+      channels: {
+        denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
+      },
+    });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
@@ -1068,7 +958,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("accepts a policy check that matches the configured expectedAttestationHash", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const policy = { channels: { denyRules: [] } };
     const policyHash = policyDocumentHash(policy);
     const acceptedAttestationHash = createPolicyAttestation({
@@ -1091,8 +980,7 @@ describe("registerPolicyDoctorChecks", () => {
       ),
       findings: [],
     }).attestationHash;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+    const configPath = await writePolicyFixture(policy);
 
     const result = await runPolicyChecks(
       ctx(configPath, cfgWithPolicy({ expectedAttestationHash: acceptedAttestationHash })),
@@ -1102,7 +990,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not include unrelated AGENTS.md tool evidence in channel-only attestations", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const policy = { channels: { denyRules: [] } };
     const policyHash = policyDocumentHash(policy);
     const acceptedAttestationHash = createPolicyAttestation({
@@ -1125,8 +1012,7 @@ describe("registerPolicyDoctorChecks", () => {
       ),
       findings: [],
     }).attestationHash;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+    const configPath = await writePolicyFixture(policy);
     await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
     const result = await runPolicyChecks(
@@ -1137,7 +1023,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not include unrelated secret or auth evidence in channel-only attestations", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const policy = { channels: { denyRules: [] } };
     const policyHash = policyDocumentHash(policy);
     const acceptedAttestationHash = createPolicyAttestation({
@@ -1184,8 +1069,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+    const configPath = await writePolicyFixture(policy);
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
@@ -1210,7 +1094,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("includes global and per-agent alsoAllow in tool posture attestations", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const policy = { tools: { profiles: { allow: ["messaging"] } } };
     const baselineConfig = {
       tools: { profile: "messaging" },
@@ -1243,8 +1126,7 @@ describe("registerPolicyDoctorChecks", () => {
         ],
       },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+    const configPath = await writePolicyFixture(policy);
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
@@ -1275,30 +1157,24 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports configured channels denied by policy", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       channels: { telegram: { enabled: true } },
     } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify(
-        {
-          channels: {
-            denyRules: [
-              {
-                id: "no-telegram",
-                when: { provider: "telegram" },
-                reason: "Telegram is not approved for this workspace.",
-              },
-            ],
-          },
+    const configPath = await writePolicyFixture(
+      {
+        channels: {
+          denyRules: [
+            {
+              id: "no-telegram",
+              when: { provider: "telegram" },
+              reason: "Telegram is not approved for this workspace.",
+            },
+          ],
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      },
+      null,
+      2,
     );
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
@@ -1321,24 +1197,18 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs denied enabled channels by disabling them when workspace repairs are enabled", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       channels: { telegram: { enabled: true } },
     } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify(
-        {
-          channels: {
-            denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-          },
+    const configPath = await writePolicyFixture(
+      {
+        channels: {
+          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      },
+      null,
+      2,
     );
 
     const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
@@ -1349,24 +1219,18 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not repair denied channels without workspace repair opt-in", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: false }),
       channels: { telegram: { enabled: true } },
     } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify(
-        {
-          channels: {
-            denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-          },
+    const configPath = await writePolicyFixture(
+      {
+        channels: {
+          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      },
+      null,
+      2,
     );
 
     const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
@@ -1379,25 +1243,19 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not let policy.jsonc enable workspace repairs", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       channels: { telegram: { enabled: true } },
     } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify(
-        {
-          workspaceRepairs: true,
-          channels: {
-            denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-          },
+    const configPath = await writePolicyFixture(
+      {
+        workspaceRepairs: true,
+        channels: {
+          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      },
+      null,
+      2,
     );
 
     const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
@@ -1410,17 +1268,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("dry-runs automatic policy narrowing repairs without mutating config", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       tools: { elevated: { enabled: true } },
     } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { elevated: { allow: false } } }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({ tools: { elevated: { allow: false } } });
 
     const result = await runPolicyRepairCheck("policy/tools-elevated-enabled", {
       ...repairCtx(configPath, cfg),
@@ -1434,17 +1286,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not repair automatic policy narrowing config without workspace repair opt-in", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       tools: { elevated: { enabled: true } },
     } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { elevated: { allow: false } } }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({ tools: { elevated: { allow: false } } });
 
     const result = await runPolicyRepairCheck(
       "policy/tools-elevated-enabled",
@@ -1461,7 +1307,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not over-apply scoped elevated policy findings globally", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       agents: {
@@ -1473,19 +1318,14 @@ describe("registerPolicyDoctorChecks", () => {
         ],
       },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        scopes: {
-          reviewer: {
-            agentIds: ["reviewer"],
-            tools: { elevated: { allow: false } },
-          },
+    const configPath = await writePolicyFixture({
+      scopes: {
+        reviewer: {
+          agentIds: ["reviewer"],
+          tools: { elevated: { allow: false } },
         },
-      }),
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runPolicyRepairCheck(
       "policy/tools-elevated-enabled",
@@ -1502,7 +1342,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("skips scoped elevated repairs that inherit shared global tools config", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       tools: { elevated: { enabled: true } },
@@ -1510,19 +1349,14 @@ describe("registerPolicyDoctorChecks", () => {
         list: [{ id: "reviewer" }],
       },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        scopes: {
-          reviewer: {
-            agentIds: ["reviewer"],
-            tools: { elevated: { allow: false } },
-          },
+    const configPath = await writePolicyFixture({
+      scopes: {
+        reviewer: {
+          agentIds: ["reviewer"],
+          tools: { elevated: { allow: false } },
         },
-      }),
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runPolicyRepairCheck(
       "policy/tools-elevated-enabled",
@@ -1539,7 +1373,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs automatic policy narrowing config findings", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       tools: { elevated: { enabled: true } },
@@ -1552,21 +1385,16 @@ describe("registerPolicyDoctorChecks", () => {
       },
       diagnostics: { otel: { enabled: true, captureContent: true } },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        tools: { elevated: { allow: false } },
-        gateway: {
-          controlUi: { allowInsecure: false },
-          remote: { allow: false },
-        },
-        dataHandling: {
-          telemetry: { denyContentCapture: true },
-        },
-      }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({
+      tools: { elevated: { allow: false } },
+      gateway: {
+        controlUi: { allowInsecure: false },
+        remote: { allow: false },
+      },
+      dataHandling: {
+        telemetry: { denyContentCapture: true },
+      },
+    });
 
     const elevated = await runPolicyRepairCheck(
       "policy/tools-elevated-enabled",
@@ -1611,7 +1439,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs denied gateway HTTP endpoint findings", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       gateway: {
@@ -1630,19 +1457,14 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        gateway: {
-          http: {
-            denyEndpoints: ["chatCompletions", "responses"],
-            requireUrlAllowlists: true,
-          },
+    const configPath = await writePolicyFixture({
+      gateway: {
+        http: {
+          denyEndpoints: ["chatCompletions", "responses"],
+          requireUrlAllowlists: true,
         },
-      }),
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runPolicyRepairCheck(
       "policy/gateway-http-endpoint-enabled",
@@ -1669,17 +1491,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("previews review-required gateway bind repair without mutating config", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       gateway: { bind: "lan" },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ gateway: { exposure: { allowNonLoopbackBind: false } } }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({
+      gateway: { exposure: { allowNonLoopbackBind: false } },
+    });
 
     const result = await runPolicyRepairCheck(
       "policy/gateway-non-loopback-bind",
@@ -1707,17 +1525,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("previews review-required custom gateway bind repair without mutating config", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       gateway: { bind: "custom", customBindHost: "10.0.0.4" },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ gateway: { exposure: { allowNonLoopbackBind: false } } }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({
+      gateway: { exposure: { allowNonLoopbackBind: false } },
+    });
 
     const result = await runPolicyRepairCheck(
       "policy/gateway-non-loopback-bind",
@@ -1752,17 +1566,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("previews review-required gateway node command repairs without mutating config", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       gateway: { nodes: { commands: { deny: ["mcp.help"] } } },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ gateway: { nodes: { denyCommands: ["mcp.help", "system.run"] } } }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({
+      gateway: { nodes: { denyCommands: ["mcp.help", "system.run"] } },
+    });
 
     const result = await runPolicyRepairCheck(
       "policy/gateway-node-command-denied",
@@ -1790,7 +1600,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs automatic channel ingress narrowing findings", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       channels: {
@@ -1807,19 +1616,14 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          channels: {
-            denyOpenGroups: true,
-            requireMentionInGroups: true,
-          },
+    const configPath = await writePolicyFixture({
+      ingress: {
+        channels: {
+          denyOpenGroups: true,
+          requireMentionInGroups: true,
         },
-      }),
-      "utf-8",
-    );
+      },
+    });
 
     const openGroups = await runPolicyRepairCheck(
       "policy/ingress-open-groups-denied",
@@ -1854,7 +1658,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs quoted channel ingress paths without splitting slash segments", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       channels: {
@@ -1863,18 +1666,13 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          channels: {
-            requireMentionInGroups: true,
-          },
+    const configPath = await writePolicyFixture({
+      ingress: {
+        channels: {
+          requireMentionInGroups: true,
         },
-      }),
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runPolicyRepairCheck(
       "policy/ingress-group-mention-required",
@@ -1896,7 +1694,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("skips scoped channel ingress repairs that would mutate inherited defaults", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       channels: {
@@ -1904,23 +1701,18 @@ describe("registerPolicyDoctorChecks", () => {
         telegram: {},
       },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        scopes: {
-          telegram: {
-            channelIds: ["telegram"],
-            ingress: {
-              channels: {
-                denyOpenGroups: true,
-              },
+    const configPath = await writePolicyFixture({
+      scopes: {
+        telegram: {
+          channelIds: ["telegram"],
+          ingress: {
+            channels: {
+              denyOpenGroups: true,
             },
           },
         },
-      }),
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runPolicyRepairCheck(
       "policy/ingress-open-groups-denied",
@@ -1945,23 +1737,17 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not repair channel ingress config without workspace repair opt-in", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       channels: { telegram: { groupPolicy: "open" } },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          channels: {
-            denyOpenGroups: true,
-          },
+    const configPath = await writePolicyFixture({
+      ingress: {
+        channels: {
+          denyOpenGroups: true,
         },
-      }),
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runPolicyRepairCheck(
       "policy/ingress-open-groups-denied",
@@ -1978,17 +1764,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("dry-runs required tool deny repairs without mutating config", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       tools: { deny: ["read"] },
     } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { denyTools: ["exec", "write"] } }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({ tools: { denyTools: ["exec", "write"] } });
 
     const result = await runPolicyRepairCheck("policy/tools-required-deny-missing", {
       ...repairCtx(configPath, cfg),

@@ -38,7 +38,7 @@ describe("heartbeat wake target concurrency", () => {
     vi.restoreAllMocks();
   });
 
-  it("flushes target wakes before an unscoped barrier that was originally queued first", async () => {
+  it("holds a post-barrier target while an earlier unscoped wake coalesces", async () => {
     vi.useFakeTimers();
     const handler = vi.fn(async (_request: WakeRequest) => ({
       status: "ran" as const,
@@ -59,18 +59,18 @@ describe("heartbeat wake target concurrency", () => {
       agentId: "main",
       sessionKey: "agent:main:guildchat:channel:123",
     });
-    requestHeartbeat({
-      source: "other",
-      intent: "immediate",
-      reason: "test-global-flush",
-      coalesceMs: 0,
-    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(handler).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
 
     expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "test-delayed-global-flush",
+    ]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "test-delayed-global-flush",
       "background-task",
-      "test-global-flush",
     ]);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
@@ -156,6 +156,120 @@ describe("heartbeat wake target concurrency", () => {
       await vi.advanceTimersByTimeAsync(0);
     }
 
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("serializes redundant agent-plus-session identity with the same canonical session", async () => {
+    vi.useFakeTimers();
+    let finishFirstWake: (() => void) | undefined;
+    const firstWakeFinished = new Promise<void>((resolve) => {
+      finishFirstWake = resolve;
+    });
+    const handler = vi.fn(async (request: WakeRequest) => {
+      if (request.reason === "session-only") {
+        await firstWakeFinished;
+      }
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler);
+    const sessionKey = "agent:main:guildchat:channel:123";
+
+    requestHeartbeat({
+      source: "cron",
+      intent: "event",
+      reason: "session-only",
+      sessionKey,
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    requestHeartbeat({
+      source: "cron",
+      intent: "event",
+      reason: "redundant-agent",
+      agentId: "main",
+      sessionKey,
+      coalesceMs: 0,
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler.mock.calls.map(([request]) => request.reason)).toEqual(["session-only"]);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    } finally {
+      finishFirstWake?.();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "session-only",
+      "redundant-agent",
+    ]);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("runs an unscoped wake as an exclusive barrier between targeted groups", async () => {
+    vi.useFakeTimers();
+    let finishBeforeBarrier: (() => void) | undefined;
+    let finishBarrier: (() => void) | undefined;
+    const beforeBarrierFinished = new Promise<void>((resolve) => {
+      finishBeforeBarrier = resolve;
+    });
+    const barrierFinished = new Promise<void>((resolve) => {
+      finishBarrier = resolve;
+    });
+    const handler = vi.fn(async (request: WakeRequest) => {
+      if (request.reason === "before-barrier") {
+        await beforeBarrierFinished;
+      } else if (request.reason === "global-barrier") {
+        await barrierFinished;
+      }
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat({
+      source: "cron",
+      intent: "event",
+      reason: "before-barrier",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    requestHeartbeat({
+      source: "other",
+      intent: "immediate",
+      reason: "global-barrier",
+      coalesceMs: 0,
+    });
+    for (const agentId of ["ops", "support"]) {
+      requestHeartbeat({
+        source: "cron",
+        intent: "event",
+        reason: `after-barrier:${agentId}`,
+        sessionKey: `agent:${agentId}:main`,
+        coalesceMs: 0,
+      });
+    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual(["before-barrier"]);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    finishBeforeBarrier?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "before-barrier",
+      "global-barrier",
+    ]);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    finishBarrier?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler.mock.calls.map(([request]) => request.reason)).toEqual([
+      "before-barrier",
+      "global-barrier",
+      "after-barrier:ops",
+      "after-barrier:support",
+    ]);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
@@ -304,6 +418,63 @@ describe("heartbeat wake target concurrency", () => {
 
     expect(newHandler).toHaveBeenCalledTimes(8);
     expect(peakActiveWakeCount).toBe(4);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("aborts the disposed generation without letting its stale disposer abort a replacement", async () => {
+    vi.useFakeTimers();
+    let finishOldWake: (() => void) | undefined;
+    let finishNewWake: (() => void) | undefined;
+    const oldWakeFinished = new Promise<void>((resolve) => {
+      finishOldWake = resolve;
+    });
+    const newWakeFinished = new Promise<void>((resolve) => {
+      finishNewWake = resolve;
+    });
+    let oldSignal: AbortSignal | undefined;
+    let newSignal: AbortSignal | undefined;
+    const oldHandler = vi.fn(async () => {
+      oldSignal = getHeartbeatWakeAbortSignal();
+      await oldWakeFinished;
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    const disposeOld = setRuntimeHeartbeatWakeHandler(oldHandler);
+    currentHandlerDisposer = disposeOld;
+    requestHeartbeat({
+      source: "cron",
+      intent: "event",
+      reason: "generation-owned",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(oldSignal?.aborted).toBe(false);
+
+    disposeOld();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(oldSignal?.aborted).toBe(true);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    const newHandler = vi.fn(async () => {
+      newSignal = getHeartbeatWakeAbortSignal();
+      await newWakeFinished;
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    const disposeNew = setRuntimeHeartbeatWakeHandler(newHandler);
+    currentHandlerDisposer = disposeNew;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(newHandler).toHaveBeenCalledOnce();
+    expect(newSignal?.aborted).toBe(false);
+
+    disposeOld();
+    expect(newSignal?.aborted).toBe(false);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    disposeNew();
+    finishOldWake?.();
+    finishNewWake?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(newSignal?.aborted).toBe(true);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 

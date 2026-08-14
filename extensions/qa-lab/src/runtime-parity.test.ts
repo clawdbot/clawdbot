@@ -1045,4 +1045,17 @@ describe("runtime parity", () => {
       "tool-result-missing",
     ]);
   });
+
+  it("copies model-switch evidence into the runtime parity cell", async () => {
+    const modelSwitchEvidence = {
+      primary: { runId: "run-1", responseModel: "primary-model" },
+      alternate: { runId: "run-2", responseModel: "alternate-model" },
+    };
+    const cell = await captureRuntimeParityWithMockRequests({
+      requests: [],
+      scenarioResult: { status: "pass", modelSwitchEvidence },
+    });
+
+    expect(cell.modelSwitchEvidence).toEqual(modelSwitchEvidence);
+  });
 });

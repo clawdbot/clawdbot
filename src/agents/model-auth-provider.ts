@@ -27,12 +27,12 @@ import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-openai.js";
 import * as authConfig from "./model-auth-provider-config.js";
-import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import {
   assertRuntimeProviderSecretOwnerAvailable,
   resolveManagedSecretRefRuntimeProviderAuth,
-  resolveSyntheticLocalProviderAuth,
-} from "./model-auth-runtime.js";
+} from "./model-auth-runtime-config.js";
+import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
 
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
@@ -73,7 +73,7 @@ export function resolveScopedAuthProfileStore(params: {
 }
 
 /** Resolves the credential that should be used for one provider request. */
-export async function resolveApiKeyForProvider(params: {
+export async function resolveApiKeyForProviderCore(params: {
   provider: string;
   cfg?: OpenClawConfig;
   profileId?: string;
@@ -176,7 +176,7 @@ export async function resolveApiKeyForProvider(params: {
         modelApi: params.modelApi,
       })
     ) {
-      return resolveApiKeyForProvider({
+      return resolveApiKeyForProviderCore({
         ...params,
         store,
         profileId: undefined,
@@ -229,6 +229,19 @@ export async function resolveApiKeyForProvider(params: {
         provider,
         inferredMode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
       });
+      if (resolvedMode === "api-key") {
+        const inlineStore = getScopedStore();
+        if (
+          authConfig.isConfigBackedInlineProviderApiKey({
+            cfg,
+            provider,
+            source: envResolved.source,
+            store: inlineStore,
+          })
+        ) {
+          authConfig.assertInlineProviderApiKeyUsable({ store: inlineStore, provider });
+        }
+      }
       if (
         !isAuthModeAllowedForModel({
           provider,
@@ -236,7 +249,7 @@ export async function resolveApiKeyForProvider(params: {
           mode: resolvedMode,
         })
       ) {
-        return resolveApiKeyForProvider({ ...params, credentialPrecedence: "profile-first" });
+        return resolveApiKeyForProviderCore({ ...params, credentialPrecedence: "profile-first" });
       }
       return {
         apiKey: authConfig.sentinelizeConfigSecretRefEnvApiKey({
@@ -301,6 +314,11 @@ export async function resolveApiKeyForProvider(params: {
       secretSentinels: params.secretSentinels,
     });
     if (runtimeCustomKey) {
+      // Managed (file/exec) SecretRef provider keys are config-backed inline
+      // credentials too, so they must honor the inline-key cooldown gate just
+      // like the literal/env paths below — otherwise a 402 cooldown is recorded
+      // but never enforced for these keys.
+      authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider });
       return runtimeCustomKey;
     }
     const customKey = authConfig.resolveUsableCustomProviderApiKey({
@@ -309,6 +327,7 @@ export async function resolveApiKeyForProvider(params: {
       secretSentinels: params.secretSentinels,
     });
     if (customKey) {
+      authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider });
       return {
         apiKey: customKey.apiKey,
         source: customKey.source,
@@ -461,6 +480,19 @@ export async function resolveApiKeyForProvider(params: {
       provider,
       inferredMode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     });
+    if (resolvedMode === "api-key") {
+      const inlineStore = getScopedStore();
+      if (
+        authConfig.isConfigBackedInlineProviderApiKey({
+          cfg,
+          provider,
+          source: envResolved.source,
+          store: inlineStore,
+        })
+      ) {
+        authConfig.assertInlineProviderApiKeyUsable({ store: inlineStore, provider });
+      }
+    }
     if (
       isAuthModeAllowedForModel({
         provider,
@@ -496,6 +528,17 @@ export async function resolveApiKeyForProvider(params: {
       mode: managedRuntimeAuth.mode,
     })
   ) {
+    const inlineStore = getScopedStore();
+    if (
+      authConfig.isConfigBackedInlineProviderApiKey({
+        cfg,
+        provider,
+        source: managedRuntimeAuth.source,
+        store: inlineStore,
+      })
+    ) {
+      authConfig.assertInlineProviderApiKeyUsable({ store: inlineStore, provider });
+    }
     return managedRuntimeAuth;
   }
 
@@ -511,6 +554,7 @@ export async function resolveApiKeyForProvider(params: {
       inferredMode: "api-key",
     });
     if (isAuthModeAllowedForModel({ provider, modelApi: params.modelApi, mode })) {
+      authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider });
       return { apiKey: customKey.apiKey, source: customKey.source, mode };
     }
   }
@@ -552,7 +596,9 @@ export async function resolveApiKeyForProvider(params: {
       },
     });
     if (pluginMissingAuthMessage) {
-      throw new ProviderAuthError("missing-provider-auth", provider, pluginMissingAuthMessage);
+      throw new ProviderAuthError("missing-provider-auth", provider, pluginMissingAuthMessage, {
+        providerGuidance: true,
+      });
     }
   }
 

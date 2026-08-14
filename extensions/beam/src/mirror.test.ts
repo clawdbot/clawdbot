@@ -5,7 +5,7 @@ import type {
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
 import type { ActiveSessionCatalog } from "openclaw/plugin-sdk/session-catalog-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   beamMirrorId,
   buildBeamMirrorItems,
@@ -87,7 +87,11 @@ function fakeRuntime(config: unknown): PluginRuntime {
 
 type SentRequest = { url: string; auth?: string; payload: BeamMirrorUpload };
 
-function captureFetch(sent: SentRequest[], status = 200): typeof fetch {
+function captureFetch(
+  sent: SentRequest[],
+  status = 200,
+  onCancel?: () => void | Promise<void>,
+): typeof fetch {
   return (async (url: unknown, init?: RequestInit) => {
     const headers = (init?.headers ?? {}) as Record<string, string>;
     sent.push({
@@ -95,7 +99,12 @@ function captureFetch(sent: SentRequest[], status = 200): typeof fetch {
       ...(headers.Authorization ? { auth: headers.Authorization } : {}),
       payload: JSON.parse(init?.body as string) as BeamMirrorUpload,
     });
-    return new Response("{}", { status });
+    const body = onCancel
+      ? new ReadableStream<Uint8Array>({
+          cancel: onCancel,
+        })
+      : "{}";
+    return new Response(body, { status });
   }) as typeof fetch;
 }
 
@@ -180,6 +189,13 @@ describe("buildBeamMirrorItems", () => {
     const reduced = buildBeamMirrorItems([{ type: "userMessage", text: "x".repeat(10_000) }]);
     expect(reduced.items[0]?.text.length).toBe(6_000);
   });
+
+  it("does not split a surrogate pair when clipping message text", () => {
+    const reduced = buildBeamMirrorItems([
+      { type: "userMessage", text: `${"x".repeat(5_999)}🙂tail` },
+    ]);
+    expect(reduced.items[0]?.text).toBe("x".repeat(5_999));
+  });
 });
 
 describe("fitBeamMirrorUpload", () => {
@@ -210,6 +226,7 @@ describe("createBeamMirrorRunner", () => {
   it("uploads active local sessions and skips unchanged ones", async () => {
     const sent: SentRequest[] = [];
     const reads: string[] = [];
+    const cancel = vi.fn();
     const catalog = fakeCatalog({
       id: "claude",
       sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: NOW - 60_000 }],
@@ -218,7 +235,7 @@ describe("createBeamMirrorRunner", () => {
     const runner = createBeamMirrorRunner({
       runtime: fakeRuntime(mirrorConfig({ token: "scratch-token" })),
       logger: silentLogger,
-      fetchFn: captureFetch(sent),
+      fetchFn: captureFetch(sent, 200, cancel),
       now: () => NOW,
       listCatalogs: () => [catalog],
     });
@@ -235,6 +252,51 @@ describe("createBeamMirrorRunner", () => {
       completed: false,
     });
     expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("does not split a surrogate pair when clipping the session title", async () => {
+    const sent: SentRequest[] = [];
+    const catalog = fakeCatalog({
+      id: "claude",
+      sessions: [{ threadId: "t-emoji", name: `${"x".repeat(159)}🙂`, recencyAt: NOW - 60_000 }],
+    });
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig()),
+      logger: silentLogger,
+      fetchFn: captureFetch(sent),
+      now: () => NOW,
+      listCatalogs: () => [catalog],
+    });
+    await runner.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.payload.title).toBe("x".repeat(159));
+  });
+
+  it("keeps successful uploads successful when response cancellation rejects", async () => {
+    const sent: SentRequest[] = [];
+    const warnings: string[] = [];
+    const cancel = vi.fn(async () => {
+      throw new Error("cancel failed");
+    });
+    const catalog = fakeCatalog({
+      id: "claude",
+      sessions: [{ threadId: "t1", recencyAt: NOW - 60_000 }],
+    });
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig()),
+      logger: { warn: (message) => warnings.push(message), info: () => {} },
+      fetchFn: captureFetch(sent, 200, cancel),
+      now: () => NOW,
+      listCatalogs: () => [catalog],
+    });
+
+    await runner.tick();
+    await runner.tick();
+
+    expect(sent).toHaveLength(1);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(warnings).toEqual([]);
   });
 
   it("ignores idle sessions, node hosts, the beam catalog, and unlisted catalogs", async () => {
@@ -318,6 +380,7 @@ describe("createBeamMirrorRunner", () => {
   it("keeps tracking for retry when the receiver rejects an upload", async () => {
     const sent: SentRequest[] = [];
     const warnings: string[] = [];
+    const cancel = vi.fn();
     const catalog = fakeCatalog({
       id: "claude",
       sessions: [{ threadId: "t1", recencyAt: NOW - 60_000 }],
@@ -325,7 +388,7 @@ describe("createBeamMirrorRunner", () => {
     const runner = createBeamMirrorRunner({
       runtime: fakeRuntime(mirrorConfig()),
       logger: { warn: (message) => warnings.push(message), info: () => {} },
-      fetchFn: captureFetch(sent, 503),
+      fetchFn: captureFetch(sent, 503, cancel),
       now: () => NOW,
       listCatalogs: () => [catalog],
     });
@@ -334,6 +397,7 @@ describe("createBeamMirrorRunner", () => {
     // Both ticks retry because the failed upload was never fingerprinted.
     expect(sent).toHaveLength(2);
     expect(warnings.length).toBeGreaterThan(0);
+    expect(cancel).toHaveBeenCalledTimes(2);
   });
 
   it("skips ticks when a configured token cannot be resolved", async () => {

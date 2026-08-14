@@ -125,6 +125,13 @@ describe("createQaSelfCheckScenario", () => {
       "thread:qa-room/thread-1",
       "thread:qa-room/thread-1",
     ]);
-    expect(state.searchMessages({ query: "inside thread" }).at(-1)?.deleted).toBe(true);
+    const deletedMessage = state.getSnapshot().messages.find((message) => message.deleted);
+    if (!deletedMessage) {
+      throw new Error("self-check did not preserve its deleted message tombstone");
+    }
+    expect(state.readMessage({ messageId: deletedMessage.id }).deleted).toBe(true);
+    expect(
+      state.searchMessages({ query: "inside thread" }).map((message) => message.id),
+    ).not.toContain(deletedMessage.id);
   });
 });

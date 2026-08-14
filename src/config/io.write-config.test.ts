@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import chokidar from "chokidar";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { startGatewayConfigReloader } from "../gateway/config-reload.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -52,7 +53,7 @@ const mockMaintainConfigBackups = vi.hoisted(() =>
 );
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mockLoadPluginManifestRegistry,
+  loadPluginManifestRegistryCore: mockLoadPluginManifestRegistry,
 }));
 
 vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
@@ -946,7 +947,10 @@ describe("config io write", () => {
         alias: "GPT",
         params: { transport: "sse", openaiWsWarmup: false },
       });
-      expect(persisted.agents?.entries).toEqual({ main: {}, ops: {} });
+      expect(persisted.agents?.entries).toEqual({
+        main: { workspace: resolveDefaultAgentWorkspaceDir() },
+        ops: {},
+      });
     },
   );
 
@@ -968,11 +972,11 @@ describe("config io write", () => {
     expect(snapshot.parsed).toEqual(original);
     expect(snapshot.sourceConfig).toEqual({
       ...original,
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
     });
     expect(snapshot.config).toEqual({
       ...original,
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
     });
     expect(snapshot.issues[0]?.message).toContain("unknown channel id: test-plugin-channel");
   });
@@ -1314,7 +1318,7 @@ describe("config io write", () => {
     const io = createFastConfigIO(home, { configPath });
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.exists).toBe(false);
-    expect(snapshot.config.agents?.entries).toEqual({ main: { default: true } });
+    expect(snapshot.config.agents?.entries).toEqual({ main: {} });
     let preflightConfig: OpenClawConfig | undefined;
 
     await io.writeConfigFile(
@@ -1333,7 +1337,7 @@ describe("config io write", () => {
       },
     );
 
-    expect(preflightConfig?.agents?.entries).toEqual({ main: { default: true } });
+    expect(preflightConfig?.agents?.entries).toEqual({ main: {} });
     const persisted = await readPersistedConfig(configPath);
     expect(persisted.agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
     expect(persisted.agents?.entries).toBeUndefined();
@@ -1351,15 +1355,16 @@ describe("config io write", () => {
     });
 
     const persisted = await readPersistedConfig(configPath);
-    expect(persisted.agents?.entries).toEqual({ main: { default: true } });
+    expect(persisted.agents?.entries).toEqual({ main: {} });
     expect(persisted.agents?.list).toBeUndefined();
   });
 
   itWithHome("forwards explicitly authorized agent roster removals", async (home) => {
     const { configPath } = await writeConfigFixture(home, {
       agents: {
+        ownership: "explicit",
         entries: {
-          main: { default: true, workspace: "/srv/shared" },
+          main: { workspace: "/srv/shared" },
           ops: { workspace: "/srv/shared" },
         },
       },
@@ -1374,7 +1379,8 @@ describe("config io write", () => {
         await writeConfigFile(
           {
             agents: {
-              entries: { main: { default: true, workspace: "/srv/shared" } },
+              ownership: "explicit",
+              entries: { main: { workspace: "/srv/shared" } },
             },
           },
           {
@@ -1387,7 +1393,7 @@ describe("config io write", () => {
 
     const persisted = await readPersistedConfig(configPath);
     expect(persisted.agents?.entries).toEqual({
-      main: { default: true, workspace: "/srv/shared" },
+      main: { workspace: "/srv/shared" },
     });
   });
 
@@ -1754,7 +1760,7 @@ describe("config io write", () => {
     await io.writeConfigFile({
       agents: {
         entries: {
-          main: { default: true, workspace: "/resolved/agent-workspace" },
+          main: { workspace: "/resolved/agent-workspace" },
         },
       },
     });
@@ -1966,7 +1972,7 @@ describe("config io write", () => {
               defaults: {
                 model: { primary: "openrouter/anthropic/claude-sonnet-4.6" },
               },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             });
           },
         );

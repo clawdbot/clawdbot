@@ -4,7 +4,10 @@ import type { ConfiguredProviderRequest } from "../config/types.provider-request
 import type { SecretRef } from "../config/types.secrets.js";
 import {
   applyPreparedRuntimeAuthToModel,
+  attachModelProviderMetadataOwners,
   buildProviderRequestDispatcherPolicy,
+  getModelProviderMetadataOwners,
+  inheritModelProviderMetadataOwners,
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
   resolveProviderRequestConfig,
@@ -14,6 +17,35 @@ import {
 } from "./provider-request-config.js";
 
 describe("provider request config", () => {
+  it("carries lifecycle plugin metadata ownership through model projections", () => {
+    const owners = {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+      providerEndpoints: [],
+      providerRequests: new Map([["prepared", { family: "prepared-family" }]]),
+    };
+    const prepared = attachModelProviderMetadataOwners({ id: "prepared-model" }, owners);
+    const projected = inheritModelProviderMetadataOwners(prepared, {
+      ...prepared,
+      id: "projected-model",
+    });
+
+    expect(getModelProviderMetadataOwners(prepared)).toBe(owners);
+    expect(getModelProviderMetadataOwners(projected)).toBe(owners);
+    expect(
+      resolveProviderRequestPolicyConfig({
+        provider: "prepared",
+        providerMetadataOwners: getModelProviderMetadataOwners(projected),
+      }).policy.knownProviderFamily,
+    ).toBe("prepared-family");
+  });
+
   it("applies prepared runtime auth without retaining stale credential headers", () => {
     const model = {
       provider: "microsoft-foundry",

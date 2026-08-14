@@ -22,6 +22,7 @@ import {
   ensureRelayTurn,
   noFallbackRelayOutputFlush,
   relaySessions,
+  resolveRelayProviderToolCallId,
   type ForcedTerminalProviderResult,
   type RelayAgentControlProviderSubmission,
   type RelaySession,
@@ -99,7 +100,7 @@ export function submitRelayAgentControlProviderResults(
       final: true,
     });
     clearRelayAgentToolCall(session, callId);
-    session.completedAgentToolCalls.add(callId);
+    session.toolCalls.markAgentCompleted([callId]);
   };
   for (const callId of activeCallIds) {
     const forcedConsult = session.harness.forcedConsults
@@ -167,6 +168,9 @@ export function scheduleForcedAgentConsult(
   }
   session.harness.forcedConsults.schedule(handle, FORCED_CONSULT_FALLBACK_DELAY_MS, () => {
     if (!relaySessions.has(session.id)) {
+      return;
+    }
+    if (!session.toolCalls.tryAdmit([handle.id])) {
       return;
     }
     const turnId = ensureRelayTurn(session);
@@ -242,7 +246,7 @@ function drainForcedTerminalProviderResults(
   }
   const hasUnsubmittedCall = session.harness.forcedConsults
     .nativeCallIds(handle)
-    .some((callId) => !session.completedProviderToolResults.has(callId));
+    .some((callId) => !session.toolCalls.isProviderCompleted(callId));
   if (hasUnsubmittedCall) {
     return drainForcedTerminalProviderResults(session, handle, terminal);
   }
@@ -275,7 +279,7 @@ export function submitRealtimeAgentConsultWorkingResponse(
   }
   const epoch = session.toolResultEpoch;
   const submission = session.bridge.submitToolResult(
-    callId,
+    resolveRelayProviderToolCallId(session, callId),
     buildRealtimeVoiceAgentConsultWorkingResponse("person"),
     { willContinue: true },
   );
@@ -309,7 +313,7 @@ export function submitForcedTalkRealtimeRelayToolResult(
 ): void | Promise<void> {
   const cancelled = session.harness.forcedConsults.isCancelled(forcedConsult);
   const turnId = cancelled
-    ? (session.cancelledAgentToolCalls.get(params.callId) ?? session.harness.talk.activeTurnId)
+    ? (session.toolCalls.cancelledTurnId(params.callId) ?? session.harness.talk.activeTurnId)
     : ensureRelayTurn(session);
   if (!turnId) {
     throw new Error("Cancelled realtime consult is missing its original turn");
@@ -342,8 +346,10 @@ export function submitForcedTalkRealtimeRelayToolResult(
       }
       session.harness.forcedConsults.markCancelled(forcedConsult);
       clearRelayAgentToolCall(session, params.callId);
-      session.cancelledAgentToolCalls.delete(params.callId);
-      session.completedAgentToolCalls.add(params.callId);
+      session.toolCalls.deleteCancelled(params.callId);
+      if (!session.toolCalls.markAgentCompleted([params.callId])) {
+        return;
+      }
       broadcastToolResultToOwner(session, {
         callId: params.callId,
         turnId,
@@ -393,7 +399,9 @@ export function submitForcedTalkRealtimeRelayToolResult(
     }
     session.harness.forcedConsults.markDelivered(forcedConsult);
     clearRelayAgentToolCall(session, params.callId);
-    session.completedAgentToolCalls.add(params.callId);
+    if (!session.toolCalls.markAgentCompleted([params.callId])) {
+      return;
+    }
     const hasNativeCalls = session.harness.forcedConsults.nativeCallIds(forcedConsult).length > 0;
     if (text && (!hasNativeCalls || providerOptions)) {
       session.bridge.sendUserMessage(buildForcedConsultSpeechPrompt(text));

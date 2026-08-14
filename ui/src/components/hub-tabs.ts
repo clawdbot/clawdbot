@@ -30,21 +30,32 @@ const PENDING_FOCUS_WINDOW_MS = 2000;
 // Web Awesome selects its first tab when `active` is empty. A truthy value that
 // matches no panel preserves an intentional no-selection state.
 const NO_ACTIVE_TAB = "__openclaw-hub-tabs-no-active__";
-let pendingFocus: { hubId: string; tab: string; at: number } | null = null;
+let pendingFocus: { hubId: string; tab: string; at: number; source: Element } | null = null;
 
 function reclaimFocus(hubId: string, tab: string, element: Element | undefined) {
   if (!element || pendingFocus?.hubId !== hubId || pendingFocus.tab !== tab) {
     return;
   }
   const pending = pendingFocus;
-  pendingFocus = null;
   if (Date.now() - pending.at > PENDING_FOCUS_WINDOW_MS) {
+    pendingFocus = null;
     return;
   }
   // The ref fires while the strip is still inside Lit's template fragment.
   // A task lets both Lit and Web Awesome finish connecting before focus moves.
   window.setTimeout(() => {
-    if (element.isConnected) {
+    if (pendingFocus !== pending) {
+      return;
+    }
+    pendingFocus = null;
+    const currentFocus = document.activeElement;
+    if (
+      element.isConnected &&
+      Date.now() - pending.at <= PENDING_FOCUS_WINDOW_MS &&
+      (currentFocus === pending.source ||
+        currentFocus === document.body ||
+        currentFocus === document.documentElement)
+    ) {
       (element as HTMLElement).focus();
     }
   }, 0);
@@ -93,7 +104,12 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
                 tab.value !== props.active
               ) {
                 event.preventDefault();
-                pendingFocus = { hubId: props.id, tab: tab.value, at: Date.now() };
+                pendingFocus = {
+                  hubId: props.id,
+                  tab: tab.value,
+                  at: Date.now(),
+                  source: event.currentTarget as Element,
+                };
                 props.onSelect(tab.value);
               }
             }}

@@ -437,7 +437,6 @@ export async function publishVerifiedSqliteFile(
   let targetPinFileDescriptor: number | undefined;
   let failedPublicationIdentity: FileIdentityStat | undefined;
   let publishedIdentity: Stats | undefined;
-  let ownershipPinned = false;
   try {
     stagingIdentity = await fs.lstat(stagingDir);
     await fs.chmod(stagingDir, 0o700);
@@ -521,7 +520,6 @@ export async function publishVerifiedSqliteFile(
     const initialPublishedIdentity = publishedIdentity;
     target = await fs.open(options.targetPath, "r");
     await assertOpenFileIdentity(target, options.targetPath, initialPublishedIdentity);
-    ownershipPinned = true;
     // Retire the writable staging hard link before the final byte verification.
     await fs.unlink(stagedPath);
     const expectedIdentity = await target.stat();
@@ -539,10 +537,8 @@ export async function publishVerifiedSqliteFile(
     );
     await target.close();
     target = undefined;
-    ownershipPinned = false;
     targetPinFileDescriptor = fsSync.openSync(options.targetPath, "r");
     assertOpenFileIdentitySync(targetPinFileDescriptor, options.targetPath, expectedIdentity);
-    ownershipPinned = true;
 
     const guard: PublishedSqliteFileGuard = {
       assertTargetMatchesExpectedContent: (finalCheck) => {
@@ -567,22 +563,18 @@ export async function publishVerifiedSqliteFile(
     }
     fsSync.closeSync(targetPinFileDescriptor);
     targetPinFileDescriptor = undefined;
-    ownershipPinned = false;
   } catch (error) {
     if (target && publishedIdentity) {
       const openedIdentity = await target.stat().catch(() => undefined);
       if (openedIdentity && sameFileIdentity(openedIdentity, publishedIdentity)) {
         publishedIdentity = openedIdentity;
-        ownershipPinned = true;
       }
     }
     const cleanupIdentity = publishedIdentity ?? failedPublicationIdentity;
     if (cleanupIdentity) {
-      const removed = removePublishedTargetIfOwned(
-        options.targetPath,
-        cleanupIdentity,
-        !ownershipPinned,
-      );
+      // Windows can reuse a deleted file's identity while our old handle is still pinned.
+      // Require the full fingerprint so cleanup never unlinks a caller replacement.
+      const removed = removePublishedTargetIfOwned(options.targetPath, cleanupIdentity, true);
       if (removed) {
         await syncDirectory(targetDirectoryReceipt).catch(() => undefined);
       }

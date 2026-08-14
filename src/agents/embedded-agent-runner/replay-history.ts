@@ -2,6 +2,8 @@
  * Sanitizes and validates replayed session history before model calls.
  */
 import { isDeepStrictEqual } from "node:util";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -44,6 +46,7 @@ import {
 } from "../session-transcript-repair.js";
 import type { SessionManager } from "../sessions/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
+import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -68,7 +71,6 @@ import {
   dropThinkingBlocks,
   shouldPreserveLatestAssistantThinking,
   stripInvalidThinkingSignatures,
-  stripStaleThinkingSignaturesForCompactionReplay,
 } from "./thinking.js";
 
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
@@ -220,19 +222,22 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
 }
 
-function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
+function normalizeAssistantReplayTextContent(
+  message: AssistantReplayMessage,
+  replayContent: string,
+): AssistantReplayMessage | null {
   const strippedText = stripInternalMetadataForDisplay(replayContent);
   const trimmed = strippedText.trim();
   if (!trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
     return null;
   }
-  return {
-    ...message,
-    content: [{ type: "text", text: strippedText }],
-  } as AgentMessage;
+  return replaceCompactionReplayOwnerContent(message, [{ type: "text", text: strippedText }]);
 }
 
-function normalizeAssistantReplayBlockContent(message: AgentMessage, replayContent: unknown[]) {
+function normalizeAssistantReplayBlockContent(
+  message: AssistantReplayMessage,
+  replayContent: unknown[],
+): AssistantReplayMessage | null {
   let touched = false;
   let removedSilentText = false;
   const sanitizedContent: unknown[] = [];
@@ -271,7 +276,10 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   if (sanitizedContent.length === 0) {
     return null;
   }
-  const normalized = { ...message, content: sanitizedContent } as AgentMessage;
+  const normalized = replaceCompactionReplayOwnerContent(
+    message,
+    sanitizedContent as AssistantReplayMessage["content"],
+  );
   // A silent reply has no visible assistant output. Do not let its signed
   // reasoning merge into the next assistant turn during strict replay.
   return removedSilentText && hasOnlyAssistantReasoningContent(normalized) ? null : normalized;
@@ -340,7 +348,10 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     if (!Array.isArray(replayContent)) {
       replayContent =
         replayContent != null && typeof replayContent === "object" ? [replayContent] : [];
-      assistantMessage = { ...message, content: replayContent } as AssistantReplayMessage;
+      assistantMessage = replaceCompactionReplayOwnerContent(
+        message,
+        replayContent as typeof message.content,
+      ) as AssistantReplayMessage;
       touched = true;
     }
     if (Array.isArray(replayContent)) {
@@ -363,7 +374,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     if (Array.isArray(replayContent) && replayContent.length === 0) {
       // An assistant turn can legitimately end with `content: []` — for
       // example the silent-reply / NO_REPLY path locked in by
-      // run.empty-error-retry.test.ts ("Clean stop with no output is a
+      // run.shared-integration.test.ts ("Clean stop with no output is a
       // legitimate silent reply, not a crash"). We must NOT inject the
       // failure sentinel into those turns: doing so would fabricate a
       // failure statement in the next provider request and change model
@@ -379,10 +390,11 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       // path.
       const stopReason = (assistantMessage as { stopReason?: unknown }).stopReason;
       if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(assistantMessage)) {
-        out.push({
-          ...assistantMessage,
-          content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
-        });
+        out.push(
+          replaceCompactionReplayOwnerContent(assistantMessage, [
+            { type: "text", text: STREAM_ERROR_FALLBACK_TEXT },
+          ]),
+        );
         touched = true;
         continue;
       }
@@ -520,10 +532,6 @@ function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["co
   // turns a real zero-dollar total back into a local estimate during later accounting.
   const totalOrigin = cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined;
   return { input, output, cacheRead, cacheWrite, total, ...(totalOrigin ? { totalOrigin } : {}) };
-}
-
-function toFiniteCostNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[] {

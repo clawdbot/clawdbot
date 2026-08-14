@@ -225,12 +225,16 @@ describe("exec approval requests", () => {
     expect(payload?.approvalReviewerDeviceIds).toEqual(["device-ios-reviewer"]);
   });
 
-  it("does not generate command spans by default", async () => {
+  it.each([
+    { name: "by default", commandHighlighting: undefined },
+    { name: "when command highlighting is disabled", commandHighlighting: false },
+  ])("does not generate command spans $name", async ({ commandHighlighting }) => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
     await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id",
       command: 'ls | grep "stuff" | python -c \'print("hi")\'',
+      ...(commandHighlighting === undefined ? {} : { commandHighlighting }),
       workdir: "/tmp/project",
       host: "node",
       security: "allowlist",
@@ -239,27 +243,7 @@ describe("exec approval requests", () => {
 
     expect(commandExplainerMock.explainShellCommand).not.toHaveBeenCalled();
     expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
-    const payload = requireApprovalRequestPayload(0);
-    expect(payload?.commandSpans).toBeUndefined();
-  });
-
-  it("does not generate command spans when command highlighting is disabled", async () => {
-    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
-
-    await registerExecApprovalRequestForHostOrThrow({
-      approvalId: "approval-id",
-      command: 'ls | grep "stuff" | python -c \'print("hi")\'',
-      commandHighlighting: false,
-      workdir: "/tmp/project",
-      host: "node",
-      security: "allowlist",
-      ask: "always",
-    });
-
-    expect(commandExplainerMock.explainShellCommand).not.toHaveBeenCalled();
-    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
-    const payload = requireApprovalRequestPayload(0);
-    expect(payload?.commandSpans).toBeUndefined();
+    expect(requireApprovalRequestPayload(0).commandSpans).toBeUndefined();
   });
 
   it("uses system run plan command text for host approval explanations", async () => {

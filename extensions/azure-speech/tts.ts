@@ -4,15 +4,16 @@
  */
 import {
   assertOkOrThrowProviderError,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
-import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import { trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Default Azure Speech neural voice. */
 export const DEFAULT_AZURE_SPEECH_VOICE = "en-US-JennyNeural";
@@ -157,12 +158,12 @@ export async function listAzureSpeechVoices(params: {
     const voices = await readProviderJsonResponse<unknown>(response, "azure-speech.voices");
     return Array.isArray(voices)
       ? voices.flatMap((value) => {
-          const voice = asObject(value);
+          const voice = asOptionalRecord(value);
           const id = trimToUndefined(voice?.ShortName);
           if (!voice || !id || isDeprecatedVoice(voice)) {
             return [];
           }
-          const voiceTag = asObject(voice.VoiceTag);
+          const voiceTag = asOptionalRecord(voice.VoiceTag);
           const tailoredScenarios = readAzureVoiceTagStrings(voiceTag?.TailoredScenarios);
           const personalities = readAzureVoiceTagStrings(voiceTag?.VoicePersonalities);
           return [
@@ -221,13 +222,12 @@ export async function azureSpeechTTS(params: {
 
   try {
     await assertOkOrThrowProviderError(response, "Azure Speech TTS API error");
-    return await readResponseWithLimit(
-      response,
-      params.maxBytes ?? DEFAULT_AZURE_SPEECH_MAX_BYTES,
-      {
+    return Buffer.from(
+      await readProviderBinaryResponse(response, "Azure Speech TTS API error", "audio", {
+        maxBytes: params.maxBytes ?? DEFAULT_AZURE_SPEECH_MAX_BYTES,
         onOverflow: ({ maxBytes }) =>
           new Error(`Azure Speech TTS audio response exceeds ${maxBytes} bytes`),
-      },
+      }),
     );
   } finally {
     await release();

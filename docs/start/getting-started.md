@@ -106,7 +106,7 @@ Then set:
   "gateway": {
     "controlUi": {
       "enabled": true,
-      "root": "~/.openclaw/control-ui-custom"
+      "root": "${HOME}/.openclaw/control-ui-custom"
     }
   }
 }

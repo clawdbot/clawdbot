@@ -7,6 +7,7 @@ import type {
   WorkboardMetadata,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -55,7 +56,6 @@ import {
   normalizeLinkType,
   normalizeMetadata,
   normalizeNotes,
-  normalizeOptionalString,
   normalizePosition,
   normalizePriority,
   normalizeStatus,
@@ -389,7 +389,7 @@ export class WorkboardCoreStore {
         templateId: normalizeTemplateId(input.templateId),
         ...(childAutomation ? { automation: childAutomation } : {}),
       },
-      { allowDependencyLinks: false },
+      { allowDependencyLinks: false, allowArchivedAt: false },
     );
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),

@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 private const val TEST_TIMEOUT_MS = 8_000L
 private const val CONNECT_CHALLENGE_FRAME =
-  """{"type":"event","event":"connect.challenge","payload":{"nonce":"android-test-nonce"}}"""
+  """{"type":"event","event":"connect.challenge","payload":{"nonce":"android-test-nonce","ts":1700000000123}}"""
 
 private class NoopDeviceAuthStore : DeviceAuthTokenStore {
   override fun loadEntry(

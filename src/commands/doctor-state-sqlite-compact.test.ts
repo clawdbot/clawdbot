@@ -14,7 +14,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { runDoctorStateSqliteCompact } from "./doctor-state-sqlite-compact.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -86,6 +86,19 @@ function seedStateDatabase(params: {
     fs.chmodSync(sqlitePath, 0o666);
   }
   return sqlitePath;
+}
+
+function dropBootstrapProvenanceColumns(sqlitePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
+      ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
+    `);
+  } finally {
+    database.close();
+  }
 }
 
 function readPragma(database: DatabaseSync, name: string): number {
@@ -168,6 +181,27 @@ describe("runDoctorStateSqliteCompact", () => {
     expect(report.after.pageSizeBytes).toBeGreaterThan(0);
     expect(report.reclaimedBytes).toBeGreaterThan(0);
     expect(report.integrityCheck).toBe("ok");
+  });
+
+  it("compacts pre-bootstrap-column v6 state without migrating it", async () => {
+    const env = createStateEnv();
+    const sqlitePath = seedStateDatabase({ env, withBloat: true });
+    dropBootstrapProvenanceColumns(sqlitePath);
+
+    const report = await runDoctorStateSqliteCompact({ env });
+
+    expectCompletedReport(report);
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      const columns = database.prepare("PRAGMA table_info(claw_installs)").all() as Array<{
+        name?: unknown;
+      }>;
+      expect(columns.map((column) => column.name)).not.toContain("bootstrap_source_path");
+      expect(columns.map((column) => column.name)).not.toContain("bootstrap_content_digest");
+    } finally {
+      database.close();
+    }
   });
 
   it("clears authoritative quarantine after compaction", async () => {

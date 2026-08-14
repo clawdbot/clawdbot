@@ -9,8 +9,6 @@ import {
   readCachedSearchPayload,
   readConfiguredSecretString,
   readProviderEnvValue,
-  readStringArrayParam,
-  readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchTimeoutSeconds,
@@ -21,11 +19,11 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildParallelCacheKey,
-  invalidSearchQueriesPayload,
-  mapParallelResults,
+  buildParallelSearchPayload,
   normalizeParallelClientModel,
   normalizeParallelObjective,
   normalizeParallelResults,
+  normalizeParallelSearchRequest,
   normalizeParallelSearchQueries,
   normalizeParallelSessionId,
   PARALLEL_SESSION_ID_MAX_LENGTH,
@@ -123,6 +121,7 @@ async function runParallelSearch(params: {
   sessionId?: string;
   clientModel?: string;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<ParallelSearchResponse> {
   const body: Record<string, unknown> = {
     search_queries: [...params.searchQueries],
@@ -142,6 +141,7 @@ async function runParallelSearch(params: {
     {
       url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -170,6 +170,7 @@ async function runParallelSearch(params: {
 export async function executeParallelWebSearchProviderTool(
   ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
@@ -187,30 +188,17 @@ export async function executeParallelWebSearchProviderTool(
   }
   const endpoint = endpointResult.endpoint;
 
-  // Generic `query` arg fallback: openclaw's operator-facing CLI
-  // (`openclaw capability web.search ...`) always passes the shared
-  // lowest-common-denominator shape `{ query, count, limit }` to whatever
-  // provider is active and doesn't know about Parallel's richer
-  // `{ objective, search_queries }` schema. When `search_queries` is absent
-  // we promote `query` into the lone search query. `objective` stays unset
-  // in that case rather than being faked from the keyword string.
-  const objective = normalizeParallelObjective(readStringParam(args, "objective"));
-  const cliQuery = normalizeParallelObjective(readStringParam(args, "query"));
-  let searchQueries = normalizeParallelSearchQueries(readStringArrayParam(args, "search_queries"));
-  if (searchQueries.length === 0 && cliQuery) {
-    searchQueries = normalizeParallelSearchQueries([cliQuery]);
-  }
-  if (searchQueries.length === 0) {
-    return invalidSearchQueriesPayload();
-  }
-  // Always pass max_results so Parallel matches the openclaw web_search default
-  // of 5 instead of Parallel's own default of 10.
-  const count = resolveParallelSearchCount(args, searchConfig?.maxResults);
-  const sessionId = normalizeParallelSessionId(
-    readStringParam(args, "session_id"),
+  const request = normalizeParallelSearchRequest(
+    args,
+    searchConfig?.maxResults,
     PARALLEL_SESSION_ID_MAX_LENGTH,
   );
-  const clientModel = normalizeParallelClientModel(readStringParam(args, "client_model"));
+  if ("error" in request) {
+    return request.error;
+  }
+  const { objective, searchQueries, count, sessionId, clientModel } = request;
+  // Always pass max_results so Parallel matches the openclaw web_search default
+  // of 5 instead of Parallel's own default of 10.
   const cacheKey = buildParallelCacheKey({
     endpoint,
     objective,
@@ -234,35 +222,16 @@ export async function executeParallelWebSearchProviderTool(
     sessionId,
     clientModel,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+    signal,
   });
-  const results = mapParallelResults(response);
-
-  const payload: Record<string, unknown> = {
-    ...(objective ? { objective } : {}),
-    searchQueries,
+  signal?.throwIfAborted();
+  const payload = buildParallelSearchPayload({
     provider: "parallel",
-    count: results.length,
-    tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "parallel",
-      wrapped: true,
-    },
-    results,
-  };
-  if (typeof response.search_id === "string") {
-    payload.searchId = response.search_id;
-  }
-  if (typeof response.session_id === "string") {
-    payload.sessionId = response.session_id;
-  }
-  if (Array.isArray(response.warnings) && response.warnings.length > 0) {
-    payload.warnings = response.warnings;
-  }
-  if (Array.isArray(response.usage) && response.usage.length > 0) {
-    payload.usage = response.usage;
-  }
+    objective,
+    searchQueries,
+    response,
+    start,
+  });
 
   // Don't persist a Parallel-generated session id into the shared cache:
   // identical queries from unrelated tasks would otherwise share that id.
@@ -274,7 +243,6 @@ export async function executeParallelWebSearchProviderTool(
 
 export const testing = {
   buildParallelCacheKey,
-  invalidSearchQueriesPayload,
   missingParallelKeyPayload,
   normalizeParallelClientModel,
   normalizeParallelObjective,
@@ -282,12 +250,8 @@ export const testing = {
   normalizeParallelSearchQueries,
   normalizeParallelSessionId,
   resolveParallelApiKey,
-  resolveParallelConfig,
   resolveParallelSearchCount,
   resolveParallelSearchEndpoint,
-  PARALLEL_ERROR_BODY_LIMIT_BYTES,
   PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
   USER_AGENT,
 } as const;
-
-export { testing as __testing };

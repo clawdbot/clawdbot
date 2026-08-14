@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -1676,6 +1677,33 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it.each(["你还记得我们上次讨论的数据库配置吗？", "你还记得我们上周决定明天部署的方案吗？"])(
+    "escalates only retrospective Chinese %j when recall mode is unset",
+    async (prompt) => {
+      registerPluginConfig({ mode: undefined });
+      expect(currentActiveMemoryConfig().mode).toBeUndefined();
+
+      const context = {
+        sessionKey: "agent:main:telegram:direct:owner",
+        messageProvider: "telegram",
+        channelId: "owner",
+      };
+
+      const ordinary = await runPromptBuild({ prompt: "部署之前先整理聊天记录" }, context);
+      expect(ordinary).toBeUndefined();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+
+      const future = await runPromptBuild({ prompt: "你记得明天发送报告吗？" }, context);
+      expect(future).toBeUndefined();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+
+      const recall = await runPromptBuild({ prompt }, context);
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expectPrependContextContains(recall, "lemon pepper wings");
+      expectEmbeddedChannel("telegram");
+    },
+  );
+
   it("fails closed when the live active-memory plugin entry is removed", async () => {
     configFile = {
       plugins: {
@@ -2082,7 +2110,6 @@ describe("active-memory plugin", () => {
     expect(params.model).toBe("gpt-5.4-mini");
     expect(params.messageProvider).toBe("webchat");
     expect(params.sessionKey).toMatch(/^agent:main:main:active-memory:[a-f0-9]{12}$/);
-    expect(activeMemoryConfigFrom(embeddedRunConfig()).qmd).toEqual({ searchMode: "search" });
     expect(params.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
@@ -2156,42 +2183,6 @@ describe("active-memory plugin", () => {
       true,
     );
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-  });
-
-  it("lets active memory inherit the main QMD search mode when configured", async () => {
-    api.config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "github-copilot/gpt-5.4-mini",
-          },
-        },
-      },
-      memory: {
-        backend: "qmd",
-        qmd: {
-          searchMode: "query",
-        },
-      },
-    };
-    registerPluginConfig({
-      qmd: {
-        searchMode: "inherit",
-      },
-    });
-
-    await runPromptBuild({
-      prompt: "what wings should i order? inherit-qmd-mode-check",
-    });
-
-    const config = embeddedRunConfig();
-    expect(config.memory).toEqual({
-      backend: "qmd",
-      qmd: {
-        searchMode: "query",
-      },
-    });
-    expect(activeMemoryConfigFrom(config).qmd).toEqual({ searchMode: "inherit" });
   });
 
   it("frames the blocking memory subagent as a memory search agent for another model", async () => {
@@ -2643,7 +2634,7 @@ describe("active-memory plugin", () => {
       return {
         meta: {
           activeMemorySearchDebug: {
-            backend: "qmd",
+            backend: "builtin",
             configuredMode: "search",
             effectiveMode: "query",
             fallback: "unsupported-search-flags",
@@ -2679,7 +2670,7 @@ describe("active-memory plugin", () => {
     expectLinesToContain(entries?.[0]?.lines ?? [], "🧩 Active Memory: status=ok");
     expectLinesToContain(
       entries?.[0]?.lines ?? [],
-      "🔎 Active Memory Debug: backend=qmd configuredMode=search effectiveMode=query fallback=unsupported-search-flags searchMs=2590 hits=3 | User prefers lemon pepper wings, and blue cheese still wins.",
+      "🔎 Active Memory Debug: backend=builtin configuredMode=search effectiveMode=query fallback=unsupported-search-flags searchMs=2590 hits=3 | User prefers lemon pepper wings, and blue cheese still wins.",
     );
   });
 
@@ -2694,7 +2685,7 @@ describe("active-memory plugin", () => {
             message: {
               role: "toolResult",
               toolName: "memory_search",
-              details: { debug: { backend: "qmd", hits: 3 } },
+              details: { debug: { backend: "builtin", hits: 3 } },
             },
           }),
           JSON.stringify({
@@ -2724,7 +2715,7 @@ describe("active-memory plugin", () => {
       line.startsWith("🔎 Active Memory Debug:"),
     );
     const line = requireNonEmptyString(debugLine, "active memory debug line missing");
-    expect(line).toContain("backend=qmd");
+    expect(line).toContain("backend=builtin");
     expect(line).toContain("hits=3");
   });
 
@@ -3532,7 +3523,7 @@ describe("active-memory plugin", () => {
           role: "toolResult",
           toolName: "memory_search",
           details: {
-            debug: { backend: "qmd", effectiveMode: "search", hits: 1 },
+            debug: { backend: "builtin", effectiveMode: "search", hits: 1 },
           },
         },
       },
@@ -3552,7 +3543,7 @@ describe("active-memory plugin", () => {
     const debug = await testing.readActiveMemorySearchDebug(sessionFile, {
       maxLines: 4,
     });
-    expect(debug?.backend).toBe("qmd");
+    expect(debug?.backend).toBe("builtin");
     expect(debug?.hits).toBe(1);
   });
 
@@ -3890,7 +3881,7 @@ describe("active-memory plugin", () => {
             message: {
               role: "toolResult",
               toolName: "memory_search",
-              details: { results: [], debug: { backend: "qmd", hits: 0, searchMs: 8 } },
+              details: { results: [], debug: { backend: "builtin", hits: 0, searchMs: 8 } },
             },
           },
         ]);
@@ -3912,7 +3903,7 @@ describe("active-memory plugin", () => {
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(2);
     expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
-    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0");
+    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=builtin searchMs=8 hits=0");
   });
 
   it("does not fast-fail memory_search results solely because debug hits is zero", async () => {
@@ -3929,7 +3920,7 @@ describe("active-memory plugin", () => {
             toolName: "memory_search",
             details: {
               results: [{ path: "memory/food.md", text: "User usually orders ramen." }],
-              debug: { backend: "qmd", hits: 0, searchMs: 8 },
+              debug: { backend: "builtin", hits: 0, searchMs: 8 },
             },
           },
         },
@@ -3949,7 +3940,7 @@ describe("active-memory plugin", () => {
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(2);
     expectLinesToContain(lines, "🧩 Active Memory: status=ok");
-    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0");
+    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=builtin searchMs=8 hits=0");
   });
 
   it("uses a late verbose summary after a successful result and later unavailable trace", async () => {
@@ -3985,7 +3976,7 @@ describe("active-memory plugin", () => {
                     results: [
                       { path: "memory/food.md", text: "User usually orders tonkotsu ramen." },
                     ],
-                    debug: { backend: "qmd", hits: 1, searchMs: 8 },
+                    debug: { backend: "builtin", hits: 1, searchMs: 8 },
                   },
                   null,
                   2,
@@ -5892,17 +5883,4 @@ describe("active-memory plugin", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

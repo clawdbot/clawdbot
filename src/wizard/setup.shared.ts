@@ -1,17 +1,12 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
-import { isDeepStrictEqual } from "node:util";
 import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
-import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
+import { createConfigIO, resolveGatewayPort } from "../config/config.js";
+import type { ConfigWriteOptions } from "../config/io.js";
+import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  commitConfigWriteWithPendingPluginInstalls,
-  hasPendingPluginInstallRecords,
-  stripPendingPluginInstallRecords,
-  unchangedPendingPluginInstallRecordIds,
-} from "../plugins/install-record-commit.js";
+import { transformConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import { isPlainObject } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import {
@@ -48,33 +43,39 @@ export function hasQuickstartGatewayOverrides(
   );
 }
 
-function mergeWizardConfigValueOntoLatest(current: unknown, base: unknown, next: unknown): unknown {
-  if (isDeepStrictEqual(next, base)) {
-    return current;
-  }
-  if (isPlainObject(current) && isPlainObject(base) && isPlainObject(next)) {
-    const merged: Record<string, unknown> = { ...current };
-    const keys = new Set([...Object.keys(current), ...Object.keys(base), ...Object.keys(next)]);
-    for (const key of keys) {
-      const mergedValue = mergeWizardConfigValueOntoLatest(current[key], base[key], next[key]);
-      if (mergedValue === undefined) {
-        delete merged[key];
-      } else {
-        merged[key] = mergedValue;
-      }
-    }
-    return merged;
-  }
-  return structuredClone(next);
-}
-
-/** Preserve concurrent edits while applying only changes made by an interactive wizard. */
-export function mergeWizardConfigOntoLatest(
-  current: OpenClawConfig,
-  base: OpenClawConfig,
-  next: OpenClawConfig,
-): OpenClawConfig {
-  return mergeWizardConfigValueOntoLatest(current, base, next) as OpenClawConfig;
+export function formatQuickstartGatewaySummary(
+  defaults: QuickstartGatewayDefaults,
+  keepExisting: boolean,
+): string {
+  const bind = {
+    auto: t("wizard.gateway.bindAuto"),
+    custom: t("wizard.gateway.bindCustom"),
+    lan: t("wizard.gateway.bindLan"),
+    loopback: t("wizard.gateway.bindLoopback"),
+    tailnet: t("wizard.gateway.bindTailnet"),
+  }[defaults.bind];
+  return [
+    ...(keepExisting ? [t("wizard.setup.quickstartKeepSettings")] : []),
+    t("wizard.setup.quickstartGatewayPort", { port: defaults.port }),
+    t("wizard.setup.quickstartGatewayBind", { bind }),
+    ...(defaults.bind === "custom" && defaults.customBindHost
+      ? [
+          t("wizard.setup.quickstartGatewayCustomIp", {
+            host: defaults.customBindHost,
+          }),
+        ]
+      : []),
+    t("wizard.setup.quickstartGatewayAuth", {
+      auth:
+        defaults.authMode === "token"
+          ? t("wizard.setup.quickstartAuthTokenDefault")
+          : t("common.password"),
+    }),
+    t("wizard.setup.quickstartTailscaleExposure", {
+      exposure: t(`wizard.gatewayTailscale.${defaults.tailscaleMode}`),
+    }),
+    t("wizard.setup.quickstartDirectChannels"),
+  ].join("\n");
 }
 
 /**
@@ -82,71 +83,39 @@ export function mergeWizardConfigOntoLatest(
  * flows never drop install records that a concurrent migration already staged.
  */
 export async function writeWizardConfigFile(
-  configInput: OpenClawConfig,
+  config: OpenClawConfig,
   opts: {
     allowConfigSizeDrop?: boolean;
     /** Reject the write if config changed after the caller's verified snapshot. */
     baseHash?: string;
     /** Preserve an absent-file precondition that cannot be represented by baseHash. */
     baseSnapshot?: ConfigFileSnapshot;
-    migrationBaseConfig?: OpenClawConfig;
-    onPendingPluginInstallMigration?: () => void;
+    /** Apply only the wizard's delta to the latest authored config. */
+    mergeBase?: OpenClawConfig;
+    writeOptions?: ConfigWriteOptions;
     /** Runtime follow-up intent for the Gateway config watcher. */
     afterWrite?: ConfigWriteAfterWrite;
   } = {},
 ): Promise<OpenClawConfig> {
-  let config = configInput;
-  let baseHash = opts.baseHash;
-  let baseSnapshot = opts.baseSnapshot;
-  const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
-  const afterWrite = opts.afterWrite ?? { mode: "auto" };
-  if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
-    // Explicit undefined means this writer already migrated its baseline; an omitted
-    // key cannot distinguish fresh pending records from stale authored metadata.
-    if (!Object.hasOwn(opts, "migrationBaseConfig")) {
-      throw new Error(
-        "Wizard config writes with pending plugin installs must declare migration ownership.",
-      );
-    }
-    const migrationBaseConfig = opts.migrationBaseConfig;
-    if (migrationBaseConfig && hasPendingPluginInstallRecords(migrationBaseConfig)) {
-      const migration = await commitConfigWriteWithPendingPluginInstalls({
-        nextConfig: migrationBaseConfig,
-        sourceConfig: migrationBaseConfig,
-        writeOptions: { allowConfigSizeDrop: true },
-        commit: async (nextConfig, writeOptions) => {
-          return await replaceConfigFile({
-            nextConfig,
-            ...(baseSnapshot ? { snapshot: baseSnapshot } : {}),
-            ...(baseHash !== undefined ? { baseHash } : {}),
-            ...(writeOptions ? { writeOptions } : {}),
-            afterWrite,
-          });
-        },
-      });
-      baseHash = migration.persistedHash ?? undefined;
-      baseSnapshot = undefined;
-      config = stripPendingPluginInstallRecords(
-        config,
-        unchangedPendingPluginInstallRecordIds(config, migrationBaseConfig),
-      );
-      opts.onPendingPluginInstallMigration?.();
-    }
-  }
-  const committed = await commitConfigWriteWithPendingPluginInstalls({
-    nextConfig: config,
-    writeOptions: { allowConfigSizeDrop },
-    commit: async (nextConfig, writeOptions) => {
-      return await replaceConfigFile({
-        nextConfig,
-        ...(baseSnapshot ? { snapshot: baseSnapshot } : {}),
-        ...(baseHash !== undefined ? { baseHash } : {}),
-        ...(writeOptions ? { writeOptions } : {}),
-        afterWrite,
-      });
+  const committed = await transformConfigWithPendingPluginInstalls({
+    ...(opts.baseHash !== undefined ? { baseHash: opts.baseHash } : {}),
+    // Caller-owned snapshots are one-shot CAS preconditions, not retry baselines.
+    ...(opts.baseHash !== undefined || opts.baseSnapshot ? { maxAttempts: 1 } : {}),
+    ...(opts.afterWrite ? { afterWrite: opts.afterWrite } : {}),
+    writeOptions: {
+      ...opts.writeOptions,
+      ...(opts.allowConfigSizeDrop !== undefined
+        ? { allowConfigSizeDrop: opts.allowConfigSizeDrop }
+        : {}),
+      ...(opts.baseSnapshot ? { baseSnapshot: opts.baseSnapshot } : {}),
     },
+    transform: (current) => ({
+      nextConfig: opts.mergeBase
+        ? (applyMergePatch(current, createMergePatch(opts.mergeBase, config)) as OpenClawConfig)
+        : config,
+    }),
   });
-  return committed.config;
+  return committed.nextConfig;
 }
 
 export async function readSetupConfigFileSnapshot() {

@@ -3,11 +3,13 @@ import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.
 
 export function resolveDiscordQaScenarioIds(params: {
   profile?: string;
+  primaryModel?: string;
   providerMode?: QaProviderModeInput;
   scenarioIds?: readonly string[];
 }) {
   return resolveLiveTransportQaScenarioIds({
     channelId: "discord",
+    supportsModuleFlows: true,
     ...params,
     providerMode: params.providerMode ?? "live-frontier",
   });

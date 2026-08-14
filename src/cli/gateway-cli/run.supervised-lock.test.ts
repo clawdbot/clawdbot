@@ -102,6 +102,30 @@ describe("supervised gateway lock recovery", () => {
     expect(testing.resolveGatewayLockErrorExitCode(failure)).toBe(78);
   });
 
+  it("preserves an agent-embedded owner error under a supervisor", async () => {
+    const err = new GatewayLockError(
+      "another embedded OpenClaw state writer is active (pid 123); lock timeout after 5000ms",
+    );
+    const startLoop = vi.fn(async () => {
+      throw err;
+    });
+    const probeHealth = vi.fn(async () => true);
+
+    await expect(
+      testing.runGatewayLoopWithSupervisedLockRecovery({
+        startLoop,
+        supervisor: "systemd",
+        port: 18789,
+        healthHost: "127.0.0.1",
+        log: createLogger(),
+        probeHealth,
+      }),
+    ).rejects.toBe(err);
+
+    expect(startLoop).toHaveBeenCalledTimes(1);
+    expect(probeHealth).not.toHaveBeenCalled();
+  });
+
   it("bounds supervised retries when the existing gateway stays unhealthy", async () => {
     let now = 0;
     const startLoop = vi.fn(async () => {

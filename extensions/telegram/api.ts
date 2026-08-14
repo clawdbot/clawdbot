@@ -51,7 +51,6 @@ export {
   isBinaryContent,
   normalizeForwardedContext,
   resetTelegramForumFlagCacheForTest,
-  resolveTelegramDirectPeerId,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
@@ -64,6 +63,7 @@ export {
   type TelegramThreadSpec,
   withResolvedTelegramForumFlag,
 } from "./src/bot/helpers.js";
+export { resolveTelegramDirectPeerId } from "./src/dm-session-key.js";
 export {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,

@@ -1,11 +1,11 @@
 // Sandbox browser creation tests cover Docker args, bridge auth, noVNC access,
 // config hashing, and cached bridge invalidation.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   computeSandboxBrowserConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
@@ -45,13 +45,7 @@ const runtimeMocks = vi.hoisted(() => ({
   log: vi.fn(),
 }));
 
-const tmpDirs: string[] = [];
-
-function makeTempDir(): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-mounts-"));
-  tmpDirs.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./docker.js", async () => {
   const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
@@ -122,6 +116,7 @@ function buildConfig(noVncEnabled: boolean): SandboxConfig {
     scope: "session",
     workspaceAccess: "none",
     workspaceRoot: "/tmp/openclaw-sandboxes",
+    dockerTmpfsSource: "default",
     docker: {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",
@@ -237,12 +232,6 @@ function latestBridgeResolved(): Record<string, unknown> {
 describe("ensureSandboxBrowser create args", () => {
   beforeAll(async () => {
     await loadFreshBrowserModulesForTest();
-  });
-
-  afterEach(() => {
-    for (const dir of tmpDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   beforeEach(() => {
@@ -513,11 +502,12 @@ describe("ensureSandboxBrowser create args", () => {
     expect(result?.noVncUrl).toBeUndefined();
   });
 
-  it("applies read-only skill overlays after browser custom binds", async () => {
-    // Browser sandboxes share workspace mount semantics with shell sandboxes:
-    // protected skill overlays must win over custom binds.
-    const workspaceDir = makeTempDir();
-    const customRoot = makeTempDir();
+  it("skips browser user binds that conflict with protected skill overlay container paths", async () => {
+    // Protected skill overlays are authoritative; a browser bind targeting the same
+    // container path is skipped so the read-only skill overlay wins and Docker does
+    // not reject the container with a "Duplicate mount point" error.
+    const workspaceDir = tempDirs.make("openclaw-browser-mounts-");
+    const customRoot = tempDirs.make("openclaw-browser-mounts-");
     mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
     const cfg = buildConfig(false);
     cfg.workspaceAccess = "rw";
@@ -534,14 +524,18 @@ describe("ensureSandboxBrowser create args", () => {
 
     const bindArgs = collectDockerFlagValues(requireDockerCreateArgs(), "-v");
     const workspaceMountIdx = bindArgs.indexOf(`${workspaceDir}:/workspace:z`);
-    const customMountIdx = bindArgs.indexOf(`${customRoot}:/workspace/skills:rw`);
-    const protectedMountIdx = bindArgs.indexOf(
-      `${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`,
-    );
+    const customMount = `${customRoot}:/workspace/skills:rw`;
+    const protectedMount = `${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`;
+    const protectedMountIdx = bindArgs.indexOf(protectedMount);
 
     expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
-    expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
-    expect(protectedMountIdx).toBeGreaterThan(customMountIdx);
+    // User bind is skipped because it conflicts with the protected skill overlay
+    expect(bindArgs).not.toContain(customMount);
+    // Protected skill overlay is present and appended after user binds
+    expect(protectedMountIdx).toBeGreaterThan(workspaceMountIdx);
+    expect(runtimeMocks.log).toHaveBeenCalledWith(
+      expect.stringContaining(`skipping user bind "${customMount}"`),
+    );
   });
 
   it("includes the explicit env policy epoch in the browser config hash when needed", async () => {

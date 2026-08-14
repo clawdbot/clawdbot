@@ -2,6 +2,7 @@
 // Apple Watch cannot use generic WebSockets on-device, so node events use bounded HTTPS polls.
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -24,14 +25,7 @@ import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
 } from "../infra/device-identity.js";
-import {
-  approveBootstrapDevicePairing,
-  ensureDeviceToken,
-  getPairedDevice,
-  requestDevicePairing,
-  verifyDeviceToken,
-} from "../infra/device-pairing.js";
-import { captureAuthenticatedNodePairingState } from "../infra/node-pairing-state.js";
+import { captureAuthenticatedNodePairingState } from "../infra/device-pairing-node-state.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
@@ -39,8 +33,17 @@ import {
   releaseNodePairingCleanupClaim,
   requestNodePairing,
   recordPairedNodeConnection,
+  recordPairedNodeDisconnection,
   type RequestNodePairingResult,
-} from "../infra/node-pairing.js";
+} from "../infra/device-pairing-node.js";
+import {
+  approveBootstrapDevicePairing,
+  ensureDeviceToken,
+  getPairedDevice,
+  requestDevicePairing,
+  verifyDeviceToken,
+} from "../infra/device-pairing.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isNodePairingSetupBootstrapProfile } from "../shared/device-bootstrap-profile.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
@@ -59,7 +62,10 @@ import {
 } from "./http-common.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { isLoopbackAddress, resolveRequestClientIp } from "./net.js";
-import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
+import {
+  reconcileNodePairingOnConnect,
+  resolveEffectiveComputerUseDescriptor,
+} from "./node-connect-reconcile.js";
 import type { NodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import type {
   NodeConnectivityResult,
@@ -173,10 +179,6 @@ function resolveWatchClientAddress(
   };
 }
 
-function isStringRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
   let aborted = false;
   let settled = false;
@@ -254,17 +256,11 @@ function createChallengeStore() {
           challenges.delete(oldest[0]);
         }
       }
-      while (challenges.size >= MAX_PENDING_CHALLENGES) {
-        const oldest = challenges.keys().next().value;
-        if (typeof oldest !== "string") {
-          break;
-        }
-        challenges.delete(oldest);
-      }
+      pruneMapToMaxSize(challenges, MAX_PENDING_CHALLENGES - 1);
       const nonce = randomBytes(24).toString("base64url");
       const expiresAtMs = current + CHALLENGE_TTL_MS;
       challenges.set(nonce, { clientKey, expiresAtMs });
-      return { nonce, expiresAtMs };
+      return { nonce, ts: current, expiresAtMs };
     },
     consume: (nonce: string, clientKey: string, current: number) => {
       const challenge = challenges.get(nonce);
@@ -328,13 +324,40 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       }
       session.waiter = undefined;
     }
+    const nodeSession = options.nodeRegistry.get(session.nodeId);
+    const disconnectHistory =
+      nodeSession?.connId === session.connId && nodeSession.pairingGeneration
+        ? {
+            nodeId: nodeSession.nodeId,
+            connectedAtMs: nodeSession.connectedAtMs,
+            pairingGeneration: nodeSession.pairingGeneration,
+          }
+        : undefined;
     const disconnectedNodeId = options.nodeRegistry.unregister(session.connId);
     if (disconnectedNodeId) {
-      try {
-        options.onNodeDisconnected?.(disconnectedNodeId, reason);
-      } catch (error) {
-        options.onError?.("watch node disconnect cleanup failed", error);
-      }
+      void (async () => {
+        try {
+          if (disconnectHistory && disconnectHistory.nodeId === disconnectedNodeId) {
+            await recordPairedNodeDisconnection({
+              nodeId: disconnectHistory.nodeId,
+              connectedAtMs: disconnectHistory.connectedAtMs,
+              disconnectedAtMs: now(),
+              expectedPairingGeneration: {
+                nodeId: disconnectHistory.nodeId,
+                key: disconnectHistory.pairingGeneration,
+              },
+              baseDir: options.pairingBaseDir,
+            });
+          }
+        } catch (error) {
+          options.onError?.("watch node disconnect persistence failed", error);
+        }
+        try {
+          options.onNodeDisconnected?.(disconnectedNodeId, reason);
+        } catch (error) {
+          options.onError?.("watch node disconnect cleanup failed", error);
+        }
+      })();
     }
   };
 
@@ -353,7 +376,8 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
   };
 
   const sendQueuedEvent = (res: ServerResponse, queued: QueuedNodeEvent): boolean => {
-    if (res.writableEnded) {
+    // The socket can be destroyed before its response receives the close event.
+    if (res.destroyed || res.socket?.destroyed || res.writableEnded) {
       return false;
     }
     try {
@@ -841,6 +865,10 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       registeredConnect.declaredPermissions = reconciliation.declaredPermissions;
       registeredConnect.caps = reconciliation.effectiveCaps;
       registeredConnect.commands = reconciliation.effectiveCommands;
+      registeredConnect.computerUse = resolveEffectiveComputerUseDescriptor({
+        commands: reconciliation.effectiveCommands,
+        declared: reconciliation.declaredComputerUse,
+      });
       registeredConnect.permissions = reconciliation.effectivePermissions;
 
       let session: WatchNodeSession | undefined;
@@ -1020,11 +1048,11 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     if (body === undefined) {
       return;
     }
-    if (!isStringRecord(body) || typeof body.id !== "string" || typeof body.ok !== "boolean") {
+    if (!isRecord(body) || typeof body.id !== "string" || typeof body.ok !== "boolean") {
       sendInvalidRequest(res, "invalid node invoke result");
       return;
     }
-    const error = isStringRecord(body.error)
+    const error = isRecord(body.error)
       ? {
           ...(typeof body.error.code === "string" ? { code: body.error.code } : {}),
           ...(typeof body.error.message === "string" ? { message: body.error.message } : {}),

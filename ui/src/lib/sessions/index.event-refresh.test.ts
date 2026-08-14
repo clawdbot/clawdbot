@@ -7,13 +7,16 @@ import { createSessionCapability } from "./index.ts";
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
 const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
 
-function sessionsResult(ts: number): SessionsListResult {
+function sessionsResult(
+  ts: number,
+  sessions: SessionsListResult["sessions"] = [],
+): SessionsListResult {
   return {
     ts,
     path: "",
-    count: 0,
+    count: sessions.length,
     defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [],
+    sessions,
   };
 }
 
@@ -56,6 +59,49 @@ function createHarness(request: GatewayBrowserClient["request"]) {
 }
 
 describe("event-driven session list refresh", () => {
+  it("retains every loaded page when a session event replaces the canonical list", async () => {
+    vi.useFakeTimers();
+    const rows = Array.from({ length: 120 }, (_, index) => ({
+      key: `agent:main:session-${index}`,
+      kind: "direct" as const,
+      updatedAt: index + 1,
+    }));
+    const request = vi.fn(async (method: string, params?: { limit?: number; offset?: number }) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const offset = params?.offset ?? 0;
+      const limit = params?.limit ?? 50;
+      const page = rows.slice(offset, offset + limit);
+      const hasMore = offset + page.length < rows.length;
+      return {
+        ...sessionsResult(offset + 1, page),
+        totalCount: rows.length,
+        nextOffset: hasMore ? offset + page.length : null,
+        hasMore,
+      };
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      await sessions.refresh({ agentId: "main", limit: 60, force: true });
+      await sessions.refresh({ agentId: "main", limit: 60, offset: 60, append: true, force: true });
+      expect(sessions.state.result?.sessions).toHaveLength(120);
+
+      emitEvent(sessionChangedEvent("agent:main:session-0"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request.mock.calls[2]?.[1]).toMatchObject({ agentId: "main", limit: 120 });
+      expect(request.mock.calls[2]?.[1]).not.toHaveProperty("offset");
+      expect(sessions.state.result?.sessions).toHaveLength(120);
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("clears a recreated session's prior deletion before the debounced refresh", async () => {
     vi.useFakeTimers();
     const key = "agent:main:recreated-thread";
@@ -171,6 +217,167 @@ describe("event-driven session list refresh", () => {
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { timing: "before", fireBeforeInitialCompletion: true },
+    { timing: "after", fireBeforeInitialCompletion: false },
+  ])(
+    "preserves queued explicit options when the event debounce fires $timing the active request completes",
+    async ({ fireBeforeInitialCompletion }) => {
+      vi.useFakeTimers();
+      const firstList = deferred<SessionsListResult>();
+      const secondList = deferred<SessionsListResult>();
+      const secondListStarted = deferred<void>();
+      let listCalls = 0;
+      const request = vi.fn(async (method: string, _params?: unknown) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        listCalls += 1;
+        if (listCalls === 1) {
+          return await firstList.promise;
+        }
+        if (listCalls === 2) {
+          secondListStarted.resolve();
+          return await secondList.promise;
+        }
+        return sessionsResult(listCalls);
+      });
+      const { sessions, emitEvent } = createHarness(
+        request as unknown as GatewayBrowserClient["request"],
+      );
+
+      try {
+        const initialRefresh = sessions.refresh({ agentId: "main", force: true });
+        const explicitRefresh = sessions.refresh({
+          agentId: "other",
+          search: "queued",
+          archivedFilter: "archived",
+          limit: 17,
+          includeDerivedTitles: true,
+          backgroundHydrate: true,
+          force: true,
+        });
+
+        emitEvent(sessionChangedEvent("agent:main:later-event"));
+        if (fireBeforeInitialCompletion) {
+          await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+          expect(request).toHaveBeenCalledTimes(1);
+        }
+
+        firstList.resolve(sessionsResult(1));
+        await secondListStarted.promise;
+        if (!fireBeforeInitialCompletion) {
+          await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+        }
+
+        expect(request.mock.calls[1]?.[1]).toEqual({
+          includeGlobal: true,
+          includeUnknown: true,
+          configuredAgentsOnly: true,
+          limit: 17,
+          includeDerivedTitles: true,
+          archived: true,
+          agentId: "other",
+          search: "queued",
+        });
+        expect(sessions.state.loading).toBe(false);
+
+        secondList.resolve(sessionsResult(2));
+        await Promise.all([initialRefresh, explicitRefresh]);
+        expect(request).toHaveBeenCalledTimes(2);
+      } finally {
+        firstList.resolve(sessionsResult(1));
+        secondList.resolve(sessionsResult(2));
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    {
+      timing: "after the append is queued",
+      eventBeforeAppend: false,
+      queueReplacementFirst: false,
+    },
+    {
+      timing: "before the append is queued",
+      eventBeforeAppend: true,
+      queueReplacementFirst: false,
+    },
+    {
+      timing: "before a queued replacement is replaced by the append",
+      eventBeforeAppend: true,
+      queueReplacementFirst: true,
+    },
+  ])("keeps event invalidation $timing", async ({ eventBeforeAppend, queueReplacementFirst }) => {
+    vi.useFakeTimers();
+    const firstList = deferred<SessionsListResult>();
+    const secondList = deferred<SessionsListResult>();
+    const secondListStarted = deferred<void>();
+    let listCalls = 0;
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCalls += 1;
+      if (listCalls === 1) {
+        return await firstList.promise;
+      }
+      if (listCalls === 2) {
+        secondListStarted.resolve();
+        return await secondList.promise;
+      }
+      return sessionsResult(listCalls);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      const initialRefresh = sessions.refresh({ agentId: "main", limit: 25, force: true });
+      if (eventBeforeAppend) {
+        emitEvent(sessionChangedEvent("agent:main:later-event"));
+      }
+      if (queueReplacementFirst) {
+        void sessions.refresh({ agentId: "discarded", force: true });
+      }
+      const appendRefresh = sessions.refresh({
+        agentId: "main",
+        limit: 25,
+        offset: 25,
+        append: true,
+        force: true,
+      });
+      if (!eventBeforeAppend) {
+        emitEvent(sessionChangedEvent("agent:main:later-event"));
+      }
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      firstList.resolve(sessionsResult(1));
+      await secondListStarted.promise;
+      expect(request.mock.calls[1]?.[1]).toMatchObject({
+        agentId: "main",
+        limit: 25,
+        offset: 25,
+      });
+
+      secondList.resolve(sessionsResult(2));
+      await Promise.all([initialRefresh, appendRefresh]);
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request.mock.calls[2]?.[1]).toMatchObject({
+        agentId: "main",
+        limit: 25,
+      });
+      expect(request.mock.calls[2]?.[1]).not.toHaveProperty("offset");
+    } finally {
+      firstList.resolve(sessionsResult(1));
+      secondList.resolve(sessionsResult(2));
       sessions.dispose();
       vi.useRealTimers();
     }

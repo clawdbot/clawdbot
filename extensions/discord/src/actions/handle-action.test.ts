@@ -8,8 +8,12 @@ const handleDiscordActionMock = vi
   .spyOn(runtimeModule, "handleDiscordAction")
   .mockResolvedValue({ content: [], details: { ok: true } });
 const { handleDiscordMessageAction } = await import("./handle-action.js");
-const { beginDiscordInboundEventDeliveryCorrelation } =
-  await import("../inbound-event-delivery.js");
+const {
+  beginDiscordActiveTurnThreadRoute,
+  notifyDiscordActiveTurnThreadCreated,
+  notifyDiscordActiveTurnThreadReplyDelivered,
+} = await import("../active-turn-thread-route.js");
+const { discordInboundEventDelivery } = await import("../inbound-event-delivery.js");
 
 function discordConfig(actions?: Record<string, boolean>): OpenClawConfig {
   return {
@@ -429,67 +433,93 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
-  it("notifies inbound event delivery after message sends", async () => {
-    const markDelivered = vi.fn();
-    const end = beginDiscordInboundEventDeliveryCorrelation(
-      "agent:main:discord:channel:c1",
-      {
-        outboundTo: "channel:c1",
-        outboundAccountId: "default",
-        markInboundEventDelivered: markDelivered,
+  it.each([
+    {
+      action: "send" as const,
+      params: { to: "channel:c1", message: "hello" },
+    },
+    {
+      action: "upload-file" as const,
+      params: { to: "channel:c1", filePath: "/tmp/image.png" },
+    },
+    {
+      action: "poll" as const,
+      params: {
+        to: "channel:c1",
+        pollQuestion: "Which option?",
+        pollOption: ["first", "second"],
       },
-      { inboundEventKind: "room_event" },
-    );
+    },
+    {
+      action: "sticker" as const,
+      params: { to: "channel:c1", stickerId: ["sticker-1"] },
+    },
+    {
+      action: "thread-reply" as const,
+      params: { threadId: "c1", message: "thread update" },
+    },
+    {
+      action: "thread-create" as const,
+      params: { channelId: "c1", messageId: "message-1", threadName: "investigation" },
+    },
+  ])(
+    "records room-event delivery only after $action receives a positive receipt",
+    async ({ action, params }) => {
+      const sessionKey = "agent:main:discord:channel:c1";
 
-    try {
-      await handleDiscordMessageAction({
-        action: "send",
-        params: {
-          to: "channel:c1",
-          message: "hello",
-        },
-        cfg: discordConfig(),
-        accountId: "default",
-        sessionKey: "agent:main:discord:channel:c1",
-        inboundEventKind: "room_event",
-      });
-    } finally {
-      end();
-    }
+      for (const ok of [false, true]) {
+        const markDelivered = vi.fn();
+        const onThreadAdopted = vi.fn();
+        const endDelivery = discordInboundEventDelivery.begin(
+          sessionKey,
+          {
+            outboundTo: "channel:c1",
+            outboundAccountId: "default",
+            markInboundEventDelivered: markDelivered,
+          },
+          { inboundEventKind: "room_event" },
+        );
+        const endThreadRoute =
+          action === "thread-create"
+            ? beginDiscordActiveTurnThreadRoute(sessionKey, {
+                accountId: "default",
+                sourceChannelId: "c1",
+                sourceMessageId: "message-1",
+                onThreadAdopted,
+              })
+            : () => {};
 
-    expect(markDelivered).toHaveBeenCalledTimes(1);
-  });
+        handleDiscordActionMock.mockResolvedValueOnce({
+          content: [],
+          details: {
+            ok,
+            ...(ok ? {} : { error: "delivery failed" }),
+            ...(action === "thread-create" ? { thread: { id: "thread-1" } } : {}),
+          },
+        });
 
-  it("notifies inbound event delivery after visible message actions", async () => {
-    const markDelivered = vi.fn();
-    const end = beginDiscordInboundEventDeliveryCorrelation(
-      "agent:main:discord:channel:c1",
-      {
-        outboundTo: "channel:c1",
-        outboundAccountId: "default",
-        markInboundEventDelivered: markDelivered,
-      },
-      { inboundEventKind: "room_event" },
-    );
+        try {
+          const result = await handleDiscordMessageAction({
+            action,
+            params,
+            cfg: discordConfig({ threads: true, polls: true, stickers: true }),
+            accountId: "default",
+            sessionKey,
+            inboundEventKind: "room_event",
+          });
 
-    try {
-      await handleDiscordMessageAction({
-        action: "upload-file",
-        params: {
-          to: "channel:c1",
-          filePath: "/tmp/image.png",
-        },
-        cfg: discordConfig(),
-        accountId: "default",
-        sessionKey: "agent:main:discord:channel:c1",
-        inboundEventKind: "room_event",
-      });
-    } finally {
-      end();
-    }
-
-    expect(markDelivered).toHaveBeenCalledTimes(1);
-  });
+          expect(result.details).toMatchObject({ ok });
+          expect(markDelivered).toHaveBeenCalledTimes(ok ? 1 : 0);
+          if (action === "thread-create") {
+            expect(onThreadAdopted).toHaveBeenCalledTimes(ok ? 1 : 0);
+          }
+        } finally {
+          endThreadRoute();
+          endDelivery();
+        }
+      }
+    },
+  );
 
   it("maps upload-file to Discord sendMessage with media read context", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
@@ -612,10 +642,176 @@ describe("handleDiscordMessageAction", () => {
       },
       cfg,
       options: {
+        mediaAccess: undefined,
         mediaLocalRoots: ["/tmp/agent-root"],
         mediaReadFile,
       },
     });
+  });
+
+  it("adopts a thread created from the active source message and confirms replies there", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
+    const onThreadAdopted = vi.fn();
+    const onThreadReplyDelivered = vi.fn();
+    const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
+      onThreadAdopted,
+      onThreadReplyDelivered,
+    });
+    try {
+      expect(
+        notifyDiscordActiveTurnThreadReplyDelivered({
+          sessionKey,
+          accountId: "account-1",
+        }),
+      ).toBe(false);
+
+      handleDiscordActionMock.mockResolvedValueOnce({
+        content: [],
+        details: { ok: true, thread: { id: "thread-1" } },
+      });
+      await handleDiscordMessageAction({
+        action: "thread-create",
+        params: {
+          channelId: "channel-1",
+          messageId: "message-1",
+          threadName: "investigation",
+        },
+        cfg: discordConfig({ threads: true }),
+        accountId: "account-1",
+        sessionKey,
+      });
+
+      expect(onThreadAdopted).toHaveBeenCalledWith("thread-1");
+
+      handleDiscordActionMock.mockResolvedValueOnce({
+        content: [],
+        details: { ok: true },
+      });
+      const mismatchedResult = await handleDiscordMessageAction({
+        action: "thread-reply",
+        params: {
+          threadId: "thread-2",
+          message: "unrelated",
+        },
+        cfg: discordConfig({ threads: true }),
+        accountId: "account-1",
+        sessionKey,
+      });
+
+      expect(mismatchedResult.details).toEqual({ ok: true });
+      expect(onThreadReplyDelivered).not.toHaveBeenCalled();
+
+      handleDiscordActionMock.mockResolvedValueOnce({
+        content: [],
+        details: { ok: true },
+      });
+      const result = await handleDiscordMessageAction({
+        action: "thread-reply",
+        params: {
+          threadId: "thread-1",
+          message: "done",
+        },
+        cfg: discordConfig({ threads: true }),
+        accountId: "account-1",
+        sessionKey,
+      });
+
+      expect(result.details).toEqual({
+        ok: true,
+        sourceReplyRoute: "current-source",
+      });
+      expect(onThreadReplyDelivered).toHaveBeenCalledWith("thread-1");
+    } finally {
+      endRoute();
+    }
+  });
+
+  it("confirms only the matching adopted thread across concurrent routes", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
+    const firstReplyDelivered = vi.fn();
+    const secondReplyDelivered = vi.fn();
+    const endFirstRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
+      onThreadAdopted: vi.fn(),
+      onThreadReplyDelivered: firstReplyDelivered,
+    });
+    const endSecondRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-2",
+      onThreadAdopted: vi.fn(),
+      onThreadReplyDelivered: secondReplyDelivered,
+    });
+    try {
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey,
+        accountId: "account-1",
+        sourceChannelId: "channel-1",
+        sourceMessageId: "message-1",
+        threadId: "thread-1",
+      });
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey,
+        accountId: "account-1",
+        sourceChannelId: "channel-1",
+        sourceMessageId: "message-2",
+        threadId: "thread-2",
+      });
+
+      expect(
+        notifyDiscordActiveTurnThreadReplyDelivered({
+          sessionKey,
+          accountId: "account-1",
+          threadId: "thread-2",
+        }),
+      ).toBe(true);
+      expect(firstReplyDelivered).not.toHaveBeenCalled();
+      expect(secondReplyDelivered).toHaveBeenCalledWith("thread-2");
+    } finally {
+      endFirstRoute();
+      endSecondRoute();
+    }
+  });
+
+  it("keeps a successful thread-create result when progress migration fails", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
+    const onThreadAdoptionError = vi.fn();
+    const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
+      onThreadAdopted: async () => {
+        throw new Error("preview move failed");
+      },
+      onThreadAdoptionError,
+    });
+    try {
+      const expectedResult = {
+        content: [],
+        details: { ok: true, thread: { id: "thread-1" } },
+      };
+      handleDiscordActionMock.mockResolvedValueOnce(expectedResult);
+
+      const result = await handleDiscordMessageAction({
+        action: "thread-create",
+        params: {
+          channelId: "channel-1",
+          messageId: "message-1",
+          threadName: "investigation",
+        },
+        cfg: discordConfig({ threads: true }),
+        sessionKey,
+      });
+
+      expect(result).toBe(expectedResult);
+      expect(onThreadAdoptionError).toHaveBeenCalledWith(expect.any(Error));
+    } finally {
+      endRoute();
+    }
   });
 
   it("forwards top-level components on sends", async () => {

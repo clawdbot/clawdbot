@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
@@ -42,7 +43,12 @@ export type RenderableImageBlock = ImageBlock & {
 
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 
-type ChatMediaResourceKind = "assistant-attachment" | "managed-image" | "pairing-qr";
+type ChatMediaResourceKind =
+  | "assistant-attachment"
+  | "document-preview"
+  | "managed-image"
+  | "managed-media"
+  | "pairing-qr";
 
 export type ChatMediaResource<Value> = {
   kind: ChatMediaResourceKind;
@@ -71,6 +77,7 @@ const chatMediaResources = new Map<string, ChatMediaResource<unknown>>();
 const chatMediaSubscribers = new Map<() => void, ChatMediaSubscriber>();
 const managedImageBlobUrls = new Map<string, ManagedImageBlobUrl>();
 const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
+let chatMediaRenderVersion = 0;
 
 function chatMediaResourceKey(kind: ChatMediaResourceKind, cacheKey: string): string {
   return `${kind}\0${cacheKey}`;
@@ -152,10 +159,15 @@ export function isChatMediaResourceCurrent<Value>(resource: ChatMediaResource<Va
   );
 }
 
+export function getChatMediaRenderVersion(): number {
+  return chatMediaRenderVersion;
+}
+
 export function notifyChatMediaResourceSubscribers<Value>(resource: ChatMediaResource<Value>) {
   if (!isChatMediaResourceCurrent(resource)) {
     return;
   }
+  chatMediaRenderVersion = (chatMediaRenderVersion + 1) % Number.MAX_SAFE_INTEGER;
   // A pane can change its subscription while another pane is being notified.
   // Snapshot the current generation so a replacement never receives stale work.
   for (const subscriber of Array.from(resource.subscribers)) {
@@ -356,8 +368,21 @@ function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   return hasVideoMediaFileExtension(path);
 }
 
+// Collision-safe managed inbound URIs store the original filename plus a
+// terminal "---<uuid>" storage suffix in the basename
+// (e.g. media://inbound/report---<uuid>.pdf). Restore the original filename by
+// removing only that final generated segment, so an original name that itself
+// contains a "---<uuid>"-shaped part is preserved; the stored URI is unchanged.
+const MANAGED_INBOUND_MEDIA_PREFIX = "media://inbound/";
+const MANAGED_INBOUND_UUID_SUFFIX_PATTERN =
+  /---[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\.[^./]*$|$)/i;
+
 function labelForMediaPath(mediaPath: string): string {
   const trimmed = mediaPath.trim();
+  if (trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) {
+    const basename = trimmed.split("/").pop()?.trim() || trimmed;
+    return basename.replace(MANAGED_INBOUND_UUID_SUFFIX_PATTERN, "") || basename;
+  }
   try {
     if (/^https?:\/\//i.test(trimmed)) {
       const parsed = new URL(trimmed);
@@ -462,8 +487,7 @@ export function extractImages(message: unknown): ImageBlock[] {
 }
 
 function readPairingQrExpiresAtMs(block: Record<string, unknown>): number | undefined {
-  const expiresAtMs = block.expiresAtMs;
-  return typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs) ? expiresAtMs : undefined;
+  return asFiniteNumber(block.expiresAtMs);
 }
 
 function isExpiredPairingQrBlock(block: Record<string, unknown>, nowMs = Date.now()): boolean {
@@ -552,7 +576,7 @@ export function schedulePairingQrExpiryRefresh(
 
 export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   const attachments: AttachmentItem[] = [];
-  for (const { path: mediaPath, mediaType } of readTranscriptMediaEntries(message)) {
+  for (const { path: mediaPath, mediaType, fileName } of readTranscriptMediaEntries(message)) {
     if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
       continue;
     }
@@ -566,7 +590,7 @@ export function extractTranscriptAttachments(message: unknown): AttachmentItem[]
       attachment: {
         url: mediaPath,
         kind,
-        label: labelForMediaPath(mediaPath),
+        label: fileName?.trim() || labelForMediaPath(mediaPath),
         ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
       },
     });

@@ -51,6 +51,38 @@ describe("browser tool detail redaction", () => {
     expect(redactToolDetail(input)).toBe(input);
   });
 
+  it.each([
+    ["expanded GitHub", `gho_${"A".repeat(20)}`],
+    ["GitLab", `glpat-${"A".repeat(24)}`],
+    ["Slack webhook", `https://hooks.slack.com/services/TABC123/BABC123/${"A".repeat(24)}`],
+    ["Discord webhook", `https://discord.com/api/webhooks/123456789012345678/${"A".repeat(60)}`],
+    ["Discord bot", `${"A".repeat(24)}.${"B".repeat(6)}.${"C".repeat(27)}`],
+    ["Stripe", `sk_live_${"A".repeat(20)}`],
+    ["SendGrid", `SG.${"A".repeat(15)}.${"B".repeat(15)}`],
+    ["DigitalOcean", `dop_v1_${"A".repeat(20)}`],
+    ["fal", `fal_${"A".repeat(20)}`],
+    ["Fernet", `gAAAA${"A".repeat(24)}`],
+  ])("redacts the canonical %s secret family", (label, secret) => {
+    const prefix = label === "Discord bot" ? "discord token " : "";
+    expect(redactToolDetail(`${prefix}${secret}`)).not.toContain(secret);
+  });
+
+  it("redacts URL userinfo and database connection passwords", () => {
+    const httpPassword = "http-password-value";
+    const databasePassword = "database-password-value";
+    const redacted = redactToolDetail(
+      `https://user:${httpPassword}@example.test postgres://user:${databasePassword}@db.test/app`,
+    );
+
+    expect(redacted).not.toContain(httpPassword);
+    expect(redacted).not.toContain(databasePassword);
+  });
+
+  it("redacts AWS secret-access-key fields", () => {
+    const secret = "Aa0/".repeat(10);
+    expect(redactToolDetail(`{"awsSecretAccessKey":"${secret}"}`)).not.toContain(secret);
+  });
+
   it("exposes the tool payload redaction name used by shared display modules", () => {
     expect(redactToolPayloadText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
       "OPENAI_API_KEY=sk-123...cdef",

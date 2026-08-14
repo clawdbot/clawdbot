@@ -234,6 +234,17 @@ describe("browser.request profile selection", () => {
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
+  it("honors a configured browser node in manual routing mode", async () => {
+    loadConfigMock.mockReturnValue({
+      gateway: { nodes: { browser: { mode: "manual", node: "node-1" } } },
+    });
+
+    const { respond, nodeRegistry } = await runBrowserRequest({ method: "GET", path: "/" });
+
+    expect(invokeParams(nodeRegistry).nodeId).toBe("node-1");
+    expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
   it.each([
     {
       method: "POST",

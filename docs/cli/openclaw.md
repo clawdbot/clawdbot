@@ -265,8 +265,10 @@ a single OpenClaw authority tool plus the inert native planning utility. In all
 three cases, setup writes remain confined to OpenClaw's audited approval
 contract.
 
-Gemini CLI remains available for normal agents, but it cannot enforce the
-tool-free probe required by the inference gate, so it cannot host OpenClaw.
+Gemini CLI remains available as an explicitly configured runtime for normal
+agents, but Gemini CLI and Antigravity are not inference-gate setup routes.
+Use AI Studio API-key or Vertex AI for the inference gate. The optional Gemini
+CLI runtime specifically requires an AI Studio API-key profile.
 
 ## Switching to an agent
 

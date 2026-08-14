@@ -24,9 +24,11 @@ struct MenuContent: View {
     @State private var micObserver = AudioInputDeviceObserver()
     @State private var micRefreshTask: Task<Void, Never>?
     @State private var browserControlEnabled = true
-    @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
-    @AppStorage(debugFileLogEnabledKey) private var appFileLoggingEnabled: Bool = false
+    @AppStorage(cameraEnabledKey, store: AppDefaults.standard) private var cameraEnabled: Bool = false
+    @AppStorage(appLogLevelKey, store: AppDefaults.standard)
+    private var appLogLevelRaw: String = Logger.Level.info.rawValue
+    @AppStorage(debugFileLogEnabledKey, store: AppDefaults.standard)
+    private var appFileLoggingEnabled: Bool = false
 
     init(state: AppState, updater: UpdaterProviding?) {
         self._state = Bindable(wrappedValue: state)
@@ -181,6 +183,9 @@ struct MenuContent: View {
         .task {
             VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && self.state.voicePushToTalkEnabled)
         }
+        .task {
+            await self.nodesStore.prepareLocalNodeIdentity()
+        }
         .onChange(of: self.state.voicePushToTalkEnabled) { _, enabled in
             VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && enabled)
         }
@@ -204,6 +209,7 @@ struct MenuContent: View {
     private var connectionLabel: String {
         DashboardGatewayMenuModel.connectionLabel(
             mode: self.state.connectionMode,
+            controlState: self.controlChannel.state,
             entries: self.dashboardManager.gatewayEntries)
     }
 
@@ -353,12 +359,15 @@ struct MenuContent: View {
         guard self.state.connectionMode != .unconfigured else { return nil }
         guard case .connected = self.controlChannel.state else { return nil }
 
-        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(
-            profile: MacNodeModeCoordinator.nodeIdentityProfile)
-        else {
+        let deviceId: String
+        switch self.nodesStore.localNodeIdentityState {
+        case .loading:
+            return nil
+        case let .available(id):
+            deviceId = id
+        case .unavailable:
             return ("Mac identity unavailable", .red)
         }
-        let deviceId = identity.deviceId
         if let entry = self.nodesStore.nodes.first(where: { $0.nodeId == deviceId }) {
             guard entry.isConnected else {
                 return ("Mac capabilities offline", .orange)
@@ -380,6 +389,23 @@ struct MenuContent: View {
     }
 
     private var healthStatus: (label: String, color: Color) {
+        if self.state.connectionMode == .local,
+           let failure = GatewayProcessManager.shared.lastFailureReason
+        {
+            return (failure, .red)
+        }
+        if self.state.connectionMode == .remote {
+            let live = GatewayConnectionPresentation(state: self.controlChannel.state)
+            switch live.tone {
+            case .healthy:
+                break
+            case .transient:
+                return (live.generalSubtitle, .orange)
+            case .attention:
+                return (live.generalSubtitle, .red)
+            }
+        }
+
         if let activity = self.activityStore.current {
             let color: Color = activity.role == .main ? .accentColor : .gray
             let roleLabel = activity.role == .main ? "Main" : "Other"

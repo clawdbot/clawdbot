@@ -14,6 +14,7 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 
 const capturedWatchers = vi.hoisted(() => [] as Array<ReturnType<typeof import("node:fs").watch>>);
+const capturedWatchChanges = vi.hoisted(() => [] as Array<() => void>);
 
 vi.mock("node:fs", async (importOriginal) => {
   const orig = await importOriginal<typeof import("node:fs")>();
@@ -23,6 +24,9 @@ vi.mock("node:fs", async (importOriginal) => {
     watch: ((path: unknown, opts: unknown, cb: unknown) => {
       const w = origWatch(path as never, opts as never, cb as never);
       capturedWatchers.push(w);
+      capturedWatchChanges.push(() => {
+        (cb as (eventType: string, filename: null) => void)("change", null);
+      });
       return w;
     }) as typeof orig.watch,
   };
@@ -37,6 +41,7 @@ afterEach(() => {
   clearUsageBarTemplateCacheForTest();
   warnSpy.mockClear();
   capturedWatchers.splice(0);
+  capturedWatchChanges.splice(0);
   for (const fn of cleanups.splice(0)) {
     fn();
   }
@@ -203,7 +208,7 @@ describe("loadUsageBarTemplate", () => {
       });
     });
 
-    it("recovers after watcher error by clearing the dead watcher reference", async () => {
+    it("recovers after watcher error by clearing the dead watcher reference", () => {
       const path = tmpFile("t.json", JSON.stringify(tplA));
 
       // Load valid template → creates a watcher in the cache.
@@ -213,10 +218,7 @@ describe("loadUsageBarTemplate", () => {
       // Write invalid JSON to trigger the change handler, which sets
       // entry.template = undefined.
       writeFileSync(path, "{ not json");
-      // Wait for the watcher to deliver the change event.
-      await new Promise((r) => {
-        setTimeout(r, 200);
-      });
+      capturedWatchChanges[0]?.();
 
       // The template is now invalid — served as DEFAULT.
       expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);

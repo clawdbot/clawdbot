@@ -2,7 +2,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import {
+  makeExecutable,
+  makePathEnv,
+  makeExecApprovalsTempDir,
+} from "./exec-approvals-test-helpers.js";
 import {
   evaluateExecAllowlist,
   resolvePlannedSegmentArgv,
@@ -55,7 +60,7 @@ function createPathExecutableFixture(params?: { executable?: string }): {
   exePath: string;
   binDir: string;
 } {
-  const dir = makeTempDir();
+  const dir = makeExecApprovalsTempDir();
   const binDir = path.join(dir, "bin");
   fs.mkdirSync(binDir, { recursive: true });
   const baseName = params?.executable ?? "rg";
@@ -117,7 +122,7 @@ describe("exec-command-resolution", () => {
     {
       name: "relative executable",
       setup: (): CommandResolutionFixture => {
-        const dir = makeTempDir();
+        const dir = makeExecApprovalsTempDir();
         const cwd = path.join(dir, "project");
         const scriptName = process.platform === "win32" ? "run.cmd" : "run.sh";
         const script = path.join(cwd, "scripts", scriptName);
@@ -135,7 +140,7 @@ describe("exec-command-resolution", () => {
     {
       name: "quoted executable",
       setup: (): CommandResolutionFixture => {
-        const dir = makeTempDir();
+        const dir = makeExecApprovalsTempDir();
         const cwd = path.join(dir, "project");
         const scriptName = process.platform === "win32" ? "tool.cmd" : "tool";
         const script = path.join(cwd, "bin", scriptName);
@@ -220,7 +225,7 @@ describe("exec-command-resolution", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const busybox = path.join(dir, "busybox");
     fs.writeFileSync(busybox, "");
     fs.chmodSync(busybox, 0o755);
@@ -268,7 +273,7 @@ describe("exec-command-resolution", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const busybox = path.join(dir, "busybox");
     fs.writeFileSync(busybox, "");
     fs.chmodSync(busybox, 0o755);
@@ -311,7 +316,7 @@ describe("exec-command-resolution", () => {
       return;
     }
 
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const binDir = path.join(dir, "bin");
     fs.mkdirSync(binDir, { recursive: true });
     const envPath = path.join(binDir, "env");
@@ -370,7 +375,7 @@ describe("exec-command-resolution", () => {
       "watch",
       "xvfb-run",
     ])("blocks opaque dispatch wrapper allowlist matches: %s", (wrapperName) => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const wrapperPath = makeExecutable(dir, wrapperName);
     const pythonPath = makeExecutable(dir, "python3");
     const env = makePathEnv(dir);
@@ -479,7 +484,7 @@ describe("exec-command-resolution", () => {
   ] as const)(
     "keeps execution and policy targets coherent across wrapper classes: $name",
     (testCase) => {
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       const binDir = path.join(dir, "bin");
       fs.mkdirSync(binDir, { recursive: true });
       const envPath = path.join(binDir, "env");
@@ -522,7 +527,7 @@ describe("exec-command-resolution", () => {
   );
 
   it("keeps package-manager exec as the planned execution argv", () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const pnpmPath = makeExecutable(dir, "pnpm");
     makeExecutable(dir, "eslint");
     const env = makePathEnv(dir);
@@ -562,27 +567,25 @@ describe("exec-command-resolution", () => {
   });
 
   it("does not synthesize cwd-joined allowlist candidates from drive-less windows roots", () => {
-    if (process.platform !== "win32") {
-      return;
-    }
-
-    expect(
-      resolveAllowlistCandidatePath(
-        {
-          rawExecutable: String.raw`:\Users\demo\AI\system\openclaw`,
-          executableName: "openclaw",
-        },
-        String.raw`C:\Users\demo\AI\system\openclaw`,
-      ),
-    ).toBeUndefined();
-    expect(
-      resolveAllowlistCandidatePath(
-        {
-          rawExecutable: String.raw`:/Users/demo/AI/system/openclaw`,
-          executableName: "openclaw",
-        },
-        String.raw`C:\Users\demo\AI\system\openclaw`,
-      ),
-    ).toBeUndefined();
+    withMockedPlatform("win32", () => {
+      expect(
+        resolveAllowlistCandidatePath(
+          {
+            rawExecutable: String.raw`:\Users\demo\AI\system\openclaw`,
+            executableName: "openclaw",
+          },
+          String.raw`C:\Users\demo\AI\system\openclaw`,
+        ),
+      ).toBeUndefined();
+      expect(
+        resolveAllowlistCandidatePath(
+          {
+            rawExecutable: String.raw`:/Users/demo/AI/system/openclaw`,
+            executableName: "openclaw",
+          },
+          String.raw`C:\Users\demo\AI\system\openclaw`,
+        ),
+      ).toBeUndefined();
+    });
   });
 });

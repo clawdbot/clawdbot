@@ -6,36 +6,34 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import {
-  isValidAgentId,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
+import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
-import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
-import { countActiveRunsForSession, registerSubagentRun } from "../subagent-registry.js";
-import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
-import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagent-spawn-plan.js";
-import { resolveSubagentTargetPolicy } from "../subagent-target-policy.js";
-import { normalizeToolModelOverride, readStringParam, ToolInputError } from "./common.js";
+import {
+  countActiveRunsForSession,
+  registerSubagentRun,
+} from "../subagents/registry/subagent-registry.js";
+import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
+import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
+import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
+import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
+import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import {
   callInProcessGatewayTool,
   callInProcessGatewayToolWithCreation,
   type InProcessGatewayCaller,
 } from "./in-process-gateway.js";
-import { reserveVisibleChildSlot } from "./sessions-spawn-visible-admission.js";
 
 export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
+        "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -52,7 +50,7 @@ export type VisibleSessionsSpawnDeps = {
 type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
   agentSessionKey?: string;
   completionOwnerKey?: string;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
@@ -97,8 +95,8 @@ export async function maybeSpawnVisibleSession(params: {
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
   const worktree = params.raw.worktree === true;
-  const worktreeName = readStringParam(params.raw, "worktreeName");
-  const worktreeBaseRef = readStringParam(params.raw, "worktreeBaseRef");
+  const worktreeName = readToolStringParam(params.raw, "worktreeName");
+  const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
       ["worktree", worktree],
@@ -115,8 +113,8 @@ export async function maybeSpawnVisibleSession(params: {
     }
     return undefined;
   }
-  const modelOverride = normalizeToolModelOverride(readStringParam(params.raw, "model"));
-  const requestedCwd = readStringParam(params.raw, "cwd");
+  const modelOverride = normalizeToolModelOverride(readToolStringParam(params.raw, "model"));
+  const requestedCwd = readToolStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
   const unsupported = [
     [
@@ -126,7 +124,7 @@ export async function maybeSpawnVisibleSession(params: {
     ],
     [
       "thinking",
-      readStringParam(params.raw, "thinking"),
+      readToolStringParam(params.raw, "thinking"),
       "thinking overrides are not wired to the sessions.create path",
     ],
     [
@@ -161,23 +159,16 @@ export async function maybeSpawnVisibleSession(params: {
   }
 
   const cfg = params.options?.config ?? getRuntimeConfig();
-  if (
-    (params.options?.inheritedToolAllowlist?.length ?? 0) > 0 ||
-    (params.options?.inheritedToolDenylist?.length ?? 0) > 0
-  ) {
-    return {
-      status: "forbidden",
-      error:
-        "Visible sessions unavailable with inherited tool restrictions. This session was spawned with a tool allow/denylist; visible sessions require an unrestricted session.",
-    };
-  }
   const ownership = resolveSubagentSpawnOwnership({
     cfg,
     agentSessionKey: params.options?.agentSessionKey,
     completionOwnerKey: params.options?.completionOwnerKey,
   });
   const requesterKey = ownership.controllerSessionKey;
-  const callerDepth = getSubagentDepthFromSessionStore(requesterKey, { cfg });
+  const callerDepth = getSubagentDepthFromSessionStore(requesterKey, {
+    cfg,
+    agentId: params.options?.requesterAgentIdOverride,
+  });
   const maxDepth =
     cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth >= maxDepth) {
@@ -194,9 +185,11 @@ export async function maybeSpawnVisibleSession(params: {
       error: `Invalid agentId "${params.requestedAgentId}". Use agents_list.`,
     };
   }
-  const requesterAgentId = normalizeAgentId(
-    params.options?.requesterAgentIdOverride ?? parseAgentSessionKey(requesterKey)?.agentId,
-  );
+  const requesterAgentId = resolveSessionAgentId({
+    config: cfg,
+    sessionKey: requesterKey,
+    agentId: params.options?.requesterAgentIdOverride,
+  });
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -266,13 +259,17 @@ export async function maybeSpawnVisibleSession(params: {
     };
   }
 
-  const reservation = reserveVisibleChildSlot({
+  const reservation = reserveChildAdmissionSlot({
     controllerSessionKey: requesterKey,
-    maxChildren,
-    countActiveRuns: (sessionKey) =>
-      (params.options?.countActiveRuns ?? countActiveRunsForSession)(sessionKey, {
-        collect: false,
-      }),
+    resolveAdmission: (pendingChildren) => {
+      const activeChildren =
+        (params.options?.countActiveRuns ?? countActiveRunsForSession)(requesterKey, {
+          collect: false,
+        }) + pendingChildren;
+      return activeChildren >= maxChildren
+        ? { ok: false as const, activeChildren }
+        : { ok: true as const };
+    },
   });
   if (!reservation.ok) {
     return {
@@ -288,6 +285,12 @@ export async function maybeSpawnVisibleSession(params: {
         callInProcessGatewayToolWithCreation(method, requestParams, {
           via: "spawn",
           actor: { type: "agent", id: requesterKey },
+          completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+          inheritedToolPolicy: {
+            version: 1,
+            allow: [...(params.options?.inheritedToolAllowlist ?? [])],
+            deny: [...(params.options?.inheritedToolDenylist ?? [])],
+          },
         }));
     const response = await createGatewayCall<{
       key?: string;

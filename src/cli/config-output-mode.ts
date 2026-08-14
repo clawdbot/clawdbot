@@ -43,9 +43,10 @@ function resolveConfigSubcommand(argv: readonly string[]): string | null {
   return null;
 }
 
-/** Config get reserves stdout for the requested value, including bare scalar output. */
+/** Config values, paths, and schemas reserve stdout for machine-consumed output. */
 export function isConfigMachineOutput(argv: readonly string[]): boolean {
-  return resolveConfigSubcommand(argv) === "get";
+  const subcommand = resolveConfigSubcommand(argv);
+  return subcommand === "get" || subcommand === "file" || subcommand === "schema";
 }
 
 /** Config set uses --json as a parser alias except when dry-run emits a JSON report. */

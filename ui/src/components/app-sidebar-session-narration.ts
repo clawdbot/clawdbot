@@ -90,10 +90,6 @@ function trailingInternalDelimiterPrefix(text: string): string {
   return "";
 }
 
-function rowIsRunning(row: SidebarRecentSession): boolean {
-  return row.hasActiveRun || row.status === "running";
-}
-
 function rowRecency(row: SidebarRecentSession): number {
   return row.startedAt ?? row.updatedAt ?? 0;
 }
@@ -161,7 +157,7 @@ export class SidebarSessionNarrationController {
       .map((row, index) => ({ row, index }))
       .filter(
         ({ row }) =>
-          rowIsRunning(row) && !areUiSessionKeysEquivalent(row.key, input.openSessionKey.trim()),
+          row.hasActiveRun && !areUiSessionKeysEquivalent(row.key, input.openSessionKey.trim()),
       )
       .toSorted(
         (left, right) => rowRecency(right.row) - rowRecency(left.row) || left.index - right.index,

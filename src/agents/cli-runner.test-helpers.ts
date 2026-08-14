@@ -16,6 +16,7 @@ import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import type { RunCliAgentParams } from "./cli-runner/types.js";
 
@@ -79,6 +80,13 @@ export function createTestMcpLoopbackServerConfig(port: number) {
   };
 }
 
+export function createClaudeInputStartedEvent(data: string) {
+  const input = JSON.parse(data) as { type?: string; uuid?: string };
+  return input.type === "user" && typeof input.uuid === "string"
+    ? { type: "command_lifecycle" as const, command_uuid: input.uuid, state: "started" as const }
+    : undefined;
+}
+
 export function createTestMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
 }): McpLoopbackClientGrant {
@@ -134,9 +142,11 @@ export type PreparedCliRunContextOverrides = {
   cliToolAvailability?: PreparedCliRunContext["params"]["cliToolAvailability"];
   emitCommentaryText?: boolean;
   workspaceDir?: string;
+  systemPrompt?: string;
   timeoutMs?: number;
   onSuccessfulAuthBinding?: PreparedCliRunContext["params"]["onSuccessfulAuthBinding"];
   runtimeArtifact?: PreparedCliRunContext["backendResolved"]["runtimeArtifact"];
+  liveSessionRequirement?: PreparedCliRunContext["backendResolved"]["liveSessionRequirement"];
 };
 
 export function buildPreparedCliRunContext(
@@ -144,6 +154,7 @@ export function buildPreparedCliRunContext(
 ): PreparedCliRunContext {
   const provider = overrides.provider ?? "claude-cli";
   const model = overrides.model ?? "sonnet";
+  const runId = overrides.runId ?? "run-test";
   const workspaceDir = overrides.workspaceDir ?? "/tmp";
   const baseBackend =
     provider === "claude-cli"
@@ -194,6 +205,7 @@ export function buildPreparedCliRunContext(
   const backend = { ...baseBackend, ...overrides.backend };
   return {
     params: {
+      admittedRunContext: createTestAdmittedRunContext(runId),
       sessionId: overrides.sessionId ?? "s1",
       sessionKey: overrides.sessionKey,
       sessionEntry: overrides.sessionEntry,
@@ -210,7 +222,7 @@ export function buildPreparedCliRunContext(
       emitCommentaryText: overrides.emitCommentaryText,
       onSuccessfulAuthBinding: overrides.onSuccessfulAuthBinding,
       timeoutMs: overrides.timeoutMs ?? 1_000,
-      runId: overrides.runId ?? "run-test",
+      runId,
       skillsSnapshot: overrides.skillsSnapshot,
     },
     started: Date.now(),
@@ -230,6 +242,7 @@ export function buildPreparedCliRunContext(
         overrides.toolAvailabilityEnforcement ??
         (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
       runtimeArtifact: overrides.runtimeArtifact,
+      liveSessionRequirement: overrides.liveSessionRequirement,
     },
     preparedBackend: {
       backend,
@@ -241,7 +254,7 @@ export function buildPreparedCliRunContext(
     contextEngineConfig: {},
     modelId: model,
     normalizedModel: model,
-    systemPrompt: "You are a helpful assistant.",
+    systemPrompt: overrides.systemPrompt ?? "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
@@ -254,21 +267,6 @@ export function buildClaudeLiveRunContext(overrides: PreparedCliRunContextOverri
     ...overrides,
     backend: { ...overrides.backend, liveSession: "claude-stdio" },
   });
-}
-
-export function buildClaudeLiveBackend(
-  overrides: Partial<PreparedCliRunContext["preparedBackend"]["backend"]> = {},
-) {
-  return {
-    command: "claude",
-    args: ["-p", "--output-format", "stream-json"],
-    output: "jsonl" as const,
-    input: "stdin" as const,
-    sessionArgs: ["--session-id", "{sessionId}"],
-    systemPromptArg: "--append-system-prompt",
-    systemPromptFileArg: "--append-system-prompt-file",
-    ...overrides,
-  };
 }
 
 export function createCancelableLiveRunLifecycle() {
@@ -416,9 +414,9 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
       return getSession();
     },
     createSession,
-    prepare(overrides: Partial<RunCliAgentParams> = {}) {
+    prepare(overrides: Partial<Omit<RunCliAgentParams, "admittedRunContext">> = {}) {
       const { dir, sessionFile } = getSession();
-      const defaults: RunCliAgentParams = {
+      const defaults: Omit<RunCliAgentParams, "admittedRunContext"> = {
         sessionId: "session-test",
         sessionFile,
         workspaceDir: dir,
@@ -429,7 +427,13 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
         runId: "run-test",
         config: {},
       };
-      return prepareCliRun(Object.assign(defaults, overrides));
+      const prepared = Object.assign(defaults, overrides);
+      return prepareCliRun({
+        ...prepared,
+        ...(prepared.preparedRunAdmission
+          ? {}
+          : { admittedRunContext: createTestAdmittedRunContext(prepared.runId) }),
+      });
     },
     appendTranscript(entry: {
       id: string;
@@ -519,6 +523,7 @@ export function mockClaudeLiveRun(
     cancelable?: boolean;
     beforeSpawn?: () => Promise<void>;
     events?: Array<Record<string, unknown> | string>;
+    inputLifecycle?: boolean;
     exitImmediately?: RunExit;
     exitOnWrite?: RunExit;
     onWrite?: (params: {
@@ -550,6 +555,10 @@ export function mockClaudeLiveRun(
     write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
       writes.push(data);
       const writeIndex = writes.length - 1;
+      const inputStartedEvent = createClaudeInputStartedEvent(data);
+      if (options.inputLifecycle !== false && inputStartedEvent) {
+        emit([inputStartedEvent]);
+      }
       if (options.onWrite) {
         options.onWrite({ data, emit, writeIndex });
       } else if (writeIndex === 0 && options.events) {

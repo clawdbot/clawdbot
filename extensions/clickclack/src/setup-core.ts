@@ -214,7 +214,7 @@ export function applyClickClackCredentialConfig(params: {
   });
 }
 
-export const clickClackSetupAdapter: ChannelSetupAdapter = {
+const clickClackSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   prepareAccountConfigInput: async ({ cfg, accountId, input }) => {
     const setupInput = input as ClickClackSetupInput;
@@ -382,6 +382,7 @@ export const clickClackSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use CLICKCLACK_BOT_TOKEN" },
+      envVars: ["CLICKCLACK_BOT_TOKEN"],
     },
   },
   legacyAdapter: clickClackSetupAdapter,

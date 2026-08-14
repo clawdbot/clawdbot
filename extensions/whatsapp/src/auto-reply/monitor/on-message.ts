@@ -17,17 +17,16 @@ import {
   requireAdmittedWhatsAppInboundMessage,
   requireWhatsAppInboundAdmission,
 } from "../../inbound/admission.js";
-import {
-  normalizeWebInboundMessage,
-  withDeprecatedWebInboundMessageFlatAliases,
-} from "../../inbound/message-aliases.js";
-import type { AdmittedWebInboundMessage, WebInboundMessageInput } from "../../inbound/types.js";
+import { withDeprecatedWebInboundMessageFlatAliases } from "../../inbound/message-aliases.js";
+import type {
+  AdmittedWebInboundMessage,
+  DeprecatedWebInboundAdmissionTopLevelFields,
+} from "../../inbound/types.js";
 import { normalizeE164 } from "../../text-runtime.js";
 import { buildMentionConfig } from "../mentions.js";
 import type { MentionConfig } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
-import type { EchoTracker } from "./echo.js";
 import type { GroupHistoryEntry } from "./group-gating.js";
 import { applyGroupGating } from "./group-gating.js";
 import { updateLastRouteInBackground } from "./last-route.js";
@@ -38,6 +37,15 @@ import {
   type StatusReactionController,
 } from "./status-reaction.js";
 
+function readDeprecatedAccessControlPassed(msg: AdmittedWebInboundMessage): boolean | undefined {
+  // The admitted type hides deprecated flat aliases, but normalized legacy
+  // listener inputs retain this one tri-state proof for preflight safety.
+  return (
+    msg as AdmittedWebInboundMessage &
+      Pick<DeprecatedWebInboundAdmissionTopLevelFields, "accessControlPassed">
+  ).accessControlPassed;
+}
+
 export function createWebOnMessageHandler(params: {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
@@ -47,15 +55,19 @@ export function createWebOnMessageHandler(params: {
   groupHistoryLimit: number;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupMemberNames: Map<string, Map<string, string>>;
-  echoTracker: EchoTracker;
   backgroundTasks: Set<Promise<unknown>>;
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<(typeof import("openclaw/plugin-sdk/runtime-env"))["getChildLogger"]>;
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 }) {
-  const hasExplicitlyPassedInboundAccess = (msg: WebInboundMessageInput): boolean =>
-    msg.admission ? msg.admission.ingress.decision === "allow" : msg.accessControlPassed === true;
+  const hasExplicitlyPassedInboundAccess = (msg: AdmittedWebInboundMessage): boolean => {
+    if (msg.admission.ingress.decisiveGateId === "legacy-flat-compat") {
+      return readDeprecatedAccessControlPassed(msg) === true;
+    }
+    return msg.admission.ingress.decision === "allow";
+  };
 
   const withDirectSenderPeer = (
     msg: AdmittedWebInboundMessage,
@@ -114,10 +126,7 @@ export function createWebOnMessageHandler(params: {
       replyResolver: params.replyResolver,
       replyLogger: params.replyLogger,
       backgroundTasks: params.backgroundTasks,
-      rememberSentText: params.echoTracker.rememberText,
-      echoHas: params.echoTracker.has,
-      echoForget: params.echoTracker.forget,
-      buildCombinedEchoKey: params.echoTracker.buildCombinedKey,
+      buildContext: params.buildContext,
     };
     if (opts?.groupHistory !== undefined) {
       processParams.groupHistory = opts.groupHistory;
@@ -140,9 +149,8 @@ export function createWebOnMessageHandler(params: {
     return processMessage(processParams);
   };
 
-  return async (rawMsg: WebInboundMessageInput) => {
-    const canRunDirectEarlyAudioPreflight = hasExplicitlyPassedInboundAccess(rawMsg);
-    const normalizedMsg = requireAdmittedWhatsAppInboundMessage(normalizeWebInboundMessage(rawMsg));
+  return async (normalizedMsg: AdmittedWebInboundMessage) => {
+    const canRunDirectEarlyAudioPreflight = hasExplicitlyPassedInboundAccess(normalizedMsg);
     const cfg = params.loadConfig?.() ?? params.cfg;
     const peerId = resolvePeerId(normalizedMsg);
     const msg = withDirectSenderPeer(normalizedMsg, peerId);
@@ -173,13 +181,6 @@ export function createWebOnMessageHandler(params: {
     // Same-phone mode logging retained
     if (conversationId === msg.platform.recipientJid) {
       logVerbose(`📱 Same-phone mode detected (from === to: ${conversationId})`);
-    }
-
-    // Skip if this is a message we just sent (echo detection)
-    if (params.echoTracker.has(msg.payload.body, conversationId)) {
-      logVerbose("Skipping auto-reply: detected echo (message matches recently sent text)");
-      params.echoTracker.forget(msg.payload.body, conversationId);
-      return;
     }
 
     const configuredRoute = resolveConfiguredBindingRoute({

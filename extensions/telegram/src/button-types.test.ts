@@ -2,7 +2,11 @@
 import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-reference-runtime";
 import { describe, expect, it } from "vitest";
 import { parseTelegramApprovalCallbackData } from "./approval-callback-data.js";
-import { buildTelegramPresentationButtons, resolveTelegramInlineButtons } from "./button-types.js";
+import {
+  buildTelegramPresentationButtons,
+  resolveTelegramInlineButtons,
+  type TelegramButtonBuildOptions,
+} from "./button-types.js";
 import { describeTelegramInteractiveButtonBehavior } from "./button-types.test-helpers.js";
 import {
   buildTelegramOpaqueCallbackData,
@@ -10,6 +14,24 @@ import {
 } from "./native-command-callback-data.js";
 
 describeTelegramInteractiveButtonBehavior();
+
+function questionButtonOptions(
+  questions: ReadonlyArray<{ questionId: string; optionValues: readonly string[] }>,
+): TelegramButtonBuildOptions {
+  return {
+    questionOptionIndices: new Map(
+      questions.map(
+        ({ questionId, optionValues }) =>
+          [
+            questionId,
+            new Map(
+              optionValues.map((value, index) => [value.trim().toLowerCase(), index] as const),
+            ),
+          ] as const,
+      ),
+    ),
+  };
+}
 
 describe("buildTelegramInteractiveButtons callback limits", () => {
   it("drops buttons whose callback payload exceeds Telegram limits", () => {
@@ -57,22 +79,185 @@ describe("buildTelegramPresentationButtons", () => {
   it("encodes question buttons by record id and option index", () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
     expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: ["Staging", "Production"].map((label) => ({
-              label,
-              action: { type: "question" as const, questionId, optionValue: label },
-            })),
-          },
-        ],
-      }),
+      buildTelegramPresentationButtons(
+        {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: ["Staging", "Production"].map((label) => ({
+                label,
+                action: { type: "question" as const, questionId, optionValue: label },
+              })),
+            },
+          ],
+        },
+        questionButtonOptions([{ questionId, optionValues: ["Staging", "Production"] }]),
+      ),
     ).toEqual([
       [
         { text: "Staging", callback_data: `tgq1:${questionId}:0`, style: undefined },
         { text: "Production", callback_data: `tgq1:${questionId}:1`, style: undefined },
       ],
+    ]);
+  });
+
+  it("drops question buttons when authoritative Gateway option order is unavailable", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Production",
+                action: {
+                  type: "question" as const,
+                  questionId,
+                  optionValue: "Production",
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps question option indices independent and stable across presentation blocks", () => {
+    const firstQuestionId = "ask_0123456789abcdef0123456789abcdef";
+    const secondQuestionId = "ask_fedcba9876543210fedcba9876543210";
+    const questionButton = (questionId: string, optionValue: string) => ({
+      label: optionValue,
+      action: { type: "question" as const, questionId, optionValue },
+    });
+
+    const rows = buildTelegramPresentationButtons(
+      {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              questionButton(firstQuestionId, "東京"),
+              questionButton(firstQuestionId, "Déployer"),
+            ],
+          },
+          {
+            type: "buttons",
+            buttons: [
+              questionButton(secondQuestionId, "東京"),
+              questionButton(secondQuestionId, "Production"),
+            ],
+          },
+          {
+            type: "buttons",
+            buttons: [
+              questionButton(firstQuestionId, "東京"),
+              questionButton(firstQuestionId, "Production 🚀"),
+            ],
+          },
+        ],
+      },
+      questionButtonOptions([
+        {
+          questionId: firstQuestionId,
+          optionValues: ["東京", "Déployer", "Production 🚀"],
+        },
+        { questionId: secondQuestionId, optionValues: ["東京", "Production"] },
+      ]),
+    );
+
+    expect(rows?.map((row) => row.map((button) => button.callback_data))).toEqual([
+      [`tgq1:${firstQuestionId}:0`, `tgq1:${firstQuestionId}:1`],
+      [`tgq1:${secondQuestionId}:0`, `tgq1:${secondQuestionId}:1`],
+      [`tgq1:${firstQuestionId}:0`, `tgq1:${firstQuestionId}:2`],
+    ]);
+  });
+
+  it("maps repeated rendered question values to their canonical Gateway option indices", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const button = (label: string) => ({
+      label,
+      action: { type: "question" as const, questionId, optionValue: label },
+    });
+
+    const rows = buildTelegramPresentationButtons(
+      {
+        blocks: [
+          { type: "buttons", buttons: [button("A"), button("A")] },
+          { type: "buttons", buttons: [button("B"), button("C")] },
+        ],
+      },
+      questionButtonOptions([{ questionId, optionValues: ["A", "B", "C"] }]),
+    );
+
+    expect(rows?.flatMap((row) => row.map((entry) => entry.callback_data))).toEqual([
+      `tgq1:${questionId}:0`,
+      `tgq1:${questionId}:0`,
+      `tgq1:${questionId}:1`,
+      `tgq1:${questionId}:2`,
+    ]);
+  });
+
+  it("normalizes repeated question values with the Gateway trim and lowercase contract", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const questionButton = (optionValue: string) => ({
+      label: optionValue,
+      action: { type: "question" as const, questionId, optionValue },
+    });
+
+    const rows = buildTelegramPresentationButtons(
+      {
+        blocks: [
+          { type: "buttons", buttons: [questionButton(" Deploy "), questionButton("deploy")] },
+          { type: "buttons", buttons: [questionButton("Production")] },
+        ],
+      },
+      questionButtonOptions([{ questionId, optionValues: [" Deploy ", "Production"] }]),
+    );
+
+    expect(rows?.flatMap((row) => row.map((entry) => entry.callback_data))).toEqual([
+      `tgq1:${questionId}:0`,
+      `tgq1:${questionId}:0`,
+      `tgq1:${questionId}:1`,
+    ]);
+  });
+
+  it("does not consume a question option position when callback encoding fails", () => {
+    const validQuestionId = "ask_0123456789abcdef0123456789abcdef";
+    const invalidQuestionId = "not-a-gateway-question";
+    const rows = buildTelegramPresentationButtons(
+      {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Invalid",
+                action: {
+                  type: "question" as const,
+                  questionId: invalidQuestionId,
+                  optionValue: "Invalid",
+                },
+              },
+              {
+                label: "Valid",
+                action: {
+                  type: "question" as const,
+                  questionId: validQuestionId,
+                  optionValue: "Valid",
+                },
+              },
+            ],
+          },
+        ],
+      },
+      questionButtonOptions([{ questionId: validQuestionId, optionValues: ["Valid", "Other"] }]),
+    );
+
+    expect(rows).toEqual([
+      [{ text: "Valid", callback_data: `tgq1:${validQuestionId}:0`, style: undefined }],
     ]);
   });
 
@@ -460,6 +645,25 @@ describe("buildTelegramPresentationButtons", () => {
         ],
       }),
     ).toBeUndefined();
+  });
+
+  it("records Web App gating separately from callback overflow", () => {
+    const dropped: Array<{ reason: string; callbackDataBytes?: number }> = [];
+    buildTelegramPresentationButtons(
+      {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "App", action: { type: "web-app", url: "https://example.com/app" } },
+            ],
+          },
+        ],
+      },
+      { onDroppedControl: (control) => dropped.push(control) },
+    );
+
+    expect(dropped).toEqual([{ label: "App", reason: "web_app_unavailable" }]);
   });
 
   it("skips hosted widget actions without a Telegram web app URL", () => {

@@ -8,20 +8,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 
-/** Mutable summary state for a capped queue. */
+/** Pending overflow summary state produced by the summarize drop policy. */
 type QueueSummaryState = {
-  dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
   summaryLines: string[];
 };
 
-/** Queue overflow strategy. */
-type QueueDropPolicy = QueueSummaryState["dropPolicy"];
+/** Queue overflow strategy for future admissions. */
+type QueueDropPolicy = "summarize" | "old" | "new";
 
 /** Generic capped queue state with shared overflow summary fields. */
 type QueueState<T> = QueueSummaryState & {
   items: T[];
   cap: number;
+  dropPolicy: QueueDropPolicy;
 };
 
 /** Build a summary prompt preview without mutating the source queue state. */
@@ -110,6 +110,7 @@ export function applyQueueDropPolicy<T>(params: {
   summarize: (item: T) => string;
   summaryLimit?: number;
   onDrop?: (items: T[]) => void;
+  onSummaryElide?: (lines: string[]) => void;
   inFlight?: ReadonlySet<T>;
   isProtected?: (item: T) => boolean;
 }): boolean {
@@ -153,8 +154,15 @@ export function applyQueueDropPolicy<T>(params: {
     }
     // Summary memory is bounded independently from the item cap to avoid prompt blowups.
     const limit = Math.max(0, params.summaryLimit ?? cap);
+    const elidedLines: string[] = [];
     while (params.queue.summaryLines.length > limit) {
-      params.queue.summaryLines.shift();
+      const line = params.queue.summaryLines.shift();
+      if (line !== undefined) {
+        elidedLines.push(line);
+      }
+    }
+    if (elidedLines.length > 0) {
+      params.onSummaryElide?.(elidedLines);
     }
   }
   return true;
@@ -307,7 +315,7 @@ function buildQueueSummaryPrompt(params: {
   noun: string;
   title?: string;
 }): string | undefined {
-  if (params.state.dropPolicy !== "summarize" || params.state.droppedCount <= 0) {
+  if (params.state.droppedCount <= 0) {
     return undefined;
   }
   const noun = params.noun;

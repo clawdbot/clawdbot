@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -13,16 +14,12 @@ import {
 } from "../infra/plugin-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import {
-  pinActivePluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
-import type { NodeSession } from "./node-registry.js";
+import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
 import { listPendingOperatorApprovals } from "./operator-approval-store.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
@@ -65,14 +62,22 @@ function createContext(opts?: {
   hasExecApprovalClients?: GatewayRequestContext["hasExecApprovalClients"];
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
+  validateAgentRuntimeApprovalAuthority?: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
 }) {
   const nodeSession = opts?.nodeSession ?? createNodeSession();
-  const invoke = vi.fn(async () => ({
-    ok: true,
-    payload: { ok: true, value: 1 },
-    payloadJSON: null,
-    error: null,
-  }));
+  const invoke = vi.fn(
+    async (params?: {
+      onDispatchReady?: (invokeId: string) => void;
+    }): Promise<NodeInvokeResult> => {
+      params?.onDispatchReady?.("invoke-1");
+      return {
+        ok: true,
+        payload: { ok: true, value: 1 },
+        payloadJSON: null,
+        error: null,
+      };
+    },
+  );
   return {
     context: {
       getRuntimeConfig:
@@ -86,6 +91,7 @@ function createContext(opts?: {
       hasExecApprovalClients: opts?.hasExecApprovalClients,
       forwardPluginApprovalRequest: opts?.forwardPluginApprovalRequest,
       pluginApprovalIosPushDelivery: opts?.pluginApprovalIosPushDelivery,
+      validateAgentRuntimeApprovalAuthority: opts?.validateAgentRuntimeApprovalAuthority,
     } as unknown as GatewayRequestContext,
     invoke,
   };
@@ -179,11 +185,6 @@ function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[
   setActivePluginRegistry(registry);
 }
 
-function createPolicyRegistry(handle: NodeInvokePolicyHandler): PluginRegistry {
-  const registry = createEmptyPluginRegistry();
-  registry.nodeInvokePolicies.push(createDemoPolicy(handle));
-  return registry;
-}
 async function invokeDemoPolicy(
   context: GatewayRequestContext,
   client: GatewayClient | null = null,
@@ -272,6 +273,8 @@ describe("applyPluginNodeInvokePolicy", () => {
       params: DEMO_PARAMS,
       timeoutMs: undefined,
       idempotencyKey: undefined,
+      isDispatchAuthorized: expect.any(Function),
+      onDispatchReady: expect.any(Function),
     });
   });
 
@@ -304,14 +307,15 @@ describe("applyPluginNodeInvokePolicy", () => {
     },
   );
 
-  it("marks plugin-owned work dispatched before calling the node transport", async () => {
+  it("marks plugin-owned work dispatched only after the node transport accepts it", async () => {
     setDangerousDemoCommandRegistry([
       createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
     ]);
     const { context, invoke } = createContext();
     const dispatchOrder: string[] = [];
-    invoke.mockImplementationOnce(async () => {
+    invoke.mockImplementationOnce(async (params) => {
       dispatchOrder.push("node transport");
+      params?.onDispatchReady?.("invoke-1");
       return {
         ok: true,
         payload: { ok: true, value: 1 },
@@ -330,7 +334,43 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
 
     expect(result).toMatchObject({ ok: true });
-    expect(dispatchOrder).toStrictEqual(["dispatched", "node transport"]);
+    expect(dispatchOrder).toStrictEqual(["node transport", "dispatched"]);
+  });
+
+  it("keeps plugin-owned work pre-dispatch when the node transport rejects the send", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    const { context, invoke } = createContext();
+    const onNodeCommandDispatched = vi.fn();
+    invoke.mockResolvedValueOnce({
+      ok: false,
+      payload: null,
+      payloadJSON: null,
+      error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+    });
+
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client: null,
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      onNodeCommandDispatched,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "UNAVAILABLE",
+      details: {
+        nodeError: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+        nodeCommandDispatched: false,
+      },
+    });
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ onDispatchReady: expect.any(Function) }),
+    );
+    expect(onNodeCommandDispatched).not.toHaveBeenCalled();
   });
 
   it("rejects expired plugin-owned work without dispatching it", async () => {
@@ -412,6 +452,94 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("rejects plugin transport dispatch when runtime authority closes during pairing recheck", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    let authorityActive = true;
+    let releasePairingCheck: (() => void) | undefined;
+    const pairingCheck = new Promise<void>((resolve) => {
+      releasePairingCheck = resolve;
+    });
+    const { context, invoke } = createContext({
+      validateAgentRuntimeApprovalAuthority: () => authorityActive,
+    });
+    const operationalRunInstance = createOperationalRunInstanceRef("run-node-policy-race");
+    const resultPromise = applyPluginNodeInvokePolicy({
+      context,
+      client: {
+        ...createOperatorClient(),
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: "agent:main:test",
+            operationalRunInstance,
+            delegatedAuthority: {
+              kind: "local",
+              operationalRunInstance,
+              lifecycleGeneration: "generation",
+              claimId: "claim",
+            },
+          },
+        },
+      },
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      isInvocationCurrent: async () => {
+        await pairingCheck;
+        return true;
+      },
+    });
+
+    await vi.waitFor(() => expect(releasePairingCheck).toBeTypeOf("function"));
+    authorityActive = false;
+    releasePairingCheck?.();
+
+    await expect(resultPromise).resolves.toMatchObject({
+      ok: false,
+      code: "APPROVAL_AUTHORITY_CLOSED",
+      details: { nodeCommandDispatched: false },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects bridged approval dispatch when its record closes during pairing recheck", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    let approvalActive = true;
+    let releasePairingCheck: (() => void) | undefined;
+    const pairingCheck = new Promise<void>((resolve) => {
+      releasePairingCheck = resolve;
+    });
+    const { context, invoke } = createContext();
+    const resultPromise = applyPluginNodeInvokePolicy({
+      context,
+      client: createOperatorClient(),
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      isInvocationCurrent: async () => {
+        await pairingCheck;
+        return true;
+      },
+      isApprovalAuthorityActive: () => approvalActive,
+    });
+
+    await vi.waitFor(() => expect(releasePairingCheck).toBeTypeOf("function"));
+    approvalActive = false;
+    releasePairingCheck?.();
+
+    await expect(resultPromise).resolves.toMatchObject({
+      ok: false,
+      code: "APPROVAL_AUTHORITY_CLOSED",
+      details: { nodeCommandDispatched: false },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("rejects plugin transport dispatch through an invalidated node session", async () => {
     setDangerousDemoCommandRegistry([
       createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
@@ -478,25 +606,6 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke).toHaveBeenCalledOnce();
   });
 
-  it("uses a matching policy from the pinned Gateway registry after an active swap", async () => {
-    const gatewayRegistry = createPolicyRegistry((ctx) => ctx.invokeNode());
-    setActivePluginRegistry(gatewayRegistry);
-    pinActivePluginChannelRegistry(gatewayRegistry);
-    setActivePluginRegistry(
-      createPolicyRegistry(async () => ({
-        ok: false,
-        code: "TRANSIENT_POLICY",
-        message: "agent-scoped policy must not shadow Gateway policy",
-      })),
-    );
-    const { context, invoke } = createContext();
-
-    const result = await invokeDemoPolicy(context);
-
-    expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
-    expect(invoke).toHaveBeenCalledOnce();
-  });
-
   it("binds plugin policy approval requests to the invoking client", async () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
     const visibleConnIds = new Set(["conn-owner-approval"]);
@@ -535,7 +644,9 @@ describe("applyPluginNodeInvokePolicy", () => {
   });
 
   it("forwards plugin policy approvals to the originating turn source", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
     const getApprovalClientConnIds = vi.fn(() => new Set<string>());
     const handlePluginApprovalRequested = vi.fn(async () => true);
     setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
@@ -544,7 +655,9 @@ describe("applyPluginNodeInvokePolicy", () => {
       getApprovalClientConnIds,
       hasExecApprovalClients: vi.fn(() => false),
       forwardPluginApprovalRequest: handlePluginApprovalRequested,
+      validateAgentRuntimeApprovalAuthority: () => true,
     });
+    const operationalRunInstance = createOperationalRunInstanceRef("run-node-policy");
     const resultPromise = applyPluginNodeInvokePolicy({
       context,
       client: {
@@ -554,6 +667,13 @@ describe("applyPluginNodeInvokePolicy", () => {
             kind: "agentRuntime",
             agentId: "main",
             sessionKey: "agent:main:telegram:direct:alice",
+            operationalRunInstance,
+            delegatedAuthority: {
+              kind: "local",
+              operationalRunInstance,
+              lifecycleGeneration: "test-generation",
+              claimId: "test-claim",
+            },
           },
         },
       },

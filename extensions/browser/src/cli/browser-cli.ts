@@ -70,6 +70,15 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
   },
   {
     placeholders: [
+      command("cookie-sync", "Sync allowlisted macOS browser cookies to a managed profile"),
+    ],
+    register: async (args) => {
+      const module = await import("./browser-cli-cookie-sync.js");
+      module.registerBrowserCookieSyncCommand(args.browser, args.parentOpts);
+    },
+  },
+  {
+    placeholders: [
       command("screenshot", "Capture a screenshot (prints the saved path)"),
       command("snapshot", "Capture a snapshot (default: ai; aria is the accessibility tree)"),
     ],
@@ -106,7 +115,6 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
   },
   {
     placeholders: [
-      command("extract", "Answer a question from the current page"),
       command("console", "Get recent console messages"),
       command("pdf", "Save page as PDF"),
       command("responsebody", "Wait for a network response and return its body"),
@@ -140,7 +148,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
     },
   },
   {
-    placeholders: [command("extension", "Chrome extension load path and pairing")],
+    placeholders: [command("extension", "Chrome extension install, status, and pairing")],
     register: async (args) => {
       const module = await import("./browser-cli-extension.js");
       module.registerBrowserExtensionCommands(args.browser, args.parentOpts, args.pluginRoot);

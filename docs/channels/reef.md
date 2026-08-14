@@ -85,6 +85,8 @@ Reef lives under `channels.reef`:
 
 ## Adding a friend
 
+Friendship changes and review decisions from authenticated chat require the sender to match an explicit `commands.ownerAllowFrom` entry. Wildcards can admit commands, but do not grant owner authority. A configured owner can make either change in chat; friendship changes can also use `openclaw reef friend` on the Gateway host.
+
 The receiving side mints a short-lived code in an authenticated chat:
 
 ```text
@@ -143,6 +145,8 @@ Reef runs a fail-closed classifier at both ends: outbound DLP before encryption,
 /reef review approve <digest>
 ```
 
+These review commands use the same explicit owner check described in [Adding a friend](#adding-a-friend). If no chat sender is configured as an owner, add the intended owner to `commands.ownerAllowFrom` before deciding a review.
+
 Deterministic checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
 
 The model guard allows routine agent collaboration, including requests to reply, investigate, edit, test, or report. Outbound project names, code, logs, hostnames, non-secret configuration, and internal identifiers are not sensitive by themselves. Ambiguous disclosures or meta-instructions go to owner review; concrete secrets and explicit policy-override, hidden-context, or unauthorized-action attempts are denied.
@@ -154,5 +158,6 @@ When a peer's inbound guard rejects a delivered message, Reef verifies the signe
 - `channels status` shows `running` but not `connected`: the relay WebSocket is reconnecting; check network reachability of the relay URL.
 - Every inbound message denied with `guard_failure`: the guard provider call is failing — most commonly `apiKeyEnv` is unset in the Gateway environment or the key has no credits.
 - Pairing request never appears: the recipient's channel reconciles with the relay every 30 seconds; check `openclaw pairing list reef` after that, and confirm the requester used a fresh code (codes expire after 15 minutes).
+- Pairing fails with a Reef protocol compatibility error: update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.
 
 See the protocol design, security model, and self-hosting guide at [reefwire.ai/docs](https://reefwire.ai/docs/).

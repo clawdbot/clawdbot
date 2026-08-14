@@ -1,6 +1,7 @@
 // Model probe RPC tests cover validation, normalization, bounded execution, and redacted mapping.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { AuthProbeSummary } from "../../commands/models/list.probe.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -47,6 +48,7 @@ function summary(results: AuthProbeSummary["results"]): AuthProbeSummary {
 
 function createOptions(params: Record<string, unknown>, cfg: OpenClawConfig = {}) {
   const respond = vi.fn();
+  const warn = vi.fn();
   return {
     options: {
       req: { type: "req", id: "probe-1", method: "models.probe", params },
@@ -54,9 +56,10 @@ function createOptions(params: Record<string, unknown>, cfg: OpenClawConfig = {}
       client: null,
       isWebchatConnect: () => false,
       respond,
-      context: { getRuntimeConfig: () => cfg } as never,
+      context: { getRuntimeConfig: () => cfg, logGateway: { warn } } as never,
     } as GatewayRequestHandlerOptions,
     respond,
+    warn,
   };
 }
 
@@ -85,6 +88,28 @@ describe("models.probe", () => {
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(mocks.runAuthProbes).not.toHaveBeenCalled();
+  });
+
+  it("returns typed selection-required when agentId is omitted", async () => {
+    mocks.resolveDefaultAgentId.mockImplementationOnce(() => {
+      throw new AgentSelectionRequiredError(["main", "writer"], {
+        surface: "model auth",
+        hint: "Pass agentId to select a configured agent.",
+      });
+    });
+    const { options, respond } = createOptions({ provider: "openai" });
+
+    await handler(options);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("agent"),
+      }),
     );
     expect(mocks.runAuthProbes).not.toHaveBeenCalled();
   });
@@ -207,6 +232,21 @@ describe("models.probe", () => {
     );
   });
 
+  it("does not require a configured default before probing provider credentials", async () => {
+    const cfg: OpenClawConfig = {};
+    const { options } = createOptions({ provider: "openai" }, cfg);
+
+    await handler(options);
+
+    expect(mocks.runAuthProbes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        providers: ["openai"],
+        modelCandidates: [],
+      }),
+    );
+  });
+
   it("maps target results and reports provider success when one credential works", async () => {
     mocks.runAuthProbes.mockResolvedValue(
       summary([
@@ -245,12 +285,69 @@ describe("models.probe", () => {
         results: [
           {
             profileId: "old",
-            label: "Old",
+            label: "Profile Old",
             status: "auth",
             latencyMs: 20,
             error: "Authentication failed.",
           },
-          { profileId: "work", label: "Work", status: "ok", latencyMs: 125 },
+          { profileId: "work", label: "Profile Work", status: "ok", latencyMs: 125 },
+        ],
+      },
+      undefined,
+    );
+  });
+
+  it("names mixed probe routes and keeps preflight failures actionable", async () => {
+    mocks.runAuthProbes.mockResolvedValue(
+      summary([
+        {
+          provider: "ollama",
+          model: "ollama/gemma4:latest",
+          label: "config",
+          source: "models.json",
+          mode: "api_key",
+          status: "unknown",
+          reasonCode: "unresolved_ref",
+          error: "Configured API key could not be resolved.",
+        },
+        {
+          provider: "ollama",
+          model: "ollama/gemma4:latest",
+          profileId: "ollama:default",
+          label: "ollama:default",
+          source: "profile",
+          mode: "api_key",
+          status: "ok",
+          latencyMs: 16121,
+        },
+      ]),
+    );
+    const cfg = {
+      agents: { defaults: { model: { primary: "ollama/gemma4:latest" } } },
+    } satisfies OpenClawConfig;
+    const { options, respond } = createOptions({ provider: "ollama" }, cfg);
+
+    await handler(options);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        provider: "ollama",
+        status: "ok",
+        latencyMs: 16121,
+        results: [
+          {
+            label: "Configured credential · ollama/gemma4:latest",
+            status: "unknown",
+            error:
+              "The configured credential could not be resolved. Update or remove it, then retry.",
+          },
+          {
+            profileId: "ollama:default",
+            label: "Profile ollama:default · ollama/gemma4:latest",
+            status: "ok",
+            latencyMs: 16121,
+          },
         ],
       },
       undefined,
@@ -276,5 +373,26 @@ describe("models.probe", () => {
     expect(payload).toMatchObject({ provider: "openai", status: "auth" });
     expect(JSON.stringify(payload)).not.toContain(secret);
     expect(JSON.stringify(payload)).toContain("Authentication failed.");
+  });
+
+  it("records a redacted typed diagnostic when probe execution fails", async () => {
+    const secret = ["AI", "za", "SyOpaqueProviderCredential"].join("");
+    mocks.runAuthProbes.mockRejectedValue(new Error(`runtime failed for ${secret}`));
+    const { options, respond, warn } = createOptions({ provider: "ollama", timeoutMs: 9_000 });
+
+    await handler(options);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE", message: "Connection probe failed." }),
+    );
+    expect(warn).toHaveBeenCalledWith("Model connection probe failed.", {
+      event: "models_probe_failed",
+      provider: "ollama",
+      timeoutMs: 9_000,
+      error: expect.stringContaining("runtime failed for"),
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(secret);
   });
 });

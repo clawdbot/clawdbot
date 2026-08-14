@@ -3,8 +3,11 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
-import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
+import {
+  createMockFollowupRun,
+  createMockReplyOperation,
+  createMockTypingController,
+} from "./test-helpers.js";
 
 const executeAgentTurnMock = vi.fn();
 const resolveOutboundAttachmentFromUrlMock = vi.fn();
@@ -109,20 +112,6 @@ type AgentTurnExecutionResult = Awaited<
   ReturnType<typeof import("./agent-runner-execution.js").executeAgentTurn>
 >;
 
-function createReplyOperation(): ReplyOperation {
-  return {
-    result: undefined,
-    startedAtMs: Date.now(),
-    lastActivityAtMs: Date.now(),
-    recordActivity: vi.fn(),
-    setPhase: vi.fn(),
-    freezeAbort: vi.fn(),
-    fail: vi.fn(),
-    complete: vi.fn(),
-    completeThen: vi.fn(),
-  } as unknown as ReplyOperation;
-}
-
 function makeRunReplyAgentParams(
   overrides: Partial<Parameters<typeof runReplyAgent>[0]> = {},
 ): Parameters<typeof runReplyAgent>[0] {
@@ -146,7 +135,6 @@ function makeRunReplyAgentParams(
     shouldSteer: false,
     shouldFollowup: false,
     isActive: false,
-    isStreaming: false,
     typing: createMockTypingController(),
     sessionCtx: {
       Provider: provider,
@@ -163,7 +151,7 @@ function makeRunReplyAgentParams(
     resolvedBlockStreamingBreak: "message_end",
     shouldInjectGroupIntro: false,
     typingMode: "instant",
-    replyOperation: createReplyOperation(),
+    replyOperation: createMockReplyOperation().replyOperation,
     ...overrides,
   };
 }

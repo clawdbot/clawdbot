@@ -1,4 +1,5 @@
 // Retry policy: backoff, attempt floor + age gate for dead-letter.
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
@@ -9,6 +10,34 @@ import {
 } from "./ingress-retry-policy.js";
 
 describe("ingress retry policy", () => {
+  it.each([
+    {
+      name: "default cap",
+      config: undefined,
+      expected: [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000, 180_000, 180_000],
+    },
+    {
+      name: "independent exponent cap",
+      config: { baseMs: 1_000, maxMs: 1_000_000 },
+      expected: [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000, 256_000, 256_000],
+    },
+  ])("preserves the exact retry schedule through attempt 10: $name", ({ config, expected }) => {
+    expect(
+      expected.map((_, index) =>
+        resolveIngressRetryDelayMs(
+          {
+            receivedAt: 0,
+            attempts: index + 1,
+            lastAttemptAt: 0,
+            lastError: "boom",
+          },
+          config,
+          0,
+        ),
+      ),
+    ).toEqual(expected);
+  });
+
   it.each([
     {
       name: "no prior error → immediate",
@@ -113,7 +142,7 @@ describe("ingress retry policy", () => {
         receivedAt,
         attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
       },
-      formatError: (err) => (err instanceof Error ? err.message : String(err)),
+      formatError: coerceErrorMessage,
       now: receivedAt + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS - 1,
     });
     expect(young.kind).toBe("release");
@@ -125,7 +154,7 @@ describe("ingress retry policy", () => {
         receivedAt,
         attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
       },
-      formatError: (err) => (err instanceof Error ? err.message : String(err)),
+      formatError: coerceErrorMessage,
       now: receivedAt + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
     });
     expect(aged).toMatchObject({

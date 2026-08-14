@@ -12,6 +12,7 @@ type TeamsLoopbackRequest = {
 
 const acknowledgedPrefix = "a".repeat(4_000);
 const completeReply = `${acknowledgedPrefix}${"b".repeat(200)}`;
+const replacementReply = "provider-final replacement";
 const requests: TeamsLoopbackRequest[] = [];
 
 const provider = createServer((request, response) => {
@@ -25,7 +26,11 @@ const provider = createServer((request, response) => {
       text?: string;
     };
     const scenario = request.url?.slice(1) ?? "";
-    const rejected = scenario === "no-ack" || (activity.text?.length ?? 0) > 4_000;
+    const priorScenarioRequests = requests.filter((entry) => entry.scenario === scenario).length;
+    const rejected =
+      scenario === "no-ack" ||
+      (scenario === "cancel-replacement" && priorScenarioRequests > 0) ||
+      (activity.text?.length ?? 0) > 4_000;
     const status = rejected ? 403 : 201;
     requests.push({
       scenario,
@@ -39,10 +44,9 @@ const provider = createServer((request, response) => {
         rejected
           ? {
               error: {
-                message:
-                  scenario === "cancel"
-                    ? "Content stream was canceled by user"
-                    : "Message size too large",
+                message: scenario.startsWith("cancel")
+                  ? "Content stream was canceled by user"
+                  : "Message size too large",
               },
             }
           : { id: `stream-${scenario}` },
@@ -178,7 +182,8 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
 
     await expect(controller.finalize()).resolves.toEqual({
       visibleReplySent: true,
-      content: completeReply,
+      content: acknowledgedPrefix,
+      messageId: "stream-size-limit",
       fallbackPayload: { text: "b".repeat(200) },
     });
     // Finalization queues its own metadata activity; this is a second
@@ -221,7 +226,74 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
     await expect(controller.finalize()).resolves.toEqual({
       visibleReplySent: true,
       content: acknowledgedPrefix,
+      messageId: "stream-cancel",
     });
     expect(requests.filter((request) => request.scenario === "cancel")).toHaveLength(2);
+  });
+
+  it("replaces a divergent preview through the same real Teams stream", async () => {
+    const { acknowledgements, controller, logger } = createLoopbackController("replacement");
+
+    controller.onPartialReply({ text: acknowledgedPrefix });
+    await vi.waitFor(() => {
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(acknowledgements).toEqual([{ id: "stream-replacement", text: acknowledgedPrefix }]);
+    });
+
+    controller.onPartialReply({ text: replacementReply });
+    expect(
+      controller.preparePayload({
+        text: replacementReply,
+        mediaUrl: "https://example.test/replacement.png",
+      }),
+    ).toBeUndefined();
+    await expect(controller.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: replacementReply,
+      logicalContent: replacementReply,
+      messageId: "stream-replacement",
+      postNativePayloads: [
+        {
+          text: undefined,
+          mediaUrl: "https://example.test/replacement.png",
+        },
+      ],
+    });
+    expect(acknowledgements).toEqual([
+      { id: "stream-replacement", text: acknowledgedPrefix },
+      { id: "stream-replacement", text: replacementReply },
+    ]);
+    expect(requests.filter((request) => request.scenario === "replacement")).toHaveLength(3);
+  });
+
+  it("detects Stop while replacing a divergent preview and suppresses the final", async () => {
+    const { acknowledgements, controller, logger, stream } =
+      createLoopbackController("cancel-replacement");
+
+    controller.onPartialReply({ text: acknowledgedPrefix });
+    await vi.waitFor(() => {
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(acknowledgements).toEqual([
+        { id: "stream-cancel-replacement", text: acknowledgedPrefix },
+      ]);
+    });
+
+    controller.onPartialReply({ text: replacementReply });
+    expect(
+      controller.preparePayload({
+        text: replacementReply,
+        mediaUrl: "https://example.test/must-not-send.png",
+      }),
+    ).toBeUndefined();
+    await expect(controller.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: acknowledgedPrefix,
+      messageId: "stream-cancel-replacement",
+    });
+    expect(stream.canceled).toBe(true);
+    expect(acknowledgements).toEqual([
+      { id: "stream-cancel-replacement", text: acknowledgedPrefix },
+    ]);
+    expect(requests.filter((request) => request.scenario === "cancel-replacement")).toHaveLength(2);
   });
 });

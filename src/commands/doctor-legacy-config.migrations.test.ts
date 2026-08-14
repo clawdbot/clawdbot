@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
 import { validateConfigObject } from "../config/validation.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -28,37 +32,40 @@ vi.mock("../plugins/setup-registry.js", () => ({
   }),
 }));
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => ({
-    diagnostics: [],
-    plugins: [
-      {
-        id: "brave",
-        origin: "bundled",
-        channels: [],
-        contracts: { webSearchProviders: ["brave"] },
-      },
-      {
-        id: "google",
-        origin: "bundled",
-        channels: [],
-        contracts: { webSearchProviders: ["gemini"] },
-      },
-      {
-        id: "firecrawl",
-        origin: "bundled",
-        channels: [],
-        contracts: { webSearchProviders: ["firecrawl"] },
-      },
-    ],
-  }),
-  resolveManifestContractOwnerPluginId: ({ value }: { value: string }): string | undefined => {
-    if (value === "gemini") {
-      return "google";
-    }
-    return value === "brave" || value === "firecrawl" ? value : undefined;
-  },
-}));
+vi.mock("../plugins/manifest-registry.js", () => {
+  const plugin = (id: string, webSearchProvider: string) => {
+    const rootDir = `/plugins/${id}`;
+    return {
+      id,
+      origin: "bundled",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      contracts: { webSearchProviders: [webSearchProvider] },
+      rootDir,
+      source: `${rootDir}/index.ts`,
+      manifestPath: `${rootDir}/openclaw.plugin.json`,
+    };
+  };
+  return {
+    loadPluginManifestRegistryCore: () => ({
+      diagnostics: [],
+      plugins: [
+        plugin("brave", "brave"),
+        plugin("google", "gemini"),
+        plugin("firecrawl", "firecrawl"),
+      ],
+    }),
+    resolveManifestContractOwnerPluginId: ({ value }: { value: string }): string | undefined => {
+      if (value === "gemini") {
+        return "google";
+      }
+      return value === "brave" || value === "firecrawl" ? value : undefined;
+    },
+  };
+});
 
 function legacyConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -71,7 +78,9 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
   }),
 }));
 
-vi.mock("../secrets/target-registry.js", () => {
+vi.mock("../secrets/target-registry.js", async () => {
+  const { asNullableRecord: readRecord } =
+    await import("@openclaw/normalization-core/record-coerce");
   const entry = {
     id: "channels.discord.token",
     targetType: "channels.discord.token",
@@ -83,11 +92,6 @@ vi.mock("../secrets/target-registry.js", () => {
     includeInConfigure: true,
     includeInAudit: true,
   };
-
-  const readRecord = (value: unknown): Record<string, unknown> | null =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
 
   return {
     discoverConfigSecretTargets: (cfg: OpenClawConfig) => {
@@ -261,6 +265,56 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     expect(res.config.agents?.list).toEqual([{ id: "main", workspace: "/main" }, { id: "beta" }]);
     expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
+  });
+
+  it("removes invalid heartbeat active-hours windows so saved config can load", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "30m",
+              activeHours: { start: "99:99", end: "17:00" },
+            },
+          },
+          list: [
+            {
+              id: "ops",
+              heartbeat: {
+                prompt: "Check alerts",
+                activeHours: { start: "09:00", end: "not-a-time" },
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(res.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
+    expect(res.config.agents?.list?.[0]?.heartbeat).toEqual({ prompt: "Check alerts" });
+    expect(res.changes).toContain(
+      "Removed invalid agents.defaults.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
+    );
+    expect(res.changes).toContain(
+      "Removed invalid agents.list[0].heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
+    );
+    expect(validateConfigObject(res.config).ok).toBe(true);
+  });
+
+  it("preserves valid heartbeat active-hours windows", () => {
+    const config = legacyConfig({
+      agents: {
+        defaults: {
+          heartbeat: {
+            activeHours: { start: "09:00", end: "24:00", timezone: "user" },
+          },
+        },
+      },
+    });
+    const res = normalizeCompatibilityConfigValues(config);
+
+    expect(res.config).toEqual(config);
+    expect(res.changes.some((change) => change.includes("activeHours"))).toBe(false);
   });
 
   it("removes bindings for missing configured agents", () => {
@@ -922,6 +976,66 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(result.config.agents?.list?.[1]?.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
+  it("uses a retained metadata snapshot for plugin-owned providers", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: "my-cli/model",
+        },
+      },
+    } as OpenClawConfig;
+    const baseSnapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: makeRegistry([
+        {
+          id: "my-cli-plugin",
+          channels: [],
+          providers: ["my-cli"],
+        },
+      ]),
+    });
+    const pluginMetadataSnapshot = {
+      ...baseSnapshot,
+      owners: {
+        ...baseSnapshot.owners,
+        providers: new Map([["my-cli", ["my-cli-plugin"]]]),
+      },
+    };
+
+    const result = repairStaleAgentModelRefs(config, {
+      pluginMetadataSnapshot,
+      persistedProviderIdsByAgentId: new Map(),
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.agents?.defaults?.model).toBe("my-cli/model");
+  });
+
+  it("preserves model refs backed by a configured installable provider", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        plugins: {
+          allow: ["mistral"],
+          entries: { mistral: { enabled: true } },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "mistral/mistral-large-latest" },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(),
+        persistedProviderIdsByAgentId: new Map(),
+      },
+    );
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.agents?.defaults?.model).toEqual({
+      primary: "mistral/mistral-large-latest",
+    });
+  });
+
   it("does not treat one agent-local provider as globally available", () => {
     const result = repairStaleAgentModelRefs(
       {
@@ -1357,7 +1471,10 @@ describe("normalizeCompatibilityConfigValues", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
           },
           models: {
-            "anthropic/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": {
+              alias: "Opus",
+              agentRuntime: { id: "auto", mode: "strict" },
+            },
           },
         },
       },
@@ -1367,7 +1484,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.agents?.defaults?.models).toEqual({
       "anthropic/claude-opus-4-7": {
         alias: "Opus",
-        agentRuntime: { id: "claude-cli" },
+        agentRuntime: { id: "claude-cli", mode: "strict" },
       },
       "anthropic/claude-sonnet-4-6": {
         agentRuntime: { id: "claude-cli" },

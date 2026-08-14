@@ -5,6 +5,7 @@ import {
 } from "@openclaw/ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../llm/ai-transport-host.js";
+import { getModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   resolveProviderStreamFn,
@@ -14,7 +15,6 @@ import {
 import { createAnthropicVertexStreamFnForModel } from "./anthropic-vertex-stream.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
-import { prepareGoogleSimpleCompletionModel } from "./google-simple-completion-stream.js";
 import {
   resolveProviderRequestCapabilities,
   resolveProviderEndpoint,
@@ -26,6 +26,7 @@ import {
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
+  inheritModelProviderMetadataOwners,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -56,6 +57,7 @@ export function configureAiTransportRuntimeHost(): void {
         resolveProviderTransportTurnStateWithPlugin({
           ...params,
           config: params.config as OpenClawConfig | undefined,
+          runtimeHandle: getModelProviderRuntimePluginHandle(params.context.model),
           context: {
             ...params.context,
             model: params.context.model as ProviderRuntimeModel | undefined,
@@ -89,13 +91,15 @@ export function configureAiTransportRuntimeHost(): void {
       return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
     },
     inheritManagedTransport: (source, target) =>
-      attachModelProviderLocalService(
-        attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),
-        getModelProviderLocalService(source),
+      inheritModelProviderMetadataOwners(
+        source,
+        attachModelProviderLocalService(
+          attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),
+          getModelProviderLocalService(source),
+        ),
       ),
     transformTransportMessages,
     registerCustomApi: ensureCustomApiRegistered,
-    prepareGoogleSimpleCompletionModel,
   });
   configured = true;
 }

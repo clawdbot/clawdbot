@@ -11,7 +11,8 @@ import {
   buildTestLiveSpawnParams,
   parseTestLiveArgs,
   resolveTestLiveHeartbeatMs,
-} from "../../scripts/test-live.mjs";
+} from "../../scripts/test-live.mts";
+import { waitForPidFile } from "../helpers/process-wait.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
@@ -90,24 +91,26 @@ describe("scripts/test-live", () => {
     const signaledPath = join(root, "signaled");
 
     writeFakePnpm(fakePnpmPath);
-    const runner = spawn(process.execPath, ["scripts/test-live.mjs", "--", "fake.live.test.ts"], {
-      env: {
-        ...process.env,
-        OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
-        OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
-        OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
-        npm_execpath: fakePnpmPath,
+    const runner = spawn(
+      process.execPath,
+      ["--import", "tsx", "scripts/test-live.mts", "--", "fake.live.test.ts"],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
+          OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
+          OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
+          npm_execpath: fakePnpmPath,
+        },
+        stdio: "ignore",
       },
-      stdio: "ignore",
-    });
+    );
     let childPid = 0;
     let descendantPid = 0;
 
     try {
-      await waitFor(() => fileExists(childPidPath), 5_000);
-      await waitFor(() => fileExists(descendantPidPath), 5_000);
-      childPid = Number(readFileSync(childPidPath, "utf8"));
-      descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+      childPid = await waitForPidFile(childPidPath, 5_000);
+      descendantPid = await waitForPidFile(descendantPidPath, 5_000);
       expect(Number.isInteger(childPid)).toBe(true);
       expect(Number.isInteger(descendantPid)).toBe(true);
 
@@ -142,26 +145,28 @@ describe("scripts/test-live", () => {
     const stderr: Buffer[] = [];
 
     writeFakePnpm(fakePnpmPath);
-    const runner = spawn(process.execPath, ["scripts/test-live.mjs", "--", "fake.live.test.ts"], {
-      env: {
-        ...process.env,
-        OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
-        OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
-        OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "25",
-        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "100",
-        npm_execpath: fakePnpmPath,
+    const runner = spawn(
+      process.execPath,
+      ["--import", "tsx", "scripts/test-live.mts", "--", "fake.live.test.ts"],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
+          OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
+          OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "25",
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "100",
+          npm_execpath: fakePnpmPath,
+        },
+        stdio: ["ignore", "ignore", "pipe"],
       },
-      stdio: ["ignore", "ignore", "pipe"],
-    });
+    );
     runner.stderr.on("data", (chunk) => stderr.push(chunk));
     let childPid = 0;
     let descendantPid = 0;
 
     try {
-      await waitFor(() => fileExists(childPidPath), 5_000);
-      await waitFor(() => fileExists(descendantPidPath), 5_000);
-      childPid = Number(readFileSync(childPidPath, "utf8"));
-      descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+      childPid = await waitForPidFile(childPidPath, 5_000);
+      descendantPid = await waitForPidFile(descendantPidPath, 5_000);
 
       expect(await waitForClose(runner)).toEqual({ code: 1, signal: null });
       expect(Buffer.concat(stderr).toString("utf8")).toContain(
@@ -199,14 +204,18 @@ describe("scripts/test-live", () => {
   });
 
   it("prints help without spawning live Vitest", () => {
-    const result = spawnSync(process.execPath, ["scripts/test-live.mjs", "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/test-live.mts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: node scripts/test-live.mjs");
+    expect(result.stdout).toContain("Usage: node --import tsx scripts/test-live.mts");
     expect(result.stdout).not.toContain("Scope:");
     expect(result.stdout).not.toContain("pnpm");
     expect(result.stdout).not.toContain("[test:live]");

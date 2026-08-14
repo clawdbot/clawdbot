@@ -14,7 +14,7 @@ channel converge on the agent's [main session](/concepts/main-session).
 
 ## Key terms
 
-- **Channel**: a bundled channel plugin such as `discord`, `googlechat`, `imessage`, `irc`, `line`, `signal`, `slack`, `telegram`, or `whatsapp`, plus installed plugin channels. `webchat` is the internal WebChat UI channel and is not a configurable outbound channel.
+- **Channel**: a channel plugin such as `discord`, `googlechat`, `imessage`, `irc`, `line`, `signal`, `slack`, `telegram`, or `whatsapp`. `webchat` is the internal WebChat UI channel and is not a configurable outbound channel.
 - **AccountId**: per-channel account instance (when supported).
 - Optional channel default account: `channels.<channel>.defaultAccount` chooses
   which account is used when an outbound path does not specify `accountId`.
@@ -124,7 +124,13 @@ Example:
 ```json5
 {
   agents: {
-    list: [{ id: "support", name: "Support", workspace: "~/.openclaw/workspace-support" }],
+    entries: {
+      support: {
+        default: true,
+        name: "Support",
+        workspace: "~/.openclaw/workspace-support",
+      },
+    },
   },
   bindings: [
     { match: { channel: "slack", teamId: "T123" }, agentId: "support" },

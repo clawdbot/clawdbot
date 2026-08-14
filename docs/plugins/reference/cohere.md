@@ -12,7 +12,7 @@ OpenClaw Cohere provider plugin.
 ## Distribution
 
 - Package: `@openclaw/cohere-provider`
-- Install route: included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/cohere-provider`
+- Install route: npm; ClawHub: `clawhub:@openclaw/cohere-provider`
 
 ## Surface
 

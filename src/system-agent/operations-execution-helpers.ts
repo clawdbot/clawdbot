@@ -1,4 +1,5 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
+import { tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope-config.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -94,7 +95,13 @@ export function formatGatewayStatusLine(overview: SystemAgentOverview): string {
 
 export async function runGatewayLifecycle(
   operation: "start" | "stop" | "restart",
+  surface?: "cli" | "gateway",
 ): Promise<void | boolean> {
+  if (operation === "restart" && surface === "gateway") {
+    const { scheduleSafeGatewayRestart } = await import("../infra/restart-coordinator.js");
+    // In-process ownership prevents remote URL/config overrides from restarting another Gateway.
+    return scheduleSafeGatewayRestart({ reason: "gateway.restart.safe", delayMs: 0 }).ok;
+  }
   const lifecycle = await import("../cli/daemon-cli/lifecycle.js");
   if (operation === "start") {
     await lifecycle.runDaemonStart();
@@ -181,12 +188,12 @@ export function createNoExitRuntime(runtime: RuntimeEnv): RuntimeEnv {
   };
 }
 
-export async function resolveTuiAgentId(params: {
+export function resolveTuiAgentId(params: {
   requestedAgentId: string | undefined;
   requestedWorkspace?: string;
-  deps?: SystemAgentCommandDeps;
-}): Promise<string | undefined> {
-  const overview = await loadOverviewForOperation(params.deps);
+  overview: SystemAgentOverview;
+}): string | undefined {
+  const { overview } = params;
   const workspace = params.requestedWorkspace
     ? resolveUserPath(params.requestedWorkspace)
     : undefined;
@@ -342,7 +349,6 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     return true;
   }
   const { readConfigFileSnapshot } = await loadConfigModule();
-  const { resolveDefaultAgentId } = await import("../agents/agent-scope.js");
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid) {
     return true;
@@ -354,8 +360,10 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     // Unknown or id-less entry: cannot prove it is off the default route.
     return true;
   }
-  const defaultAgentId = resolveDefaultAgentId(config ?? {});
-  return normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId);
+  const defaultAgentId =
+    config?.agents?.defaults?.systemAgent?.agentId?.trim() ??
+    (config ? tryResolveLegacyCompatibilityAgentId(config) : undefined);
+  return !defaultAgentId || normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId);
 }
 
 export async function assertConfigWriteDoesNotBypassInferenceVerification(
@@ -381,7 +389,7 @@ export async function assertConfigWriteDoesNotBypassInferenceVerification(
       return;
     }
     throw new Error(
-      `Direct config writes cannot change plugin "${pluginId}" because it may back OpenClaw's own active inference route. Exit OpenClaw and edit it from a terminal.`,
+      `Direct config writes cannot change plugin "${pluginId}" because it may back OpenClaw's own active inference route. Editing it is a human-only change, made with OpenClaw stopped from a trusted shell on the machine running it.`,
     );
   }
   const deniedRoot = segments[0]?.trim().toLowerCase() ?? "";
@@ -389,7 +397,7 @@ export async function assertConfigWriteDoesNotBypassInferenceVerification(
   throw new Error(
     denialReason
       ? `Direct config writes cannot change \`${deniedRoot}\` (${denialReason}).`
-      : "Direct config writes cannot change the default inference route or include alternate config. Use `set_default_model` (optionally with agentId) for an already configured route, or exit OpenClaw and run `openclaw onboard` to change provider/auth access.",
+      : "Direct config writes cannot change the default inference route or include alternate config. Use `set_default_model` (optionally with agentId) for an already configured route; changing provider or auth access is `openclaw onboard` on the machine running OpenClaw.",
   );
 }
 
@@ -405,14 +413,14 @@ async function verifyCurrentSetupInference(
   const before = await readConfigFileSnapshot();
   if (!before.exists || !before.valid) {
     throw new Error(
-      "OpenClaw setup requires a valid configured inference route. Exit OpenClaw and run `openclaw onboard`, then retry.",
+      "OpenClaw setup requires a valid configured inference route. Run `openclaw onboard` on the machine running OpenClaw, then retry.",
     );
   }
   const beforeConfig = before.runtimeConfig ?? before.config;
   const beforeRoute = await projectDefaultInferenceRoute(beforeConfig);
   if (!beforeRoute.route) {
     throw new Error(
-      "OpenClaw setup requires working inference first. Exit OpenClaw and run `openclaw onboard`, then retry.",
+      "OpenClaw setup requires working inference first. Run `openclaw onboard` on the machine running OpenClaw, then retry.",
     );
   }
   const verifyInferenceConfig =
@@ -421,7 +429,7 @@ async function verifyCurrentSetupInference(
   const verification = await verifyInferenceConfig({ config: beforeConfig, runtime });
   if (!verification.ok) {
     throw new Error(
-      `OpenClaw setup requires working inference first. The configured route failed a live check: ${verification.error} Exit OpenClaw and run \`openclaw onboard\`, then retry.`,
+      `OpenClaw setup requires working inference first. The configured route failed a live check: ${verification.error} Run \`openclaw onboard\` on the machine running OpenClaw, then retry.`,
     );
   }
 
@@ -457,13 +465,13 @@ export async function executeSetup(
   const defaultModel = overview.defaultModel?.trim();
   if (!defaultModel) {
     throw new Error(
-      "OpenClaw setup requires working inference first. Run `openclaw onboard` to configure and verify a default model, then start OpenClaw again.",
+      "OpenClaw setup requires working inference first. Run `openclaw onboard` on the machine running OpenClaw to configure and verify a default model, then start OpenClaw again.",
     );
   }
   const requestedModel = operation.model?.trim();
   if (requestedModel && requestedModel !== defaultModel) {
     throw new Error(
-      `OpenClaw setup will preserve the verified default model ${defaultModel}. Exit OpenClaw and run \`openclaw onboard\` to stage, live-test, and save a different inference route.`,
+      `OpenClaw setup will preserve the verified default model ${defaultModel}. Staging, live-testing, and saving a different inference route is \`openclaw onboard\` on the machine running OpenClaw.`,
     );
   }
   if (!opts.approved) {
@@ -477,10 +485,9 @@ export async function executeSetup(
   const verified = await verifyCurrentSetupInference(runtime, opts.deps);
   if (requestedModel && requestedModel !== verified.modelRef) {
     throw new Error(
-      `The verified default model is now ${verified.modelRef}, not ${requestedModel}. Review the current route or exit OpenClaw and run \`openclaw onboard\` before retrying setup.`,
+      `The verified default model is now ${verified.modelRef}, not ${requestedModel}. Review the current route, or run \`openclaw onboard\` on the machine running OpenClaw, before retrying setup.`,
     );
   }
-  const workspace = resolveUserPath(operation.workspace ?? process.cwd());
   return await applyPersistentOperation({
     auditOperation: "openclaw.setup",
     operation,
@@ -490,23 +497,38 @@ export async function executeSetup(
       const applySetup =
         ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applySystemAgentSetup;
       const surface = ctx.deps?.setupSurface ?? "cli";
+      const recovery =
+        surface === "cli"
+          ? await (await import("./setup-recovery.js")).loadLocalSetupRecovery(operation.workspace)
+          : undefined;
+      const workspace =
+        recovery?.workspace ?? resolveUserPath(operation.workspace ?? process.cwd());
       // The guarded setup transaction publishes the load-time injected main
       // roster before any workspace provisioning or other follow-up effect.
       // The outer boundary covers injected implementations. The production
       // setup helper also uses this same seam for each of its internal writes.
-      const applied = await ctx.commit(
-        async () =>
-          await applySetup(
-            {
-              workspace,
-              expectedInferenceRoute: verified.route,
-              surface,
-              runtime: ctx.runtime,
-            },
-            { commit: async (effect) => await ctx.commit(effect) },
-          ),
+      const applied = await ctx.commit(() =>
+        applySetup(
+          {
+            workspace,
+            ...(operation.agentName ? { firstAgent: { name: operation.agentName } } : {}),
+            expectedInferenceRoute: verified.route,
+            ...recovery?.applyOptions,
+            surface,
+            runtime: ctx.runtime,
+          },
+          { commit: (effect) => ctx.commit(effect) },
+        ),
       );
-      const after = await readConfigFileSnapshotLazy();
+      if (!applied.workspaceReady) {
+        throw new Error("The workspace could not be prepared. Retry onboarding to finish setup.");
+      }
+      if (applied.gateway.status === "failed") {
+        throw new Error(applied.gateway.error);
+      }
+      const after =
+        (await recovery?.complete(applied.configPath, (effect) => ctx.commit(effect))) ??
+        (await readConfigFileSnapshotLazy());
       ctx.runtime.log(`Updated ${after.path || applied.configPath || "config"}`);
       for (const line of applied.lines) {
         ctx.runtime.log(line);
@@ -542,11 +564,11 @@ export async function executeSetDefaultModel(
       const { applySystemAgentModelSelection, createSystemAgentModelSelectionUpdater } =
         await import("./setup-apply.js");
       const targetAgentId = operation.agentId;
+      const snapshot = await readConfigFileSnapshot();
       // Route projection and the live probes below all take the same optional
       // agent scope, so a per-agent selection is verified against that agent's
       // route with the exact rigor the default route gets.
       const projectRoute = (config: OpenClawConfig) => projectInferenceRoute(config, targetAgentId);
-      const snapshot = await readConfigFileSnapshot();
       const stagedConfig = await applySystemAgentModelSelection({
         config: snapshot.sourceConfig,
         model: operation.model,

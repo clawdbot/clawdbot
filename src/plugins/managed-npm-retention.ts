@@ -1,11 +1,22 @@
-// Marks retained managed npm package trees that should stay importable but not recoverable.
+// Marks managed npm packages excluded from recovery and classifies cleanup eligibility.
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
+import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
 import { listManagedPluginNpmRootsSync } from "./npm-project-roots.js";
 
 const RETAINED_MANAGED_NPM_INSTALL_MARKER_DIR = ".openclaw-retained-npm-installs";
+
+function markerPreservesPackageFiles(markerPath: string): boolean {
+  try {
+    const marker: unknown = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+    return isRecord(marker) && marker.reason === RETAINED_MANAGED_NPM_KEEP_FILES_REASON;
+  } catch {
+    return false;
+  }
+}
 
 export function resolveRetainedManagedNpmInstallPackageInfo(packageDir: string): {
   packageName: string;
@@ -150,6 +161,7 @@ async function cleanupRetainedLegacyNpmPackages(params: {
   for (const packageDir of listManagedNpmPackageDirs(params.npmRoot)) {
     if (
       !hasRetainedManagedNpmInstallMarker(packageDir) ||
+      markerPreservesPackageFiles(resolveRetainedManagedNpmInstallMarkerPath(packageDir)) ||
       params.activeInstallPaths.some((installPath) => isPathEqualOrInside(packageDir, installPath))
     ) {
       continue;
@@ -205,6 +217,9 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
     }
     if (
       markerEntries.length === 0 ||
+      markerEntries.some((entry) =>
+        markerPreservesPackageFiles(path.join(markerDir, entry.name)),
+      ) ||
       !isPathEqualOrInside(projectsDir, projectRoot) ||
       activeInstallPaths.some((installPath) => isPathEqualOrInside(projectRoot, installPath))
     ) {

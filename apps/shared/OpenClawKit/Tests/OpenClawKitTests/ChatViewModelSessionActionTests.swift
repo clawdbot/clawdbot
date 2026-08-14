@@ -36,6 +36,7 @@ private actor SessionActionTransportState {
     var historySessionKeys: [String] = []
     var historyCallCount = 0
     var patchedKeys: [String] = []
+    var patchIdentities: [(key: String, expectedSessionID: String?)] = []
     var deletedKeys: [String] = []
     var groupPuts: [[String]] = []
     var createdAgentIDs: [String?] = []
@@ -73,8 +74,9 @@ private actor SessionActionTransportState {
         return self.historyCallCount
     }
 
-    func recordPatch(_ key: String) {
+    func recordPatch(_ key: String, expectedSessionID: String?) {
         self.patchedKeys.append(key)
+        self.patchIdentities.append((key: key, expectedSessionID: expectedSessionID))
     }
 
     func recordGroupPut(_ names: [String]) {
@@ -262,13 +264,14 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
 
     func patchSession(
         key: String,
+        expectedSessionID: String?,
         label _: String??,
         category _: String??,
         pinned _: Bool?,
         archived _: Bool?,
         unread _: Bool?) async throws
     {
-        await self.state.recordPatch(key)
+        await self.state.recordPatch(key, expectedSessionID: expectedSessionID)
     }
 
     func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease? {
@@ -354,6 +357,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         await self.state.patchedKeys
     }
 
+    func patchIdentities() async -> [(key: String, expectedSessionID: String?)] {
+        await self.state.patchIdentities
+    }
+
     func groupPuts() async -> [[String]] {
         await self.state.groupPuts
     }
@@ -423,6 +430,23 @@ struct ChatViewModelSessionActionTests {
         #expect(result.succeededKeys == ["older-search-result"])
         #expect(result.errorsByKey.isEmpty)
         #expect(await transport.patchedKeys() == ["older-search-result"])
+    }
+
+    @Test func `batch archive carries each observed identity and rejects missing identity`() async {
+        let transport = SessionActionTransport()
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+
+        let result = await viewModel.performSessionBatch(
+            sessions: [
+                self.entry(key: "durable", sessionId: "session-durable"),
+                self.entry(key: "missing"),
+            ],
+            action: .archive)
+
+        #expect(result.succeededKeys == ["durable"])
+        #expect(result.errorsByKey["missing"] != nil)
+        #expect(await transport.patchIdentities().map(\.key) == ["durable"])
+        #expect(await transport.patchIdentities().map(\.expectedSessionID) == ["session-durable"])
     }
 
     @Test func `group create lists and replaces through one captured route lease`() async throws {
@@ -1253,7 +1277,7 @@ struct ChatViewModelSessionActionTests {
         ]
     }
 
-    private func entry(key: String) -> OpenClawChatSessionEntry {
+    private func entry(key: String, sessionId: String? = nil) -> OpenClawChatSessionEntry {
         OpenClawChatSessionEntry(
             key: key,
             kind: nil,
@@ -1263,7 +1287,7 @@ struct ChatViewModelSessionActionTests {
             room: nil,
             space: nil,
             updatedAt: nil,
-            sessionId: nil,
+            sessionId: sessionId,
             systemSent: nil,
             abortedLastRun: nil,
             thinkingLevel: nil,

@@ -13,7 +13,10 @@ import {
   resolveCliRuntimeModelBackendBinding,
 } from "./cli-backends.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import {
+  resolveProviderIdForAuth,
+  type ProviderAuthAliasLookupParams,
+} from "./provider-auth-aliases.js";
 
 const RETIRED_MODEL_PICKER_PROVIDERS = new Set(["codex", "codex-cli"]);
 
@@ -169,11 +172,24 @@ function resolveConfiguredRuntime(params: {
   };
 }
 
-function resolveProfileRuntimeAlias(params: {
+type RuntimeAuthAliasParams = {
   cfg?: OpenClawConfig;
-  provider: string;
-  profileId: string;
-}): string | undefined {
+  metadataSnapshot?: ProviderAuthAliasLookupParams["metadataSnapshot"];
+};
+
+function resolveRuntimeAuthProvider(provider: string, params: RuntimeAuthAliasParams): string {
+  return resolveProviderIdForAuth(provider, {
+    config: params.cfg,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
+  });
+}
+
+function resolveProfileRuntimeAlias(
+  params: RuntimeAuthAliasParams & {
+    provider: string;
+    profileId: string;
+  },
+): string | undefined {
   const profile = params.cfg?.auth?.profiles?.[params.profileId];
   if (!profile?.provider) {
     return undefined;
@@ -183,8 +199,8 @@ function resolveProfileRuntimeAlias(params: {
   if (!provider || !profileProvider) {
     return undefined;
   }
-  const providerAuthKey = resolveProviderIdForAuth(provider, { config: params.cfg });
-  const profileAuthKey = resolveProviderIdForAuth(profileProvider, { config: params.cfg });
+  const providerAuthKey = resolveRuntimeAuthProvider(provider, params);
+  const profileAuthKey = resolveRuntimeAuthProvider(profileProvider, params);
   if (providerAuthKey !== profileAuthKey) {
     return undefined;
   }
@@ -198,24 +214,25 @@ function resolveProfileRuntimeAlias(params: {
   })?.runtime;
 }
 
-function resolveCliRuntimeFromAuthProfile(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  authProfileId?: string;
-}): string | undefined {
+function resolveCliRuntimeFromAuthProfile(
+  params: RuntimeAuthAliasParams & {
+    provider: string;
+    authProfileId?: string;
+  },
+): string | undefined {
   if (!params.cfg?.auth?.profiles) {
     return undefined;
   }
   if (params.authProfileId?.trim()) {
     return resolveProfileRuntimeAlias({
-      cfg: params.cfg,
+      ...params,
       provider: params.provider,
       profileId: params.authProfileId.trim(),
     });
   }
 
   const provider = normalizeProviderId(params.provider);
-  const providerAuthKey = resolveProviderIdForAuth(provider, { config: params.cfg });
+  const providerAuthKey = resolveRuntimeAuthProvider(provider, params);
   const orderedProfileIds = [
     ...(params.cfg.auth.order?.[providerAuthKey] ?? []),
     ...(providerAuthKey === provider ? [] : (params.cfg.auth.order?.[provider] ?? [])),
@@ -225,11 +242,15 @@ function resolveCliRuntimeFromAuthProfile(params: {
     if (!profile?.provider) {
       continue;
     }
-    const profileAuthKey = resolveProviderIdForAuth(profile.provider, { config: params.cfg });
+    const profileAuthKey = resolveRuntimeAuthProvider(profile.provider, params);
     if (profileAuthKey !== providerAuthKey) {
       continue;
     }
-    return resolveProfileRuntimeAlias({ cfg: params.cfg, provider, profileId });
+    return resolveProfileRuntimeAlias({
+      ...params,
+      provider,
+      profileId,
+    });
   }
 
   const compatibleProfileIds = Object.entries(params.cfg.auth.profiles)
@@ -237,7 +258,7 @@ function resolveCliRuntimeFromAuthProfile(params: {
       if (!profile?.provider) {
         return false;
       }
-      return resolveProviderIdForAuth(profile.provider, { config: params.cfg }) === providerAuthKey;
+      return resolveRuntimeAuthProvider(profile.provider, params) === providerAuthKey;
     })
     .map(([profileId]) => profileId);
   if (compatibleProfileIds.length !== 1) {
@@ -245,17 +266,22 @@ function resolveCliRuntimeFromAuthProfile(params: {
   }
   const [profileId] = compatibleProfileIds;
   return profileId
-    ? resolveProfileRuntimeAlias({ cfg: params.cfg, provider, profileId })
+    ? resolveProfileRuntimeAlias({
+        ...params,
+        provider,
+        profileId,
+      })
     : undefined;
 }
 
-export function resolveCliRuntimeExecutionProvider(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  agentId?: string;
-  modelId?: string;
-  authProfileId?: string;
-}): string | undefined {
+export function resolveCliRuntimeExecutionProvider(
+  params: RuntimeAuthAliasParams & {
+    provider: string;
+    agentId?: string;
+    modelId?: string;
+    authProfileId?: string;
+  },
+): string | undefined {
   const provider = normalizeProviderId(params.provider);
   const { runtime, matchedProvider } = resolveConfiguredRuntime({ ...params, provider });
   if (runtime === "openclaw") {

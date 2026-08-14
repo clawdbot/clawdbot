@@ -1,4 +1,5 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -12,6 +13,7 @@ import {
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
 import { canonicalizeOpenAIModelId } from "../openai-routing.js";
+import { inheritModelProviderMetadataOwners } from "../provider-request-config.js";
 import {
   normalizeResolvedTransportApi,
   resolveProviderModelInput,
@@ -231,10 +233,13 @@ export function normalizeResolvedModel(params: {
     normalizedInputModel.requestTimeoutMs !== undefined
       ? { ...normalizedModel, requestTimeoutMs: normalizedInputModel.requestTimeoutMs }
       : normalizedModel;
-  return canonicalizeLegacyResolvedModel({
-    provider: params.provider,
-    model: modelWithProviderTimeout,
-  });
+  return inheritModelProviderMetadataOwners(
+    params.model,
+    canonicalizeLegacyResolvedModel({
+      provider: params.provider,
+      model: modelWithProviderTimeout,
+    }),
+  );
 }
 
 export function resolveProviderTransport(params: {
@@ -268,11 +273,7 @@ export function resolveProviderTransport(params: {
 }
 
 export function normalizeTransportBaseUrl(baseUrl: unknown): string | undefined {
-  if (typeof baseUrl !== "string") {
-    return undefined;
-  }
-  const trimmed = baseUrl.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(baseUrl);
 }
 
 export function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {

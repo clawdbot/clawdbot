@@ -5,7 +5,7 @@ const manifestMocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
   listOpenClawPluginManifestMetadata: vi.fn(),
   loadPluginManifest: vi.fn(),
-  loadPluginManifestRegistry: vi.fn(),
+  loadPluginManifestRegistryCore: vi.fn(),
 }));
 const providerMocks = vi.hoisted(() => ({
   normalizePluginDiscoveryResult: vi.fn(),
@@ -31,7 +31,7 @@ vi.mock("../../plugins/manifest.js", async (importOriginal) => ({
 
 vi.mock("../../plugins/manifest-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/manifest-registry.js")>()),
-  loadPluginManifestRegistry: manifestMocks.loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore: manifestMocks.loadPluginManifestRegistryCore,
 }));
 
 vi.mock("../../plugins/providers.js", async (importOriginal) => ({
@@ -115,7 +115,7 @@ beforeEach(() => {
     mock.mockReset();
   }
   manifestMocks.listOpenClawPluginManifestMetadata.mockReturnValue([]);
-  manifestMocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [] });
+  manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins: [] });
   providerMocks.resolveActivatableProviderOwnerPluginIds.mockImplementation(
     ({ pluginIds }: { pluginIds: string[] }) => pluginIds,
   );
@@ -179,7 +179,16 @@ describe("bundled static model catalog snapshot cache", () => {
 
   it("pins lifecycle lookups to the supplied plugin generation", () => {
     const cfg = {};
-    const capturedPlugin = createMistralManifestPlugin();
+    const capturedPlugin = {
+      ...createMistralManifestPlugin(),
+      modelIdNormalization: {
+        providers: {
+          mistral: {
+            aliases: { latest: "mistral-medium-3-5" },
+          },
+        },
+      },
+    };
     const capturedSnapshot = {
       plugins: [capturedPlugin],
       manifestRegistry: { plugins: [capturedPlugin] },
@@ -189,7 +198,16 @@ describe("bundled static model catalog snapshot cache", () => {
       metadataSnapshot: capturedSnapshot,
     });
 
-    const replacementPlugin = createMistralManifestPlugin();
+    const replacementPlugin = {
+      ...createMistralManifestPlugin(),
+      modelIdNormalization: {
+        providers: {
+          mistral: {
+            aliases: { latest: "mistral-medium-next" },
+          },
+        },
+      },
+    };
     replacementPlugin.modelCatalog.providers.mistral.models =
       replacementPlugin.modelCatalog.providers.mistral.models.map((model) => ({
         ...model,
@@ -201,7 +219,9 @@ describe("bundled static model catalog snapshot cache", () => {
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })?.id).toBe(
       "mistral-medium-3-5",
     );
+    expect(resolveModel({ provider: "mistral", modelId: "latest" })?.id).toBe("mistral-medium-3-5");
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
+    expect(manifestMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
     expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
     expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
   });
@@ -320,6 +340,6 @@ describe("bundled static model catalog snapshot cache", () => {
     await expect(loadBundledProviderStaticCatalogContextModels({ cfg })).resolves.toEqual([
       expect.objectContaining({ provider: "google", contextWindow: 1_048_576 }),
     ]);
-    expect(manifestMocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(manifestMocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
   });
 });

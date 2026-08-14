@@ -2,8 +2,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
@@ -140,6 +142,20 @@ describe("pruneStaleEntries", () => {
     expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
     expect(store.archived).toBeUndefined();
   });
+
+  it("preserves pinned entries until they are unpinned", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["pinned", { ...makeEntry(now - 31 * DAY_MS), pinnedAt: now - DAY_MS }],
+    ]);
+
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(0);
+    expect(store).toHaveProperty("pinned");
+
+    delete store.pinned?.pinnedAt;
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
+    expect(store.pinned).toBeUndefined();
+  });
 });
 
 describe("resolveQuotaSuspensionEntryMaintenance", () => {
@@ -156,7 +172,6 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "quota_exhausted",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
       now,
@@ -173,10 +188,8 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "quota_exhausted",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
-      resumed: { laneId: "main" },
       cleared: false,
     });
   });
@@ -194,7 +207,6 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
           reason: "circuit_open",
           failedProvider: "anthropic",
           failedModel: "claude-opus-4-6",
-          laneId: "main",
         },
       },
       now,
@@ -275,6 +287,48 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     expect(trajectoryCleanupReferencedIds).toEqual(new Set(["shared-session", "active-session"]));
   });
 
+  it("reports archive retention failure without aborting file-backed maintenance", async () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
+      ["fresh", { sessionId: "fresh-session", updatedAt: now }],
+    ]);
+    const cleanupError = new Error("archive cleanup denied");
+    const warn = vi.fn();
+    const onMaintenanceApplied = vi.fn();
+
+    const result = await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/sessions.json",
+      store,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 7 * DAY_MS,
+        maxEntries: 500,
+        modelRunPruneAfterMs: DAY_MS,
+        resetArchiveRetentionMs: 0,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      onMaintenanceApplied,
+      log: { warn, info: () => {} },
+      artifacts: {
+        archiveRemovedSessionTranscripts: async () => new Set(),
+        removeRemovedSessionTrajectoryArtifacts: async () => {},
+        cleanupArchivedSessionTranscripts: async () => {
+          throw cleanupError;
+        },
+      },
+    });
+
+    expect(result.changedStore).toBe(true);
+    expect(store.stale).toBeUndefined();
+    expect(store).toHaveProperty("fresh");
+    expect(onMaintenanceApplied).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith("session transcript archive retention cleanup failed", {
+      error: String(cleanupError),
+    });
+  });
+
   it("forced cleanup prunes stale model-run probes before the cap evicts real sessions", async () => {
     const now = Date.now();
     const staleProbe = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174099";
@@ -324,61 +378,83 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     }
   });
 
-  it("preserves every active admission instead of only the writer session", async () => {
+  it("does not trigger capping when protected sessions alone exceed the high-water mark", async () => {
     const now = Date.now();
-    const storePath = "/tmp/openclaw-sessions/active-admissions.json";
-    const activeKey = "agent:main:cron:job:run:active";
     const store = makeStore([
-      [activeKey, { sessionId: "active-session", updatedAt: now - 3 }],
-      ["removable", { sessionId: "removable-session", updatedAt: now - 2 }],
-      ["writer", { sessionId: "writer-session", updatedAt: now - 1 }],
+      ["archived-1", { ...makeEntry(now - 5), archivedAt: now }],
+      ["archived-2", { ...makeEntry(now - 4), archivedAt: now }],
+      ["archived-3", { ...makeEntry(now - 3), archivedAt: now }],
+      ["dashboard-1", makeEntry(now - 2)],
+      ["dashboard-2", makeEntry(now - 1)],
     ]);
-    const admission = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [activeKey, "active-session"],
-      assertAllowed: () => {},
+    let capped: number | undefined;
+
+    await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/protected-quota.json",
+      store,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 30 * DAY_MS,
+        maxEntries: 2,
+        modelRunPruneAfterMs: DAY_MS,
+        resetArchiveRetentionMs: null,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      onMaintenanceApplied: (report) => {
+        capped = report.capped;
+      },
+      log: { warn: () => {}, info: () => {} },
+      artifacts: createMaintenanceArtifacts(),
     });
 
-    try {
-      await applyFileBackedSessionStoreMaintenance({
-        storePath,
-        store,
-        activeSessionKey: "writer",
-        maintenanceConfig: {
-          mode: "enforce",
-          pruneAfterMs: 30 * DAY_MS,
-          maxEntries: 1,
-          modelRunPruneAfterMs: DAY_MS,
-          resetArchiveRetentionMs: null,
-          maxDiskBytes: null,
-          highWaterBytes: null,
-        },
-        log: { warn: () => {}, info: () => {} },
-        artifacts: createMaintenanceArtifacts(),
-      });
-
-      expect(store).toHaveProperty(activeKey);
-      expect(store).toHaveProperty("writer");
-      expect(store.removable).toBeUndefined();
-    } finally {
-      admission.release();
-    }
+    expect(capped).toBe(0);
+    expect(store).toHaveProperty("dashboard-1");
+    expect(store).toHaveProperty("dashboard-2");
   });
 
-  it("preserves every store alias backed by an active session id", async () => {
+  it.each([
+    {
+      name: "preserves every active admission instead of only the writer session",
+      storeName: "active-admissions",
+      preserved: [
+        ["agent:main:cron:job:run:active", "active-session"],
+        ["writer", "writer-session"],
+      ],
+      identities: ["agent:main:cron:job:run:active", "active-session"],
+      activeSessionKey: "writer",
+    },
+    {
+      name: "preserves every store alias backed by an active session id",
+      storeName: "active-aliases",
+      preserved: [
+        ["agent:main:cron:job:run:active", "active-alias-session"],
+        ["agent:main:cron:job:run:active:thread:reply", "active-alias-session"],
+      ],
+      identities: ["active-alias-session"],
+      activeSessionKey: undefined,
+    },
+    {
+      name: "preserves a raw legacy store key matched by a canonical admission identity",
+      storeName: "active-legacy-key",
+      preserved: [["Agent:Main:Subagent:CHILD", "active-legacy-session"]],
+      identities: ["agent:main:subagent:child"],
+      activeSessionKey: undefined,
+    },
+  ] as const)("$name", async ({ storeName, preserved, identities, activeSessionKey }) => {
     const now = Date.now();
-    const storePath = "/tmp/openclaw-sessions/active-aliases.json";
-    const activeSessionId = "active-alias-session";
-    const firstAlias = "agent:main:cron:job:run:active";
-    const secondAlias = "agent:main:cron:job:run:active:thread:reply";
+    const storePath = `/tmp/openclaw-sessions/${storeName}.json`;
     const store = makeStore([
-      [firstAlias, { sessionId: activeSessionId, updatedAt: now - 3 }],
-      [secondAlias, { sessionId: activeSessionId, updatedAt: now - 2 }],
-      ["removable", { sessionId: "removable-session", updatedAt: now - 1 }],
+      ...preserved.map(([key, sessionId], index): [string, SessionEntry] => [
+        key,
+        { sessionId, updatedAt: now - preserved.length - 1 + index },
+      ]),
+      ["removable-old", { sessionId: "removable-old-session", updatedAt: now - 2 }],
+      ["removable-recent", { sessionId: "removable-recent-session", updatedAt: now - 1 }],
     ]);
     const admission = await beginSessionWorkAdmission({
       scope: storePath,
-      identities: [activeSessionId],
+      identities: [...identities],
       assertAllowed: () => {},
     });
 
@@ -386,6 +462,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       await applyFileBackedSessionStoreMaintenance({
         storePath,
         store,
+        activeSessionKey,
         maintenanceConfig: {
           mode: "enforce",
           pruneAfterMs: 30 * DAY_MS,
@@ -398,49 +475,11 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         log: { warn: () => {}, info: () => {} },
         artifacts: createMaintenanceArtifacts(),
       });
-
-      expect(store).toHaveProperty(firstAlias);
-      expect(store).toHaveProperty(secondAlias);
-      expect(store.removable).toBeUndefined();
-    } finally {
-      admission.release();
-    }
-  });
-
-  it("preserves a raw legacy store key matched by a canonical admission identity", async () => {
-    const now = Date.now();
-    const storePath = "/tmp/openclaw-sessions/active-legacy-key.json";
-    const rawActiveKey = "Agent:Main:Subagent:CHILD";
-    const canonicalActiveKey = "agent:main:subagent:child";
-    const store = makeStore([
-      [rawActiveKey, { sessionId: "active-legacy-session", updatedAt: now - 2 }],
-      ["removable", { sessionId: "removable-session", updatedAt: now - 1 }],
-    ]);
-    const admission = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [canonicalActiveKey],
-      assertAllowed: () => {},
-    });
-
-    try {
-      await applyFileBackedSessionStoreMaintenance({
-        storePath,
-        store,
-        maintenanceConfig: {
-          mode: "enforce",
-          pruneAfterMs: 30 * DAY_MS,
-          maxEntries: 1,
-          modelRunPruneAfterMs: DAY_MS,
-          resetArchiveRetentionMs: null,
-          maxDiskBytes: null,
-          highWaterBytes: null,
-        },
-        log: { warn: () => {}, info: () => {} },
-        artifacts: createMaintenanceArtifacts(),
-      });
-
-      expect(store).toHaveProperty(rawActiveKey);
-      expect(store.removable).toBeUndefined();
+      for (const [key] of preserved) {
+        expect(store).toHaveProperty(key);
+      }
+      expect(store["removable-old"]).toBeUndefined();
+      expect(store).toHaveProperty("removable-recent");
     } finally {
       admission.release();
     }
@@ -662,13 +701,13 @@ describe("capEntryCount", () => {
 
     const evicted = capEntryCount(store, 3);
 
-    expect(evicted).toBe(2);
-    expect(Object.keys(store)).toHaveLength(3);
+    expect(evicted).toBe(1);
+    expect(Object.keys(store)).toHaveLength(4);
     expect(store).toHaveProperty(threadKey);
     expect(store).toHaveProperty("newest");
     expect(store).toHaveProperty("recent");
+    expect(store).toHaveProperty("old");
     expect(store.oldest).toBeUndefined();
-    expect(store.old).toBeUndefined();
   });
 
   it("never evicts the agent primary main session even when protected entries fill the cap (#112637)", () => {
@@ -702,10 +741,10 @@ describe("capEntryCount", () => {
 
     const evicted = capEntryCount(store, 2);
 
-    expect(evicted).toBe(1);
+    expect(evicted).toBe(0);
     expect(store).toHaveProperty(lockedKey);
     expect(store).toHaveProperty("recent");
-    expect(store.old).toBeUndefined();
+    expect(store).toHaveProperty("old");
   });
 
   it("preserves archived sessions when capping", () => {
@@ -716,8 +755,22 @@ describe("capEntryCount", () => {
       ["old", makeEntry(now - DAY_MS)],
     ]);
 
-    expect(capEntryCount(store, 2)).toBe(1);
+    expect(capEntryCount(store, 2)).toBe(0);
     expect(store).toHaveProperty("archived");
+    expect(store).toHaveProperty("recent");
+    expect(store).toHaveProperty("old");
+  });
+
+  it("preserves pinned sessions when capping", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["pinned", { ...makeEntry(now - 10 * DAY_MS), pinnedAt: now - 5 * DAY_MS }],
+      ["recent", makeEntry(now)],
+      ["old", makeEntry(now - DAY_MS)],
+    ]);
+
+    expect(capEntryCount(store, 1)).toBe(1);
+    expect(store).toHaveProperty("pinned");
     expect(store).toHaveProperty("recent");
     expect(store.old).toBeUndefined();
   });
@@ -738,11 +791,11 @@ describe("capEntryCount", () => {
         preserveKeys: collectSessionMaintenancePreserveKeys(),
       });
 
-      expect(evicted).toBe(2);
-      expect(Object.keys(store)).toHaveLength(2);
+      expect(evicted).toBe(1);
+      expect(Object.keys(store)).toHaveLength(3);
       expect(store).toHaveProperty(childKey);
       expect(store).toHaveProperty("recent-1");
-      expect(store["recent-2"]).toBeUndefined();
+      expect(store).toHaveProperty("recent-2");
       expect(store.old).toBeUndefined();
     } finally {
       unregister();
@@ -768,11 +821,11 @@ describe("capEntryCount", () => {
         preserveKeys: collectSessionMaintenancePreserveKeys(),
       });
 
-      expect(evicted).toBe(1);
-      expect(Object.keys(store)).toHaveLength(2);
+      expect(evicted).toBe(0);
+      expect(Object.keys(store)).toHaveLength(3);
       expect(store).toHaveProperty(childKey);
       expect(store).toHaveProperty("recent-1");
-      expect(store.old).toBeUndefined();
+      expect(store).toHaveProperty("old");
     } finally {
       unregister();
     }
@@ -943,6 +996,76 @@ describe("resolveMaintenanceConfigFromInput", () => {
 
     expect(maintenance.maxDiskBytes).toBeNull();
     expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("disables the disk budget when maxDiskBytes is 0", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: 0 });
+
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("disables the disk budget when maxDiskBytes is the string '0'", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: "0" });
+
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("retains session history when a zero maxDiskBytes disables the budget", async () => {
+    await withTestDir({ prefix: "openclaw-zero-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const transcriptPath = path.join(dir, "old-session.jsonl");
+      await fs.writeFile(transcriptPath, JSON.stringify({ role: "user", content: "hello" }));
+      const store: Record<string, SessionEntry> = {
+        "agent:main:subagent:old-worker": {
+          sessionId: "old-session",
+          updatedAt: 1,
+          transcriptPath,
+        },
+      };
+      await saveSessionStore(storePath, store, { skipMaintenance: true });
+
+      const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: 0 });
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: maintenance.maxDiskBytes,
+          highWaterBytes: maintenance.highWaterBytes,
+        },
+        warnOnly: false,
+      });
+
+      expect(maintenance.maxDiskBytes).toBeNull();
+      expect(maintenance.highWaterBytes).toBeNull();
+      expect(result).toBeNull();
+      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+    });
+  });
+
+  it.each([
+    ["the number 0", 0],
+    ["the string '0'", "0"],
+    ["the byte string '0b'", "0b"],
+    ["a byte string that rounds to zero", "0.4b"],
+  ])("falls back to the default high-water mark when highWaterBytes is %s", (_label, raw) => {
+    const maintenance = resolveMaintenanceConfigFromInput({
+      maxDiskBytes: "500mb",
+      highWaterBytes: raw,
+    });
+
+    expect(maintenance.maxDiskBytes).toBe(500 * 1024 * 1024);
+    expect(maintenance.highWaterBytes).toBe(Math.floor(500 * 1024 * 1024 * 0.8));
+  });
+
+  it("keeps an explicit positive highWaterBytes", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({
+      maxDiskBytes: "500mb",
+      highWaterBytes: "300mb",
+    });
+
+    expect(maintenance.highWaterBytes).toBe(300 * 1024 * 1024);
   });
 
   it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {

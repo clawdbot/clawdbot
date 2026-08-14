@@ -21,7 +21,6 @@ import {
 import type { ReplyPayload } from "../types.js";
 import {
   buildSilentFallbackFailurePayload,
-  enqueueCommitmentExtractionForTurn,
   hasSuccessfulSourceReplyDelivery,
   hasSuccessfulTerminalSourceReplyDelivery,
   refreshSessionEntryFromStore,
@@ -39,6 +38,7 @@ import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
+import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageTo } from "./origin-routing.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
@@ -55,7 +55,6 @@ export async function prepareReplyAgentPayloads(state: {
     blockReplyPipeline,
     blockStreamingEnabled,
     cfg,
-    commandBody,
     followupRun,
     isHeartbeat,
     opts,
@@ -81,7 +80,6 @@ export async function prepareReplyAgentPayloads(state: {
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
-    hasBillableUsageBuckets,
     modelUsed,
     payloadArray,
     preserveUserFacingSessionState,
@@ -97,6 +95,15 @@ export async function prepareReplyAgentPayloads(state: {
     verboseEnabled,
   } = accounting;
   let { activeSessionEntry, didLogHeartbeatStrip } = accounting;
+  const deliberateSilentTerminalReply = hasDeliberateSilentTerminalReply(runResult);
+  if (deliberateSilentTerminalReply) {
+    opts?.onDeliberateSilentTerminalReply?.();
+  }
+  const pendingContinuation =
+    runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
+  if (pendingContinuation) {
+    opts?.onPendingContinuation?.();
+  }
 
   const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
     blockReplyPipeline,
@@ -140,9 +147,8 @@ export async function prepareReplyAgentPayloads(state: {
         isMessageToolOnly:
           (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
           "message_tool_only",
-        hasPendingContinuation:
-          runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
-        hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
+        hasPendingContinuation: pendingContinuation,
+        hasExplicitSilentReply: deliberateSilentTerminalReply,
         hasCommittedDelivery: successfulTerminalDelivery,
         sessionCtx,
         cfg,
@@ -175,10 +181,10 @@ export async function prepareReplyAgentPayloads(state: {
     });
     return recovery.kind === "diagnostic" ? recovery.payload : undefined;
   };
-  // Route-aware message-tool delivery attests observed delivery in every mode:
-  // an automatic-mode turn answered via the message tool plus NO_REPLY must not
-  // draw the no-visible-reply fallback into the source conversation. The dedupe
-  // route matcher keeps unrelated-target tool sends from counting as the reply.
+  // Structured source-reply delivery evidence is the canonical owner for current
+  // runtimes. The route matcher remains only for legacy results that recorded
+  // successful target/text/media aggregates before structured receipts existed.
+  // It still keeps unrelated-target tool sends from counting as the source reply.
   const sourceRoutedMessagingToolDelivery =
     completedSourceReplyDelivery ||
     ((runResult.messagingToolSentTargets?.length ?? 0) > 0 &&
@@ -408,6 +414,10 @@ export async function prepareReplyAgentPayloads(state: {
     sessionKey,
     view: runResult.latestMcpAppChannelView,
   });
+  replyPayloads = attachMcpConnectChannelAction({
+    payloads: replyPayloads,
+    action: runResult.latestMcpConnectAction,
+  });
 
   const hasVisibleReplyPayload = replyPayloads.some(
     (payload) =>
@@ -461,27 +471,16 @@ export async function prepareReplyAgentPayloads(state: {
       ? appendUnscheduledReminderNote(replyPayloads)
       : replyPayloads;
 
-  enqueueCommitmentExtractionForTurn({
-    cfg,
-    commandBody,
-    isHeartbeat,
-    followupRun,
-    sessionCtx,
-    sessionKey,
-    replyToChannel,
-    payloads: replyPayloads,
-    runId,
-  });
-
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
-  if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
-    const input = usage.input ?? 0;
-    const output = usage.output ?? 0;
-    const cacheRead = usage.cacheRead ?? 0;
-    const cacheWrite = usage.cacheWrite ?? 0;
+  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
+  if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(diagnosticUsage)) {
+    const input = diagnosticUsage.input ?? 0;
+    const output = diagnosticUsage.output ?? 0;
+    const cacheRead = diagnosticUsage.cacheRead ?? 0;
+    const cacheWrite = diagnosticUsage.cacheWrite ?? 0;
     const usagePromptTokens = input + cacheRead + cacheWrite;
-    const totalTokens = usage.total ?? usagePromptTokens + output;
+    const totalTokens = diagnosticUsage.total ?? usagePromptTokens + output;
     const contextUsedTokens = deriveContextPromptTokens({
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
@@ -491,9 +490,15 @@ export async function prepareReplyAgentPayloads(state: {
       provider: providerUsed,
       model: modelUsed,
       config: cfg,
+      agentDir: followupRun.run.agentDir,
     });
-    const costUsd = hasBillableUsageBuckets
-      ? estimateUsageCost({ usage, cost: costConfig })
+    const hasDiagnosticBillableUsageBuckets =
+      diagnosticUsage.input !== undefined ||
+      diagnosticUsage.output !== undefined ||
+      diagnosticUsage.cacheRead !== undefined ||
+      diagnosticUsage.cacheWrite !== undefined;
+    const costUsd = hasDiagnosticBillableUsageBuckets
+      ? estimateUsageCost({ usage: diagnosticUsage, cost: costConfig })
       : undefined;
     emitTrustedDiagnosticEvent({
       type: "model.usage",
@@ -533,6 +538,7 @@ export async function prepareReplyAgentPayloads(state: {
     (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
   const responseUsageLine = resolveResponseUsageLine({
     config: cfg,
+    agentDir: followupRun.run.agentDir,
     sessionRaw: responseUsageSessionRaw,
     channel: replyToChannel,
     usage,

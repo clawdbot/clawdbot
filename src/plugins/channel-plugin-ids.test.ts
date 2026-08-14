@@ -31,10 +31,11 @@ const hasMeaningfulChannelConfig = vi.hoisted(() =>
     );
   }),
 );
-const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistryCore = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() => vi.fn());
 const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
+const resolveConfigWidePluginManifestRegistry = vi.hoisted(() => vi.fn());
 
 vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds,
@@ -67,6 +68,10 @@ vi.mock("./plugin-registry-contributions.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry,
+}));
+
 import {
   hasConfiguredChannelsForReadOnlyScope,
   listConfiguredAnnounceChannelIdsForConfig,
@@ -74,7 +79,6 @@ import {
   listExplicitConfiguredChannelIdsForConfig,
   resolveConfiguredChannelPluginIds,
   resolveConfiguredChannelPresencePolicy,
-  resolveConfiguredDeferredChannelPluginIdsFromRegistry,
   resolveConfigValidationMetadataPluginIds,
   resolveGatewayStartupMetadataPluginIds,
   resolveGatewayStartupPluginIdsFromRegistry,
@@ -212,6 +216,16 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
       activation: { onStartup: true },
     },
     {
+      id: "source-external-startup",
+      enabledByDefault: true,
+      activation: { onStartup: true },
+      channels: ["source-external-channel"],
+      providers: ["source-external-provider"],
+      packageManifest: {
+        build: { bundledDist: false },
+      },
+    },
+    {
       id: "demo-config-startup",
       enabledByDefault: true,
       activation: {
@@ -281,7 +295,6 @@ function createManifestRegistryFixtureWithWorkspaceDemoChannel(): PluginManifest
       withManifestLoadPaths({
         id: "workspace-demo-channel-plugin",
         channels: ["demo-channel"],
-        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
         origin: "workspace",
         enabledByDefault: undefined,
         providers: [],
@@ -314,11 +327,10 @@ function createInstalledPluginRecordFixture(
     origin: record.origin,
     enabled: true,
     ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
+    ...(record.packageManifest?.build ? { packageBuild: record.packageManifest.build } : {}),
     startup: {
       sidecar: record.activation?.onStartup === true,
       memory,
-      deferConfiguredChannelFullLoadUntilAfterListen:
-        record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
       agentHarnesses: normalizeStartupAgentHarnesses(record),
       configPaths: record.activation?.onConfigPaths ?? [],
     },
@@ -342,7 +354,7 @@ function createInstalledPluginRecordFixture(
 }
 
 function createInstalledPluginIndexFixture(
-  registry: PluginManifestRegistry = loadPluginManifestRegistry(),
+  registry: PluginManifestRegistry = loadPluginManifestRegistryCore(),
 ): InstalledPluginIndex {
   return {
     version: 1,
@@ -361,7 +373,7 @@ function filterManifestRegistryForInstalledIndex(params: {
   pluginIds?: readonly string[];
   includeDisabled?: boolean;
 }): PluginManifestRegistry {
-  const registry = loadPluginManifestRegistry() as PluginManifestRegistry;
+  const registry = loadPluginManifestRegistryCore() as PluginManifestRegistry;
   const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
   return {
     ...registry,
@@ -381,11 +393,12 @@ function useManifestRegistryFixture(
   registry: PluginManifestRegistry = createManifestRegistryFixture(),
 ) {
   const index = createInstalledPluginIndexFixture(registry);
-  loadPluginManifestRegistry.mockReset().mockReturnValue(registry);
+  loadPluginManifestRegistryCore.mockReset().mockReturnValue(registry);
   loadPluginManifestRegistryForPluginRegistry
     .mockReset()
-    .mockImplementation(() => loadPluginManifestRegistry());
+    .mockImplementation(() => loadPluginManifestRegistryCore());
   loadPluginRegistrySnapshot.mockReset().mockReturnValue(index);
+  resolveConfigWidePluginManifestRegistry.mockReset().mockReturnValue(registry);
   return { registry, index };
 }
 
@@ -396,7 +409,7 @@ function expectStartupPluginIds(params: {
   workerProviderIds?: readonly string[];
   expected: readonly string[];
 }) {
-  const manifestRegistry = loadPluginManifestRegistry() as PluginManifestRegistry;
+  const manifestRegistry = loadPluginManifestRegistryCore() as PluginManifestRegistry;
   expect(
     resolveGatewayStartupPluginIdsFromRegistry({
       config: params.config,
@@ -411,19 +424,6 @@ function expectStartupPluginIds(params: {
         : {}),
     }),
   ).toEqual(params.expected);
-}
-
-function resolveConfiguredDeferredChannelPluginIdsForFixture(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): string[] {
-  const manifestRegistry = loadPluginManifestRegistry() as PluginManifestRegistry;
-  return resolveConfiguredDeferredChannelPluginIdsFromRegistry({
-    config: params.config,
-    env: createPluginPlanningTestEnv(params.env),
-    index: createInstalledPluginIndexFixture(manifestRegistry),
-    manifestRegistry,
-  });
 }
 
 function createStartupConfig(params: {
@@ -504,7 +504,7 @@ function createStartupConfig(params: {
   return config as OpenClawConfig;
 }
 
-describe("resolveGatewayStartupPluginIds", () => {
+describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockImplementation((config: OpenClawConfig) => {
       if (Object.hasOwn(config, "channels")) {
@@ -517,7 +517,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       .mockImplementation((config: OpenClawConfig) => {
         return listPotentialConfiguredChannelIds(config).map((channelId: string) => ({
           channelId,
-          source: "config",
+          source: "env",
         }));
       });
     useManifestRegistryFixture();
@@ -526,7 +526,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       .mockImplementation(filterManifestRegistryForInstalledIndex);
     loadPluginManifestRegistryForPluginRegistry
       .mockReset()
-      .mockImplementation(() => loadPluginManifestRegistry());
+      .mockImplementation(() => loadPluginManifestRegistryCore());
   });
 
   it.each([
@@ -780,6 +780,18 @@ describe("resolveGatewayStartupPluginIds", () => {
         },
       } as OpenClawConfig,
       ["browser", "openai", "memory-core"],
+    ],
+    [
+      "keeps configured memory embedding providers behind restrictive allowlists",
+      {
+        channels: {},
+        memory: { search: { provider: "openai" } },
+        plugins: {
+          allow: ["memory-core"],
+          slots: { memory: "memory-core" },
+        },
+      } as OpenClawConfig,
+      ["memory-core"],
     ],
     [
       "includes the owning plugin for a configured memory embedding fallback at startup",
@@ -1186,6 +1198,47 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("starts a renamed external channel after its bundled owner is removed", () => {
+    const registry = createManifestRegistryFixture();
+    registry.plugins.push(
+      withManifestLoadPaths({
+        id: "openclaw-qqbot",
+        channels: ["qqbot"],
+        channelConfigs: {
+          qqbot: {
+            schema: { type: "object" },
+            preferOver: ["qqbot"],
+          },
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      }),
+    );
+    const index = createInstalledPluginIndexFixture(registry);
+    const sourceConfig = {
+      channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+      plugins: { entries: { "openclaw-qqbot": { enabled: true } } },
+    } as OpenClawConfig;
+    const runtimeConfig = applyPluginAutoEnable({
+      config: sourceConfig,
+      env: createPluginPlanningTestEnv(),
+      manifestRegistry: registry,
+    }).config;
+
+    expect(runtimeConfig.plugins?.entries?.qqbot).toBeUndefined();
+    expect(
+      resolveGatewayStartupPluginPlanFromRegistry({
+        config: runtimeConfig,
+        activationSourceConfig: sourceConfig,
+        env: createPluginPlanningTestEnv(),
+        index,
+        manifestRegistry: registry,
+      }).pluginIds,
+    ).toContain("openclaw-qqbot");
+  });
+
   it("loads configured worker-provider owners from the activation source", () => {
     const activationSourceConfig = {
       channels: {},
@@ -1426,6 +1479,111 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads enabled plugin tool owners before turns can enter the Gateway", () => {
+    useManifestRegistryFixture({
+      diagnostics: [],
+      plugins: [
+        withManifestLoadPaths({
+          id: "bundled-tool-owner",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          contracts: { tools: ["bundled_tool"] },
+        }),
+        withManifestLoadPaths({
+          id: "external-tool-owner",
+          origin: "global",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          contracts: { tools: ["external_tool"] },
+        }),
+      ],
+    });
+
+    expectStartupPluginIds({
+      config: createStartupConfig({ noConfiguredChannels: true, memorySlot: "none" }),
+      expected: ["bundled-tool-owner"],
+    });
+    expectStartupPluginIds({
+      config: createStartupConfig({
+        enabledPluginIds: ["external-tool-owner"],
+        allowPluginIds: ["external-tool-owner"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-tool-owner"],
+    });
+  });
+
+  it("does not ambient-start source-discovered external plugins from onStartup alone", () => {
+    expectStartupPluginIds({
+      config: createStartupConfig({
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["browser"],
+    });
+  });
+
+  it.each([
+    [
+      "plugins.entries",
+      createStartupConfig({
+        enabledPluginIds: ["source-external-startup"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      ["browser", "source-external-startup"],
+    ],
+    [
+      "plugins.allow",
+      createStartupConfig({
+        allowPluginIds: ["source-external-startup"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      ["source-external-startup"],
+    ],
+  ])(
+    "starts source-discovered external plugins explicitly selected through %s",
+    (_name, config, expected) => {
+      expectStartupPluginIds({
+        config,
+        expected,
+      });
+    },
+  );
+
+  it.each([
+    [
+      "configured channel",
+      {
+        channels: {
+          "source-external-channel": { enabled: true },
+        },
+        plugins: {
+          slots: { memory: "none" },
+        },
+      } as OpenClawConfig,
+    ],
+    [
+      "selected provider",
+      createStartupConfig({
+        modelId: "source-external-provider/demo-model",
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+    ],
+  ])("preserves %s activation for source-discovered external plugins", (_name, config) => {
+    expectStartupPluginIds({
+      config,
+      expected: ["browser", "source-external-startup"],
     });
   });
 
@@ -1821,33 +1979,6 @@ describe("resolveGatewayStartupPluginIds", () => {
       }),
       expected: ["demo-channel", "browser", "memory-core"],
     });
-    expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
-        config,
-        env: createPluginPlanningTestEnv({
-          DEMO_CHANNEL_ANYTHING: "1",
-        }),
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("keeps explicitly trusted deferred channel owners eligible at startup", () => {
-    useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
-    expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
-        config: {
-          channels: {
-            "demo-channel": {
-              token: "configured",
-            },
-          },
-          plugins: {
-            allow: ["workspace-demo-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        env: createPluginPlanningTestEnv(),
-      }),
-    ).toEqual(["workspace-demo-channel-plugin"]);
   });
 
   it("preserves explicit bundled channel config under restrictive allowlists", () => {
@@ -2085,8 +2216,6 @@ describe("resolveGatewayStartupPluginIds", () => {
       startup: {
         sidecar: browserPlugin.startup.sidecar,
         memory: browserPlugin.startup.memory,
-        deferConfiguredChannelFullLoadUntilAfterListen:
-          browserPlugin.startup.deferConfiguredChannelFullLoadUntilAfterListen,
         agentHarnesses: browserPlugin.startup.agentHarnesses,
       },
       compat: ["activation-config-path-hint"],
@@ -2400,6 +2529,16 @@ describe("resolveGatewayStartupPluginIds", () => {
         options?: { includePersistedAuthState?: boolean },
       ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
     );
+    listPotentialConfiguredChannelPresenceSignals.mockImplementation(
+      (
+        _configForTest: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { includePersistedAuthState?: boolean },
+      ) =>
+        options?.includePersistedAuthState === false
+          ? []
+          : [{ channelId: "demo-channel", source: "persisted-auth" }],
+    );
 
     expectStartupPluginIds({
       config: {} as OpenClawConfig,
@@ -2410,31 +2549,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("does not treat persisted auth alone as deferred channel startup intent", () => {
-    useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
-    listPotentialConfiguredChannelIds.mockImplementation(
-      (
-        configForTest: OpenClawConfig,
-        _env: NodeJS.ProcessEnv,
-        options?: { includePersistedAuthState?: boolean },
-      ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
-    );
-
-    expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
-        config: {
-          plugins: {
-            allow: ["workspace-demo-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        env: createPluginPlanningTestEnv({
-          OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
-        }),
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("resolves channel, deferred, and startup plugin ids from one manifest registry", () => {
+  it("resolves channel and startup plugin ids from one manifest registry", () => {
     const registry = createManifestRegistryFixture();
     const index = createInstalledPluginIndexFixture(registry);
 
@@ -2453,10 +2568,9 @@ describe("resolveGatewayStartupPluginIds", () => {
 
     expect(plan.channelPluginIds).toContain("demo-channel");
     expect(plan.pluginIds).toContain("demo-channel");
-    expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([]);
   });
 
-  it("carries deferred configured channel ids through the startup plan", () => {
+  it("keeps explicitly trusted channel owners eligible in the startup plan", () => {
     const registry = createManifestRegistryFixtureWithWorkspaceDemoChannel();
     const index = createInstalledPluginIndexFixture(registry);
 
@@ -2477,30 +2591,6 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
 
     expect(plan.pluginIds).toContain("workspace-demo-channel-plugin");
-    expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([
-      "workspace-demo-channel-plugin",
-    ]);
-  });
-
-  it("does not treat explicitly disabled stale channel config as deferred startup intent", () => {
-    useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
-
-    expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
-        config: {
-          channels: {
-            "demo-channel": {
-              enabled: false,
-              token: "stale",
-            },
-          },
-          plugins: {
-            allow: ["workspace-demo-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        env: createPluginPlanningTestEnv(),
-      }),
-    ).toStrictEqual([]);
   });
 
   it("includes the explicitly selected memory slot plugin in startup scope", () => {
@@ -3429,15 +3519,22 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
           defaults: {
             model: "sonnet-4.6",
           },
+          modelByChannel: {
+            "demo-channel": { default: "openai/gpt-5.6-luna" },
+          },
+          " ": { token: "dummy" },
           "demo-channel": {
-            token: "configured",
+            token: "test-token",
+          },
+          " trimmed-channel ": {
+            token: "test-token",
           },
           "demo-other-channel": {
             enabled: false,
           },
         },
       } as OpenClawConfig),
-    ).toEqual(["demo-channel"]);
+    ).toEqual(["demo-channel", "trimmed-channel"]);
   });
 
   it("does not let disabled mixed-case channel config announce ambient matches", () => {

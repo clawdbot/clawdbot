@@ -4,7 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
-import { runPluginRegisterSync } from "./loader-module-runtime.js";
+import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi } from "./types.js";
 
@@ -21,9 +22,14 @@ function captureRegisteredPluginApi(handlers: Parameters<typeof buildPluginApi>[
     handlers,
   });
   let captured: OpenClawPluginApi | undefined;
-  runPluginRegisterSync((pluginApi) => {
-    captured = pluginApi;
-  }, api);
+  runPluginRegisterSyncInRegistry(
+    (pluginApi) => {
+      captured = pluginApi;
+    },
+    api,
+    createEmptyPluginRegistry(),
+    "late-call-fixture",
+  );
   return expectDefined(captured, "captured plugin api");
 }
 

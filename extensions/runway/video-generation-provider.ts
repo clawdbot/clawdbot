@@ -1,6 +1,8 @@
 // Runway provider module implements model/runtime integration.
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import {
+  downloadGeneratedVideoAsset,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -15,7 +17,6 @@ import {
   resolveProviderHttpRequestConfig,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -299,38 +300,31 @@ async function downloadRunwayVideos(params: {
 }): Promise<GeneratedVideoAsset[]> {
   const videos: GeneratedVideoAsset[] = [];
   for (const [index, url] of params.urls.entries()) {
-    const deadline = createProviderOperationDeadline({
-      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      label: "Runway generated video download",
-    });
-    const timeoutMs = createProviderOperationTimeoutResolver({
-      deadline,
-      defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    });
-    const response = await fetchProviderDownloadResponse({
-      url,
-      init: { method: "GET" },
-      deadline,
-      fetchFn: params.fetchFn,
-      provider: "runway",
-      requestFailedMessage: "Runway generated video download failed",
-    });
-    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const buffer = await readResponseWithLimit(response, params.maxBytes, {
-      timeoutMs,
-      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `Runway generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
-      onOverflow: ({ maxBytes }) =>
-        new Error(`Runway generated video download exceeds ${maxBytes} bytes`),
-    });
-    videos.push({
-      buffer,
-      mimeType,
-      fileName: `video-${index + 1}.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-      metadata: { sourceUrl: url },
-    });
+    videos.push(
+      await downloadGeneratedVideoAsset({
+        url,
+        timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        fetchFn: params.fetchFn,
+        provider: "runway",
+        label: "Runway generated video download",
+        requestFailedMessage: "Runway generated video download failed",
+        index,
+        maxBytes: params.maxBytes,
+        validateBinaryResponse: true,
+        metadata: { sourceUrl: url },
+        fetchResponse: async ({ deadline }) => ({
+          response: await fetchProviderDownloadResponse({
+            url,
+            init: { method: "GET" },
+            deadline,
+            fetchFn: params.fetchFn,
+            provider: "runway",
+            requestFailedMessage: "Runway generated video download failed",
+          }),
+        }),
+      }),
+    );
   }
   return videos;
 }
@@ -341,11 +335,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
     label: "Runway",
     defaultModel: DEFAULT_RUNWAY_MODEL,
     models: ["gen4.5", "gen4_turbo", "gen4_aleph", "gen3a_turbo", "veo3.1", "veo3.1_fast", "veo3"],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "runway",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "runway", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,

@@ -123,9 +123,12 @@ export function mergeInstallInvocationEnv(params: {
     ) {
       continue;
     }
-    // Existing service env may contain host-specific secrets or loader overrides; keep only
-    // portable, non-dangerous values and let the current shell override them.
-    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+    // An installed CA file is additive, operator-owned Node startup trust; retain it on reinstall.
+    // Never replay service-owned TLS-disable, proxy, or loader overrides from the old environment.
+    if (
+      isDangerousHostEnvVarName(key) ||
+      (isDangerousHostEnvOverrideVarName(key) && upper !== "NODE_EXTRA_CA_CERTS")
+    ) {
       continue;
     }
     const value = rawValue.trim();

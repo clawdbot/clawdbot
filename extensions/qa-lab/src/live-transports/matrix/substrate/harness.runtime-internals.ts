@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { FetchLike } from "../../../docker-runtime.js";
 
-const MATRIX_QA_DEFAULT_IMAGE = "ghcr.io/matrix-construct/tuwunel:v1.5.1";
+const MATRIX_QA_DEFAULT_IMAGE =
+  "ghcr.io/matrix-construct/tuwunel:v1.8.2@sha256:6f950bb139411a7964781e986321e395e045e4a6a52240a4dda9d23d04075f78";
 const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";
 export const MATRIX_QA_INTERNAL_PORT = 8008;
 export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
@@ -91,6 +92,7 @@ export async function waitForReachableMatrixBaseUrl(params: {
     }
     const probeController = new AbortController();
     let reachableCandidate: string | undefined;
+    let probeConsumedDeadline = false;
     try {
       // Race both network paths so neither stalled probe can starve or delay
       // a healthy peer. The outer deadline also bounds injected fetch fakes.
@@ -113,13 +115,20 @@ export async function waitForReachableMatrixBaseUrl(params: {
           }),
         ),
       );
-    } catch {
-      // Poll again after every candidate fails or the discovery deadline expires.
+    } catch (error) {
+      // A stalled probe consumed the entire remaining budget; its timeout can
+      // fire marginally before Date.now() crosses the deadline, so re-polling
+      // here would start a doomed extra probe. Fast candidate failures re-poll.
+      probeConsumedDeadline =
+        error instanceof Error && error.message.startsWith("Matrix health probes timed out");
     } finally {
       probeController.abort();
     }
     if (reachableCandidate) {
       return reachableCandidate;
+    }
+    if (probeConsumedDeadline) {
+      break;
     }
     const remainingSleepMs = deadline - Date.now();
     if (remainingSleepMs > 0) {

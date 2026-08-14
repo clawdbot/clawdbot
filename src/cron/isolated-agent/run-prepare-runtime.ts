@@ -9,6 +9,7 @@ import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronJob,
+  CronStoredJob,
 } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
@@ -17,7 +18,7 @@ import type { RunCronAgentTurnResult } from "./run.types.js";
 export type RunCronAgentTurnParams = {
   cfg: OpenClawConfig;
   deps: CliDeps;
-  job: CronJob;
+  job: CronStoredJob;
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
@@ -52,10 +53,6 @@ const cronAuthProfileRuntimeLoader = createLazyImportLoader(
 const cronModelPreflightRuntimeLoader = createLazyImportLoader(
   () => import("./model-preflight.runtime.js"),
 );
-const runtimePluginsLoader = createLazyImportLoader(
-  () => import("../../plugins/runtime-plugins.runtime.js"),
-);
-
 export async function loadSessionAccessorRuntime() {
   return await sessionAccessorRuntimeLoader.load();
 }
@@ -70,10 +67,6 @@ export async function loadCronAuthProfileRuntime() {
 
 export async function loadCronModelPreflightRuntime() {
   return await cronModelPreflightRuntimeLoader.load();
-}
-
-export async function loadRuntimePlugins() {
-  return await runtimePluginsLoader.load();
 }
 
 export function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
@@ -112,6 +105,6 @@ export function appendCronUnattendedRunPreamble(
 ) {
   const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly ${HEARTBEAT_TOKEN}. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts.`;
   const trustedExtra =
-    " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, you may remove it with the cron tool.";
+    " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, you may remove it with the automations tool.";
   return `${commandBody}\n\n${core}${opts.externalHook ? "" : trustedExtra}`;
 }

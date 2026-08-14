@@ -15,6 +15,7 @@ import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { readCodexPluginConfig } from "./src/app-server/config.js";
+import { createCodexAppServerConnectionHealthService } from "./src/app-server/connection-health.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -25,6 +26,7 @@ import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.j
 import { createCodexCommand } from "./src/commands.js";
 import { codexConversationBindingRuntime } from "./src/conversation-binding.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
+import { createCodexPluginsTool } from "./src/native-plugin-tool.js";
 import { createCodexThreadsTool } from "./src/native-thread-tool.js";
 import {
   createCodexCliSessionNodeHostCommands,
@@ -90,6 +92,15 @@ export default definePluginEntry({
       return livePluginConfig;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
+    const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
+    if (appServerConfig?.transport === "websocket") {
+      api.registerService(
+        createCodexAppServerConnectionHealthService({
+          getPluginConfig: resolveCurrentPluginConfig,
+          getRuntimeConfig: resolveCurrentConfig,
+        }),
+      );
+    }
     let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
     const openBindingStateStore = () =>
       (bindingStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
@@ -123,9 +134,13 @@ export default definePluginEntry({
         api,
         bindingStore,
         control: sessionCatalogControl,
+        getPluginConfig: resolveCurrentPluginConfig,
         getRuntimeConfig: resolveCurrentConfig,
       });
-      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
+      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl, {
+        getPluginConfig: resolveCurrentPluginConfig,
+        getRuntimeConfig: resolveCurrentConfig,
+      })) {
         api.registerNodeHostCommand(command);
       }
     }
@@ -184,6 +199,22 @@ export default definePluginEntry({
       description: "Manage native Codex threads in the shared user Codex home.",
       risk: "high",
       tags: ["codex", "sessions"],
+    });
+    api.registerTool(
+      (context) =>
+        createCodexPluginsTool({
+          bindingStore,
+          context,
+          getPluginConfig: resolveCurrentPluginConfig,
+        }),
+      { name: "codex_plugins" },
+    );
+    api.registerToolMetadata({
+      toolName: "codex_plugins",
+      displayName: "Codex Plugins",
+      description: "Discover available Codex plugins without installing or enabling them.",
+      risk: "low",
+      tags: ["codex", "plugins", "discovery"],
     });
     for (const command of createCodexCliSessionNodeHostCommands()) {
       api.registerNodeHostCommand(command);
@@ -319,15 +350,21 @@ export default definePluginEntry({
         return;
       }
       const config = resolveCurrentConfig();
-      const { sessionBindingIdentity } = await import("./src/app-server/session-binding.js");
-      await bindingStore.retireSessionGeneration(
-        sessionBindingIdentity({
+      const [{ sessionBindingIdentity }, { retireCodexAppServerSessionGeneration }] =
+        await Promise.all([
+          import("./src/app-server/session-binding.js"),
+          import("./src/app-server/session-retirement.js"),
+        ]);
+      await retireCodexAppServerSessionGeneration({
+        bindingStore,
+        identity: sessionBindingIdentity({
           sessionId: event.sessionId,
           ...(sessionKey ? { sessionKey } : {}),
           ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
           ...(config ? { config } : {}),
         }),
-      );
+        mode: "retire",
+      });
     });
   },
 });

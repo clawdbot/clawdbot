@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { WAMessage } from "baileys";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   deserializeWhatsAppDurableInboundMessage,
   serializeWhatsAppDurableInboundMessage,
@@ -51,6 +51,34 @@ function payload(id: string, remoteJid = REMOTE_JID): WhatsAppDurableInboundPayl
 }
 
 describe("createWhatsAppIngressMonitor", () => {
+  it("rejects messages without a native id as a permanent ingress failure", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+        channelId: "whatsapp",
+        accountId: "acct",
+        stateDir,
+      });
+      const monitor = createWhatsAppIngressMonitor({
+        queue,
+        pollIntervalMs: 10,
+        dispatch: async () => ({ kind: "completed" }),
+      });
+      monitor.start();
+      const missingIdMessage = {
+        ...message("unused"),
+        key: { remoteJid: REMOTE_JID, fromMe: false },
+      } as WAMessage;
+
+      await expect(
+        monitor.admit({ message: missingIdMessage, receivedAt: 1 }, { receivedAt: 1 }),
+      ).rejects.toMatchObject({
+        name: "WhatsAppIngressPermanentError",
+        reason: "missing-message-key",
+      });
+      await monitor.stop();
+    });
+  });
+
   it("releases claims when dispatch throws before adoption", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
@@ -191,6 +219,112 @@ describe("createWhatsAppIngressMonitor", () => {
       expect(await queue.listClaims()).toEqual([]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
       await monitor.stop();
+    });
+  });
+
+  it("dispatches accepted pending records older than the legacy 30-day TTL", async () => {
+    await withTempState(async (stateDir) => {
+      const thirtyOneDaysAgo = Date.now() - 31 * 24 * 60 * 60 * 1_000;
+      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+        channelId: "whatsapp",
+        accountId: "acct",
+        stateDir,
+        now: () => thirtyOneDaysAgo,
+      });
+      await queue.enqueue(eventId("msg-old"), payload("msg-old"), {
+        laneKey: REMOTE_JID,
+        receivedAt: thirtyOneDaysAgo,
+      });
+
+      const dispatched: string[] = [];
+      const monitor = createWhatsAppIngressMonitor({
+        queue,
+        pollIntervalMs: 10,
+        dispatch: async (admission) => {
+          const id = admission.message.key.id;
+          if (!id) {
+            throw new Error("expected transport id");
+          }
+          dispatched.push(id);
+          return { kind: "completed" };
+        },
+      });
+
+      monitor.start();
+      await monitor.waitForIdle();
+      await monitor.stop();
+
+      expect(dispatched).toEqual(["msg-old"]);
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+    });
+  });
+
+  it("dispatches every accepted pending record past the legacy 450-entry cap", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+        channelId: "whatsapp",
+        accountId: "acct",
+        stateDir,
+      });
+      const transportIds = Array.from(
+        { length: 451 },
+        (_unused, index) => `msg-${String(index).padStart(3, "0")}`,
+      );
+      for (const [index, transportId] of transportIds.entries()) {
+        await queue.enqueue(eventId(transportId), payload(transportId), {
+          laneKey: REMOTE_JID,
+          receivedAt: index + 1,
+        });
+      }
+
+      const dispatched: string[] = [];
+      const monitor = createWhatsAppIngressMonitor({
+        queue,
+        pollIntervalMs: 10,
+        dispatch: async (admission) => {
+          const id = admission.message.key.id;
+          if (!id) {
+            throw new Error("expected transport id");
+          }
+          dispatched.push(id);
+          return { kind: "completed" };
+        },
+      });
+
+      monitor.start();
+      await monitor.waitForIdle();
+      await monitor.stop();
+
+      expect(dispatched.toSorted()).toEqual(transportIds.toSorted());
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+    });
+  });
+
+  it("keeps completed and failed replay guards bounded", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+        channelId: "whatsapp",
+        accountId: "acct",
+        stateDir,
+      });
+      const prune = vi.spyOn(queue, "prune");
+      const monitor = createWhatsAppIngressMonitor({
+        queue,
+        pollIntervalMs: 10,
+        dispatch: async () => ({ kind: "completed" }),
+      });
+
+      monitor.start();
+      await monitor.waitForIdle();
+      await monitor.stop();
+
+      expect(prune).toHaveBeenCalledWith({
+        completedTtlMs: 7 * 24 * 60 * 60 * 1_000,
+        completedMaxEntries: 5_000,
+        failedTtlMs: 30 * 24 * 60 * 60 * 1_000,
+        failedMaxEntries: 450,
+        now: expect.any(Number),
+      });
     });
   });
 });

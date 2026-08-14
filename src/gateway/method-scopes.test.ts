@@ -3,13 +3,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  pinActivePluginHttpRouteRegistry,
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginHttpRouteRegistry,
-  releasePinnedPluginSessionExtensionRegistry,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   authorizeOperatorScopesForMethod,
   isGatewayMethodClassified,
@@ -41,8 +35,6 @@ function setPluginGatewayMethodScope(
 }
 
 afterEach(() => {
-  releasePinnedPluginHttpRouteRegistry();
-  releasePinnedPluginSessionExtensionRegistry();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -51,6 +43,7 @@ describe("method scope resolution", () => {
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
     ["audit.activity.list", ["operator.read"]],
+    ["audit.run.inspect", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["users.list", ["operator.read"]],
     ["users.self", ["operator.write"]],
@@ -68,7 +61,10 @@ describe("method scope resolution", () => {
     ["sessions.reclaim", ["operator.admin"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
+    ["sessions.patchMany", ["operator.write"]],
     ["tasks.cancel", ["operator.write"]],
+    ["tasks.retry", ["operator.write"]],
+    ["tasks.dismiss", ["operator.write"]],
     ["tools.invoke", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
@@ -78,6 +74,13 @@ describe("method scope resolution", () => {
     ["worktrees.list", ["operator.read"]],
     ["worktrees.branches", ["operator.write"]],
     ["worktrees.create", ["operator.admin"]],
+    ["projects.list", ["operator.read"]],
+    ["users.prefs.get", ["operator.read"]],
+    ["users.prefs.set", ["operator.write"]],
+    ["projects.register", ["operator.admin"]],
+    ["projects.remove", ["operator.admin"]],
+    ["projects.add", ["operator.write"]],
+    ["projects.searchRemote", ["operator.read"]],
     ["sessions.groups.list", ["operator.read"]],
     ["sessions.groups.put", ["operator.write"]],
     ["sessions.groups.rename", ["operator.write"]],
@@ -86,11 +89,14 @@ describe("method scope resolution", () => {
     ["sessions.catalog.read", ["operator.read"]],
     ["sessions.catalog.continue", ["operator.write"]],
     ["sessions.catalog.archive", ["operator.write"]],
+    ["sessions.catalog.startTerminal", ["operator.admin"]],
     ["session.discussion.info", ["operator.read"]],
     ["session.discussion.open", ["operator.write"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
+    ["gateway.restart.preflight", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
+    ["hooks.status", ["operator.read"]],
     ["skills.curator.pin", ["operator.admin"]],
     ["skills.curator.unpin", ["operator.admin"]],
     ["skills.curator.restore", ["operator.admin"]],
@@ -102,17 +108,17 @@ describe("method scope resolution", () => {
     ["talk.client.toolCall", ["operator.talk"]],
     ["talk.client.steer", ["operator.talk"]],
     ["talk.session.create", ["operator.talk"]],
-    ["talk.session.join", ["operator.talk"]],
     ["talk.session.appendAudio", ["operator.talk"]],
-    ["talk.session.startTurn", ["operator.talk"]],
-    ["talk.session.endTurn", ["operator.talk"]],
-    ["talk.session.cancelTurn", ["operator.talk"]],
     ["talk.session.cancelOutput", ["operator.talk"]],
     ["talk.session.acknowledgeMark", ["operator.talk"]],
     ["talk.session.submitToolResult", ["operator.talk"]],
     ["talk.session.steer", ["operator.talk"]],
     ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
+    ["update.hold", ["operator.admin"]],
+    ["secrets.store.list", ["operator.admin"]],
+    ["secrets.store.set", ["operator.admin"]],
+    ["secrets.store.delete", ["operator.admin"]],
     ["config.schema", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
@@ -321,57 +327,12 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.approvals" });
   });
 
-  it("keeps session action scopes pinned when an agent replaces the active registry", () => {
-    const gatewayRegistry = createEmptyPluginRegistry();
-    gatewayRegistry.sessionActions = [
-      {
-        pluginId: "scope-plugin",
-        pluginName: "Scope Plugin",
-        source: "gateway",
-        action: {
-          id: "approve",
-          requiredScopes: ["operator.approvals"],
-          handler: () => ({ result: { owner: "gateway" } }),
-        },
-      },
-    ];
-    setActivePluginRegistry(gatewayRegistry);
-    pinActivePluginSessionExtensionRegistry(gatewayRegistry);
-
-    const scopedRegistry = createEmptyPluginRegistry();
-    scopedRegistry.sessionActions = [
-      {
-        pluginId: "scope-plugin",
-        pluginName: "Scope Plugin",
-        source: "agent",
-        action: {
-          id: "approve",
-          requiredScopes: ["operator.read"],
-          handler: () => ({ result: { owner: "agent" } }),
-        },
-      },
-    ];
-    setActivePluginRegistry(scopedRegistry);
-
-    const params = { pluginId: "scope-plugin", actionId: "approve" };
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", params)).toEqual([
-      "operator.approvals",
-    ]);
-    expect(
-      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.read"], params),
-    ).toEqual({ allowed: false, missingScope: "operator.approvals" });
-    expect(
-      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.approvals"], params),
-    ).toEqual({ allowed: true });
-  });
-
   it("resolves sessions.patch to write scope for chat-organization fields only", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", {
         key: "agent:main:ios-1",
         label: "Trip planning",
         boardFace: "dashboard",
-        icon: "name:spark",
         pinned: true,
         archived: false,
       }),
@@ -387,30 +348,65 @@ describe("method scope resolution", () => {
     expect(isGatewayMethodClassified("sessions.patch")).toBe(true);
   });
 
-  it("requires admin whenever sessions.create targets an explicit cwd", () => {
+  it("defers Gateway cwd containment to sessions.create while keeping node cwd admin-only", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { worktree: true }),
     ).toEqual(["operator.write"]);
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { cwd: "/other/repo" }),
-    ).toEqual(["operator.admin"]);
+    ).toEqual(["operator.write"]);
     expect(
       authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
         cwd: "/other/repo",
       }),
-    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    ).toEqual({ allowed: true });
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
         worktree: true,
         cwd: "/other/repo",
       }),
-    ).toEqual(["operator.admin"]);
+    ).toEqual(["operator.write"]);
     expect(
       authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
         worktree: true,
         cwd: "/other/repo",
       }),
+    ).toEqual({ allowed: true });
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        execNode: "macbook",
+        cwd: "/other/repo",
+      }),
+    ).toEqual(["operator.admin"]);
+  });
+
+  it("keeps Gateway fs.listDir write-scoped and node browsing admin-only", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("fs.listDir", {})).toEqual([
+      "operator.write",
+    ]);
+    expect(
+      authorizeOperatorScopesForMethod("fs.listDir", ["operator.write"], {
+        path: "/configured/workspace",
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("fs.listDir", { nodeId: "macbook" }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("fs.listDir", ["operator.write"], {
+        nodeId: "macbook",
+      }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
+  });
+
+  it("keeps sessions.create project IDs at write scope", () => {
+    const params = { projectId: "openclaw", worktree: true };
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
+      "operator.write",
+    ]);
+    expect(authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params)).toEqual(
+      { allowed: true },
+    );
   });
 
   it("requires admin for incognito session creation and inheritance", () => {
@@ -514,18 +510,8 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
-  it.each([
-    ["model", { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" }],
-    ["sendPolicy", { key: "agent:main:ios-1", sendPolicy: "deny" }],
-    ["inheritedToolAllow", { key: "agent:main:ios-1", inheritedToolAllow: ["exec"] }],
-    ["inheritedToolPolicyVersion", { key: "agent:main:ios-1", inheritedToolPolicyVersion: 1 }],
-    [
-      "completionOwnerSessionKey",
-      { key: "agent:main:ios-1", completionOwnerSessionKey: "agent:main:main" },
-    ],
-    ["mixed with safe fields", { key: "agent:main:ios-1", label: "x", execHost: "node-1" }],
-    ["unknown fields", { key: "agent:main:ios-1", futureField: true }],
-  ])("keeps sessions.patch admin-only when params include %s", (_name, params) => {
+  it("delegates effort patches to the admin-scoped session policy", () => {
+    const params = { key: "agent:main:ios-1", thinkingLevel: "high" };
     expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", params)).toEqual([
       "operator.admin",
     ]);
@@ -538,8 +524,11 @@ describe("method scope resolution", () => {
     });
   });
 
-  it("authorizes write-scoped sessions.patch for chat-organization fields and denies read scope", () => {
-    const params = { key: "agent:main:ios-1", label: "Trip planning", pinned: true };
+  it("delegates model patches to the write-scoped session policy", () => {
+    const params = { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" };
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", params)).toEqual([
+      "operator.write",
+    ]);
     expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.write"], params)).toEqual({
       allowed: true,
     });
@@ -547,6 +536,25 @@ describe("method scope resolution", () => {
       allowed: false,
       missingScope: "operator.write",
     });
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.admin"], params)).toEqual({
+      allowed: true,
+    });
+  });
+
+  it("delegates sessions.patchMany from its patch fields", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.patchMany", {
+        targets: [
+          {
+            key: "agent:main:ios-1",
+            agentId: "main",
+            expectedSessionId: "session-1",
+            expectedLifecycleRevision: "revision-1",
+          },
+        ],
+        patch: { model: "openai/gpt-5.6-luna" },
+      }),
+    ).toEqual(["operator.write"]);
   });
 
   it("lets malformed sessions.patch params through to handler validation at write scope", () => {
@@ -665,40 +673,6 @@ describe("method scope resolution", () => {
     ]);
   });
 
-  it("keeps gateway method scopes pinned when an agent replaces the active registry", () => {
-    const method = "fixture.gateway.inspect";
-    const gatewayRegistry = createEmptyPluginRegistry();
-    gatewayRegistry.gatewayHandlers[method] = pluginHandler;
-    gatewayRegistry.gatewayMethodDescriptors.push(
-      createPluginGatewayMethodDescriptor({
-        pluginId: "gateway-fixture",
-        name: method,
-        handler: pluginHandler,
-        scope: "operator.admin",
-      }),
-    );
-    setActivePluginRegistry(gatewayRegistry);
-    pinActivePluginHttpRouteRegistry(gatewayRegistry);
-
-    const scopedRegistry = createEmptyPluginRegistry();
-    scopedRegistry.gatewayHandlers[method] = pluginHandler;
-    scopedRegistry.gatewayMethodDescriptors.push(
-      createPluginGatewayMethodDescriptor({
-        pluginId: "agent-fixture",
-        name: method,
-        handler: pluginHandler,
-        scope: "operator.read",
-      }),
-    );
-    setActivePluginRegistry(scopedRegistry);
-
-    expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.admin"]);
-    expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
-      allowed: false,
-      missingScope: "operator.admin",
-    });
-  });
-
   it("keeps reserved admin namespaces admin-only even if a plugin scope is narrower", () => {
     setPluginGatewayMethodScope(RESERVED_ADMIN_PLUGIN_METHOD, "operator.read");
 
@@ -719,6 +693,16 @@ describe("operator scope authorization", () => {
     expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
   });
 
+  it("authorizes execution identity inspection with operator.read and rejects unrelated scopes", () => {
+    expect(authorizeOperatorScopesForMethod("audit.run.inspect", ["operator.read"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("audit.run.inspect", ["operator.approvals"])).toEqual({
+      allowed: false,
+      missingScope: "operator.read",
+    });
+  });
+
   it("requires operator.write for write methods", () => {
     expect(authorizeOperatorScopesForMethod("send", ["operator.read"])).toEqual({
       allowed: false,
@@ -734,11 +718,7 @@ describe("operator scope authorization", () => {
       "talk.client.toolCall",
       "talk.client.steer",
       "talk.session.create",
-      "talk.session.join",
       "talk.session.appendAudio",
-      "talk.session.startTurn",
-      "talk.session.endTurn",
-      "talk.session.cancelTurn",
       "talk.session.cancelOutput",
       "talk.session.acknowledgeMark",
       "talk.session.submitToolResult",
@@ -886,6 +866,7 @@ describe("core gateway method classification", () => {
     expect(isGatewayMethodClassified("node.pluginSurface.refresh")).toBe(true);
     expect(isGatewayMethodClassified("node.pluginTools.update")).toBe(true);
     expect(isGatewayMethodClassified("node.skills.update")).toBe(true);
+    expect(isGatewayMethodClassified("node.runnerInventory.update")).toBe(true);
   });
 
   it("classifies every exposed core gateway handler method", () => {

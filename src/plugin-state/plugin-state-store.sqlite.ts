@@ -9,6 +9,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -395,6 +396,62 @@ function openPluginStateDatabase(
       "Failed to open the plugin state database.",
       pathname,
     );
+  }
+}
+
+function isMissingPluginStateTableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as NodeJS.ErrnoException).code === "ERR_SQLITE_ERROR" &&
+    error.message === "no such table: plugin_state_entries"
+  );
+}
+
+function hasStateTablesBeyondStartupCheckpoint(db: DatabaseSync): boolean {
+  return (
+    /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
+      .prepare(
+        "SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name NOT IN ('schema_meta', 'state_leases') LIMIT 1",
+      )
+      .get() !== undefined
+  );
+}
+
+/** Read plugin state without joining the shared writable database lifecycle. */
+function withPluginStateDatabaseReadOnly<T>(
+  operationName: PluginStateStoreOperation,
+  operation: (store: PluginStateDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T | undefined {
+  const pathname = resolveOpenClawStateSqlitePath(options.env ?? process.env);
+  let operationStarted = false;
+  try {
+    return withExistingOpenClawStateDatabaseReadOnly(({ db, path }) => {
+      operationStarted = true;
+      try {
+        return operation({ db, path });
+      } catch (error) {
+        if (isMissingPluginStateTableError(error)) {
+          // The lease bootstrap creates exactly schema_meta + state_leases before the first write;
+          // any other table means the missing plugin-state table is damage, not fresh state.
+          if (!hasStateTablesBeyondStartupCheckpoint(db)) {
+            return undefined;
+          }
+        }
+        throw error;
+      }
+    }, options);
+  } catch (error) {
+    if (!operationStarted) {
+      throw wrapPluginStateError(
+        error,
+        operationName,
+        "PLUGIN_STATE_OPEN_FAILED",
+        "Failed to open the plugin state database.",
+        pathname,
+      );
+    }
+    throw error;
   }
 }
 
@@ -907,21 +964,28 @@ export function pluginStateLookup(params: {
   key: string;
   env?: NodeJS.ProcessEnv;
 }): unknown {
+  const pathname = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   try {
-    const { db } = openPluginStateDatabase("lookup", envOptions(params.env));
-    const row = selectPluginStateEntry(db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      key: params.key,
-      now: Date.now(),
-    });
-    return row ? parseStoredJson(row.value_json, "lookup") : undefined;
+    return withPluginStateDatabaseReadOnly(
+      "lookup",
+      ({ db }) => {
+        const row = selectPluginStateEntry(db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.key,
+          now: Date.now(),
+        });
+        return row ? parseStoredJson(row.value_json, "lookup") : undefined;
+      },
+      envOptions(params.env),
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
       "lookup",
       "PLUGIN_STATE_READ_FAILED",
       "Failed to read plugin state entry.",
+      pathname,
     );
   }
 }
@@ -1023,20 +1087,29 @@ export function pluginStateEntries(params: {
   namespace: string;
   env?: NodeJS.ProcessEnv;
 }): PluginStateEntry<unknown>[] {
+  const pathname = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   try {
-    const { db } = openPluginStateDatabase("entries", envOptions(params.env));
-    const rows = selectPluginStateEntries(db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      now: Date.now(),
-    });
-    return rows.map((row) => rowToEntry(row, "entries"));
+    return (
+      withPluginStateDatabaseReadOnly(
+        "entries",
+        ({ db }) => {
+          const rows = selectPluginStateEntries(db, {
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            now: Date.now(),
+          });
+          return rows.map((row) => rowToEntry(row, "entries"));
+        },
+        envOptions(params.env),
+      ) ?? []
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
       "entries",
       "PLUGIN_STATE_READ_FAILED",
       "Failed to list plugin state entries.",
+      pathname,
     );
   }
 }
@@ -1065,23 +1138,31 @@ export function pluginStateEntriesInKeyRange(params: {
       message: "Plugin state key range must have an increasing exclusive upper bound.",
     });
   }
+  const pathname = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   try {
-    const { db } = openPluginStateDatabase("entries", envOptions(params.env));
-    return selectPluginStateEntriesInKeyRange(db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      keyStartInclusive: params.keyStartInclusive,
-      keyEndExclusive: params.keyEndExclusive,
-      limit: params.limit,
-      order: params.order ?? "asc",
-      now: Date.now(),
-    }).map((row) => rowToEntry(row, "entries"));
+    return (
+      withPluginStateDatabaseReadOnly(
+        "entries",
+        ({ db }) =>
+          selectPluginStateEntriesInKeyRange(db, {
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            keyStartInclusive: params.keyStartInclusive,
+            keyEndExclusive: params.keyEndExclusive,
+            limit: params.limit,
+            order: params.order ?? "asc",
+            now: Date.now(),
+          }).map((row) => rowToEntry(row, "entries")),
+        envOptions(params.env),
+      ) ?? []
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
       "entries",
       "PLUGIN_STATE_READ_FAILED",
       "Failed to list plugin state entries by key range.",
+      pathname,
     );
   }
 }
@@ -1147,15 +1228,22 @@ function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
 }
 
 export function countPluginStateLiveEntries(pluginId: string, env?: NodeJS.ProcessEnv): number {
+  const pathname = resolveOpenClawStateSqlitePath(env ?? process.env);
   try {
-    const { db } = openPluginStateDatabase("entries", envOptions(env));
-    return countLivePluginStateEntries(db, { pluginId, now: Date.now() });
+    return (
+      withPluginStateDatabaseReadOnly(
+        "entries",
+        ({ db }) => countLivePluginStateEntries(db, { pluginId, now: Date.now() }),
+        envOptions(env),
+      ) ?? 0
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
       "entries",
       "PLUGIN_STATE_READ_FAILED",
       "Failed to count plugin state entries.",
+      pathname,
     );
   }
 }

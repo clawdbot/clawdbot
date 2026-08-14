@@ -307,6 +307,7 @@ describe("streamSignalEvents", () => {
   it("streams events through node http instead of fetch", async () => {
     type StreamEvent = Parameters<Parameters<typeof streamSignalEvents>[0]["onEvent"]>[0];
     const events: StreamEvent[] = [];
+    const onStreamOpen = vi.fn();
     const baseUrl = await withSignalServer((req, res) => {
       expect(req.url).toBe("/api/v1/events?account=%2B15555550123");
       expect(req.headers.accept).toBe("text/event-stream");
@@ -317,9 +318,11 @@ describe("streamSignalEvents", () => {
     await streamSignalEvents({
       baseUrl,
       account: "+15555550123",
+      onStreamOpen,
       onEvent: (event) => events.push(event),
     });
 
+    expect(onStreamOpen).toHaveBeenCalledOnce();
     expect(events).toEqual([{ id: "42", event: "message", data: '{"group":true}' }]);
   });
 

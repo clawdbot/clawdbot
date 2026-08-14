@@ -14,6 +14,8 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
 
 vi.mock("../../cli/command-secret-targets.js", () => ({
   getAgentRuntimeCommandSecretTargetIds: () => new Set(["skills.entries.*.apiKey"]),
+  getAgentRuntimeOptionalCommandSecretPaths: () =>
+    new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
   getScopedChannelsCommandSecretTargets: (...args: unknown[]) =>
     hoisted.getScopedChannelsCommandSecretTargetsMock(...args),
 }));
@@ -28,6 +30,7 @@ type ResolveCommandSecretRefsCall = {
   commandName: string;
   targetIds?: Set<string>;
   allowedPaths?: Set<string>;
+  optionalActivePaths?: Set<string>;
 };
 
 function resolveCommandSecretRefsCall(callIndex = 0): ResolveCommandSecretRefsCall {
@@ -92,6 +95,9 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
     expect(baseCall.config).toBe(sourceConfig);
     expect(baseCall.commandName).toBe("reply");
     expect(baseCall.targetIds).toEqual(new Set(["skills.entries.*.apiKey"]));
+    expect(baseCall.optionalActivePaths).toEqual(
+      new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
+    );
     expect(hoisted.getScopedChannelsCommandSecretTargetsMock).toHaveBeenCalledWith({
       config: baseResolved,
       channel: "discord",

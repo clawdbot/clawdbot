@@ -55,6 +55,7 @@ function liveConfig(): OpenClawConfig {
           },
         },
       },
+      list: [{ id: "main", default: true, workspace: workspaceDir }],
     },
     skills: { workshop: { autonomous: { mode: "off" } } },
   };

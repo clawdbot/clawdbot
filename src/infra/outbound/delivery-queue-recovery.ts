@@ -5,6 +5,7 @@ import type {
   ChannelMessageUnknownSendReconciliationResult,
 } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   createDeliveryRecoveryCoordinator,
   createEmptyDeliveryRecoverySummary,
@@ -20,6 +21,8 @@ import {
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
+import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
+import { buildPayloadSummary } from "./deliver-payload.js";
 import {
   createQueuedDeliveryOwner,
   persistQueuedPostSendState,
@@ -43,9 +46,13 @@ import {
 } from "./delivery-completion.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
-  cancelDeliveryQueueMediaRecoveryLease,
-  createDeliveryQueueMediaRecoveryLease,
+  cancelDeliveryQueueMediaRetention,
+  createDeliveryQueueMediaRetention,
 } from "./delivery-queue-media-staging.js";
+import {
+  buildUnknownSendContext,
+  reconcileUnknownQueuedDelivery,
+} from "./delivery-queue-reconciliation.js";
 import {
   claimDeliveryPlatformSendAttempt,
   failDelivery,
@@ -59,23 +66,28 @@ import {
   type QueuedDelivery,
   type QueuedDeliveryPayload,
 } from "./delivery-queue-storage.js";
+import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditTerminals,
   failedOutboundAuditTerminals,
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
+import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 export type DeliverFn = (
   params: {
     cfg: OpenClawConfig;
   } & QueuedDeliveryPayload & {
+      payloads: ReturnType<typeof queuedDeliveryPayloads>;
       deliveryQueueId?: string;
       deliveryQueueStateDir?: string;
       deliveryProducerClaimId?: string;
+      deliveryProducerLeaseRequired?: boolean;
       skipQueue?: boolean;
       deferredDeliveryAdmissionPassed?: true;
       deferCommitHooks?: boolean;
+      onMessageSentEvent?: (event: MessageSentEvent, sourceIndex: number) => void;
       onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
       onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
     },
@@ -104,6 +116,111 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 ];
 
 const recoveryCoordinator = createDeliveryRecoveryCoordinator<QueuedDelivery>();
+
+const queuedDeliveryPayloads = (entry: QueuedDelivery) =>
+  acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload);
+
+function queuedPayloadCount(entry: QueuedDelivery): number {
+  return entry.preparedBatch.sourcePayloadCount;
+}
+
+function emitRecoveredMessageSentEvents(
+  entry: QueuedDelivery,
+  events: readonly MessageSentEvent[],
+): void {
+  const { emitMessageSent } = createMessageSentEmitter({
+    hookRunner: getGlobalHookRunner(),
+    channel: entry.channel,
+    to: entry.to,
+    accountId: entry.accountId,
+    sessionKeyForInternalHooks: entry.mirror?.sessionKey ?? entry.session?.key,
+    isGroup: entry.mirror?.isGroup,
+    groupId: entry.mirror?.groupId,
+    runId: entry.preparedBatch.runId,
+    logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
+  });
+  for (const event of events) {
+    emitMessageSent(event);
+  }
+}
+
+type IndexedMessageSentEvent = {
+  sourceIndex: number;
+  event: MessageSentEvent;
+};
+
+function queuedTerminalFailureEvents(
+  entry: QueuedDelivery,
+  error: string,
+): IndexedMessageSentEvent[] {
+  return acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => {
+    const summary = buildPayloadSummary(prepared.payload);
+    return {
+      sourceIndex: prepared.sourceIndex,
+      event: {
+        success: false,
+        content: summary.hookContent ?? summary.text,
+        error,
+      },
+    };
+  });
+}
+
+function emitRecoveredTerminalFailure(
+  entry: QueuedDelivery,
+  error: string,
+  collected: readonly IndexedMessageSentEvent[] = [],
+): void {
+  if (entry.legacyPreparedContentUnavailable) {
+    return;
+  }
+  const fallbackEvents = queuedTerminalFailureEvents(entry, error);
+  // Rendering can suppress an accepted payload before later payloads settle.
+  // Reconcile by source index so a gap cannot duplicate or misattribute events.
+  const collectedBySourceIndex = new Map(
+    collected.map(({ sourceIndex, event }) => [sourceIndex, event] as const),
+  );
+  const terminalEvents = fallbackEvents.map(
+    ({ sourceIndex, event }) => collectedBySourceIndex.get(sourceIndex) ?? event,
+  );
+  emitRecoveredMessageSentEvents(entry, terminalEvents);
+}
+
+function emitRecoveredTerminalSuccess(entry: QueuedDelivery, result: OutboundDeliveryResult): void {
+  if (entry.legacyPreparedContentUnavailable) {
+    return;
+  }
+  const preparedEntries = acceptedPreparedOutboundEntries(entry.preparedBatch);
+  if (preparedEntries.length === 0) {
+    return;
+  }
+  const receiptMessageIds = result.receipt?.parts.length
+    ? result.receipt.parts
+        .toSorted((left, right) => left.index - right.index)
+        .map((part) => part.platformMessageId)
+    : result.receipt?.platformMessageIds;
+  const messageIds =
+    preparedEntries.length === 1
+      ? [result.messageId || receiptMessageIds?.[0]]
+      : receiptMessageIds?.length === preparedEntries.length
+        ? receiptMessageIds
+        : [];
+  emitRecoveredMessageSentEvents(
+    entry,
+    preparedEntries.map((prepared, index) => {
+      const summary = buildPayloadSummary(prepared.payload);
+      const messageId = messageIds[index];
+      const event: MessageSentEvent = {
+        success: true,
+        content: summary.hookContent ?? summary.text,
+      };
+      if (messageId) {
+        event.messageId = messageId;
+      }
+      return event;
+    }),
+  );
+}
 
 function resolveMaxRetries(entry: QueuedDelivery): number {
   const configured = entry.maxRetries;
@@ -137,13 +254,15 @@ function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
   );
 }
 
-function hasActiveStableDeliveryOwner(entry: QueuedDelivery, now: number): boolean {
+function hasActiveDeliveryOwner(entry: QueuedDelivery, now: number): boolean {
   return (
     (typeof entry.completionRetention === "object" ||
       entry.completionRetention === "permanent" ||
       entry.requiresProducerClaim === true) &&
     (entry.recoveryState === "producer_claimed" ||
-      (entry.recoveryState === "send_attempt_started" && entry.requiresProducerClaim === true)) &&
+      ((entry.recoveryState === "send_attempt_started" ||
+        entry.recoveryState === "unknown_after_send") &&
+        entry.requiresProducerClaim === true)) &&
     typeof entry.availableAt === "number" &&
     entry.availableAt > now
   );
@@ -151,19 +270,19 @@ function hasActiveStableDeliveryOwner(entry: QueuedDelivery, now: number): boole
 
 function queuedDeadLetterAuditTerminals(entry: QueuedDelivery) {
   if (needsUnknownSendReconciliation(entry)) {
-    return uniformOutboundAuditTerminals(entry.payloads.length, {
+    return uniformOutboundAuditTerminals(queuedPayloadCount(entry), {
       outcome: "unknown",
       failureStage: "queue",
     });
   }
-  return uniformOutboundAuditTerminals(entry.payloads.length, {
+  return uniformOutboundAuditTerminals(queuedPayloadCount(entry), {
     outcome: "failed",
     failureStage: "queue",
   });
 }
 
 function queuedUnknownAuditTerminals(entry: QueuedDelivery) {
-  return uniformOutboundAuditTerminals(entry.payloads.length, {
+  return uniformOutboundAuditTerminals(queuedPayloadCount(entry), {
     outcome: "unknown",
     failureStage: "queue",
   });
@@ -191,7 +310,8 @@ function buildRecoveryDeliverParams(
     ...(entry.requireUnknownSendReconciliation === true
       ? { requireUnknownSendReconciliation: true }
       : {}),
-    payloads: entry.payloads,
+    payloads: queuedDeliveryPayloads(entry),
+    preparedBatch: entry.preparedBatch,
     renderedBatchPlan: entry.renderedBatchPlan,
     threadId: entry.threadId,
     replyToId: entry.replyToId,
@@ -201,7 +321,6 @@ function buildRecoveryDeliverParams(
     bestEffort: entry.bestEffort,
     gifPlayback: entry.gifPlayback,
     forceDocument: entry.forceDocument,
-    replyPayloadSendingHook: entry.replyPayloadSendingHook,
     silent: entry.silent,
     mirror: entry.mirror,
     session: entry.session,
@@ -211,10 +330,57 @@ function buildRecoveryDeliverParams(
     deliveryQueueId: entry.id,
     deliveryQueueStateDir: stateDir,
     ...(producerClaimId ? { deliveryProducerClaimId: producerClaimId } : {}),
+    ...(entry.requiresProducerClaim === true ? { deliveryProducerLeaseRequired: true } : {}),
     skipQueue: true, // Prevent re-enqueueing during recovery.
     deferredDeliveryAdmissionPassed: true,
     deferCommitHooks: true,
   } satisfies Parameters<DeliverFn>[0];
+}
+
+async function terminalizeWithMediaRetention(
+  params: { entry: QueuedDelivery; cfg: OpenClawConfig; log: RecoveryLogger; stateDir?: string },
+  operation: (spoolPaths: string[]) => Promise<readonly string[] | false>,
+): Promise<boolean> {
+  const spoolPaths = collectEntrySpoolPaths(queuedDeliveryPayloads(params.entry), params.stateDir);
+  const leaseId =
+    spoolPaths.length > 0
+      ? createDeliveryQueueMediaRetention(
+          spoolPaths,
+          "outbound-media-recovery-lease",
+          params.stateDir,
+        )
+      : undefined;
+  try {
+    const releasedPaths = await operation(spoolPaths);
+    if (releasedPaths === false) {
+      return false;
+    }
+    if (needsUnknownSendReconciliation(params.entry)) {
+      const cleanup = resolveOutboundChannelMessageAdapter({
+        channel: params.entry.channel,
+        cfg: params.cfg,
+        agentId: params.entry.session?.agentId,
+        allowBootstrap: true,
+      })?.durableFinal?.afterUnknownSendTerminal;
+      try {
+        await cleanup?.(
+          buildUnknownSendContext({
+            entry: params.entry,
+            payloads: queuedDeliveryPayloads(params.entry),
+            cfg: params.cfg,
+          }),
+        );
+      } catch (error) {
+        params.log.warn(
+          `Delivery entry ${params.entry.id} unknown-send terminal cleanup failed: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
+    await releaseSpoolArtifacts(releasedPaths, params.stateDir);
+    return true;
+  } finally {
+    cancelDeliveryQueueMediaRetention(leaseId, params.stateDir);
+  }
 }
 
 async function applyRecoveryDeliveryAdmission(params: {
@@ -224,84 +390,53 @@ async function applyRecoveryDeliveryAdmission(params: {
   stateDir?: string;
   logLabel: string;
 }): Promise<"allowed" | "failed" | "not_pending"> {
-  const admission = resolveDeferredDeliveryAdmission({
-    cfg: params.cfg,
-    channel: params.entry.channel,
-    to: params.entry.to,
-    accountId: params.entry.accountId,
-    phase: "recovery",
-  });
+  const admission = resolveDeferredDeliveryAdmission(
+    {
+      cfg: params.cfg,
+      channel: params.entry.channel,
+      to: params.entry.to,
+      accountId: params.entry.accountId,
+      phase: "recovery",
+    },
+    { agentId: params.entry.session?.agentId },
+  );
   if (admission.status === "allowed") {
     return "allowed";
   }
-  markDurableDeliveryFailedBestEffort(params.entry, params.log);
-  const result = await failPendingDelivery(
-    {
-      id: params.entry.id,
-      expectedStatus: "pending",
-      lastError: admission.reason,
-      entry: params.entry,
-    },
-    params.stateDir,
-  );
-  if (result.status === "failed") {
-    emitQueuedAuditTerminals(params.entry, () => queuedDeadLetterAuditTerminals(params.entry));
-    params.log.warn(
-      `${params.logLabel}: entry ${params.entry.id} permanently rejected before recovery: ${admission.reason}`,
+  await markDurableDeliveryFailedBestEffort(params.entry, params.log, params.stateDir);
+  const failed = await terminalizeWithMediaRetention(params, async (spoolPaths) => {
+    const result = await failPendingDelivery(
+      { id: params.entry.id, entry: params.entry, retainSpoolArtifacts: true },
+      params.stateDir,
     );
-    return "failed";
+    return result.status === "failed" ? spoolPaths : false;
+  });
+  if (!failed) {
+    params.log.info(
+      `${params.logLabel}: entry ${params.entry.id} changed status before admission failure was persisted`,
+    );
+    return "not_pending";
   }
-  params.log.info(
-    `${params.logLabel}: entry ${params.entry.id} changed status before admission failure was persisted`,
+  emitRecoveredTerminalFailure(params.entry, admission.reason);
+  emitQueuedAuditTerminals(params.entry, () => queuedDeadLetterAuditTerminals(params.entry));
+  params.log.warn(
+    `${params.logLabel}: entry ${params.entry.id} permanently rejected before recovery: ${admission.reason}`,
   );
-  return "not_pending";
+  return "failed";
 }
 
-async function reconcileUnknownQueuedDelivery(opts: {
+async function moveEntryToFailedAndCleanup(params: {
   entry: QueuedDelivery;
   cfg: OpenClawConfig;
   log: RecoveryLogger;
-}): Promise<ChannelMessageUnknownSendReconciliationResult | null> {
-  const adapter = resolveOutboundChannelMessageAdapter({
-    channel: opts.entry.channel,
-    cfg: opts.cfg,
-    allowBootstrap: true,
-  });
-  if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {
-    return null;
-  }
-  const reconcileUnknownSend = adapter?.durableFinal?.reconcileUnknownSend;
-  if (!reconcileUnknownSend) {
-    return null;
-  }
-  const { entry } = opts;
-  try {
-    return await reconcileUnknownSend({
-      cfg: opts.cfg,
-      queueId: entry.id,
-      channel: entry.channel,
-      to: entry.to,
-      ...(entry.accountId !== undefined ? { accountId: entry.accountId } : {}),
-      enqueuedAt: entry.enqueuedAt,
-      retryCount: entry.retryCount,
-      ...(entry.platformSendStartedAt !== undefined
-        ? { platformSendStartedAt: entry.platformSendStartedAt }
-        : {}),
-      ...(entry.effectiveReplyToId !== undefined
-        ? { effectiveReplyToId: entry.effectiveReplyToId }
-        : {}),
-      payloads: entry.payloads,
-      ...(entry.renderedBatchPlan ? { renderedBatchPlan: entry.renderedBatchPlan } : {}),
-      ...(entry.replyToId !== undefined ? { replyToId: entry.replyToId } : {}),
-      ...(entry.replyToMode !== undefined ? { replyToMode: entry.replyToMode } : {}),
-      ...(entry.threadId !== undefined ? { threadId: entry.threadId } : {}),
-      ...(entry.silent !== undefined ? { silent: entry.silent } : {}),
-    });
-  } catch (err) {
-    const error = formatErrorMessage(err);
-    opts.log.warn(`Delivery entry ${opts.entry.id} unknown-send reconciliation failed: ${error}`);
-    return { status: "unresolved", error, retryable: true };
-  }
+  stateDir?: string;
+  attemptId?: string | null;
+}): Promise<void> {
+  await terminalizeWithMediaRetention(params, async () =>
+    params.attemptId !== undefined
+      ? moveToFailed(params.entry.id, params.stateDir, params.attemptId)
+      : moveToFailed(params.entry.id, params.stateDir),
+  );
 }
 
 function buildReconciledSentResult(
@@ -324,7 +459,7 @@ function buildReconciledCommitContext(params: {
   cfg: OpenClawConfig;
   result: OutboundDeliveryResult;
 }): ChannelMessageSendCommitContext {
-  const payload = params.entry.payloads[0] ?? {};
+  const payload = queuedDeliveryPayloads(params.entry)[0] ?? {};
   const result = {
     messageId: params.result.messageId,
     receipt: params.result.receipt ?? {
@@ -336,6 +471,7 @@ function buildReconciledCommitContext(params: {
   const base = {
     cfg: params.cfg,
     to: params.entry.to,
+    deliveryQueueId: params.entry.id,
     accountId: params.entry.accountId,
     replyToId:
       params.entry.effectiveReplyToId !== undefined
@@ -385,9 +521,13 @@ async function runReconciledSentCommitHooks(params: {
   reconciliation: Extract<ChannelMessageUnknownSendReconciliationResult, { status: "sent" }>;
   log: RecoveryLogger;
 }): Promise<void> {
+  if (params.entry.legacyPreparedContentUnavailable) {
+    return;
+  }
   const adapter = resolveOutboundChannelMessageAdapter({
     channel: params.entry.channel,
     cfg: params.cfg,
+    agentId: params.entry.session?.agentId,
     allowBootstrap: true,
   });
   const afterCommit = adapter?.send?.lifecycle?.afterCommit;
@@ -412,15 +552,15 @@ async function runReconciledSentCommitHooks(params: {
 
 async function moveEntryToFailedWithLogging(
   entry: QueuedDelivery,
+  cfg: OpenClawConfig,
   log: RecoveryLogger,
   stateDir?: string,
 ): Promise<boolean> {
-  markDurableDeliveryFailedBestEffort(entry, log);
+  await markDurableDeliveryFailedBestEffort(entry, log, stateDir);
   try {
     const attemptId = recoveryPlatformAttemptId(entry);
-    await (attemptId !== undefined
-      ? moveToFailed(entry.id, stateDir, attemptId)
-      : moveToFailed(entry.id, stateDir));
+    await moveEntryToFailedAndCleanup({ entry, cfg, log, stateDir, attemptId });
+    emitRecoveredTerminalFailure(entry, "delivery retry budget exhausted");
     return true;
   } catch (err) {
     log.error(`Failed to move entry ${entry.id} to failed/: ${String(err)}`);
@@ -434,9 +574,11 @@ function recoveryPlatformAttemptId(
 ): string | null | undefined {
   return claimedAttemptId !== undefined
     ? claimedAttemptId
-    : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
-      ? null
-      : undefined;
+    : typeof entry.platformSendAttemptId === "string"
+      ? entry.platformSendAttemptId
+      : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
+        ? null
+        : undefined;
 }
 
 async function ackRecoveredDelivery(
@@ -466,12 +608,16 @@ async function recordRecoveredFailure(
   }).fail(record, error);
 }
 
-function markDurableDeliveryFailedBestEffort(entry: QueuedDelivery, log: RecoveryLogger): void {
+async function markDurableDeliveryFailedBestEffort(
+  entry: QueuedDelivery,
+  log: RecoveryLogger,
+  stateDir?: string,
+): Promise<void> {
   if (!entry.deliveryCompletion) {
     return;
   }
   try {
-    failDurableDelivery(entry.deliveryCompletion);
+    await failDurableDelivery(entry.deliveryCompletion, stateDir);
   } catch (error) {
     // Queue ownership is authoritative for replay safety. Missing owner state
     // must not leave a dead-lettered delivery permanently replayable.
@@ -483,6 +629,7 @@ function markDurableDeliveryFailedBestEffort(entry: QueuedDelivery, log: Recover
 
 async function resolveCompletedOwnerBeforeRecovery(opts: {
   entry: QueuedDelivery;
+  cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
   onRecovered?: (entry: QueuedDelivery) => void;
@@ -492,9 +639,9 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
   if (!completion) {
     return "continue";
   }
-  let operation: ReturnType<typeof markDurableDeliveryQueued>;
+  let operation: Awaited<ReturnType<typeof markDurableDeliveryQueued>>;
   try {
-    operation = markDurableDeliveryQueued(completion, opts.entry.id);
+    operation = await markDurableDeliveryQueued(completion, opts.entry.id);
   } catch (error) {
     const errMsg = `delivery owner state unavailable: ${formatErrorMessage(error)}`;
     await recordRecoveredFailure(failDelivery, opts.entry, errMsg, opts.stateDir).catch(
@@ -504,7 +651,7 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
     return "failed";
   }
-  if (operation.status === "sent" || operation.status === "replied") {
+  if (operation.state === "delivered") {
     try {
       await ackRecoveredDelivery(opts.entry, opts.stateDir);
     } catch (error) {
@@ -513,13 +660,14 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
       opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
       return "failed";
     }
-    const messageId = operation.platformMessageId ?? operation.preparedMessageId;
+    const messageId = operation.platformMessageId;
     if (messageId) {
       const result: OutboundDeliveryResult = { channel: opts.entry.channel, messageId };
+      emitRecoveredTerminalSuccess(opts.entry, result);
       await runOutboundDeliveryCommitHooks([result]);
       emitQueuedAuditTerminals(opts.entry, () =>
         completedOutboundAuditTerminals({
-          payloadCount: opts.entry.payloads.length,
+          payloadCount: queuedPayloadCount(opts.entry),
           results: [result],
           payloadOutcomes: [],
         }),
@@ -528,7 +676,7 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     opts.onRecovered?.(opts.entry);
     return "recovered";
   }
-  if (operation.status === "suppressed") {
+  if (operation.state === "suppressed" || operation.state === "stale") {
     try {
       await (typeof opts.entry.completionRetention === "object"
         ? ackRecoveredDelivery(opts.entry, opts.stateDir, { suppressCompletionReceipt: true })
@@ -542,7 +690,7 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     opts.onRecovered?.(opts.entry);
     return "recovered";
   }
-  if (operation.status === "rejected") {
+  if (operation.state === "rejected") {
     try {
       await (typeof opts.entry.completionRetention === "object"
         ? ackRecoveredDelivery(opts.entry, opts.stateDir, { suppressCompletionReceipt: true })
@@ -555,20 +703,20 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     }
     emitQueuedAuditTerminals(opts.entry, () =>
       failedOutboundAuditTerminals({
-        payloadCount: opts.entry.payloads.length,
+        payloadCount: queuedPayloadCount(opts.entry),
         results: [],
         payloadOutcomes: [],
         failureStage: "platform_send",
       }),
     );
-    opts.onFailed?.(
-      opts.entry,
-      operation.rejectionError ?? "delivery permanently rejected before platform dispatch",
-    );
+    const error =
+      operation.rejectionError ?? "delivery permanently rejected before platform dispatch";
+    emitRecoveredTerminalFailure(opts.entry, error);
+    opts.onFailed?.(opts.entry, error);
     return "failed";
   }
-  if (operation.status === "unknown") {
-    const moved = await moveEntryToFailedWithLogging(opts.entry, opts.log, opts.stateDir);
+  if (operation.state === "unknown") {
+    const moved = await moveEntryToFailedWithLogging(opts.entry, opts.cfg, opts.log, opts.stateDir);
     return moved ? "moved-to-failed" : "failed";
   }
   return "continue";
@@ -622,18 +770,22 @@ async function drainQueuedEntry(opts: {
   if (needsUnknownSendReconciliation(entry)) {
     // A crash after platform send start cannot be blindly replayed; adapters
     // must reconcile whether the platform already committed the message.
-    const reconciliation = await reconcileUnknownQueuedDelivery({
-      entry,
-      cfg: opts.cfg,
-      log: opts.log,
-    });
+    const reconciliation =
+      entry.legacyUnknownSendReconciliation ??
+      (await reconcileUnknownQueuedDelivery({
+        entry,
+        payloads: queuedDeliveryPayloads(entry),
+        cfg: opts.cfg,
+        warn: (message) => opts.log.warn(message),
+      }));
     if (reconciliation?.status === "sent") {
       try {
         const result = buildReconciledSentResult(entry, reconciliation);
         if (entry.deliveryCompletion) {
-          completeDurableDelivery(entry.deliveryCompletion, result);
+          await completeDurableDelivery(entry.deliveryCompletion, result, opts.stateDir);
         }
         await ackRecoveredDelivery(entry, opts.stateDir, undefined, entry.platformSendAttemptId);
+        emitRecoveredTerminalSuccess(entry, result);
         await runReconciledSentCommitHooks({
           entry,
           cfg: opts.cfg,
@@ -642,7 +794,7 @@ async function drainQueuedEntry(opts: {
         });
         emitQueuedAuditTerminals(entry, () =>
           completedOutboundAuditTerminals({
-            payloadCount: entry.payloads.length,
+            payloadCount: queuedPayloadCount(entry),
             results: [result],
             payloadOutcomes: [],
           }),
@@ -707,11 +859,16 @@ async function drainQueuedEntry(opts: {
         return "failed";
       }
       try {
-        markDurableDeliveryFailedBestEffort(entry, opts.log);
+        await markDurableDeliveryFailedBestEffort(entry, opts.log, opts.stateDir);
         const attemptId = recoveryPlatformAttemptId(entry);
-        await (attemptId !== undefined
-          ? moveToFailed(entry.id, opts.stateDir, attemptId)
-          : moveToFailed(entry.id, opts.stateDir));
+        await moveEntryToFailedAndCleanup({
+          entry,
+          cfg: opts.cfg,
+          log: opts.log,
+          stateDir: opts.stateDir,
+          attemptId,
+        });
+        emitRecoveredTerminalFailure(entry, errMsg);
         emitQueuedAuditTerminals(entry, () => queuedUnknownAuditTerminals(entry));
         return "moved-to-failed";
       } catch (moveErr) {
@@ -723,6 +880,9 @@ async function drainQueuedEntry(opts: {
     }
   }
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
+  // Deliberately process-local: a crash may lose best-effort observers, but
+  // persisting plugin callbacks must never become part of delivery custody.
+  const messageSentEvents: IndexedMessageSentEvent[] = [];
   let postSendState: QueuedPostSendState | undefined;
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
@@ -739,15 +899,21 @@ async function drainQueuedEntry(opts: {
     }
   };
   const runCommitHooksAfterAck = async (): Promise<void> => {
-    if (postSendState !== "acked" || commitHooksRun || deliveredResults.length === 0) {
+    if (postSendState !== "acked" || commitHooksRun) {
       return;
     }
     commitHooksRun = true;
-    await runOutboundDeliveryCommitHooks(deliveredResults);
+    emitRecoveredMessageSentEvents(
+      entry,
+      messageSentEvents.map(({ event }) => event),
+    );
+    if (deliveredResults.length > 0) {
+      await runOutboundDeliveryCommitHooks(deliveredResults);
+    }
   };
-  // Stable producer rows can be observed between enqueue and live ownership.
-  // Fence recovery at the same SQLite claim before consuming an attempt or
-  // crossing provider I/O; an active live producer keeps its original lease.
+  // Live producer rows can be observed between enqueue and platform I/O.
+  // Fence recovery at the same SQLite claim before consuming an attempt;
+  // an active live producer keeps its original renewable lease.
   const requiresProducerClaim =
     typeof entry.completionRetention === "object" ||
     entry.requiresProducerClaim === true ||
@@ -770,11 +936,16 @@ async function drainQueuedEntry(opts: {
     : await reserveDeliveryAttempt(entry.id, maxRetries, opts.stateDir);
   if (reservation.status === "exhausted") {
     const errMsg = `delivery retry budget exhausted (${reservation.attemptCount}/${maxRetries})`;
-    markDurableDeliveryFailedBestEffort(entry, opts.log);
+    await markDurableDeliveryFailedBestEffort(entry, opts.log, opts.stateDir);
     try {
-      await (producerClaimId
-        ? moveToFailed(entry.id, opts.stateDir, producerClaimId)
-        : moveToFailed(entry.id, opts.stateDir));
+      await moveEntryToFailedAndCleanup({
+        entry,
+        cfg: opts.cfg,
+        log: opts.log,
+        stateDir: opts.stateDir,
+        attemptId: producerClaimId,
+      });
+      emitRecoveredTerminalFailure(entry, errMsg);
     } catch (moveErr) {
       if (getErrnoCode(moveErr) === "ENOENT") {
         return "already-gone";
@@ -785,18 +956,23 @@ async function drainQueuedEntry(opts: {
     opts.onFailed?.(entry, errMsg);
     return "moved-to-failed";
   }
-  const recoverySpoolPaths = collectEntrySpoolPaths(entry.payloads, opts.stateDir);
+  const recoverySpoolPaths = collectEntrySpoolPaths(queuedDeliveryPayloads(entry), opts.stateDir);
   let mediaRecoveryLeaseId: string | undefined;
   try {
     // The pending row owns these artifacts until the lease exists. Fallback
     // acks may then remove replay intent without exposing active media to GC.
     mediaRecoveryLeaseId =
       recoverySpoolPaths.length > 0
-        ? createDeliveryQueueMediaRecoveryLease(recoverySpoolPaths, opts.stateDir)
+        ? createDeliveryQueueMediaRetention(
+            recoverySpoolPaths,
+            "outbound-media-recovery-lease",
+            opts.stateDir,
+          )
         : undefined;
     const result = await opts.deliver({
       ...buildRecoveryDeliverParams(entry, opts.cfg, opts.stateDir, producerClaimId),
       onPayloadDeliveryOutcome: collectPayloadOutcome,
+      onMessageSentEvent: (event, sourceIndex) => messageSentEvents.push({ sourceIndex, event }),
       onDeliveryResult: async (deliveryResult) => {
         collectResults([deliveryResult]);
         postSendState ??= await persistRecoveredPostSendState({
@@ -830,11 +1006,6 @@ async function drainQueuedEntry(opts: {
     }
     if (results.length > 0) {
       deliveredResults = [...results];
-      if (entry.deliveryCompletion) {
-        completeDurableDelivery(entry.deliveryCompletion, results.at(-1)!);
-      }
-    } else if (entry.deliveryCompletion) {
-      suppressDurableDelivery(entry.deliveryCompletion);
     }
     const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
     const failedOutcome = failedOutcomes[0];
@@ -855,7 +1026,7 @@ async function drainQueuedEntry(opts: {
           await runCommitHooksAfterAck();
           emitQueuedAuditTerminals(entry, () =>
             failedOutboundAuditTerminals({
-              payloadCount: entry.payloads.length,
+              payloadCount: queuedPayloadCount(entry),
               results: deliveredResults,
               payloadOutcomes,
               failureStage: "platform_send",
@@ -871,6 +1042,13 @@ async function drainQueuedEntry(opts: {
         await recordRecoveredFailure(recordFailure, entry, errMsg, opts.stateDir, producerClaimId);
       }
       return "failed";
+    }
+    if (entry.deliveryCompletion) {
+      if (results.length > 0) {
+        await completeDurableDelivery(entry.deliveryCompletion, results.at(-1)!, opts.stateDir);
+      } else {
+        await suppressDurableDelivery(entry.deliveryCompletion, opts.stateDir);
+      }
     }
     postSendState ??=
       results.length > 0
@@ -926,7 +1104,7 @@ async function drainQueuedEntry(opts: {
     await runCommitHooksAfterAck();
     emitQueuedAuditTerminals(entry, () =>
       completedOutboundAuditTerminals({
-        payloadCount: entry.payloads.length,
+        payloadCount: queuedPayloadCount(entry),
         results,
         payloadOutcomes,
       }),
@@ -963,7 +1141,7 @@ async function drainQueuedEntry(opts: {
         await runCommitHooksAfterAck();
         emitQueuedAuditTerminals(entry, () =>
           failedOutboundAuditTerminals({
-            payloadCount: entry.payloads.length,
+            payloadCount: queuedPayloadCount(entry),
             results: deliveredResults,
             payloadOutcomes,
             failureStage: isOutboundDeliveryError(err) ? err.stage : "platform_send",
@@ -980,7 +1158,7 @@ async function drainQueuedEntry(opts: {
       // I/O. Recovery then owns the stable queue terminal on provider rejection.
       emitQueuedAuditTerminals(entry, () =>
         failedOutboundAuditTerminals({
-          payloadCount: entry.payloads.length,
+          payloadCount: queuedPayloadCount(entry),
           results: deliveredResults,
           payloadOutcomes,
           failureStage: isOutboundDeliveryError(err) ? err.stage : "platform_send",
@@ -992,16 +1170,25 @@ async function drainQueuedEntry(opts: {
     if (permanentPlatformRejection || isPermanentDeliveryError(errMsg)) {
       try {
         if (permanentPlatformRejection && entry.deliveryCompletion) {
-          rejectDurableDelivery(entry.deliveryCompletion, permanentPlatformRejection.message);
+          await rejectDurableDelivery(
+            entry.deliveryCompletion,
+            permanentPlatformRejection.message,
+            opts.stateDir,
+          );
         } else {
-          markDurableDeliveryFailedBestEffort(entry, opts.log);
+          await markDurableDeliveryFailedBestEffort(entry, opts.log, opts.stateDir);
         }
-        await (producerClaimId
-          ? moveToFailed(entry.id, opts.stateDir, producerClaimId)
-          : moveToFailed(entry.id, opts.stateDir));
+        await moveEntryToFailedAndCleanup({
+          entry,
+          cfg: opts.cfg,
+          log: opts.log,
+          stateDir: opts.stateDir,
+          attemptId: producerClaimId,
+        });
+        emitRecoveredTerminalFailure(entry, errMsg, messageSentEvents);
         emitQueuedAuditTerminals(entry, () =>
           failedOutboundAuditTerminals({
-            payloadCount: entry.payloads.length,
+            payloadCount: queuedPayloadCount(entry),
             results: deliveredResults,
             payloadOutcomes,
             failureStage: "queue",
@@ -1031,7 +1218,7 @@ async function drainQueuedEntry(opts: {
     // Early fallback acks make the row non-replayable before the adapter has
     // necessarily finished reading every payload. Release only after the whole
     // recovered attempt settles, and only if no pending row still owns it.
-    cancelDeliveryQueueMediaRecoveryLease(mediaRecoveryLeaseId, opts.stateDir);
+    cancelDeliveryQueueMediaRetention(mediaRecoveryLeaseId, opts.stateDir);
     const pending = await loadPendingDelivery(entry.id, opts.stateDir).catch(() => entry);
     if (!pending) {
       await releaseSpoolArtifacts(recoverySpoolPaths, opts.stateDir);
@@ -1039,7 +1226,7 @@ async function drainQueuedEntry(opts: {
   }
 }
 
-export async function drainPendingDeliveries(opts: {
+export async function drainPendingDeliveriesCore(opts: {
   drainKey: string;
   logLabel: string;
   cfg: OpenClawConfig;
@@ -1062,7 +1249,7 @@ export async function drainPendingDeliveries(opts: {
       // Poll-driven reconnect drains can repeat while a live send owns its
       // claim. Leave conflicts silent so reconnect polling cannot starve it.
       onEntry: async (currentEntry) => {
-        if (hasActiveStableDeliveryOwner(currentEntry, Date.now())) {
+        if (hasActiveDeliveryOwner(currentEntry, Date.now())) {
           return;
         }
         const admission = await applyRecoveryDeliveryAdmission({
@@ -1088,11 +1275,16 @@ export async function drainPendingDeliveries(opts: {
           !needsUnknownSendReconciliation(currentEntry)
         ) {
           try {
-            markDurableDeliveryFailedBestEffort(currentEntry, opts.log);
+            await markDurableDeliveryFailedBestEffort(currentEntry, opts.log, opts.stateDir);
             const attemptId = recoveryPlatformAttemptId(currentEntry);
-            await (attemptId !== undefined
-              ? moveToFailed(currentEntry.id, opts.stateDir, attemptId)
-              : moveToFailed(currentEntry.id, opts.stateDir));
+            await moveEntryToFailedAndCleanup({
+              entry: currentEntry,
+              cfg: opts.cfg,
+              log: opts.log,
+              stateDir: opts.stateDir,
+              attemptId,
+            });
+            emitRecoveredTerminalFailure(currentEntry, "delivery retry budget exhausted");
           } catch (err) {
             if (getErrnoCode(err) === "ENOENT") {
               opts.log.info(`${opts.logLabel}: entry ${currentEntry.id} already gone, skipping`);
@@ -1162,6 +1354,12 @@ export async function recoverPendingDeliveries(opts: {
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next startup. Default: 60 000. */
   maxRecoveryMs?: number;
 }): Promise<DeliveryRecoverySummary> {
+  const { migrateLegacyPendingOutboundDeliveries } = await import("./delivery-queue-migration.js");
+  await migrateLegacyPendingOutboundDeliveries({
+    cfg: opts.cfg,
+    log: opts.log,
+    stateDir: opts.stateDir,
+  });
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
     return createEmptyDeliveryRecoverySummary();
@@ -1187,7 +1385,7 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(`Recovery skipped for delivery ${entry.id}: already gone`);
     },
     onEntry: async (currentEntry) => {
-      if (hasActiveStableDeliveryOwner(currentEntry, Date.now())) {
+      if (hasActiveDeliveryOwner(currentEntry, Date.now())) {
         opts.log.info(`Recovery skipped for delivery ${currentEntry.id}: active platform owner`);
         return "continue";
       }
@@ -1213,6 +1411,7 @@ export async function recoverPendingDeliveries(opts: {
         );
         const movedToFailed = await moveEntryToFailedWithLogging(
           currentEntry,
+          opts.cfg,
           opts.log,
           opts.stateDir,
         );

@@ -13,27 +13,19 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import {
-  getEmbeddingProvider as getGenericEmbeddingProvider,
-  type EmbeddingProvider as GenericEmbeddingProvider,
-  type EmbeddingProviderAdapter as GenericEmbeddingProviderAdapter,
-} from "../plugins/embedding-provider-runtime.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
-import type {
-  MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderAdapter,
-} from "../plugins/memory-embedding-providers.js";
+import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, sendMissingScopeForbidden } from "./http-common.js";
+import { sendJson, sendMissingScopeForbidden, watchClientDisconnect } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
-  OPENCLAW_MODEL_ID,
   authorizeOpenAiCompatibleHttpModelOverride,
   getHeader,
+  isAgentSelectionRequiredError,
+  isOpenClawAgentModelId,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
-  resolveAgentIdFromModel,
   resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 
@@ -72,13 +64,21 @@ const EMBEDDING_PROVIDER_ADMISSION_TAILS = new Map<string, Promise<void>>();
 
 async function acquireEmbeddingProviderLease(
   scopeKey: string,
+  signal: AbortSignal,
   create: () => Promise<MemoryEmbeddingProvider>,
   holdForCleanup: (provider: MemoryEmbeddingProvider) => boolean,
 ): Promise<{ provider: MemoryEmbeddingProvider; release: () => void }> {
   const previous = EMBEDDING_PROVIDER_ADMISSION_TAILS.get(scopeKey) ?? Promise.resolve();
   const createLease = async () => {
+    signal.throwIfAborted();
     await drainEmbeddingProviderRetirements(scopeKey);
+    // Keep the cleanup fence intact, but do not create a provider for an aborted waiter.
+    signal.throwIfAborted();
     const provider = await create();
+    if (signal.aborted) {
+      await closeEmbeddingProvider(scopeKey, provider);
+      signal.throwIfAborted();
+    }
     if (!holdForCleanup(provider)) {
       return { provider, lifecycle: Promise.resolve(), release: () => {} };
     }
@@ -140,6 +140,18 @@ function retainEmbeddingProviderForRetirement(
   EMBEDDING_PROVIDER_RETIREMENTS.set(scopeKey, pending);
 }
 
+async function closeEmbeddingProvider(
+  scopeKey: string,
+  provider: MemoryEmbeddingProvider,
+): Promise<void> {
+  try {
+    await provider.close?.();
+  } catch (closeErr) {
+    retainEmbeddingProviderForRetirement(scopeKey, provider);
+    logWarn(`openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`);
+  }
+}
+
 export async function drainRetainedOpenAiEmbeddingProviders(): Promise<void> {
   const activeLifecycles = Array.from(EMBEDDING_PROVIDER_ADMISSION_TAILS.values());
   if (activeLifecycles.length > 0) {
@@ -188,6 +200,9 @@ function encodeEmbeddingBase64(embedding: number[]): string {
 // Keep request limits local to the HTTP bridge; provider adapters may support
 // more, but this endpoint must protect gateway memory and request latency.
 function validateInputTexts(texts: string[]): string | undefined {
+  if (texts.length === 0 || texts.some((text) => text.length === 0)) {
+    return "`input` must contain at least one non-empty string.";
+  }
   if (texts.length > MAX_EMBEDDING_INPUTS) {
     return `Too many inputs (max ${MAX_EMBEDDING_INPUTS}).`;
   }
@@ -220,10 +235,7 @@ function isLocalEmbeddingProvider(params: {
 }): boolean {
   const providerId =
     params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
-  return (
-    getMemoryEmbeddingProvider(providerId, params.cfg)?.transport === "local" ||
-    getGenericEmbeddingProvider(providerId, params.cfg)?.transport === "local"
-  );
+  return getMemoryEmbeddingProvider(providerId, params.cfg)?.transport === "local";
 }
 
 async function createConfiguredEmbeddingProvider(params: {
@@ -236,83 +248,28 @@ async function createConfiguredEmbeddingProvider(params: {
   const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(() => params.cfg);
   const providerId =
     params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
-  // Prefer memory-specific adapters because they understand query/document
-  // input types; generic embedding adapters are adapted only as a fallback.
-  const createWithAdapter = async (adapter: MemoryEmbeddingProviderAdapter) => {
-    const createOptions = {
-      config: params.cfg,
-      agentDir: params.agentDir,
-      provider: providerId,
-      model: params.model || adapter.defaultModel || "",
-      local: params.memorySearch?.local,
-      remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
-      outputDimensionality: params.memorySearch?.outputDimensionality,
-      acquireLocalService,
-    };
-    const result = await adapter.create(createOptions);
-    return result.provider;
-  };
-  const createWithGenericAdapter = async (adapter: GenericEmbeddingProviderAdapter) => {
-    const createOptions = {
-      config: params.cfg,
-      agentDir: params.agentDir,
-      provider: providerId,
-      model: params.model || adapter.defaultModel || "",
-      local: params.memorySearch?.local,
-      remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
-      dimensions: params.memorySearch?.outputDimensionality,
-      inputType: params.memorySearch?.inputType,
-      queryInputType: params.memorySearch?.queryInputType,
-      documentInputType: params.memorySearch?.documentInputType,
-      acquireLocalService,
-    };
-    const result = await adapter.create(createOptions);
-    return result.provider ? adaptGenericEmbeddingProvider(result.provider) : null;
-  };
-
   const adapter = getMemoryEmbeddingProvider(providerId, params.cfg);
-  if (adapter) {
-    const provider = await createWithAdapter(adapter);
-    if (!provider) {
-      throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
-    }
-    return provider;
-  }
-
-  const genericAdapter = getGenericEmbeddingProvider(providerId, params.cfg);
-  if (!genericAdapter) {
+  if (!adapter) {
     throw new Error(`Unknown memory embedding provider: ${providerId}`);
   }
-  const provider = await createWithGenericAdapter(genericAdapter);
+  const createOptions = {
+    config: params.cfg,
+    agentDir: params.agentDir,
+    provider: providerId,
+    model: params.model || adapter.defaultModel || "",
+    local: params.memorySearch?.local,
+    remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
+    inputType: params.memorySearch?.inputType,
+    queryInputType: params.memorySearch?.queryInputType,
+    documentInputType: params.memorySearch?.documentInputType,
+    outputDimensionality: params.memorySearch?.outputDimensionality,
+    acquireLocalService,
+  };
+  const { provider } = await adapter.create(createOptions);
   if (!provider) {
-    throw new Error(`Embedding provider ${providerId} is unavailable.`);
+    throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
   }
   return provider;
-}
-
-// Generic embedding providers expose one embed API; memory search expects
-// query/document methods so the HTTP endpoint can batch document-style inputs.
-function adaptGenericEmbeddingProvider(
-  provider: GenericEmbeddingProvider,
-): MemoryEmbeddingProvider {
-  return {
-    id: provider.id,
-    model: provider.model,
-    ...(typeof provider.maxInputTokens === "number"
-      ? { maxInputTokens: provider.maxInputTokens }
-      : {}),
-    embedQuery: async (text, options) =>
-      await provider.embed(text, {
-        ...options,
-        inputType: "query",
-      }),
-    embedBatch: async (texts, options) =>
-      await provider.embedBatch(texts, {
-        ...options,
-        inputType: "document",
-      }),
-    ...(provider.close ? { close: async () => await provider.close?.() } : {}),
-  };
 }
 
 // Request model overrides are constrained to the configured memory provider so
@@ -384,7 +341,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   }
 
   const cfg = getRuntimeConfig();
-  if (requestModel !== OPENCLAW_MODEL_ID && !resolveAgentIdFromModel(requestModel, cfg)) {
+  if (!isOpenClawAgentModelId(requestModel)) {
     sendJson(res, 400, {
       error: {
         message: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
@@ -416,7 +373,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model: requestModel });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err)) {
+    if (isAgentSelectionRequiredError(err) || isUnknownGatewayAgentError(err)) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -449,10 +406,16 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     cfg,
     provider: target.provider,
   });
+  if (req.socket.destroyed || res.destroyed || res.socket?.destroyed) {
+    return true;
+  }
+  const abortController = new AbortController();
+  const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
 
   try {
     const { provider, release } = await acquireEmbeddingProviderLease(
       providerScopeKey,
+      abortController.signal,
       async () =>
         await createConfiguredEmbeddingProvider({
           cfg,
@@ -474,7 +437,10 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         isLocalEmbeddingProvider({ cfg, provider: createdProvider.id }),
     );
     try {
-      const embeddings = await provider.embedBatch(texts);
+      const embeddings = await provider.embedBatch(texts, { signal: abortController.signal });
+      if (abortController.signal.aborted) {
+        return true;
+      }
       const encodingFormat = payload.encoding_format === "base64" ? "base64" : "float";
 
       sendJson(res, 200, {
@@ -492,24 +458,23 @@ export async function handleOpenAiEmbeddingsHttpRequest(
       });
     } finally {
       try {
-        await provider.close?.();
-      } catch (closeErr) {
-        retainEmbeddingProviderForRetirement(providerScopeKey, provider);
-        logWarn(
-          `openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`,
-        );
+        await closeEmbeddingProvider(providerScopeKey, provider);
       } finally {
         release();
       }
     }
   } catch (err) {
-    logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
-    sendJson(res, 500, {
-      error: {
-        message: "internal error",
-        type: "api_error",
-      },
-    });
+    if (!abortController.signal.aborted) {
+      logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
+      sendJson(res, 500, {
+        error: {
+          message: "internal error",
+          type: "api_error",
+        },
+      });
+    }
+  } finally {
+    stopWatchingDisconnect();
   }
 
   return true;

@@ -18,10 +18,14 @@ import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtim
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
-import { resolveModel } from "./embedded-agent-runner/model.js";
+import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
-import { normalizeToolName } from "./tool-policy.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  acquireReadOnlyPreparedModelRuntime,
+} from "./prepared-model-runtime.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import { buildRuntimeCompatibleToolInventory } from "./tools-effective-inventory-build.js";
 import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
 import type {
@@ -35,8 +39,8 @@ function listIncludesTool(list: string[] | undefined, toolName: string): boolean
   if (!Array.isArray(list)) {
     return false;
   }
-  const normalizedToolName = normalizeToolName(toolName);
-  return list.some((entry) => normalizeToolName(entry) === normalizedToolName);
+  const normalizedToolName = normalizeToolPolicyName(toolName);
+  return list.some((entry) => normalizeToolPolicyName(entry) === normalizedToolName);
 }
 
 function policyDeniesTool(policy: { deny?: string[] } | undefined, toolName: string): boolean {
@@ -57,7 +61,9 @@ function buildToolInventoryNotices(params: {
   entries: EffectiveToolInventoryEntry[];
   effectivePolicy: ReturnType<typeof resolveEffectiveToolPolicy>;
 }): EffectiveToolInventoryNotice[] | undefined {
-  const hasBrowserTool = params.entries.some((entry) => normalizeToolName(entry.id) === "browser");
+  const hasBrowserTool = params.entries.some(
+    (entry) => normalizeToolPolicyName(entry.id) === "browser",
+  );
   if (hasBrowserTool || !hasExplicitBrowserIntent(params.cfg)) {
     return undefined;
   }
@@ -172,7 +178,7 @@ function resolveDynamicRuntimeModelContext(params: {
 }
 
 /** Resolves the runtime model metadata needed to filter model-compatible tools. */
-export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
+function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   agentDir?: string;
@@ -260,6 +266,48 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   };
 }
 
+/** Resolves dynamic model metadata after publishing a request-owned read snapshot when needed. */
+export async function resolveEffectiveToolInventoryRuntimeModelContextAsync(
+  params: Parameters<typeof resolveEffectiveToolInventoryRuntimeModelContext>[0],
+): Promise<ReturnType<typeof resolveEffectiveToolInventoryRuntimeModelContext>> {
+  try {
+    return resolveEffectiveToolInventoryRuntimeModelContext(params);
+  } catch (error) {
+    if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+      throw error;
+    }
+  }
+
+  const provider = normalizeProviderId(params.modelProvider ?? "");
+  const modelId = params.modelId?.trim() ?? "";
+  if (!provider || !modelId) {
+    return {};
+  }
+  const agentId = params.agentId?.trim() || resolveSessionAgentId({ config: params.cfg });
+  const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
+  const lease = await acquireReadOnlyPreparedModelRuntime({
+    agentId,
+    agentDir,
+    config: params.cfg,
+    workspaceDir,
+  });
+  try {
+    const stores = lease.snapshot.createStores();
+    const resolved = await resolveModelAsync(provider, modelId, agentDir, params.cfg, {
+      agentId,
+      workspaceDir,
+      authStorage: stores.authStorage,
+      modelRegistry: stores.modelRegistry,
+      preparedModelRuntime: lease.snapshot,
+    });
+    const runtimeModel = resolved.model as ProviderRuntimeModel | undefined;
+    return runtimeModel ? { modelApi: runtimeModel.api, runtimeModel } : {};
+  } finally {
+    lease.release();
+  }
+}
+
 /** Resolves compatibility metadata explicitly configured for a provider/model pair. */
 export function resolveConfiguredModelCompat(params: {
   cfg: OpenClawConfig;
@@ -299,7 +347,7 @@ export function resolveEffectiveToolInventory(
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
   const runtimeModelContext =
-    params.modelApi || params.runtimeModel
+    Object.hasOwn(params, "modelApi") || Object.hasOwn(params, "runtimeModel")
       ? {
           modelApi: params.modelApi ?? params.runtimeModel?.api,
           runtimeModel: params.runtimeModel,

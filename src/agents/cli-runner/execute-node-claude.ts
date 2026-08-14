@@ -14,7 +14,7 @@ const NODE_CLI_MAX_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 type NodeClaudePlacement = { nodeId: string; cwd?: string };
 
-export function resolveNodeClaudePlacement(
+export function resolveNodeClaudeTarget(
   context: PreparedCliRunContext,
 ): NodeClaudePlacement | null {
   const entry = context.params.sessionEntry;
@@ -197,12 +197,12 @@ export async function executeNodeClaudeRun(params: {
   if (contextParams.abortSignal?.aborted) {
     abortNodeRun();
   }
-  let replyBackendCompleted = false;
   const replyBackendHandle = contextParams.replyOperation
     ? {
         kind: "cli" as const,
+        runId: contextParams.runId,
+        toolAuthorityFingerprint: contextParams.toolAuthorityFingerprint,
         cancel: abortNodeRun,
-        isStreaming: () => !replyBackendCompleted,
       }
     : undefined;
   if (replyBackendHandle) {
@@ -307,7 +307,6 @@ export async function executeNodeClaudeRun(params: {
     };
   } finally {
     clearTimeout(hardDeadlineTimer);
-    replyBackendCompleted = true;
     if (replyBackendHandle) {
       contextParams.replyOperation?.detachBackend(replyBackendHandle);
     }

@@ -1,21 +1,14 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
-import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.MessageSpeechPhase
-import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OUTBOX_BRANCH_CHANGED_ERROR
 import ai.openclaw.app.chat.chatOutboxDisplayError
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.gateway.GatewayLoadedImage
-import ai.openclaw.app.gateway.GatewayLoadedMedia
-import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
-import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.MobileColorsAccessor
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.image.RemoteImageResult
@@ -35,7 +28,6 @@ import ai.openclaw.app.ui.mobileDanger
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileWarning
-import ai.openclaw.app.ui.mobileWarningSoft
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -52,10 +44,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -74,7 +64,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -96,110 +85,6 @@ private data class ChatBubbleStyle(
   val borderColor: Color,
   val roleColor: Color,
 )
-
-/** Renders one persisted chat message as text and image parts. */
-@Composable
-internal fun ChatMessageBubble(
-  message: ChatMessage,
-  onReplyMessage: (String) -> Unit = {},
-  sessionActionsEnabled: Boolean = false,
-  onRewindMessage: (String) -> Unit = {},
-  onForkMessage: (String) -> Unit = {},
-  speechState: MessageSpeechState? = null,
-  onToggleListen: ((String, String) -> Unit)? = null,
-  imageResolverReady: Boolean = false,
-  loadImageArtifact: suspend (String) -> GatewayLoadedImage? = { null },
-  inlineMediaPlaybackBlocked: Boolean = false,
-  loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia? = { _, _, _ -> null },
-) {
-  val role = normalizeVisibleChatMessageRole(message.role) ?: return
-  val style = bubbleStyle(role)
-
-  // Filter to only displayable content parts (text with content, or base64 images).
-  val displayableContent =
-    message.content.filter { part ->
-      when (part.type) {
-        "text" -> !part.text.isNullOrBlank()
-        "image" -> !part.base64.isNullOrBlank() || !part.artifactId.isNullOrBlank()
-        else -> part.isAudioAttachment() || part.isVideoAttachment()
-      }
-    }
-
-  if (displayableContent.isEmpty()) return
-
-  val messageText = chatMessagePlainText(displayableContent)
-  val messageSpeech = speechState?.takeIf { it.messageId == message.id }
-  val canListen = role == "assistant" && messageText.isNotBlank() && onToggleListen != null
-  val toggleListen: (() -> Unit)? =
-    if (canListen) {
-      { checkNotNull(onToggleListen).invoke(message.id, messageText) }
-    } else {
-      null
-    }
-  ChatMessageActionHost(
-    text = messageText,
-    onReply = onReplyMessage,
-    showSessionActions = role == "user" && message.entryId != null && sessionActionsEnabled,
-    onRewind = message.entryId?.let { entryId -> { onRewindMessage(entryId) } },
-    onFork = message.entryId?.let { entryId -> { onForkMessage(entryId) } },
-    listenActive = messageSpeech != null,
-    onToggleListen = toggleListen,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
-      ChatMessageBody(
-        content = displayableContent,
-        textColor = mobileText,
-        imageResolverReady = imageResolverReady,
-        loadImageArtifact = loadImageArtifact,
-        inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
-        loadMediaArtifact = loadMediaArtifact,
-      )
-      ChatMessageLinkPreview(messageId = message.id, role = role, content = displayableContent)
-      messageSpeech?.let { speech ->
-        MessageSpeechIndicator(
-          phase = speech.phase,
-          onStop = { checkNotNull(onToggleListen).invoke(message.id, messageText) },
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun MessageSpeechIndicator(
-  phase: MessageSpeechPhase,
-  onStop: () -> Unit,
-) {
-  Surface(
-    onClick = onStop,
-    shape = RoundedCornerShape(999.dp),
-    color = mobileAccentSoft,
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Icon(
-        imageVector =
-          if (phase == MessageSpeechPhase.Preparing) {
-            Icons.Default.HourglassEmpty
-          } else {
-            Icons.AutoMirrored.Filled.VolumeUp
-          },
-        contentDescription = null,
-        modifier = Modifier.size(14.dp),
-        tint = mobileTextSecondary,
-      )
-      Text(
-        text = if (phase == MessageSpeechPhase.Preparing) nativeString("Preparing audio…") else nativeString("Speaking…"),
-        style = mobileCaption1,
-        color = mobileTextSecondary,
-      )
-    }
-  }
-}
 
 @Composable
 private fun ChatBubbleContainer(
@@ -230,52 +115,6 @@ private fun ChatBubbleContainer(
           color = style.roleColor,
         )
         content()
-      }
-    }
-  }
-}
-
-@Composable
-private fun ChatMessageBody(
-  content: List<ChatMessageContent>,
-  textColor: Color,
-  imageResolverReady: Boolean,
-  loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
-  inlineMediaPlaybackBlocked: Boolean,
-  loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
-) {
-  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    for (part in content) {
-      when {
-        part.type == "text" -> {
-          val text = part.text ?: continue
-          ChatMarkdown(text = text, textColor = textColor)
-        }
-        part.isAudioAttachment() && part.hasPlayableMediaArtifact() ->
-          ChatAudioPlayerCard(
-            content = part,
-            playbackBlocked = inlineMediaPlaybackBlocked,
-            loadMedia = loadMediaArtifact,
-          )
-        part.isVideoAttachment() && part.hasPlayableMediaArtifact() ->
-          ChatVideoPlayerCard(
-            content = part,
-            playbackBlocked = inlineMediaPlaybackBlocked,
-            loadMedia = loadMediaArtifact,
-          )
-        part.isAudioAttachment() || part.isVideoAttachment() -> ChatMediaAttachmentLabel(content = part)
-        part.type == "image" && !part.base64.isNullOrBlank() ->
-          ChatBase64Image(base64 = part.base64, mimeType = part.mimeType)
-        part.type == "image" && !part.artifactId.isNullOrBlank() ->
-          ChatManagedImage(
-            artifactId = part.artifactId,
-            label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
-            resolverReady = imageResolverReady,
-            loadImage = loadImageArtifact,
-          )
-        else -> {
-          Text(part.fileName ?: nativeString("Attachment"), style = mobileCaption1, color = mobileTextSecondary)
-        }
       }
     }
   }
@@ -423,7 +262,7 @@ fun ChatTypingIndicatorBubble(
   val tokens = outputTokens?.let { localizedChatOutputTokens(it) }
   ChatBubbleContainer(
     style = bubbleStyle("assistant"),
-    roleLabel = roleLabel("assistant"),
+    roleLabel = nativeString("OpenClaw"),
   ) {
     Row(
       modifier = Modifier.clearAndSetSemantics { contentDescription = nativeString("Working") },
@@ -441,50 +280,6 @@ fun ChatTypingIndicatorBubble(
           Text(it, style = mobileCallout, color = mobileTextSecondary)
         }
         phrase?.let { Text(nativeStringResource("· \$phrase", it), style = mobileCallout, color = mobileTextSecondary) }
-      }
-    }
-  }
-}
-
-/** Tool progress bubble resolved through Android's tool display registry. */
-@Composable
-fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
-  val context = LocalContext.current
-  val displays =
-    remember(toolCalls, context) {
-      toolCalls.map { ToolDisplayRegistry.resolve(context, it.name, it.args) }
-    }
-
-  ChatBubbleContainer(
-    style = bubbleStyle("assistant"),
-    roleLabel = "Tools",
-  ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(nativeString("Running tools..."), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
-      for (display in displays.take(6)) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          Text(
-            nativeString("\${display.emoji} \${display.label}", display.emoji, display.label),
-            style = mobileCallout,
-            color = mobileTextSecondary,
-            fontFamily = FontFamily.Monospace,
-          )
-          display.detailLine?.let { detail ->
-            Text(
-              detail,
-              style = mobileCaption1,
-              color = mobileTextSecondary,
-              fontFamily = FontFamily.Monospace,
-            )
-          }
-        }
-      }
-      if (toolCalls.size > 6) {
-        Text(
-          text = nativeString("... +\${toolCalls.size - 6} more", toolCalls.size - 6),
-          style = mobileCaption1,
-          color = mobileTextSecondary,
-        )
       }
     }
   }
@@ -577,17 +372,6 @@ private fun ChatOutboxAction(
   }
 }
 
-/** Live assistant stream bubble shown before the final message is committed. */
-@Composable
-fun ChatStreamingAssistantBubble(text: String) {
-  ChatBubbleContainer(
-    style = bubbleStyle("assistant").copy(borderColor = mobileAccent),
-    roleLabel = "OpenClaw · Live",
-  ) {
-    ChatMarkdown(text = text, textColor = mobileText, isStreaming = true)
-  }
-}
-
 @Composable
 private fun bubbleStyle(role: String): ChatBubbleStyle =
   when (role) {
@@ -599,14 +383,6 @@ private fun bubbleStyle(role: String): ChatBubbleStyle =
         roleColor = mobileAccent,
       )
 
-    "system" ->
-      ChatBubbleStyle(
-        alignEnd = false,
-        containerColor = mobileWarningSoft,
-        borderColor = mobileWarning.copy(alpha = 0.45f),
-        roleColor = mobileWarning,
-      )
-
     else ->
       ChatBubbleStyle(
         alignEnd = false,
@@ -614,13 +390,6 @@ private fun bubbleStyle(role: String): ChatBubbleStyle =
         borderColor = mobileBorderStrong,
         roleColor = mobileTextSecondary,
       )
-  }
-
-private fun roleLabel(role: String): String =
-  when (role) {
-    "user" -> nativeString("You")
-    "system" -> nativeString("System")
-    else -> nativeString("OpenClaw")
   }
 
 @Composable

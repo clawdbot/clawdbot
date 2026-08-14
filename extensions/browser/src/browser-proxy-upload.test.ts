@@ -126,6 +126,9 @@ describe("browser proxy upload transport", () => {
       uploadDir: nodeUploadDir,
     });
     const stagedPaths = (staged.body as { paths: string[] }).paths;
+    const canonicalStagedPaths = await Promise.all(
+      stagedPaths.map((filePath) => fs.realpath(filePath)),
+    );
 
     expect(stagedPaths).toHaveLength(1);
     expect(stagedPaths[0]?.startsWith(`${nodeUploadDir}${path.sep}`)).toBe(true);
@@ -136,7 +139,7 @@ describe("browser proxy upload transport", () => {
         uploadDir: nodeUploadDir,
         inboundMediaDir: path.join(nodeRoot, "inbound"),
       }),
-    ).resolves.toEqual({ ok: true, paths: stagedPaths });
+    ).resolves.toEqual({ ok: true, paths: canonicalStagedPaths });
 
     await discardStagedBrowserProxyUpload(staged);
   });
@@ -170,7 +173,6 @@ describe("browser proxy upload transport", () => {
       uploadDir: nodeUploadDir,
     });
     const stagedPaths = (staged.body as { paths: string[] }).paths;
-
     await expect(fs.stat(stagedPaths[0] ?? "")).resolves.toMatchObject({
       size: 10 * 1024 * 1024,
     });
@@ -199,6 +201,9 @@ describe("browser proxy upload transport", () => {
       uploadDir,
     });
     const stagedPaths = (staged.body as { paths: string[] }).paths;
+    const canonicalStagedPaths = await Promise.all(
+      stagedPaths.map((filePath) => fs.realpath(filePath)),
+    );
 
     expect(stagedPaths).toHaveLength(2);
     expect(stagedPaths.map((filePath) => path.basename(filePath))).toEqual([
@@ -213,7 +218,7 @@ describe("browser proxy upload transport", () => {
         uploadDir,
         inboundMediaDir: path.join(root, "inbound"),
       }),
-    ).resolves.toEqual({ ok: true, paths: stagedPaths });
+    ).resolves.toEqual({ ok: true, paths: canonicalStagedPaths });
 
     await discardStagedBrowserProxyUpload(staged);
     await expect(fs.stat(staged.directory ?? "")).rejects.toHaveProperty("code", "ENOENT");

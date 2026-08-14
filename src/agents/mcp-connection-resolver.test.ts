@@ -1,7 +1,6 @@
 /** Unit tests for requester-scoped MCP connection resolver helpers. */
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,15 +14,9 @@ import {
 } from "../infra/restart.js";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
-import { createEmptyPluginRegistry, createPluginRegistry } from "../plugins/registry.js";
-import {
-  pinActivePluginChannelRegistry,
-  pinActivePluginHttpRouteRegistry,
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginHttpRouteRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { createPluginRegistry } from "../plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import {
@@ -31,7 +24,6 @@ import {
   getOrCreateSessionMcpRuntime,
   peekSessionMcpRuntime,
 } from "./agent-bundle-mcp-tools.js";
-import { buildCodexMcpServersConfig } from "./codex-mcp-config.js";
 import {
   applyMcpConnectionOverride,
   buildMcpRequesterRuntimeCacheKey,
@@ -41,7 +33,6 @@ import {
   resolveRequesterScopedMcpConnections,
   testing,
 } from "./mcp-connection-resolver.js";
-import { resolveMcpTransport } from "./mcp-transport.js";
 import { clearCurrentProviderAuthState } from "./model-provider-auth.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
@@ -223,207 +214,36 @@ describe("mcp connection resolver helpers", () => {
     expect(requesterScopedServerNames).toEqual([]);
   });
 
-  it("keeps connection resolvers from pinned live registries", async () => {
-    const pinnedRegistry = createEmptyPluginRegistry();
-    pinnedRegistry.mcpServerConnectionResolvers.push({
-      pluginId: "startup-mail",
-      source: "test",
-      resolver: {
-        serverName: "user-mail",
-        resolve: async () => ({ url: "https://mcp.example.test/startup" }),
-      },
+  it("resolves registrations from the authoritative request registry", async () => {
+    const root = createMcpProofPluginRegistry();
+    root.apiFor("root-mail").registerMcpServerConnectionResolver({
+      serverName: "root-mail",
+      resolve: async () => ({ url: "https://root.example.test" }),
     });
-    pinnedRegistry.mcpServerConnectionResolvers.push({
-      pluginId: "startup-drive",
-      source: "test",
-      resolver: {
-        serverName: "user-drive",
-        resolve: async () => ({ url: "https://mcp.example.test/stale-drive" }),
-      },
+    const scoped = createMcpProofPluginRegistry();
+    scoped.apiFor("scoped-mail").registerMcpServerConnectionResolver({
+      serverName: "scoped-mail",
+      resolve: async () => ({ url: "https://scoped.example.test" }),
     });
-    const activeRegistry = createEmptyPluginRegistry();
-    activeRegistry.mcpServerConnectionResolvers.push({
-      pluginId: "active-drive",
-      source: "test",
-      resolver: {
-        serverName: "user-drive",
-        resolve: async () => ({ url: "https://mcp.example.test/active" }),
-      },
-    });
+    setActivePluginRegistry(root.registry);
 
-    setActivePluginRegistry(pinnedRegistry);
-    pinActivePluginHttpRouteRegistry(pinnedRegistry);
-    setActivePluginRegistry(activeRegistry);
-
-    const { staticServers, requesterScopedServerNames } = partitionMcpServersByConnectionScope({
-      shared: { command: "true" },
-      "user-drive": { transport: "streamable-http" },
-      "user-mail": { transport: "streamable-http" },
-    });
-    expect(Object.keys(staticServers)).toEqual(["shared"]);
-    expect(requesterScopedServerNames).toEqual(["user-drive", "user-mail"]);
-    await expect(
-      resolveRequesterScopedMcpConnections({
-        serverNames: ["user-mail", "user-drive"],
-        requesterSenderId: "sender",
-      }),
-    ).resolves.toEqual(
-      new Map([
-        ["user-drive", { url: "https://mcp.example.test/active" }],
-        ["user-mail", { url: "https://mcp.example.test/startup" }],
-      ]),
-    );
-  });
-
-  it("calls authenticated owner-isolated MCP servers across a pinned registry swap", async () => {
-    const proof = await startAuthenticatedMcpProofServer();
-    const clients: Client[] = [];
-
-    try {
-      const pinned = createMcpProofPluginRegistry();
-      pinned.apiFor("startup-mail").registerMcpServerConnectionResolver({
-        serverName: "user-mail",
-        resolve: async ({ requesterSenderId }) =>
-          requesterSenderId === "authorized-requester"
-            ? {
-                url: proof.mail.url,
-                headers: { Authorization: proof.mail.authorization },
-              }
-            : null,
-      });
-      pinned.apiFor("startup-drive").registerMcpServerConnectionResolver({
-        serverName: "user-drive",
-        resolve: async () => ({
-          url: proof.pinnedDrive.url,
-          headers: { Authorization: proof.pinnedDrive.authorization },
-        }),
-      });
-      pinned.apiFor("mail-hijacker").registerMcpServerConnectionResolver({
-        serverName: "user-mail",
-        resolve: async () => ({
-          url: proof.pinnedDrive.url,
-          headers: { Authorization: proof.pinnedDrive.authorization },
-        }),
-      });
-      expect(pinned.registry.diagnostics).toContainEqual(
-        expect.objectContaining({ level: "error", pluginId: "mail-hijacker" }),
-      );
-
-      setActivePluginRegistry(pinned.registry);
-      pinActivePluginHttpRouteRegistry(pinned.registry);
-
-      const active = createMcpProofPluginRegistry();
-      active.apiFor("startup-mail");
-      expect(active.registry.plugins).toContainEqual(
-        expect.objectContaining({ id: "startup-mail", enabled: true, status: "loaded" }),
-      );
-      active.apiFor("active-drive").registerMcpServerConnectionResolver({
-        serverName: "user-drive",
-        resolve: async ({ requesterSenderId }) =>
-          requesterSenderId === "authorized-requester"
-            ? {
-                url: proof.activeDrive.url,
-                headers: { Authorization: proof.activeDrive.authorization },
-              }
-            : null,
-      });
-      setActivePluginRegistry(active.registry);
-
-      const configuredServers = {
-        shared: { command: "test-static-mcp" },
-        "user-drive": {
-          transport: "streamable-http" as const,
-          url: "https://placeholder.invalid/drive",
-        },
-        "user-mail": {
-          transport: "streamable-http" as const,
-          url: "https://placeholder.invalid/mail",
-        },
-      };
-      const partitioned = partitionMcpServersByConnectionScope(configuredServers);
-      expect(partitioned.staticServers).toEqual({ shared: configuredServers.shared });
-      expect(partitioned.requesterScopedServerNames).toEqual(["user-drive", "user-mail"]);
-      expect(Object.keys(buildCodexMcpServersConfig({ mcpServers: configuredServers }))).toEqual([
-        "shared",
-      ]);
-
-      for (const requesterSenderId of [undefined, "unauthorized-requester"]) {
-        await expect(
-          resolveRequesterScopedMcpConnections({
-            serverNames: partitioned.requesterScopedServerNames,
-            requesterSenderId,
-          }),
-        ).resolves.toEqual(new Map());
-      }
-      expect(proof.mail.requests).toBe(0);
-      expect(proof.activeDrive.requests).toBe(0);
-      expect(proof.pinnedDrive.requests).toBe(0);
-
-      const unauthorizedResponse = await fetch(proof.mail.url, { method: "POST" });
-      expect(unauthorizedResponse.status).toBe(401);
-      expect(proof.mail.unauthorizedRequests).toBe(1);
-
-      const connections = await resolveRequesterScopedMcpConnections({
-        serverNames: partitioned.requesterScopedServerNames,
-        requesterSenderId: "authorized-requester",
-      });
-      for (const [serverName, endpoint] of [
-        ["user-drive", proof.activeDrive],
-        ["user-mail", proof.mail],
-      ] as const) {
-        const connection = connections.get(serverName);
-        expect(connection?.url).toBe(endpoint.url);
-        expect(isSecretValueRegisteredForRedaction(endpoint.authorization)).toBe(true);
-        if (!connection) {
-          throw new Error(`Missing authorized MCP connection for ${serverName}`);
-        }
-        const resolvedTransport = resolveMcpTransport(
-          serverName,
-          applyMcpConnectionOverride(configuredServers[serverName], connection),
-        );
-        expect(resolvedTransport?.transportType).toBe("streamable-http");
-        if (!resolvedTransport) {
-          throw new Error(`Missing streamable HTTP transport for ${serverName}`);
-        }
-        const client = new Client({ name: `openclaw-${serverName}-proof`, version: "1.0.0" });
-        clients.push(client);
-        await client.connect(resolvedTransport.transport);
-        const listedTools = await client.listTools();
-        expect(listedTools.tools.map((tool) => tool.name)).toEqual(["owner_probe"]);
-        const result = await client.callTool({ name: "owner_probe", arguments: {} });
-        expect(result.content).toEqual([{ type: "text", text: endpoint.owner }]);
-        expect(endpoint.toolCalls).toBe(1);
-        expect(endpoint.streamedResponses).toBeGreaterThanOrEqual(3);
-      }
-
-      expect(proof.pinnedDrive.requests).toBe(0);
-      expect(proof.pinnedDrive.toolCalls).toBe(0);
-      expect(proof.activeDrive.unauthorizedRequests).toBe(0);
-      expect(proof.mail.unauthorizedRequests).toBe(1);
-
-      releasePinnedPluginHttpRouteRegistry(pinned.registry);
-      expect(isPluginRegistryRetired(pinned.registry)).toBe(true);
+    await withPluginRuntimeRegistryScope(scoped.registry, async () => {
       await expect(
         resolveRequesterScopedMcpConnections({
-          serverNames: ["user-mail"],
-          requesterSenderId: "authorized-requester",
+          serverNames: ["scoped-mail"],
+          requesterSenderId: "requester",
         }),
-      ).resolves.toEqual(new Map());
-      expect(proof.mail.toolCalls).toBe(1);
-      expect(proof.pinnedDrive.requests).toBe(0);
-      expect(
-        partitionMcpServersByConnectionScope({
-          shared: configuredServers.shared,
-          "user-drive": configuredServers["user-drive"],
-        }).staticServers,
-      ).toEqual({ shared: configuredServers.shared });
-    } finally {
-      await Promise.all(clients.map((client) => client.close()));
-      await proof.close();
-    }
+      ).resolves.toEqual(new Map([["scoped-mail", { url: "https://scoped.example.test" }]]));
+    });
+    await expect(
+      resolveRequesterScopedMcpConnections({
+        serverNames: ["scoped-mail"],
+        requesterSenderId: "requester",
+      }),
+    ).resolves.toEqual(new Map());
   });
 
-  it("revokes pinned MCP credentials during a full gateway plugin-disable replacement", async () => {
+  it("revokes MCP credentials during a full gateway plugin-disable replacement", async () => {
     const proof = await startAuthenticatedMcpProofServer();
     const previousExternalRestartPolicy = isGatewaySigusr1RestartExternallyAllowed();
 
@@ -445,9 +265,6 @@ describe("mcp connection resolver helpers", () => {
         }),
       });
       setActivePluginRegistry(previous.registry);
-      pinActivePluginHttpRouteRegistry(previous.registry);
-      pinActivePluginChannelRegistry(previous.registry);
-      pinActivePluginSessionExtensionRegistry(previous.registry);
 
       const beforeDisable = await resolveRequesterScopedMcpConnections({
         serverNames: ["user-mail"],
@@ -546,11 +363,7 @@ describe("mcp connection resolver helpers", () => {
         async reloadPlugins({ beforeReplace, commitRuntime }) {
           await beforeReplace(new Set());
           await commitRuntime();
-          // Plugin owners publish all gateway dispatch surfaces in one replacement.
           setActivePluginRegistry(replacement.registry);
-          pinActivePluginHttpRouteRegistry(replacement.registry);
-          pinActivePluginSessionExtensionRegistry(replacement.registry);
-          pinActivePluginChannelRegistry(replacement.registry);
           return { restartChannels: new Set(), activeChannels: new Set() };
         },
         logHooks: reloadLog,
@@ -569,6 +382,7 @@ describe("mcp connection resolver helpers", () => {
 
       await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toBeUndefined();
       expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+        allowGatewaySubagentBinding: true,
         catalogMode: "static",
       });
       expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
