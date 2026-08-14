@@ -66,6 +66,7 @@ import {
 } from "../session-utils.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
+import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
 import {
@@ -80,8 +81,13 @@ import {
   loadSessionEntriesForTarget,
   requireSessionKey,
 } from "./sessions-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const projectContextWorkerPlacement = (
+  context: GatewayRequestContext,
+  record: WorkerSessionPlacementRecord,
+) => projectWorkerSessionPlacement(record, context.workerPlacementDiskSpaceReader?.read(record));
 
 export const sessionReadHandlers: GatewayRequestHandlers = {
   "sessions.search": async ({ params, respond, context, client }) => {
@@ -408,7 +414,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                     : {}),
                   hasActiveRun: activeRunState.active,
                   ...(placementRecord
-                    ? { placement: projectWorkerSessionPlacement(placementRecord) }
+                    ? { placement: projectContextWorkerPlacement(context, placementRecord) }
                     : {}),
                   ...(activeRunState.runIds.length > 0
                     ? { activeRunIds: activeRunState.runIds }
@@ -630,10 +636,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const placement = row.sessionId
       ? context.workerSessionPlacementService?.getMany([row.sessionId]).get(row.sessionId)
       : undefined;
+    const projectedPlacement = placement
+      ? projectContextWorkerPlacement(context, placement)
+      : undefined;
     respond(
       true,
       {
-        session: placement ? { ...row, placement: projectWorkerSessionPlacement(placement) } : row,
+        session: projectedPlacement ? { ...row, placement: projectedPlacement } : row,
       },
       undefined,
     );

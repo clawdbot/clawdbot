@@ -123,7 +123,6 @@ export async function writeConfigFileFromContext(
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
   let nextConfig = cfg;
-  let persistCandidate: unknown;
   const snapshotRead = options.baseSnapshot
     ? {
         snapshot: options.baseSnapshot,
@@ -281,11 +280,12 @@ export async function writeConfigFileFromContext(
   const cronOwnerRefusal = persistOwnership
     ? await prepareCronOwnerWriteRefusal({
         storePath: resolveCronJobsStorePathFromConfig(nextConfig, deps.env),
+        ...(retainedFleetOwner ? { provenOwnerAgentId: retainedFleetOwner } : {}),
         env: deps.env,
       })
     : undefined;
 
-  persistCandidate = nextConfig;
+  let persistCandidate: unknown = nextConfig;
   let envRefMap: Map<string, string> | null = null;
   const changedPaths = new Set<string>();
   collectChangedPaths(snapshot.config, nextConfig, "", changedPaths);

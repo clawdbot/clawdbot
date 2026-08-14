@@ -50,7 +50,6 @@ import {
   GatewayClient,
   isGatewayConnectAssemblyError,
   type GatewayClientCloseInfo,
-  type GatewayClientOptions,
   type GatewayClientRequestOptions,
 } from "./client.js";
 import {
@@ -364,36 +363,10 @@ export function isGatewayExplicitAuthRequiredError(
   return value instanceof Error && value.name === "GatewayExplicitAuthRequiredError";
 }
 
-const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
-type GatewayRuntimeConfigLoader = () => OpenClawConfig | Promise<OpenClawConfig>;
 // Gateway dispatch owns only connection, auth, TLS, and shell-env resolution.
 // Loading the full runtime config here makes every RPC pay unrelated plugin/state startup costs.
 const defaultGetRuntimeConfig = async (): Promise<OpenClawConfig> =>
   getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
-const defaultGatewayCallDeps: {
-  createGatewayClient: typeof defaultCreateGatewayClient;
-  getRuntimeConfig: GatewayRuntimeConfigLoader;
-  loadOrCreateDeviceIdentity: typeof loadOrCreateDeviceIdentity;
-  resolveGatewayPort: typeof resolveGatewayPortFromPaths;
-  resolveConfigPath: typeof resolveConfigPathFromPaths;
-  resolveStateDir: typeof resolveStateDirFromPaths;
-  loadGatewayTlsRuntime: typeof loadGatewayTlsRuntime;
-  loadDeviceAuthToken: typeof loadDeviceAuthToken;
-  loadOriginDeviceToken: typeof loadOriginDeviceToken;
-} = {
-  createGatewayClient: defaultCreateGatewayClient,
-  getRuntimeConfig: defaultGetRuntimeConfig,
-  loadOrCreateDeviceIdentity,
-  resolveGatewayPort: resolveGatewayPortFromPaths,
-  resolveConfigPath: resolveConfigPathFromPaths,
-  resolveStateDir: resolveStateDirFromPaths,
-  loadGatewayTlsRuntime,
-  loadDeviceAuthToken,
-  loadOriginDeviceToken,
-};
-const gatewayCallDeps = {
-  ...defaultGatewayCallDeps,
-};
 
 async function stopGatewayClient(client: GatewayClient): Promise<void> {
   try {
@@ -417,51 +390,23 @@ function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string |
 }
 
 async function loadGatewayConfig(): Promise<OpenClawConfig> {
-  const loadConfigFn =
-    typeof gatewayCallDeps.getRuntimeConfig === "function"
-      ? gatewayCallDeps.getRuntimeConfig
-      : typeof defaultGatewayCallDeps.getRuntimeConfig === "function"
-        ? defaultGatewayCallDeps.getRuntimeConfig
-        : defaultGetRuntimeConfig;
-  return await loadConfigFn();
+  return await defaultGetRuntimeConfig();
 }
 
 function loadGatewayConfigForConnectionDetails(): OpenClawConfig {
-  if (
-    gatewayCallDeps.getRuntimeConfig !== defaultGetRuntimeConfig &&
-    typeof gatewayCallDeps.getRuntimeConfig === "function"
-  ) {
-    const config = gatewayCallDeps.getRuntimeConfig();
-    if (config && typeof (config as Promise<OpenClawConfig>).then === "function") {
-      throw new Error("async gateway config loader is not supported for connection details");
-    }
-    return config as OpenClawConfig;
-  }
   return readGatewayDispatchConfig();
 }
 
 function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
-  const resolveStateDirFn =
-    typeof gatewayCallDeps.resolveStateDir === "function"
-      ? gatewayCallDeps.resolveStateDir
-      : resolveStateDirFromPaths;
-  return resolveStateDirFn(env);
+  return resolveStateDirFromPaths(env);
 }
 
 function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
-  const resolveConfigPathFn =
-    typeof gatewayCallDeps.resolveConfigPath === "function"
-      ? gatewayCallDeps.resolveConfigPath
-      : resolveConfigPathFromPaths;
-  return resolveConfigPathFn(env, resolveGatewayStateDir(env));
+  return resolveConfigPathFromPaths(env, resolveGatewayStateDir(env));
 }
 
 function resolveGatewayPortValue(config?: OpenClawConfig, env?: NodeJS.ProcessEnv): number {
-  const resolveGatewayPortFn =
-    typeof gatewayCallDeps.resolveGatewayPort === "function"
-      ? gatewayCallDeps.resolveGatewayPort
-      : resolveGatewayPortFromPaths;
-  return resolveGatewayPortFn(config, env);
+  return resolveGatewayPortFromPaths(config, env);
 }
 
 export function buildGatewayConnectionDetails(
@@ -480,40 +425,6 @@ export function buildGatewayConnectionDetails(
     resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
   });
 }
-
-export const testing = {
-  setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
-    gatewayCallDeps.createGatewayClient =
-      deps?.createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
-    gatewayCallDeps.getRuntimeConfig =
-      deps?.getRuntimeConfig ?? defaultGatewayCallDeps.getRuntimeConfig;
-    gatewayCallDeps.loadOrCreateDeviceIdentity =
-      deps?.loadOrCreateDeviceIdentity ?? defaultGatewayCallDeps.loadOrCreateDeviceIdentity;
-    gatewayCallDeps.resolveGatewayPort =
-      deps?.resolveGatewayPort ?? defaultGatewayCallDeps.resolveGatewayPort;
-    gatewayCallDeps.resolveConfigPath =
-      deps?.resolveConfigPath ?? defaultGatewayCallDeps.resolveConfigPath;
-    gatewayCallDeps.resolveStateDir =
-      deps?.resolveStateDir ?? defaultGatewayCallDeps.resolveStateDir;
-    gatewayCallDeps.loadGatewayTlsRuntime =
-      deps?.loadGatewayTlsRuntime ?? defaultGatewayCallDeps.loadGatewayTlsRuntime;
-    gatewayCallDeps.loadDeviceAuthToken =
-      deps?.loadDeviceAuthToken ?? defaultGatewayCallDeps.loadDeviceAuthToken;
-    gatewayCallDeps.loadOriginDeviceToken =
-      deps?.loadOriginDeviceToken ?? defaultGatewayCallDeps.loadOriginDeviceToken;
-  },
-  resetDepsForTests(): void {
-    gatewayCallDeps.createGatewayClient = defaultGatewayCallDeps.createGatewayClient;
-    gatewayCallDeps.getRuntimeConfig = defaultGatewayCallDeps.getRuntimeConfig;
-    gatewayCallDeps.loadOrCreateDeviceIdentity = defaultGatewayCallDeps.loadOrCreateDeviceIdentity;
-    gatewayCallDeps.resolveGatewayPort = defaultGatewayCallDeps.resolveGatewayPort;
-    gatewayCallDeps.resolveConfigPath = defaultGatewayCallDeps.resolveConfigPath;
-    gatewayCallDeps.resolveStateDir = defaultGatewayCallDeps.resolveStateDir;
-    gatewayCallDeps.loadGatewayTlsRuntime = defaultGatewayCallDeps.loadGatewayTlsRuntime;
-    gatewayCallDeps.loadDeviceAuthToken = defaultGatewayCallDeps.loadDeviceAuthToken;
-    gatewayCallDeps.loadOriginDeviceToken = defaultGatewayCallDeps.loadOriginDeviceToken;
-  },
-};
 
 function isLoopbackGatewayUrl(rawUrl: string): boolean {
   try {
@@ -557,7 +468,7 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
 
 function resolveDeviceIdentityForGatewayCall(): DeviceIdentity | null {
   try {
-    return gatewayCallDeps.loadOrCreateDeviceIdentity();
+    return loadOrCreateDeviceIdentity();
   } catch {
     // Read-only or restricted environments should still be able to call the
     // gateway with token/password auth without crashing before the RPC.
@@ -574,14 +485,14 @@ function loadStoredOperatorDeviceAuthToken(
   }
   try {
     if (deviceAuthScope) {
-      return gatewayCallDeps.loadOriginDeviceToken({
+      return loadOriginDeviceToken({
         gatewayScope: deviceAuthScope,
         deviceId: deviceIdentity.deviceId,
         role: "operator",
         env: process.env,
       });
     }
-    return gatewayCallDeps.loadDeviceAuthToken({
+    return loadDeviceAuthToken({
       deviceId: deviceIdentity.deviceId,
       role: "operator",
       env: process.env,
@@ -949,7 +860,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     };
     opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-    const client: GatewayClient | undefined = gatewayCallDeps.createGatewayClient({
+    const client: GatewayClient | undefined = new GatewayClient({
       url,
       token,
       password,
@@ -1126,7 +1037,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     resolveTlsFingerprint: async (params) =>
       await resolveGatewayConnectionTlsFingerprint({
         ...params,
-        loadGatewayTlsRuntime: gatewayCallDeps.loadGatewayTlsRuntime,
+        loadGatewayTlsRuntime,
       }),
   });
   ensureRemoteModeUrlConfigured({
@@ -1260,7 +1171,7 @@ export async function buildGatewayProbeConnectionDetails(
     resolveTlsFingerprint: async (params) =>
       await resolveGatewayConnectionTlsFingerprint({
         ...params,
-        loadGatewayTlsRuntime: gatewayCallDeps.loadGatewayTlsRuntime,
+        loadGatewayTlsRuntime,
       }),
   });
   ensureRemoteModeUrlConfigured({

@@ -190,17 +190,19 @@ describe("cron service ops regressions", () => {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
+    const job = createIsolatedRegressionJob({
+      id: "missing-state-startup",
+      name: "missing-state-startup",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "noop" },
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
     state.store = {
       version: 1,
       jobs: [
         {
-          ...createIsolatedRegressionJob({
-            id: "missing-state-startup",
-            name: "missing-state-startup",
-            scheduledAt,
-            schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-            payload: { kind: "agentTurn", message: "noop" },
-          }),
+          ...job,
           state: undefined as never,
         },
       ],

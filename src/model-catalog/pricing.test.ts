@@ -232,6 +232,40 @@ describe("hosted model pricing", () => {
     expect(() => resolveModelCostConfigFingerprint(config)).not.toThrow();
   });
 
+  it("keeps optional pricing non-throwing without an ambient agent owner", () => {
+    const config = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, other: {} },
+      },
+      models: {
+        providers: {
+          fixture: {
+            baseUrl: "https://fixture.invalid",
+            models: [
+              {
+                id: "priced",
+                name: "Priced",
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveModelCostConfig({ config, provider: "fixture", model: "priced" })).toEqual({
+      input: 1,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+    expect(
+      resolveModelCostConfig({ config, provider: "fixture", model: "missing" }),
+    ).toBeUndefined();
+    expect(() => resolveModelCostConfigFingerprint(config)).not.toThrow();
+  });
+
   it("bounds fingerprints for multi-megabyte hosted pricing catalogs", () => {
     const pricing = Object.fromEntries(
       Array.from({ length: 40_000 }, (_, index) => [

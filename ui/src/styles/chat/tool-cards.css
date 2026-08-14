@@ -1032,9 +1032,6 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-}
-
-.chat-activity-group__icon {
   color: var(--muted);
 }
 
@@ -2134,7 +2131,7 @@ openclaw-tooltip.chat-tasks-status__preview {
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 560px) {
   .chat-tool-card__block-content {
     max-height: min(360px, 55vh);
   }

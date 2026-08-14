@@ -7,6 +7,7 @@ import {
   type PortalListResult,
   type PortalSummary,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -15,9 +16,17 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
-import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
+import {
+  callAgentToolGatewayRequest,
+  callInProcessGatewayTool,
+  type AgentToolGatewayRequestCaller,
+  type InProcessGatewayCaller,
+} from "./in-process-gateway.js";
 
 const PORTAL_ACTIONS = ["open", "list", "close"] as const;
+// Reading a portal's bearer URL is a write-scope capability: it is the same
+// credential action=open mints, so listing must ask for it explicitly.
+const PORTAL_URL_SCOPE = WRITE_SCOPE;
 
 const PortalToolSchema = Type.Object(
   {
@@ -39,6 +48,7 @@ const PortalToolOutputSchema = Type.Union([
 
 type PortalToolOptions = {
   callGateway?: InProcessGatewayCaller;
+  callGatewayRequest?: AgentToolGatewayRequestCaller;
 };
 
 function portalResult<T>(text: string, payload: T): AgentToolResult<T> {
@@ -48,6 +58,7 @@ function portalResult<T>(text: string, payload: T): AgentToolResult<T> {
 
 export function createPortalTool(options: PortalToolOptions = {}): AnyAgentTool {
   const callGateway = options.callGateway ?? callInProcessGatewayTool;
+  const callGatewayRequest = options.callGatewayRequest ?? callAgentToolGatewayRequest;
   return {
     label: "Portal",
     name: "portal",
@@ -59,7 +70,15 @@ export function createPortalTool(options: PortalToolOptions = {}): AnyAgentTool 
       const params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
       if (action === "list") {
-        const result = await callGateway<PortalListResult>("portal.list", {});
+        // portal.list redacts the bearer URL for read-scope callers. Least-privilege
+        // resolution would make every list call read-scope, hiding the URL from a
+        // caller that can mint the same portal through action=open; ask with the
+        // write authority this tool already requires so the listing stays usable.
+        const result = await callGatewayRequest<PortalListResult>({
+          method: "portal.list",
+          params: {},
+          scopes: [PORTAL_URL_SCOPE],
+        });
         return portalResult(
           `${result.portals.length} active portal${result.portals.length === 1 ? "" : "s"}. The operator can see them in the Control UI Portals page.`,
           result,

@@ -1432,6 +1432,13 @@ describe("gateway server chat", () => {
               }),
             ],
           ]);
+          const requirePreparedAuthStore = (agentId: string) => {
+            const authStore = preparedAuthStoreByAgentId.get(agentId);
+            if (!authStore) {
+              throw new Error(`expected prepared auth store for agent "${agentId}"`);
+            }
+            return authStore;
+          };
           const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
           const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
             await import("./server-methods/models-list-result.js");
@@ -1467,7 +1474,7 @@ describe("gateway server chat", () => {
               agentId,
               snapshot: catalogSnapshot,
               metadataSnapshot: pluginMetadataSnapshot,
-              preparedAuthStore: preparedAuthStoreByAgentId.get(agentId),
+              preparedAuthStore: requirePreparedAuthStore(agentId),
               ...(profileId ? { preferredProfileId: profileId } : {}),
               ...(profileId && (profileSource === "user" || legacyUserProfile)
                 ? { lockedProfileId: profileId }
@@ -1535,6 +1542,7 @@ describe("gateway server chat", () => {
             agentId: "work",
             snapshot: catalogSnapshot,
             metadataSnapshot: pluginMetadataSnapshot,
+            preparedAuthStore: requirePreparedAuthStore("work"),
             preferredProfileId: "openai:expired",
           }).evaluateEntry(subscriptionRoute, catalogSnapshot.routeVariants);
           expect(expiredPreferenceEvaluation).toMatchObject({
