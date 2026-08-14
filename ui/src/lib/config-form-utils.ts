@@ -9,7 +9,7 @@ export function serializeConfigForm(form: Record<string, unknown>): string {
   return `${JSON.stringify(form, null, 2).trimEnd()}\n`;
 }
 
-const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 type SanitizeResult = { omitted: true } | { omitted: false; value: unknown };
 
 const OMIT_VALUE: SanitizeResult = { omitted: true };

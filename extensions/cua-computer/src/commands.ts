@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  COMPUTER_USE_V2_ACTION_NAMES,
   parseComputerActParamsJSON,
   parseScreenSnapshotParamsJSON,
   type ComputerActParams,
@@ -29,6 +30,24 @@ import {
 } from "./frame.js";
 
 const AVAILABILITY_POLL_MS = 5_000;
+const CUA_COORDINATE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(0, 15);
+const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
+type CuaComputerActParams = {
+  action: ComputerActParams["action"];
+  displayFrameId?: string;
+  x?: number;
+  y?: number;
+  fromX?: number;
+  fromY?: number;
+  text?: string;
+  keys?: string;
+  modifiers?: string;
+  scrollDirection?: "up" | "down" | "left" | "right";
+  scrollAmount?: number;
+  durationMs?: number;
+  screenIndex?: number;
+  refWidth?: number;
+};
 // Rastermill enforces inputPixels before resizing, so this must clear the native
 // capture, not the delivered frame. 8K (7680x4320 = ~33.2M) is a valid primary
 // display; budget above it so full-resolution snapshots reach the downscaler.
@@ -191,7 +210,7 @@ function createImageProcessor(env: NodeJS.ProcessEnv): ImageProcessor {
 
 function clickArgs(
   frame: CuaLastFrame,
-  params: ComputerActParams,
+  params: CuaComputerActParams,
   button: ClickButton,
   count: 1 | 2 | 3,
 ) {
@@ -212,7 +231,7 @@ function clickArgs(
 async function currentFrame(
   driver: CuaDriverSession,
   frameState: CuaFrameState,
-  params: ComputerActParams,
+  params: CuaComputerActParams,
   signal?: AbortSignal,
 ): Promise<CuaLastFrame> {
   const current = screenSize(await driver.getScreenSize(signal));
@@ -231,36 +250,40 @@ async function handleAct(
   params: ComputerActParams,
   signal?: AbortSignal,
 ): Promise<string> {
-  assertPrimaryDisplay(params.screenIndex);
+  if (!(CUA_WIRE_ACTION_NAMES as readonly string[]).includes(params.action)) {
+    throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${params.action}`);
+  }
+  const v1Params = params as CuaComputerActParams;
+  assertPrimaryDisplay(v1Params.screenIndex);
   // `wait` never reaches the wire: core sleeps locally and the Swift wire enum
   // has no wait case, so accepting it here would fork the computer.act contract.
   if (
-    params.action === "hold_key" ||
-    params.action === "left_mouse_down" ||
-    params.action === "left_mouse_up"
+    v1Params.action === "hold_key" ||
+    v1Params.action === "left_mouse_down" ||
+    v1Params.action === "left_mouse_up"
   ) {
     // Upstream has no desktop keyboard-down API, and its Linux mouse hold tools
     // are window-only, so these actions cannot preserve desktop-scope semantics.
-    throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${params.action}`);
+    throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${v1Params.action}`);
   }
 
   // Every action uses scope:"desktop", a global SendInput/XTest/wayland_desktop
   // injection that is inherently foreground and ignores delivery_mode (that
   // background-vs-foreground contract is window-targeted only). We deliberately
   // never send delivery_mode.
-  switch (params.action) {
+  switch (v1Params.action) {
     case "type": {
-      if (!params.text) {
+      if (!v1Params.text) {
         throw new Error("COMPUTER_INVALID_REQUEST: text is required for type");
       }
-      assertToolSuccess(await driver.typeText(params.text, signal), "type_text");
+      assertToolSuccess(await driver.typeText(v1Params.text, signal), "type_text");
       break;
     }
     case "key": {
       // press_key applies the modifier array on every backend: X11 via XTest,
       // and native Wayland by internally promoting a modifier chord to
       // hotkey_focused. No separate hotkey call is needed for chords.
-      const chord = parseKeyChord(params.keys);
+      const chord = parseKeyChord(v1Params.keys);
       assertToolSuccess(
         await driver.pressKey(
           {
@@ -274,10 +297,10 @@ async function handleAct(
       break;
     }
     case "scroll": {
-      if (!params.scrollDirection) {
+      if (!v1Params.scrollDirection) {
         throw new Error("COMPUTER_INVALID_REQUEST: scrollDirection is required for scroll");
       }
-      if (normalizeModifiers(params.modifiers).length > 0) {
+      if (normalizeModifiers(v1Params.modifiers).length > 0) {
         throw new Error(
           "COMPUTER_UNSUPPORTED_ACTION: modifier-held scroll is unsupported by cua-driver",
         );
@@ -286,20 +309,20 @@ async function handleAct(
       // frame-authorized like clicks. We deliberately do not synthesize a point
       // from get_cursor_position: that mixes cursor and capture coordinate
       // spaces across X11/Wayland/Windows and would scroll an unverified target.
-      const frame = await currentFrame(driver, frameState, params, signal);
-      const point = scalePoint(frame, params.x, params.y, params.action);
+      const frame = await currentFrame(driver, frameState, v1Params, signal);
+      const point = scalePoint(frame, v1Params.x, v1Params.y, v1Params.action);
       const direction = {
         up: ScrollDirection.Up,
         down: ScrollDirection.Down,
         left: ScrollDirection.Left,
         right: ScrollDirection.Right,
-      }[params.scrollDirection];
+      }[v1Params.scrollDirection];
       assertToolSuccess(
         await driver.scroll(
           {
             direction,
             // Schema guarantees a positive amount; cap at the driver's max of 50.
-            amount: BigInt(Math.min(50, params.scrollAmount ?? 3)),
+            amount: BigInt(Math.min(50, v1Params.scrollAmount ?? 3)),
             ...point,
           },
           signal,
@@ -309,49 +332,49 @@ async function handleAct(
       break;
     }
     default: {
-      const frame = await currentFrame(driver, frameState, params, signal);
-      switch (params.action) {
+      const frame = await currentFrame(driver, frameState, v1Params, signal);
+      switch (v1Params.action) {
         case "left_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Left, 1), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Left, 1), signal),
             "click",
           );
           break;
         case "right_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Right, 1), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Right, 1), signal),
             "click",
           );
           break;
         case "middle_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Middle, 1), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Middle, 1), signal),
             "click",
           );
           break;
         case "double_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Left, 2), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Left, 2), signal),
             "click",
           );
           break;
         case "triple_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Left, 3), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Left, 3), signal),
             "click",
           );
           break;
         case "mouse_move": {
-          const point = scalePoint(frame, params.x, params.y, params.action);
+          const point = scalePoint(frame, v1Params.x, v1Params.y, v1Params.action);
           assertToolSuccess(await driver.moveCursor(point, signal), "move_cursor");
           break;
         }
         case "left_click_drag": {
-          const from = scalePoint(frame, params.fromX, params.fromY, "drag start");
-          const to = scalePoint(frame, params.x, params.y, "drag end");
+          const from = scalePoint(frame, v1Params.fromX, v1Params.fromY, "drag start");
+          const to = scalePoint(frame, v1Params.x, v1Params.y, "drag end");
           // The typed desktop drag API has no modifier field. Refuse instead of
           // silently widening a model request into an unmodified drag.
-          if (normalizeModifiers(params.modifiers).length > 0) {
+          if (normalizeModifiers(v1Params.modifiers).length > 0) {
             throw new Error(
               "COMPUTER_UNSUPPORTED_ACTION: modifier-held drag is unsupported by cua-driver",
             );
@@ -365,9 +388,9 @@ async function handleAct(
                 toY: to.y,
                 // CUA caps desktop drag duration at 10 seconds; clamp rather than
                 // rejecting a valid computer.act request at the SDK boundary.
-                ...(params.durationMs === undefined
+                ...(v1Params.durationMs === undefined
                   ? {}
-                  : { durationMs: BigInt(Math.min(10_000, params.durationMs)) }),
+                  : { durationMs: BigInt(Math.min(10_000, v1Params.durationMs)) }),
               },
               signal,
             ),
@@ -413,6 +436,19 @@ export function createCuaComputerProvider(
   return {
     id: "cua-computer",
     label: "CUA Computer",
+    capabilities: () => ({
+      contractVersion: 2,
+      provider: {
+        id: "cua-computer",
+        label: "CUA Computer",
+        generation: "cua-computer-coordinate-v1",
+      },
+      actions: CUA_COORDINATE_ACTION_NAMES,
+      targets: ["screen"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    }),
     isAvailable,
     watchAvailability: (_context, onChange) => {
       let knownAvailable = isAvailable();

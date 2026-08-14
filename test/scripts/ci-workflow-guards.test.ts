@@ -2695,7 +2695,7 @@ NODE
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
-    expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
+    expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(3);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
   });
 
@@ -2741,6 +2741,7 @@ NODE
     const expectedHostedWindowsMatrix = [
       { check_name: "checks-windows-node-test-1", runtime: "node", task: "test-1" },
       { check_name: "checks-windows-node-test-2", runtime: "node", task: "test-2" },
+      { check_name: "checks-windows-node-test-3", runtime: "node", task: "test-3" },
     ];
     expect(
       JSON.parse(expectDefined(github.outputs.checks_windows_matrix, "GitHub Windows matrix"))
@@ -2752,6 +2753,7 @@ NODE
     ).toEqual(expectedHostedWindowsMatrix);
     expect(runStep.run).toContain("test-1)\n    pnpm test:windows:ci:1");
     expect(runStep.run).toContain("test-2)\n    pnpm test:windows:ci:2");
+    expect(runStep.run).toContain("test-3)\n    pnpm test:windows:ci:3");
   });
 
   it("installs the Android SDK platform used by Gradle", () => {
@@ -3009,7 +3011,6 @@ NODE
       "build-artifacts": "ubuntu-24.04",
       "check-additional-shard": "ubuntu-24.04",
       "check-docs": "ubuntu-24.04",
-      "check-lint-hosted-core-shard": "ubuntu-24.04",
       "check-shard": "ubuntu-24.04",
       "checks-fast-channel-contracts-shard": "ubuntu-24.04",
       "checks-fast-core": "ubuntu-24.04",
@@ -3035,7 +3036,6 @@ NODE
       ...expectedHostedRunners,
       android: "blacksmith-8vcpu-ubuntu-2404",
       "build-artifacts": "blacksmith-32vcpu-ubuntu-2404",
-      "check-lint-hosted-core-shard": "blacksmith-8vcpu-ubuntu-2404",
       "checks-ui-e2e": "blacksmith-8vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "sqlite-session-lifecycle": "blacksmith-8vcpu-ubuntu-2404",
@@ -3056,6 +3056,7 @@ NODE
     } as const;
 
     expect(configurableJobs).toEqual(Object.keys(expectedHostedRunners).toSorted());
+    expect(jobs["check-lint-hosted-core-shard"]?.["runs-on"]).toBe("ubuntu-24.04");
     for (const [jobName, hostedRunner] of Object.entries(expectedHostedRunners)) {
       const expression = jobs[jobName]?.["runs-on"];
       expect(expression, jobName).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
@@ -5566,15 +5567,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'node --import tsx scripts/run-oxlint-shards.mts "${lint_args[@]}"',
     );
     expect(hostedCoreLint.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
+    expect(hostedCoreLint["runs-on"]).toBe("ubuntu-24.04");
     expect(hostedCoreLint.strategy).toEqual({
       "fail-fast": false,
-      "max-parallel": 3,
-      matrix: { stripe: [1, 2, 3] },
+      "max-parallel": 5,
+      matrix: { stripe: [1, 2, 3, 4, 5] },
     });
     expect(
       hostedCoreLint.steps.find((step: WorkflowStep) => step.name === "Run hosted core lint stripe")
         .run,
-    ).toContain("--only=core --split-core --core-stripe=${{ matrix.stripe }}/3 --threads=1");
+    ).toContain("--only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1");
   });
 
   it("runs the suppression-baseline max-lines ratchet against the exact tested tree", () => {

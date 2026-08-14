@@ -14,6 +14,8 @@ import {
 } from "../../scripts/lib/changed-extensions.mts";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+  MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT,
+  TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT,
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
   listExtensionTestFilesForRoots,
@@ -37,7 +39,7 @@ import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mts");
 const posixIt = process.platform === "win32" ? it.skip : it;
-const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
+const MATRIX_TEST_PROCESS_FILE_LIMIT = MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT;
 
 type RunGroupParams = VitestBatchRunParams;
 
@@ -170,14 +172,26 @@ describe("scripts/test-extension.mts", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("bounds Matrix test files across balanced process lifetimes", () => {
-    const config = "test/vitest/vitest.extension-matrix.config.ts";
-    const roots = [bundledPluginRoot("matrix")];
+  it.each([
+    {
+      name: "Matrix",
+      config: "test/vitest/vitest.extension-matrix.config.ts",
+      root: "matrix",
+      limit: MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT,
+    },
+    {
+      name: "Telegram",
+      config: "test/vitest/vitest.extension-telegram.config.ts",
+      root: "telegram",
+      limit: TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT,
+    },
+  ])("bounds $name test files across balanced process lifetimes", ({ config, root, limit }) => {
+    const roots = [bundledPluginRoot(root)];
     const expectedFiles = listExtensionTestFilesForRoots(roots);
     const chunks = createExtensionTestProcessTargetChunks(config, roots);
 
-    expect(chunks).toHaveLength(expectedMatrixTestProcessCount());
-    expect(chunks.every((chunk) => chunk.length <= MATRIX_TEST_PROCESS_FILE_LIMIT)).toBe(true);
+    expect(chunks).toHaveLength(Math.max(1, Math.ceil(expectedFiles.length / limit)));
+    expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
     expect(Math.max(...chunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(
       Math.min(...chunks.map((chunk) => chunk.length)) + 1,
     );

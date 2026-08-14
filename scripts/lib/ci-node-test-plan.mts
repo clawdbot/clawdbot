@@ -167,13 +167,13 @@ const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
 // The group hints below are loaded-fleet CI walls. Three-way striping plus a
 // Blacksmith keeps the proven 200s/276s admission caps and 28-worker ceiling.
-// Standard 4-core GitHub runners use direct hosted wall hints below. The
-// 160-second wall budget is the hosted-hint equivalent of tightening the old
-// 120/166 admission caps to 80/110, leaving setup inside a ~3.5-minute lane.
+// Standard 4-core GitHub runners use direct hosted wall hints below. These
+// budgets are the hosted-hint equivalent of 60/85-second admission targets,
+// leaving setup inside a roughly 220-second lane.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 160;
-const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 160;
+const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 120;
+const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 124;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 210;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
@@ -374,11 +374,12 @@ const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
 ]);
 
 // Rounded medians from standard 4-core GitHub-hosted runs 31737316152,
-// 31742781948, 31749838728, and 31754493208. The last run exercised compact
-// bins; the earlier full-plan runs isolate the named groups. Exclude failed
-// samples and reject media-ui-3's 444s compact retry sample because its log
-// records a 300s no-output timeout; its three healthy samples are 52-63s.
-// Unmeasured groups use the scale above.
+// 31742781948, 31749838728, 31754493208, 31776290645, 31784022043, and
+// 31784883914. The first four runs established the table; the last three
+// refresh core-tooling-1 from 299s, 305s, and 311s healthy compact samples.
+// Exclude failed samples and reject media-ui-3's 444s compact retry sample
+// because its log records a 300s no-output timeout; its three healthy samples
+// are 52-63s. Unmeasured groups use the scale above.
 const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-auth", 50],
   ["agentic-agents-core-isolated", 23],
@@ -484,7 +485,7 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-runtime-media-ui-support", 101],
   ["core-runtime-secrets", 73],
   ["core-runtime-shared", 92],
-  ["core-tooling-1", 210],
+  ["core-tooling-1", 305],
   ["core-tooling-2", 181],
   ["core-tooling-3", 335],
   ["core-tooling-4", 183],

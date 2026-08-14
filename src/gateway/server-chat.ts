@@ -841,8 +841,8 @@ export function createAgentEventHandler({
           timeoutPhase: evt.data?.timeoutPhase,
           error: evt.data?.error,
         });
-        const terminalState =
-          CHAT_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminalOutcome)];
+        const terminalClassification = classifyAgentRunTerminalOutcome(terminalOutcome);
+        const terminalState = CHAT_STATE_BY_TERMINAL_CLASSIFICATION[terminalClassification];
         if (!(opts?.skipChatErrorFinal && terminalState === "error")) {
           emitChatTerminal(
             terminalSessionKey,
@@ -852,8 +852,13 @@ export function createAgentEventHandler({
             terminalState,
             terminalOutcome.error ?? evt.data?.error,
             terminalOutcome.stopReason,
-            readChatErrorKind(evt.data?.errorKind) ??
-              resolveChatErrorKindFromError(evt.data?.error),
+            // Timeout is a recorded classification, not event metadata: the
+            // lifecycle producer emits no errorKind, so without this the UI
+            // shows a generic "failed" while sessions.list says "timeout".
+            terminalClassification === "timeout"
+              ? "timeout"
+              : (readChatErrorKind(evt.data?.errorKind) ??
+                  resolveChatErrorKindFromError(evt.data?.error)),
             {
               agentId: terminalAgentId,
               controlUiVisible: isControlUiVisible,

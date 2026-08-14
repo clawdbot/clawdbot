@@ -64,10 +64,12 @@ type ProjectedDispatchParams = Parameters<
 >[0];
 
 const TEST_TOOL_AUTHORITY_FINGERPRINT = "test-tool-authority";
+const TEST_TOOL_AUTHORITY_ROUTE = { provider: "openai", model: "gpt-5.6-sol" } as const;
 const replyRunRegistry = {
   ...baseReplyRunRegistry,
   begin(...args: Parameters<typeof baseReplyRunRegistry.begin>) {
     const operation = baseReplyRunRegistry.begin(...args);
+    operation.bindToolAuthorityRoute(TEST_TOOL_AUTHORITY_ROUTE);
     operation.bindToolAuthorityFingerprint(TEST_TOOL_AUTHORITY_FINGERPRINT);
     return operation;
   },

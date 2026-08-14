@@ -6,7 +6,12 @@ import {
   findAgentEntryIndex,
   listAgentEntries,
 } from "../commands/agents.config.js";
-import { transformConfigFileWithRetry, withConfigMutationExclusive } from "../config/config.js";
+import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
+import {
+  ConfigMutationConflictError,
+  transformConfigFileWithRetry,
+  withConfigMutationExclusive,
+} from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -36,6 +41,7 @@ type CreateAgentResult =
       agentDir: string;
       model?: string;
       bootstrapPending: boolean;
+      configHash?: string;
       bindingResult?: ReturnType<typeof applyAgentBindings>;
     }
   | {
@@ -60,6 +66,10 @@ type CreateAgentParams = {
   entry?: CreateAgentEntry;
   /** Internal authorization for onboarding to materialize the reserved sole `main` agent. */
   bootstrapMain?: boolean;
+  /** Replace the load-time compatibility roster when onboarding creates the first real agent. */
+  bootstrapFirstAgent?: boolean;
+  /** Config revision that must still own first-agent creation under the write lock. */
+  expectedConfigHash?: string | null;
   workspace?: string;
   model?: string;
   emoji?: unknown;
@@ -85,6 +95,30 @@ function createError(
 /** True when raw user input contains a character that can survive agent-id normalization. */
 function hasValidRawAgentIdCharacters(value: string): boolean {
   return /[a-z0-9]/iu.test(value);
+}
+
+export function validateAgentIdInput(
+  rawId: string,
+  options: { allowBootstrapMain?: boolean; displayName?: string } = {},
+):
+  | { ok: true; agentId: string }
+  | { ok: false; reason: "invalid-name" | "reserved-id"; message: string; agentId?: string } {
+  const displayName = options.displayName ?? rawId;
+  if (!hasValidRawAgentIdCharacters(rawId)) {
+    return {
+      ok: false,
+      reason: "invalid-name",
+      message: `agent name "${displayName}" has no valid id characters`,
+    };
+  }
+  const agentId = normalizeAgentId(rawId);
+  if (
+    (agentId === RESERVED_BOOTSTRAP_AGENT_ID && options.allowBootstrapMain !== true) ||
+    isReservedSystemAgentId(agentId)
+  ) {
+    return { ok: false, reason: "reserved-id", message: `"${agentId}" is reserved`, agentId };
+  }
+  return { ok: true, agentId };
 }
 
 function isInjectedBootstrapMainEntry(entry: CreateAgentEntry | undefined): boolean {
@@ -120,17 +154,15 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     return createError("invalid-name", "agent name is required");
   }
   const rawId = params.entry?.id ?? rawName;
-  if (!hasValidRawAgentIdCharacters(rawId)) {
-    return createError("invalid-name", `agent name "${rawName}" has no valid id characters`);
+  const validation = validateAgentIdInput(rawId, {
+    allowBootstrapMain: params.bootstrapMain,
+    displayName: rawName,
+  });
+  if (!validation.ok) {
+    return createError(validation.reason, validation.message, validation.agentId);
   }
-  const agentId = normalizeAgentId(rawId);
+  const agentId = validation.agentId;
   const isBootstrapMain = agentId === RESERVED_BOOTSTRAP_AGENT_ID && params.bootstrapMain === true;
-  if (
-    (!isBootstrapMain && agentId === RESERVED_BOOTSTRAP_AGENT_ID) ||
-    isReservedSystemAgentId(agentId)
-  ) {
-    return createError("reserved-id", `"${agentId}" is reserved`, agentId);
-  }
 
   const safeName = sanitizeAgentIdentityLine(rawName);
   const model = normalizeOptionalString(params.model);
@@ -173,8 +205,27 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       const committed = await transformConfig<CreateAgentResult>({
         afterWrite: { mode: "auto" },
         maxAttempts: 1,
+        ...(params.bootstrapFirstAgent
+          ? { writeOptions: { allowedAgentRosterRemovals: [RESERVED_BOOTSTRAP_AGENT_ID] } }
+          : {}),
         transform: async (currentConfig, context) => {
-          const currentEntries = listAgentEntries(currentConfig);
+          if (
+            Object.hasOwn(params, "expectedConfigHash") &&
+            context.previousHash !== params.expectedConfigHash
+          ) {
+            throw new ConfigMutationConflictError("config changed before first-agent creation", {
+              currentHash: context.previousHash,
+              retryable: false,
+            });
+          }
+          const hasAuthoredRoster =
+            params.bootstrapFirstAgent === true &&
+            hasResolvedRosterBeforeMigrations(context.snapshot);
+          if (params.bootstrapFirstAgent && hasAuthoredRoster) {
+            throw new DuplicateAgentError();
+          }
+          const bootstrappingFirstAgent = params.bootstrapFirstAgent === true;
+          const currentEntries = bootstrappingFirstAgent ? [] : listAgentEntries(currentConfig);
           const existingIndex = findAgentEntryIndex(currentEntries, agentId);
           const existingEntry = currentEntries[existingIndex];
           if (
@@ -219,9 +270,19 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             isBootstrapMain &&
             isInjectedBootstrapMainEntry(existingEntry) &&
             !context.snapshot.exists;
+          const creationBase = bootstrappingFirstAgent
+            ? {
+                ...currentConfig,
+                agents: {
+                  ...currentConfig.agents,
+                  entries: {},
+                  list: undefined,
+                },
+              }
+            : currentConfig;
           let nextConfig =
             existingIndex < 0 || materializeInjectedMain
-              ? applyAgentConfig(currentConfig, {
+              ? applyAgentConfig(creationBase, {
                   agentId,
                   name: safeName,
                   workspace: workspaceDir,
@@ -229,7 +290,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
                   model,
                   identity,
                 })
-              : currentConfig;
+              : creationBase;
           if (params.entry) {
             const { default: _retiredDefault, ...stagedEntry } = params.entry;
             const list = listAgentEntries(nextConfig);
@@ -324,7 +385,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       ) {
         throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
       }
-      return committed.result!;
+      const result = committed.result!;
+      return typeof committed.persistedHash === "string"
+        ? { ...result, configHash: committed.persistedHash }
+        : result;
     });
   } catch (error) {
     if (error instanceof DuplicateAgentError) {

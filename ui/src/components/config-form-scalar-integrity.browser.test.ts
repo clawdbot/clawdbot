@@ -355,4 +355,35 @@ describe("config form scalar integrity", () => {
     expect(reset.disabled).toBe(true);
     expect(container.textContent).not.toContain("inherited");
   });
+
+  it("never reveals a server-redacted sentinel and keeps the input readonly", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderTextInput({
+        schema: { type: "string" },
+        value: "__OPENCLAW_REDACTED__",
+        path: ["secret"],
+        hints: { secret: { sensitive: true } },
+        unsupported: new Set(),
+        disabled: false,
+        inputType: "text",
+        // Even with reveal forced on, the sentinel is not the stored value;
+        // showing it editable would let a stray edit overwrite the credential.
+        revealSensitive: true,
+        onPatch: vi.fn(),
+        onRemove: vi.fn(),
+      }),
+      container,
+    );
+
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input"),
+      "sentinel secret input",
+    );
+    expect(input.value).not.toContain("__OPENCLAW_REDACTED__");
+    expect(input.readOnly).toBe(true);
+    const eye = container.querySelector<HTMLButtonElement>(".settings-secret__toggle");
+    expect(eye?.disabled ?? true).toBe(true);
+  });
 });
