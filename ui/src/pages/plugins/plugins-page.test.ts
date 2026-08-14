@@ -204,6 +204,11 @@ describe("PluginsPage", () => {
   it("owns install-policy reviews by install identity across row aliases", async () => {
     let installCalls = 0;
     const { client } = createClient(async (method) => {
+      if (method === "plugins.list") {
+        return createResult(
+          createPlugin({ id: "bluebubbles", name: "BlueBubbles", installed: true }),
+        );
+      }
       if (method !== "plugins.install") {
         throw new Error(`Unexpected method ${method}`);
       }
@@ -214,7 +219,7 @@ describe("PluginsPage", () => {
           message: "install requires review",
           details: {
             installPolicyCode: "install_policy_warning_acknowledgement_required",
-            targetName: "@openclaw/lobster",
+            targetName: "@openclaw/bluebubbles",
             targetType: "plugin",
             requestMode: "install",
             reason: `Review this plugin (${installCalls}).`,
@@ -223,23 +228,36 @@ describe("PluginsPage", () => {
       }
       return {
         ok: true,
-        plugin: createPlugin({ id: "lobster", name: "Lobster", installed: true }),
+        plugin: createPlugin({ id: "bluebubbles", name: "BlueBubbles", installed: true }),
         restartRequired: false,
       } satisfies PluginMutationResult;
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
       createContext(harness.gateway),
-      createPluginsRouteData(harness.gateway),
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(
+          createPlugin({
+            id: "@openclaw/bluebubbles",
+            name: "BlueBubbles",
+            packageName: "@openclaw/bluebubbles",
+            installed: false,
+            enabled: false,
+            state: "not-installed",
+            install: { source: "official", pluginId: "@openclaw/bluebubbles" },
+          }),
+        ),
+      ),
     );
-    const installIdentity = "plugin:lobster";
+    const installIdentity = "plugin:@openclaw/bluebubbles";
     const catalogRequest = {
       source: "official",
-      pluginId: "lobster",
+      pluginId: "@openclaw/bluebubbles",
     } satisfies PluginInstallRequest;
     const searchRequest = {
       source: "clawhub",
-      packageName: "@openclaw/lobster",
+      packageName: "@openclaw/bluebubbles",
     } satisfies PluginInstallRequest;
     page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
 
@@ -258,8 +276,9 @@ describe("PluginsPage", () => {
       installIdentity,
     );
 
-    expect(page.messages[installIdentity]?.installPolicyWarning).toBeUndefined();
-    expect(page.messages[installIdentity]?.kind).toBe("success");
+    expect(page.messages[installIdentity]).toBeUndefined();
+    expect(page.messages["plugin:bluebubbles"]?.kind).toBe("success");
+    expect(page.result?.plugins.map((plugin) => plugin.id)).toEqual(["bluebubbles"]);
     expect(page.messages["plugin:workboard"]?.text).toBe("Unrelated message.");
   });
 

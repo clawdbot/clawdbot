@@ -778,9 +778,13 @@ class PluginsPage extends OpenClawLightDomElement {
       installIdentity,
       (client) => installPlugin(client, request),
       async (result, refreshError, client) => {
+        const installedPluginKey = pluginRowKey(result.plugin.id);
         this.applyMutationResult(result);
+        if (installedPluginKey !== installIdentity) {
+          this.setMessage(installIdentity, null);
+        }
         this.setMessage(
-          installIdentity,
+          installedPluginKey,
           committedMutationMessage(mutationSuccessMessage("installed", result), refreshError),
         );
         await this.refreshCatalogAfterMutation(client);
