@@ -18,9 +18,7 @@ const SLACK_PRESENCE_MAX_TARGETS = 2_000;
 
 type SlackPresenceEventsConfig = NonNullable<SlackAccountConfig["presenceEvents"]>;
 type SlackPresenceEventsMode = NonNullable<SlackPresenceEventsConfig["mode"]>;
-type PresenceObservation =
-  | { presence: "active" }
-  | { presence: "away"; firstObservedAtMs: number };
+type PresenceObservation = { presence: "active" } | { presence: "away"; firstObservedAtMs: number };
 
 type PresenceTarget = {
   key: string;
