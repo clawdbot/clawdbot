@@ -4,6 +4,10 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import {
+  findWorkerWorkspaceOperatorRecoveryError,
+  WorkerWorkspaceOperatorRecoveryError,
+} from "./tunnel-contract.js";
 import { createWorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import {
@@ -20,6 +24,7 @@ import {
   waitForStarts,
 } from "./tunnel.test-support.js";
 import { sshArgvPort } from "./worker-ssh-argv.test-support.js";
+import { WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE } from "./workspace-quiescence-scripts.js";
 
 describe("worker tunnel manager", () => {
   it("cascades only an epoch-matched environment stop into the desktop tunnel owner", async () => {
@@ -141,7 +146,7 @@ describe("worker tunnel manager", () => {
     vi.useFakeTimers();
     try {
       const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
-      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
       expect(
         fake.runs.filter((entry) => entry.argv.at(-1)?.includes('process.stdout.write("renewed "')),
       ).toHaveLength(1);
@@ -179,6 +184,73 @@ describe("worker tunnel manager", () => {
     );
     await quiescence.resume();
     await handle.stop();
+  });
+
+  it("preserves operator recovery classification from heartbeat renewal", async () => {
+    const nonce = "c".repeat(32);
+    const fake = fakeRunner((argv) => {
+      const remoteCommand = argv.at(-1) ?? "";
+      if (remoteCommand.includes('process.stdout.write("quiesced "')) {
+        return success(`quiesced ${nonce}\n`);
+      }
+      if (
+        remoteCommand.includes('process.stdout.write("renewed "') ||
+        remoteCommand.includes("async function resume()")
+      ) {
+        return {
+          ...success(),
+          code: WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE,
+          stderr: "workspace quiescence recovery timed out; lease retained for operator recovery\n",
+        };
+      }
+      return undefined;
+    });
+    const { handle } = await startConnectedTunnel(fake, "worker:quiescence-terminal-renewal", 3);
+
+    vi.useFakeTimers();
+    try {
+      const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      const error = await quiescence.assertActive().catch((cause: unknown) => cause);
+      expect(findWorkerWorkspaceOperatorRecoveryError(error)).toBeInstanceOf(
+        WorkerWorkspaceOperatorRecoveryError,
+      );
+      const resumeError = await quiescence.resume().catch((cause: unknown) => cause);
+      expect(findWorkerWorkspaceOperatorRecoveryError(resumeError)).toBeInstanceOf(
+        WorkerWorkspaceOperatorRecoveryError,
+      );
+    } finally {
+      vi.useRealTimers();
+      await handle.stop();
+    }
+  });
+
+  it("keeps matching command prose retryable without the quiescence outcome code", async () => {
+    const nonce = "d".repeat(32);
+    const fake = fakeRunner((argv) => {
+      const remoteCommand = argv.at(-1) ?? "";
+      if (remoteCommand.includes('process.stdout.write("quiesced "')) {
+        return success(`quiesced ${nonce}\n`);
+      }
+      if (remoteCommand.includes("async function resume()")) {
+        return {
+          ...success(),
+          code: 1,
+          stderr: "workspace quiescence recovery timed out; lease retained for operator recovery\n",
+        };
+      }
+      return undefined;
+    });
+    const { handle } = await startConnectedTunnel(fake, "worker:quiescence-retryable-prose", 3);
+
+    try {
+      const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
+      const error = await quiescence.resume().catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(WorkerWorkspaceOperatorRecoveryError);
+    } finally {
+      await handle.stop();
+    }
   });
 
   it("reconnects with capped backoff after unexpected exits and failed attempts", async () => {

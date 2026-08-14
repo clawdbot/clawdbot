@@ -9,11 +9,11 @@ import {
 import {
   waitForQuiescenceRenewal,
   workerWorkspaceCommandSucceeded,
-  workspaceSyncError,
+  workspaceQuiescenceError,
 } from "./workspace-sync-helpers.js";
 
 const WORKSPACE_QUIESCENCE_TIMEOUT_MS = 12 * 60_000;
-const WORKSPACE_QUIESCENCE_RENEW_INTERVAL_MS = 4 * 60_000;
+const WORKSPACE_QUIESCENCE_RENEW_INTERVAL_MS = 3 * 60_000;
 
 export function createWorkerWorkspaceQuiescence(params: {
   ownerSignal: AbortSignal;
@@ -28,7 +28,7 @@ export function createWorkerWorkspaceQuiescence(params: {
     const run = async (argv: string[]) => {
       const result = await params.runWorkspaceCommand({ transportRetry: "never", argv });
       if (!workerWorkspaceCommandSucceeded(result)) {
-        throw workspaceSyncError(result);
+        throw workspaceQuiescenceError(result);
       }
       return result;
     };

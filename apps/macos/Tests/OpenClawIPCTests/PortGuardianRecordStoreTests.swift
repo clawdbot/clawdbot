@@ -592,7 +592,7 @@ struct PortGuardianRecordStoreTests {
         try store.upsert(existing)
         try JSONEncoder().encode([existing]).write(to: fixture.legacyURL, options: [.atomic])
 
-        try Self.execute(fixture.databaseURL, "PRAGMA user_version = 7")
+        try Self.execute(fixture.databaseURL, "PRAGMA user_version = 9")
 
         #expect(throws: PortGuardianStoreError.self) {
             try store.upsert(Self.record(pid: 4243, port: 18790, timestamp: 43))

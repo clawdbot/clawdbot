@@ -17,6 +17,7 @@ import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import {
   requestCloudWorkerStop,
+  resolveCloudWorkerStopConfirmation,
   resolveCloudWorkerStopAction,
 } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -946,9 +947,7 @@ class SessionsPage extends OpenClawLightDomElement {
     if (
       !scope ||
       !(await showConfirmDialog({
-        message: t("sessionsView.stopCloudWorkerConfirm", { session: label }),
-        confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
-        danger: true,
+        ...resolveCloudWorkerStopConfirmation(stopAction, label),
       })) ||
       !this.isRequestScopeCurrent(scope) ||
       !this.requireMutationAccess(scope, stopAction)

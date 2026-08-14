@@ -34,6 +34,7 @@ import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
+import type { WorkerEnvironmentTeardownAuthorization } from "./provider-lifecycle.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
@@ -282,6 +283,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: tunnelLifecycle,
+    placementStore: options.placementStore,
     credentialBroker,
     callBootstrap,
     callProvider,
@@ -422,6 +424,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       ),
     destroy: async (environmentId: string) =>
       environmentAccess.project(await providerLifecycle.destroy(environmentId)),
+    destroyOwned: async (
+      environmentId: string,
+      authorizeTeardown: WorkerEnvironmentTeardownAuthorization,
+    ) =>
+      environmentAccess.project(
+        await providerLifecycle.destroy(environmentId, { authorizeTeardown }),
+      ),
     destroyUnattached: async (environmentId: string) =>
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { requireUnattached: true }),

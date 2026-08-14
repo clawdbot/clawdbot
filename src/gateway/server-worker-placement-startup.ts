@@ -16,7 +16,10 @@ import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-pl
 import { createNodeWorkspaceRetainCoordinator } from "./worker-environments/node-workspace-retain-coordinator.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/placement-disk-space.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
-import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
+import {
+  createWorkerPlacementDispatchService,
+  type WorkerPlacementDispatchService,
+} from "./worker-environments/placement-dispatch.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -433,15 +436,16 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     workspaceOperations,
   });
   const recoverPendingWorkspaceReconciliations = async (): Promise<void> => {
-    const orphanedJournals = params.placements.pruneOrphanedWorkspaceReconciliations({
-      retainFailedOwner: (recoveryError) =>
-        recoveryError.startsWith(FORCED_WORKER_ABANDONMENT_ERROR),
-    });
+    const orphanedJournals = params.placements.pruneOrphanedWorkspaceReconciliations();
     for (const owner of orphanedJournals) {
       workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
     }
     for (const owner of params.placements.listWorkspaceReconciliationOwners()) {
       try {
+        if (params.placements.isWorkspaceReconciliationRetainedForPendingResult(owner)) {
+          // Terminal pending results own their journal until explicit forced abandonment.
+          continue;
+        }
         const placement = params.placements.get(owner.sessionId);
         if (
           (placement?.state !== "active" && placement?.state !== "draining") ||

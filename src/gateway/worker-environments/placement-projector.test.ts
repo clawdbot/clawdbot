@@ -84,7 +84,11 @@ describe("worker placement projection", () => {
         recoveryError: "worker unavailable",
         terminalReason: "worker unavailable",
         terminalAtMs: 260,
-      },
+        terminalRecovery: {
+          action: "force-destroy-environment",
+          dataLoss: "unreconciled-workspace-result",
+        },
+      } as WorkerSessionPlacementRecord,
     ] satisfies WorkerSessionPlacementRecord[];
 
     const projected = records.map((record) => projectWorkerSessionPlacement(record));
@@ -133,6 +137,10 @@ describe("worker placement projection", () => {
         recoveryError: "worker unavailable",
         terminalReason: "worker unavailable",
         terminalAtMs: 260,
+        terminalRecovery: {
+          action: "force-destroy-environment",
+          dataLoss: "unreconciled-workspace-result",
+        },
       },
     ]);
     for (const placement of projected) {

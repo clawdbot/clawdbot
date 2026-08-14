@@ -410,4 +410,41 @@ describe("worker session placement gate", () => {
     ).toEqual({ kind: "unknown" });
     expect(() => restarted.releaseTurn(claim)).not.toThrow();
   });
+
+  it("fences an environment only for an exact placement-owned recovery record", async () => {
+    const claim = preclaim("run-worker-terminal");
+    store.markWorkspaceResultPending(claim);
+    const active = store.get(SESSION.sessionId);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    const gate = createWorkerSessionPlacementGate(store);
+    expect(gate.isEnvironmentTeardownFenced(ENVIRONMENT_ID)).toBe(true);
+    expect(store.canDestroyAcceptedWorkspaceResult(claim)).toBe(false);
+    store.acceptWorkspaceResult(claim);
+    expect(store.canDestroyAcceptedWorkspaceResult(claim)).toBe(true);
+    const pending = store.listPendingWorkspaceResults()[0]!;
+    await store.failPendingWorkspaceResult({
+      pending,
+      recoveryError: "workspace recovery retained for operator action",
+    });
+    expect(store.get(SESSION.sessionId)).toMatchObject({
+      state: "failed",
+      terminalRecovery: {
+        action: "force-destroy-environment",
+        dataLoss: "unreconciled-workspace-result",
+      },
+    });
+    expect(gate.isEnvironmentTeardownFenced(ENVIRONMENT_ID)).toBe(true);
+    expect(store.canDestroyAcceptedWorkspaceResult(claim)).toBe(false);
+    expect(store.canDestroyForceAbandonedEnvironment(ENVIRONMENT_ID)).toBe(false);
+    expect(gate.isEnvironmentTeardownFenced("environment-other")).toBe(false);
+
+    store.forceAbandonPendingWorkspaceResult({
+      pending,
+      recoveryError: "forced abandonment",
+    });
+    expect(gate.isEnvironmentTeardownFenced(ENVIRONMENT_ID)).toBe(false);
+    expect(store.canDestroyForceAbandonedEnvironment(ENVIRONMENT_ID)).toBe(true);
+  });
 });

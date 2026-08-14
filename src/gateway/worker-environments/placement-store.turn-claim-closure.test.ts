@@ -113,3 +113,30 @@ it("emits exact worker claim closure after release and owner fencing", () => {
   expect(closed).toHaveBeenCalledTimes(2);
   unregister();
 });
+
+it("emits exact worker claim closure for a terminal pending result", async () => {
+  const closed = vi.fn();
+  const unregister = store.registerTurnClaimClosedHandler(closed);
+  const active = advanceToActive();
+  const claim = store.claimTurn({
+    ...SESSION,
+    owner: {
+      kind: "worker",
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+    },
+    claimId: "claim-terminal-result",
+    runId: "run-terminal-result",
+  });
+  store.markWorkspaceResultPending(claim);
+
+  const pending = store.listPendingWorkspaceResults()[0]!;
+  await store.failPendingWorkspaceResult({
+    pending,
+    recoveryError: "workspace recovery retained for operator action",
+  });
+
+  expect(closed).toHaveBeenCalledOnce();
+  expect(closed).toHaveBeenCalledWith(claim);
+  unregister();
+});

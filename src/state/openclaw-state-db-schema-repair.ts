@@ -36,12 +36,45 @@ import {
 } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
+const LEGACY_FORCED_WORKER_ABANDONMENT_ERROR =
+  "Cloud worker result abandoned by forced operator teardown";
+
 export function dropLegacyStateTables(db: DatabaseSync): void {
   // Unreleased transient history; drop, do not migrate.
   const transientHistoryTable = ["database", "verifications"].join("_");
   db.exec(`DROP TABLE IF EXISTS ${transientHistoryTable};`);
   // Retired node pairing tables never had a shipped writer.
   db.exec("DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;");
+}
+
+/** Add v8's semantic marker and promote the shipped v7 error-prefix owner. */
+export function migrateWorkerWorkspaceRetentionV8(db: DatabaseSync, previousVersion: number): void {
+  if (previousVersion >= 8 || !tableExists(db, "worker_workspace_reconciliations")) {
+    return;
+  }
+  if (!tableHasColumn(db, "worker_workspace_reconciliations", "forced_abandonment_retained")) {
+    db.exec(
+      "ALTER TABLE worker_workspace_reconciliations ADD COLUMN forced_abandonment_retained INTEGER;",
+    );
+  }
+  if (previousVersion !== 7) {
+    return;
+  }
+  db.prepare(
+    `UPDATE worker_workspace_reconciliations
+     SET forced_abandonment_retained = 1
+     WHERE forced_abandonment_retained IS NULL
+       AND EXISTS (
+         SELECT 1
+         FROM worker_session_placements AS placement
+         WHERE placement.session_id = worker_workspace_reconciliations.session_id
+           AND placement.state = 'failed'
+           AND placement.environment_id = worker_workspace_reconciliations.environment_id
+           AND placement.active_owner_epoch = worker_workspace_reconciliations.owner_epoch
+           AND placement.transition_generation > worker_workspace_reconciliations.placement_generation
+           AND instr(placement.recovery_error, ?) = 1
+       )`,
+  ).run(LEGACY_FORCED_WORKER_ABANDONMENT_ERROR);
 }
 
 const RETIRED_COMMITMENTS_SCHEMA_SQL = `

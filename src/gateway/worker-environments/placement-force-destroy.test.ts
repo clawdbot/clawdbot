@@ -160,5 +160,15 @@ describe("forced worker environment destruction", () => {
     await harness.service.reconcileActive(active.environmentId);
 
     expect(harness.environments.destroy).toHaveBeenCalledExactlyOnceWith(active.environmentId);
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: expect.stringContaining("destroy pending"),
+    });
+
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    placementStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    expect(placementStore.pruneOrphanedWorkspaceReconciliations()).toEqual([]);
+    expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([owner]);
   });
 });

@@ -2,12 +2,13 @@ import type { EnvironmentsDestroyResult } from "../../../packages/gateway-protoc
 import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { t } from "../i18n/index.ts";
 
 export type CloudWorkerStopAction =
   | { method: "sessions.reclaim"; requiredScope: "operator.admin" }
   | {
       method: "environments.destroy";
-      params: { environmentId: string };
+      params: { environmentId: string; force?: true };
       requiredScope: "operator.admin";
     };
 
@@ -20,13 +21,35 @@ export function resolveCloudWorkerStopAction(
   if (placement.state === "active") {
     return { method: "sessions.reclaim", requiredScope: "operator.admin" };
   }
-  return "environmentId" in placement && placement.environmentId
-    ? {
-        method: "environments.destroy",
-        params: { environmentId: placement.environmentId },
-        requiredScope: "operator.admin",
-      }
-    : null;
+  if (!("environmentId" in placement) || !placement.environmentId) {
+    return null;
+  }
+  const force =
+    placement.state === "failed" &&
+    placement.terminalRecovery?.action === "force-destroy-environment" &&
+    placement.terminalRecovery.dataLoss === "unreconciled-workspace-result";
+  return {
+    method: "environments.destroy",
+    params: { environmentId: placement.environmentId, ...(force ? { force: true as const } : {}) },
+    requiredScope: "operator.admin",
+  };
+}
+
+export function resolveCloudWorkerStopConfirmation(
+  action: CloudWorkerStopAction,
+  session: string,
+): { message: string; confirmLabel: string; danger: true } {
+  const abandonsWorkspaceResult =
+    action.method === "environments.destroy" && action.params.force === true;
+  return {
+    message: abandonsWorkspaceResult
+      ? t("sessionsView.abandonCloudWorkerResultConfirm", { session })
+      : t("sessionsView.stopCloudWorkerConfirm", { session }),
+    confirmLabel: abandonsWorkspaceResult
+      ? t("sessionsView.abandonCloudWorkerResultConfirmAction")
+      : t("sessionsView.stopCloudWorkerConfirmAction"),
+    danger: true,
+  };
 }
 
 export async function requestCloudWorkerStop(

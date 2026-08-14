@@ -13,12 +13,19 @@ import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
 } from "./placement-session-tool-operations.js";
+import { classifyPendingWorkspaceResultOwner } from "./placement-teardown-fence.js";
 import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
+import { retainWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 import { boundedWorkerError } from "./worker-error.js";
 
-export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime) {
-  const { now, path, write } = runtime;
+export function createPlacementPendingFailureOps(
+  runtime: PlacementStoreRuntime,
+  dependencies: {
+    closeWorkerTurnToolState: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  },
+) {
+  const { now, path, read, write } = runtime;
   return {
     failWorkspaceResultAndReleaseTurn(
       pending: WorkerWorkspacePendingResult,
@@ -167,6 +174,97 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
       if (outcome.releasedClaim) {
         signalWorkerTurnClaimClosed(path, outcome.releasedClaim);
       }
+      return outcome.record;
+    },
+
+    async failPendingWorkspaceResult(input: {
+      pending: WorkerWorkspacePendingResult;
+      recoveryError: string;
+    }): Promise<WorkerSessionPlacementRecord> {
+      const { pending } = input;
+      const recoveryError = boundedWorkerError(input.recoveryError);
+      const beforeDrain = getRequired(read(), pending.sessionId);
+      if (classifyPendingWorkspaceResultOwner(beforeDrain, pending) !== "current") {
+        throw new Error(`Cannot fail stale pending worker result for session ${pending.sessionId}`);
+      }
+      const claim: WorkerSessionTurnClaim = {
+        sessionId: pending.sessionId,
+        claimId: pending.claimId,
+        runId: pending.runId,
+        placementGeneration: pending.placementGeneration,
+        owner: {
+          kind: "worker",
+          environmentId: pending.environmentId,
+          ownerEpoch: pending.ownerEpoch,
+        },
+      };
+      await dependencies.closeWorkerTurnToolState(claim);
+      const outcome = write((db) => {
+        const current = getRequired(db, pending.sessionId);
+        const persisted = current.turnClaim;
+        const durablePending = executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_pending_results">>(db)
+            .selectFrom("worker_workspace_pending_results")
+            .selectAll()
+            .where("session_id", "=", pending.sessionId),
+        ).rows[0];
+        if (
+          classifyPendingWorkspaceResultOwner(current, pending) !== "current" ||
+          persisted?.owner !== "worker" ||
+          !durablePending ||
+          durablePending.environment_id !== pending.environmentId ||
+          durablePending.owner_epoch !== pending.ownerEpoch ||
+          durablePending.placement_generation !== pending.placementGeneration ||
+          durablePending.claim_id !== pending.claimId ||
+          durablePending.run_id !== pending.runId
+        ) {
+          throw new Error(
+            `Cannot fail stale pending worker result for session ${pending.sessionId}`,
+          );
+        }
+        assertNoRunningWorkerSessionToolOperations(db, {
+          sessionId: pending.sessionId,
+          claimId: pending.claimId,
+        });
+        clearWorkerTurnToolState(db, {
+          sessionId: pending.sessionId,
+          claimId: pending.claimId,
+        });
+        const values = transitionValues(current, "failed", { recoveryError }, now());
+        retainWorkerWorkspaceReconciliation(db, {
+          sessionId: pending.sessionId,
+          environmentId: pending.environmentId,
+          ownerEpoch: pending.ownerEpoch,
+          placementGeneration: current.generation,
+        });
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_session_placements")
+            .set(values)
+            .where("session_id", "=", pending.sessionId)
+            .where("state", "=", current.state)
+            .where("transition_generation", "=", current.generation)
+            .where("environment_id", "=", pending.environmentId)
+            .where("active_owner_epoch", "=", pending.ownerEpoch)
+            .where("turn_claim_owner", "=", "worker")
+            .where("turn_claim_id", "=", pending.claimId)
+            .where("turn_claim_run_id", "=", pending.runId)
+            .where("turn_claim_generation", "=", pending.placementGeneration)
+            .where("turn_claim_owner_epoch", "=", pending.ownerEpoch),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(
+            `Pending worker result owner changed during failure for ${pending.sessionId}`,
+          );
+        }
+        return {
+          record: getRequired(db, pending.sessionId),
+          releasedClaim: claim,
+        };
+      });
+      signalWorkerTurnClaimClosed(path, outcome.releasedClaim);
       return outcome.record;
     },
   };

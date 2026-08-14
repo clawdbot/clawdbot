@@ -34,11 +34,19 @@ export type WorkerDispatchPlacementStore = Pick<
   | "claimTurn"
   | "closeWorkerTurnToolState"
   | "fail"
+  | "failPendingWorkspaceResult"
+  | "forceAbandonPendingWorkspaceResult"
+  | "forceAbandonWorkerTurn"
   | "finishReclaim"
   | "get"
   | "loadWorkspaceReconciliation"
   | "beginWorkspaceReconciliation"
   | "abortWorkspaceReconciliation"
+  | "canDestroyAcceptedWorkspaceResult"
+  | "canDestroyForceAbandonedEnvironment"
+  | "isWorkspaceReconciliationRetainedForForcedAbandonment"
+  | "retainWorkspaceReconciliationForForcedAbandonment"
+  | "listEnvironmentTeardownFences"
   | "listWorkspaceReconciliationOwners"
   | "list"
   | "listPendingWorkspaceResults"
@@ -67,6 +75,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "create"
   | "createFromProfileSnapshot"
   | "destroy"
+  | "destroyOwned"
   | "get"
   | "reconcileOnce"
   | "startTunnel"
@@ -83,6 +92,8 @@ export type WorkerActivationBarrier = (params: {
 
 const RECOVERY_ERROR_LIMIT = 1_024;
 const boundedError = boundedWorkerError;
+const RETAINED_WORKSPACE_RESULT_RECOVERY_GUIDANCE =
+  "Use Stop cloud worker and confirm abandoning the result to destroy the environment; unreconciled remote workspace changes will be permanently lost";
 
 export function isUnavailableEnvironment(
   environment: NonNullable<ReturnType<WorkerEnvironmentService["get"]>>,
@@ -175,6 +186,29 @@ export function createPlacementFailureActions(deps: {
         recoveryError: truncateUtf16Safe(recoveryError, RECOVERY_ERROR_LIMIT),
       });
     }
+  };
+
+  const recordRetainedResultFailure = async (
+    placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
+    error: unknown,
+  ): Promise<void> => {
+    const pending = placements
+      .listPendingWorkspaceResults()
+      .find(
+        (candidate) =>
+          candidate.sessionId === placement.sessionId &&
+          candidate.environmentId === placement.environmentId &&
+          candidate.ownerEpoch === placement.activeOwnerEpoch,
+      );
+    if (!pending) {
+      throw new Error(`Pending cloud workspace result disappeared for ${placement.sessionId}`);
+    }
+    await placements.failPendingWorkspaceResult({
+      pending,
+      recoveryError: boundedError(
+        new Error(`${boundedError(error)}. ${RETAINED_WORKSPACE_RESULT_RECOVERY_GUIDANCE}.`),
+      ),
+    });
   };
 
   const startDrain = (
@@ -301,6 +335,7 @@ export function createPlacementFailureActions(deps: {
   return {
     failActive,
     failDraining,
+    recordRetainedResultFailure,
     reclaimActive,
     retryFailedTeardown,
     teardownEnvironment,

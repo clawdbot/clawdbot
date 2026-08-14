@@ -6,6 +6,7 @@ import type { WorkerSessionPlacementRecord } from "./placement-store.js";
 
 export type WorkerSessionPlacementReader = {
   getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
+  isEnvironmentTeardownFenced?(environmentId: string): boolean;
 };
 
 export type WorkerPlacementDiskSpaceReader = {
@@ -149,6 +150,7 @@ export function projectWorkerSessionPlacement(
           : {}),
         ...conflict,
         recoveryError: record.recoveryError,
+        ...(record.terminalRecovery ? { terminalRecovery: record.terminalRecovery } : {}),
         ...terminal,
       };
   }

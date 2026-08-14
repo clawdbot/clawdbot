@@ -53,6 +53,9 @@ type WorkerProviderLifecycleOptions = {
   ensureNodeWorkerBundle?: (deviceId: string) => Promise<WorkerAdmissionHandshake>;
   providerCallTimeoutMs?: number;
   tunnelManager?: Pick<WorkerTunnelManager, "stop">;
+  placementStore?: {
+    isEnvironmentTeardownFenced(environmentId: string): boolean;
+  };
   credentialBroker: WorkerCredentialBroker;
   callBootstrap: <T>(
     installation: WorkerInstallationArtifact,
@@ -81,6 +84,8 @@ type WorkerProviderLifecycleOptions = {
   ) => Error;
   withLock: <T>(environmentId: string, task: () => Promise<T>) => Promise<T>;
 };
+
+export type WorkerEnvironmentTeardownAuthorization = () => boolean;
 
 function requireProviderProvisionTimeoutMs(timeoutMs: number | undefined): number | undefined {
   if (timeoutMs === undefined) {
@@ -363,15 +368,37 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     throw serviceError("invalid_state", `Cannot destroy worker in state: ${record.state}`);
   };
 
-  const finishDestroy = async (r: WorkerEnvironmentRecord, provider?: WorkerProvider) => {
+  const assertTeardownAllowed = (
+    environmentId: string,
+    authorizeTeardown?: WorkerEnvironmentTeardownAuthorization,
+  ): void => {
+    const allowed = authorizeTeardown
+      ? authorizeTeardown()
+      : !options.placementStore?.isEnvironmentTeardownFenced(environmentId);
+    if (!allowed) {
+      throw serviceError(
+        "invalid_state",
+        "Worker environment teardown is fenced by a pending workspace result",
+      );
+    }
+  };
+
+  const finishDestroy = async (
+    r: WorkerEnvironmentRecord,
+    provider?: WorkerProvider,
+    authorizeTeardown?: WorkerEnvironmentTeardownAuthorization,
+  ) => {
     if (!r.leaseId) {
       throw serviceError("invalid_state", "Worker environment has no lease");
     }
+    assertTeardownAllowed(r.environmentId, authorizeTeardown);
     const leaseId = r.leaseId;
-    const draining = beginDrain(r);
     await tunnels?.stop(r.environmentId);
+    // Authorization is operational authority, not a bearer token. Re-read its
+    // exact SQLite owner after the awaited tunnel stop before provider teardown.
+    assertTeardownAllowed(r.environmentId, authorizeTeardown);
     const owningProvider = provider ?? providerFor(r.providerId);
-    const destroying = beginDestroy(draining);
+    const destroying = beginDestroy(r);
     try {
       await callProvider(r.environmentId, () => owningProvider.destroy(lifecycleLease(r, leaseId)));
     } catch (error) {
@@ -396,6 +423,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   const reconcileRecord = async (initialRecord: WorkerEnvironmentRecord): Promise<void> => {
     let record = initialRecord;
+    if (options.placementStore?.isEnvironmentTeardownFenced(record.environmentId)) {
+      return;
+    }
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
       return void cancelRequested(record);
     }
@@ -442,6 +472,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (!inspection) {
       return;
     }
+    // Provider inspection and bundle preparation are awaited above. Re-read the
+    // placement-owned fence before any cleanup can destroy the only remote result.
+    if (options.placementStore?.isEnvironmentTeardownFenced(record.environmentId)) {
+      return;
+    }
     const { status } = inspection;
     const teardownExpected = record.destroyRequestedAtMs !== null || record.state === "destroying";
     if (status === "destroyed" || (status === "unknown" && teardownExpected)) {
@@ -469,6 +504,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           ? record
           : move(record, "draining", { lastError: ORPHANED_LEASE_ERROR });
       await tunnels?.stop(record.environmentId);
+      if (options.placementStore?.isEnvironmentTeardownFenced(record.environmentId)) {
+        return;
+      }
       move(draining, "orphaned", { lastError: ORPHANED_LEASE_ERROR });
       return;
     }
@@ -485,6 +523,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       // Workspace actions capture isolation at tunnel creation. Fence the old actions before
       // committing a provider-owned change so no reconciliation can use stale host scope.
       await tunnels?.stop(record.environmentId);
+      if (options.placementStore?.isEnvironmentTeardownFenced(record.environmentId)) {
+        return;
+      }
     }
     record = store.reconcileSharedHost({
       environmentId: record.environmentId,
@@ -525,6 +566,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (record.state === "draining" && record.destroyRequestedAtMs === null) {
       // Draining without destroy intent is durable provider-loss cleanup.
       await tunnels?.stop(record.environmentId);
+      if (options.placementStore?.isEnvironmentTeardownFenced(record.environmentId)) {
+        return;
+      }
       move(record, "orphaned", { lastError: record.lastError ?? ORPHANED_LEASE_ERROR });
       return;
     }
@@ -652,7 +696,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   const destroy = async (
     environmentId: string,
-    destroyOptions: { requireUnattached?: boolean } = {},
+    destroyOptions: {
+      requireUnattached?: boolean;
+      authorizeTeardown?: WorkerEnvironmentTeardownAuthorization;
+    } = {},
   ) => {
     const stopping = options.isStopping();
     if (stopping) {
@@ -672,6 +719,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           "Attached cloud workers must be stopped through sessions.reclaim",
         );
       }
+      assertTeardownAllowed(environmentId, destroyOptions.authorizeTeardown);
       record = store.requestDestroy({ environmentId, state: record.state });
       if (record.state === "requested") {
         return cancelRequested(record);
@@ -682,9 +730,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       if (!record.leaseId) {
         const provider = providerFor(record.providerId);
         record = await resumeProvision(record, provider);
-        return finishDestroy(record, provider);
+        return finishDestroy(record, provider, destroyOptions.authorizeTeardown);
       }
-      return finishDestroy(record);
+      return finishDestroy(record, undefined, destroyOptions.authorizeTeardown);
     });
   };
 

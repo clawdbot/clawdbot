@@ -5,6 +5,7 @@ import type { DB as StateDatabase } from "../../state/openclaw-state-db.generate
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { classifyWorkspaceJournalOwner } from "./placement-teardown-fence.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
@@ -25,36 +26,20 @@ type WorkerWorkspaceJournalOwner = {
   placementGeneration: number;
 };
 
-function isCurrentJournalOwner(
-  placement: WorkerSessionPlacementRecord | undefined,
-  owner: WorkerWorkspaceJournalOwner,
-): boolean {
-  // Only the original active/draining generation may apply these rollback bytes.
-  // Drain/reconcile advances generation, making the prior journal permanently stale.
-  return (
-    (placement?.state === "active" || placement?.state === "draining") &&
-    placement.environmentId === owner.environmentId &&
-    placement.activeOwnerEpoch === owner.ownerEpoch &&
-    placement.generation === owner.placementGeneration
-  );
-}
-
 function assertJournalOwner(
   db: DatabaseSync,
   owner: WorkerWorkspaceJournalOwner,
   options: { allowFailedOwner?: boolean } = {},
 ) {
   const placement = getRequired(db, owner.sessionId);
-  const isCurrentOwner = isCurrentJournalOwner(placement, owner);
   // Forced teardown advances the exact owner to failed before best-effort
   // rollback. Admit that state without weakening the manifest checks below.
-  const isAllowedFailedOwner =
-    options.allowFailedOwner === true &&
-    placement.state === "failed" &&
-    placement.generation > owner.placementGeneration &&
-    placement.environmentId === owner.environmentId &&
-    placement.activeOwnerEpoch === owner.ownerEpoch;
-  if (!isCurrentOwner && !isAllowedFailedOwner) {
+  const ownerState = classifyWorkspaceJournalOwner(
+    placement,
+    owner,
+    options.allowFailedOwner === true,
+  );
+  if (!ownerState) {
     throw new Error(`Cannot reconcile stale worker workspace for session ${owner.sessionId}`);
   }
   return placement;
@@ -81,7 +66,32 @@ export function clearWorkerWorkspaceReconciliation(
   );
 }
 
-export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntime) {
+export function retainWorkerWorkspaceReconciliation(
+  db: DatabaseSync,
+  owner: WorkerWorkspaceJournalOwner,
+): void {
+  executeSqliteQuerySync(
+    db,
+    query(db)
+      .updateTable("worker_workspace_reconciliations")
+      .set({ forced_abandonment_retained: 1 })
+      .where("session_id", "=", owner.sessionId)
+      .where("environment_id", "=", owner.environmentId)
+      .where("owner_epoch", "=", owner.ownerEpoch)
+      .where("placement_generation", "=", owner.placementGeneration),
+  );
+}
+
+export function createPlacementWorkspaceJournalOps(
+  runtime: PlacementStoreRuntime,
+  deps: {
+    hasMatchingRetainedFailedResultOwner: (
+      db: DatabaseSync,
+      placement: WorkerSessionPlacementRecord | undefined,
+      owner: WorkerWorkspaceJournalOwner,
+    ) => boolean;
+  },
+) {
   const { now, read, write } = runtime;
   return {
     listWorkspaceReconciliationOwners(): WorkerWorkspaceJournalOwner[] {
@@ -100,15 +110,94 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
       }));
     },
 
-    pruneOrphanedWorkspaceReconciliations(options: {
-      retainFailedOwner: (recoveryError: string) => boolean;
-    }): WorkerWorkspaceJournalOwner[] {
+    isWorkspaceReconciliationRetainedForForcedAbandonment(
+      owner: WorkerWorkspaceJournalOwner,
+    ): boolean {
+      const db = read();
+      const row = executeSqliteQuerySync(
+        db,
+        query(db)
+          .selectFrom("worker_workspace_reconciliations")
+          .select("forced_abandonment_retained")
+          .where("session_id", "=", owner.sessionId)
+          .where("environment_id", "=", owner.environmentId)
+          .where("owner_epoch", "=", owner.ownerEpoch)
+          .where("placement_generation", "=", owner.placementGeneration),
+      ).rows[0];
+      return row?.forced_abandonment_retained === 1;
+    },
+
+    isWorkspaceReconciliationRetainedForPendingResult(owner: WorkerWorkspaceJournalOwner): boolean {
+      const db = read();
+      const row = executeSqliteQuerySync(
+        db,
+        query(db)
+          .selectFrom("worker_workspace_reconciliations")
+          .select("forced_abandonment_retained")
+          .where("session_id", "=", owner.sessionId)
+          .where("environment_id", "=", owner.environmentId)
+          .where("owner_epoch", "=", owner.ownerEpoch)
+          .where("placement_generation", "=", owner.placementGeneration),
+      ).rows[0];
+      return (
+        row?.forced_abandonment_retained === 1 &&
+        deps.hasMatchingRetainedFailedResultOwner(db, find(db, owner.sessionId), owner)
+      );
+    },
+
+    retainWorkspaceReconciliationForForcedAbandonment(owner: WorkerWorkspaceJournalOwner): void {
+      write((db) => {
+        const placement = find(db, owner.sessionId);
+        const row = executeSqliteQuerySync(
+          db,
+          query(db)
+            .selectFrom("worker_workspace_reconciliations")
+            .select("forced_abandonment_retained")
+            .where("session_id", "=", owner.sessionId)
+            .where("environment_id", "=", owner.environmentId)
+            .where("owner_epoch", "=", owner.ownerEpoch)
+            .where("placement_generation", "=", owner.placementGeneration),
+        ).rows[0];
+        const retainedFailedResultOwner =
+          row?.forced_abandonment_retained === 1 &&
+          deps.hasMatchingRetainedFailedResultOwner(db, placement, owner);
+        const ownerState = classifyWorkspaceJournalOwner(
+          placement,
+          owner,
+          row?.forced_abandonment_retained === 1,
+        );
+        if (!row || (!ownerState && !retainedFailedResultOwner)) {
+          throw new Error(`Cannot retain stale worker workspace for session ${owner.sessionId}`);
+        }
+        const updated = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_workspace_reconciliations")
+            .set({ forced_abandonment_retained: 1 })
+            .where("session_id", "=", owner.sessionId)
+            .where("environment_id", "=", owner.environmentId)
+            .where("owner_epoch", "=", owner.ownerEpoch)
+            .where("placement_generation", "=", owner.placementGeneration),
+        );
+        if (updated.numAffectedRows !== 1n) {
+          throw new Error(`Worker workspace journal changed for ${owner.sessionId}`);
+        }
+      });
+    },
+
+    pruneOrphanedWorkspaceReconciliations(): WorkerWorkspaceJournalOwner[] {
       return write((db) => {
         const rows = executeSqliteQuerySync(
           db,
           query(db)
             .selectFrom("worker_workspace_reconciliations")
-            .select(["session_id", "environment_id", "owner_epoch", "placement_generation"])
+            .select([
+              "session_id",
+              "environment_id",
+              "owner_epoch",
+              "placement_generation",
+              "forced_abandonment_retained",
+            ])
             .orderBy("session_id"),
         ).rows;
         const pruned: WorkerWorkspaceJournalOwner[] = [];
@@ -120,14 +209,15 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
             placementGeneration: row.placement_generation,
           };
           const placement = find(db, owner.sessionId);
-          const stillOwned = isCurrentJournalOwner(placement, owner);
-          const retainedFailedOwner =
-            placement?.state === "failed" &&
-            placement.environmentId === owner.environmentId &&
-            placement.activeOwnerEpoch === owner.ownerEpoch &&
-            placement.generation > owner.placementGeneration &&
-            options.retainFailedOwner(placement.recoveryError);
-          if (stillOwned || retainedFailedOwner) {
+          const retainedFailedResultOwner =
+            row.forced_abandonment_retained === 1 &&
+            deps.hasMatchingRetainedFailedResultOwner(db, placement, owner);
+          const ownerState = classifyWorkspaceJournalOwner(
+            placement,
+            owner,
+            row.forced_abandonment_retained === 1,
+          );
+          if (ownerState || retainedFailedResultOwner) {
             continue;
           }
           // Generation and owner epoch only advance, so a mismatched exact owner cannot rebind.

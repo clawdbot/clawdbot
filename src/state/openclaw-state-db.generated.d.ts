@@ -1653,6 +1653,7 @@ export interface WorkerWorkspaceReconciliations {
   created_at_ms: number;
   current_manifest_ref: string;
   environment_id: string;
+  forced_abandonment_retained: number | null;
   owner_epoch: number;
   placement_generation: number;
   plan_json: string;

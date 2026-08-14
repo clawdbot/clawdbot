@@ -492,6 +492,17 @@ export const environmentsHandlers: GatewayRequestHandlers = {
         if (params.force && !placementService?.forceDestroyEnvironment) {
           throw new Error("cloud worker placement control is unavailable");
         }
+        if (
+          !params.force &&
+          context.workerSessionPlacementService?.isEnvironmentTeardownFenced?.(params.environmentId)
+        ) {
+          throw Object.assign(
+            new Error(
+              "This cloud worker retains an unreconciled workspace result. Retry environments.destroy with force=true only to abandon that result and permanently lose its remote workspace changes.",
+            ),
+            { code: "invalid_state" },
+          );
+        }
         const destroyed = params.force
           ? await placementService!.forceDestroyEnvironment!(params.environmentId, (error) => {
               context.logGateway.warn(

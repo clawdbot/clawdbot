@@ -17,6 +17,7 @@ export type WorkerPlacementTurnBinding = WorkerPlacementBinding &
 
 export type WorkerSessionPlacementGate = {
   hasWorkerTurn(binding: WorkerPlacementBinding): boolean;
+  isEnvironmentTeardownFenced(environmentId: string): boolean;
   validateWorkerTurn(binding: WorkerPlacementTurnBinding): boolean;
   isWorkerTurnToolAuthorized(binding: WorkerPlacementTurnBinding, toolName: string): boolean;
   updateAckCursors(
@@ -69,6 +70,8 @@ export function createWorkerSessionPlacementGate(
       const claim = claimForBinding(store.get(binding.sessionId), binding);
       return claim ? store.validateTurnClaim(claim) : false;
     },
+    isEnvironmentTeardownFenced: (environmentId) =>
+      store.isEnvironmentTeardownFenced(environmentId),
 
     validateWorkerTurn,
 

@@ -452,6 +452,7 @@ export function placementHarness(
   const identity = seedAttachedIdentity(environmentId, sessionId);
   const placementStore = {
     hasWorkerTurn: vi.fn(() => true),
+    isEnvironmentTeardownFenced: vi.fn(() => false),
     validateWorkerTurn: vi.fn(() => true),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
     updateAckCursors: vi.fn(),

@@ -13,6 +13,7 @@ import {
   workerSshOptions,
   workerSshRemoteCommand,
 } from "./ssh.js";
+import { WorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
 import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncRequest } from "./tunnel-contract.js";
 import {
   recordRemoteWorkspaceHashMetrics,
@@ -21,6 +22,7 @@ import {
   type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
 import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
+import { WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE } from "./workspace-quiescence-scripts.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
@@ -91,6 +93,14 @@ export function workspaceSyncError(result: SpawnResult): Error {
   return new Error(
     detail ? `Worker workspace sync failed: ${detail}` : "Worker workspace sync failed",
   );
+}
+
+export function workspaceQuiescenceError(result: SpawnResult): Error {
+  const error = workspaceSyncError(result);
+  return result.termination === "exit" &&
+    result.code === WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE
+    ? new WorkerWorkspaceOperatorRecoveryError(error)
+    : error;
 }
 
 export function workerWorkspaceRsyncRemoteCommand(

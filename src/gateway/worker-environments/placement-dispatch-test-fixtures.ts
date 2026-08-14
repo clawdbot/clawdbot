@@ -28,6 +28,8 @@ export type DispatchStage =
 
 export const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
+export const FORCED_WORKER_ABANDONMENT_ERROR =
+  "Cloud worker result abandoned by forced operator teardown";
 export const REQUEST: WorkerDispatchRequest = {
   sessionId: "session-1",
   sessionKey: "agent:main:session-1",
@@ -36,7 +38,7 @@ export const REQUEST: WorkerDispatchRequest = {
   executionMode: "worker-turn",
 };
 
-export function seedSyncingPlacement(
+function seedSyncingPlacement(
   store: PlacementStore,
   environmentId: string,
   executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,

@@ -7,7 +7,9 @@ import type {
   WorkerDrainingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import { placementTurnOwner } from "./placement-record.js";
+import { isRetainedFailedWorkspaceResultOwner } from "./placement-teardown-fence.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { findWorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -95,10 +97,10 @@ export async function recoverPendingWorkspaceResults(
   environmentId?: string,
 ): Promise<Set<string>> {
   const { environments, failure, placements } = deps;
-  const stagedResultOwners = new Set<string>();
+  const retainedResultOwners = new Set<string>();
   for (const pending of placements.listPendingWorkspaceResults()) {
     if (pending.stagedResultRef) {
-      stagedResultOwners.add(pending.sessionId);
+      retainedResultOwners.add(pending.sessionId);
     }
     const sameGatewayInstance =
       pending.gatewayInstanceId === placements.workspaceResultInstanceId();
@@ -107,6 +109,12 @@ export async function recoverPendingWorkspaceResults(
     }
     const placement = placements.get(pending.sessionId);
     if (environmentId !== undefined && placement?.environmentId !== environmentId) {
+      continue;
+    }
+    if (isRetainedFailedWorkspaceResultOwner(placement, pending)) {
+      // A failed placement plus its matching pending row is the durable
+      // operator-recovery owner. Only explicit forced abandonment may clear it.
+      retainedResultOwners.add(pending.sessionId);
       continue;
     }
     try {
@@ -169,7 +177,7 @@ export async function recoverPendingWorkspaceResults(
       ) {
         placements.recordStagedWorkspaceResult(turnClaim, canonicalStagedResultRef);
         stagedResultRef = canonicalStagedResultRef;
-        stagedResultOwners.add(pending.sessionId);
+        retainedResultOwners.add(pending.sessionId);
       }
       if (stagedResultRef && pending.workspaceAcceptedAtMs !== null) {
         const canonicalExists = await hasWorkerWorkspaceResultRef({
@@ -218,7 +226,9 @@ export async function recoverPendingWorkspaceResults(
           environment.state !== "destroyed" &&
           environment.ownerEpoch === active.activeOwnerEpoch
         ) {
-          await environments.destroy(active.environmentId);
+          await environments.destroyOwned(active.environmentId, () =>
+            placements.canDestroyAcceptedWorkspaceResult(turnClaim),
+          );
         }
         const reclaimed = placements.completeWorkspaceResultAndReleaseTurn(turnClaim, {
           reclaim: true,
@@ -308,7 +318,9 @@ export async function recoverPendingWorkspaceResults(
                 currentEnvironment.state !== "destroyed" &&
                 currentEnvironment.ownerEpoch === active.activeOwnerEpoch
               ) {
-                await environments.destroy(active.environmentId);
+                await environments.destroyOwned(active.environmentId, () =>
+                  placements.canDestroyAcceptedWorkspaceResult(turnClaim),
+                );
               }
             },
             validateCompleted: (completed) => {
@@ -419,7 +431,9 @@ export async function recoverPendingWorkspaceResults(
               if (sameGatewayInstance) {
                 await quiescence.resume();
               } else {
-                await environments.destroy(active.environmentId);
+                await environments.destroyOwned(active.environmentId, () =>
+                  placements.canDestroyAcceptedWorkspaceResult(turnClaim),
+                );
               }
               quiescenceHandled = true;
             },
@@ -442,7 +456,14 @@ export async function recoverPendingWorkspaceResults(
           }
         }
       });
-    } catch {
+    } catch (error) {
+      const operatorRecoveryError = findWorkerWorkspaceOperatorRecoveryError(error);
+      if (
+        operatorRecoveryError &&
+        (placement?.state === "active" || placement?.state === "draining")
+      ) {
+        await failure.recordRetainedResultFailure(placement, operatorRecoveryError);
+      }
       // Keep the result, claim, and environment fenced. The next sweep retries.
     }
   }
@@ -471,7 +492,7 @@ export async function recoverPendingWorkspaceResults(
     }
   }
   return new Set([
-    ...stagedResultOwners,
+    ...retainedResultOwners,
     ...placements.listPendingWorkspaceResults().map((pending) => pending.sessionId),
   ]);
 }

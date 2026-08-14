@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
+import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
@@ -208,6 +211,100 @@ describe("worker environment service", () => {
       attachedSessionIds: [],
       lastError: STALE_WORKER_BUILD_REASON,
     });
+  it("rechecks the placement teardown fence after stale-bundle preparation", async () => {
+    const environmentId = "worker-attached-stale-pending-result";
+    support.seedBootstrapping(environmentId);
+    const ready = support.testState.store.transition({
+      environmentId,
+      from: "bootstrapping",
+      to: "ready",
+      patch: support.readyPatch(environmentId, {
+        ...support.BOOTSTRAP_RECEIPT,
+        bundleHash: "b".repeat(64),
+      }),
+    });
+    support.testState.store.transition({
+      environmentId,
+      from: ready.state,
+      to: "attached",
+      patch: support.attachedPatch(environmentId, "session-1"),
+    });
+    let fenced = false;
+    support.testState.prepareInstallation = vi.fn(async () => {
+      fenced = true;
+      return support.BUNDLE_ARTIFACT;
+    });
+    const placementStore = {
+      hasWorkerTurn: vi.fn(() => false),
+      isEnvironmentTeardownFenced: vi.fn(() => fenced),
+      validateWorkerTurn: vi.fn(() => false),
+      isWorkerTurnToolAuthorized: vi.fn(() => false),
+      updateAckCursors: vi.fn(),
+    };
+    const destroy = vi.fn(async () => {});
+
+    await support
+      .createService(support.createProvider({ destroy }), { placementStore })
+      .reconcileOnce();
+
+    expect(placementStore.isEnvironmentTeardownFenced).toHaveBeenCalledTimes(2);
+    expect(destroy).not.toHaveBeenCalled();
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "attached",
+      attachedSessionIds: ["session-1"],
+    });
+  });
+
+  it("lets the exact accepted placement owner destroy through the real service fence", async () => {
+    const environmentId = "worker-attached-owned-result";
+    const ready = support.seedReady(environmentId);
+    const attached = support.testState.store.transition({
+      environmentId,
+      from: ready.state,
+      to: "attached",
+      patch: support.attachedPatch(environmentId, REQUEST.sessionId),
+    });
+    const placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => support.testState.nowMs,
+    });
+    const active = seedActivePlacement(placements, {
+      environmentId,
+      ownerEpoch: attached.ownerEpoch,
+    });
+    if (active.state !== "active") {
+      throw new Error("expected active placement owner");
+    }
+    const claim = placements.claimReclaimWorkspaceResult({
+      ...REQUEST,
+      claimId: "reclaim-owned-result",
+      runId: "reclaim-owned-result",
+      owner: {
+        kind: "worker",
+        environmentId,
+        ownerEpoch: attached.ownerEpoch,
+      },
+    });
+    placements.acceptWorkspaceResult(claim);
+    const destroy = vi.fn(async () => {});
+    const workerService = support.createService(support.createProvider({ destroy }), {
+      placementStore: createWorkerSessionPlacementGate(placements),
+    });
+
+    await expect(workerService.destroy(environmentId)).rejects.toMatchObject({
+      code: "invalid_state",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(support.testState.store.get(environmentId)?.state).toBe("attached");
+    const authorizeTeardown = vi.fn(() => placements.canDestroyAcceptedWorkspaceResult(claim));
+    await expect(
+      workerService.destroyOwned(environmentId, authorizeTeardown),
+    ).resolves.toMatchObject({ state: "destroyed" });
+
+    expect(authorizeTeardown.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(
+      placements.completeWorkspaceResultAndReleaseTurn(claim, { reclaim: true }),
+    ).toMatchObject({ state: "reclaimed", turnClaim: null });
   });
 
   it("does not resolve npm while an admitted receipt matches the local bundle", async () => {

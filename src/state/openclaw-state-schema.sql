@@ -2256,6 +2256,7 @@ CREATE TABLE IF NOT EXISTS worker_workspace_reconciliations (
   current_manifest_ref TEXT NOT NULL,
   plan_json TEXT NOT NULL,
   base_pack BLOB NOT NULL CHECK (length(base_pack) <= 268435456),
+  forced_abandonment_retained INTEGER,
   created_at_ms INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
 ) STRICT;

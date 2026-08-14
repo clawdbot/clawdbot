@@ -76,6 +76,7 @@ function mockContext(
       connectedAtMs: 123,
     },
   ],
+  teardownFenced = false,
 ) {
   return {
     logGateway: {
@@ -85,6 +86,10 @@ function mockContext(
       listConnectedForPairingStates: () => connectedNodes,
     },
     workerEnvironmentService,
+    workerSessionPlacementService: {
+      getMany: () => new Map(),
+      isEnvironmentTeardownFenced: vi.fn(() => teardownFenced),
+    },
     getRuntimeConfig: () => ({
       cloudWorkers: {
         profiles: {
@@ -171,6 +176,7 @@ async function callEnvironmentMethod(
       onCleanupError?: (error: unknown) => void,
     ) => Promise<TestWorkerRecord>;
     connectedNodes?: unknown[];
+    teardownFenced?: boolean;
   } = {},
 ) {
   const respond = vi.fn();
@@ -182,6 +188,7 @@ async function callEnvironmentMethod(
       options.reconcileActive,
       options.forceDestroyEnvironment,
       options.connectedNodes,
+      options.teardownFenced,
     ),
   } as never);
   const call = respond.mock.calls.at(0);
@@ -850,6 +857,24 @@ describe("environment gateway methods", () => {
       code: ErrorCodes.INVALID_REQUEST,
       message: "Attached cloud workers must be stopped through sessions.reclaim",
     });
+  });
+
+  it("names forced abandonment and data loss for a retained workspace result", async () => {
+    const service = workerService();
+
+    const [ok, , error] = await callEnvironmentMethod(
+      "environments.destroy",
+      { environmentId: "worker-1" },
+      { service, teardownFenced: true },
+    );
+
+    expect(ok).toBe(false);
+    expect(error).toEqual({
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        "This cloud worker retains an unreconciled workspace result. Retry environments.destroy with force=true only to abandon that result and permanently lose its remote workspace changes.",
+    });
+    expect(service.destroyUnattached).not.toHaveBeenCalled();
   });
 
   it("durably abandons placement ownership before forced destruction", async () => {

@@ -39,6 +39,10 @@ import {
   type WorkerSessionPlacementState,
 } from "./placement-state.js";
 import {
+  createPlacementTeardownFenceOps,
+  findWorkerTerminalRecovery,
+} from "./placement-teardown-fence.js";
+import {
   createPlacementTurnClaimOps,
   registerWorkerTurnClaimClosedHandler,
   signalWorkerTurnClaimClosed,
@@ -50,6 +54,7 @@ import {
 import {
   createPlacementWorkspaceResultOps,
   hasCurrentWorkspaceResultClaim,
+  hasMatchingRetainedFailedWorkspaceResultOwner,
   hasWorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -132,14 +137,22 @@ export function createWorkerSessionPlacementStore(
   };
   const { read, write } = runtime;
   const workspaceResultConflicts = new Map<string, WorkerWorkspaceResultConflict>();
-  const withWorkspaceResultConflict = (
+  const withPlacementProjectionFacts = (
+    db: DatabaseSync,
     record: WorkerSessionPlacementRecord | undefined,
   ): WorkerSessionPlacementRecord | undefined => {
     if (!record) {
       return undefined;
     }
     const conflict = workspaceResultConflicts.get(record.sessionId);
-    return conflict ? { ...record, workspaceResultConflict: conflict } : record;
+    const terminalRecovery = findWorkerTerminalRecovery(db, record);
+    return conflict || terminalRecovery
+      ? {
+          ...record,
+          ...(conflict ? { workspaceResultConflict: conflict } : {}),
+          ...(terminalRecovery ? { terminalRecovery } : {}),
+        }
+      : record;
   };
 
   const requireClaimOwner = (claim: WorkerSessionTurnClaim): void => {
@@ -153,18 +166,28 @@ export function createWorkerSessionPlacementStore(
     }
   };
 
+  const turnClaimOps = createPlacementTurnClaimOps(runtime);
+
   return {
-    ...createPlacementTurnClaimOps(runtime),
-    ...createPlacementPendingFailureOps(runtime),
-    ...createPlacementWorkspaceJournalOps(runtime),
-    ...createPlacementWorkspaceResultOps(runtime),
+    ...turnClaimOps,
+    ...createPlacementPendingFailureOps(runtime, {
+      closeWorkerTurnToolState: (claim) => turnClaimOps.closeWorkerTurnToolState(claim),
+    }),
+    ...createPlacementTeardownFenceOps(runtime),
+    ...createPlacementWorkspaceJournalOps(runtime, {
+      hasMatchingRetainedFailedResultOwner: hasMatchingRetainedFailedWorkspaceResultOwner,
+    }),
+    ...createPlacementWorkspaceResultOps(runtime, {
+      signalTurnClaimClosed: signalWorkerTurnClaimClosed,
+    }),
 
     registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void {
       return registerWorkerTurnClaimClosedHandler(path, handler);
     },
 
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
-      return withWorkspaceResultConflict(find(read(), required(sessionId, "session id")));
+      const db = read();
+      return withPlacementProjectionFacts(db, find(db, required(sessionId, "session id")));
     },
 
     getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord> {
@@ -183,7 +206,7 @@ export function createWorkerSessionPlacementStore(
             .where("session_id", "in", chunk),
         ).rows) {
           const record = fromRow(row);
-          records.set(record.sessionId, withWorkspaceResultConflict(record)!);
+          records.set(record.sessionId, withPlacementProjectionFacts(db, record)!);
         }
       }
       return records;
@@ -610,7 +633,7 @@ export function createWorkerSessionPlacementStore(
           .where("state", "not in", ["local", "reclaimed"])
           .orderBy("updated_at_ms")
           .orderBy("session_id"),
-      ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
+      ).rows.map((row) => withPlacementProjectionFacts(db, fromRow(row))!);
     },
 
     list(): WorkerSessionPlacementRecord[] {
@@ -618,7 +641,7 @@ export function createWorkerSessionPlacementStore(
       return executeSqliteQuerySync(
         db,
         query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
-      ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
+      ).rows.map((row) => withPlacementProjectionFacts(db, fromRow(row))!);
     },
   };
 }

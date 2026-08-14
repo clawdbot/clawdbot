@@ -37,8 +37,11 @@ export function createHarness(
     verifyFailureCall?: number;
     leaseFails?: boolean;
     leaseFailureCount?: number;
+    leaseError?: Error;
+    leaseBarrier?: Promise<void>;
     localVerifyFails?: boolean;
     resumeFails?: boolean;
+    resumeError?: Error;
     workspacePath?: string;
     priorWorkspaceResultConflict?: { paths: string[]; stagedResultRef: string };
     reconcileConflictPaths?: string[];
@@ -47,6 +50,7 @@ export function createHarness(
     terminalizeReclaimOnTunnelDrop?: boolean;
     terminalizedReclaimError?: Error;
     environmentGeneration?: number;
+    destroyPendingOwnerDuringEnvironmentReconcile?: boolean;
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -73,7 +77,17 @@ export function createHarness(
       placementStore.beginWorkspaceReconciliation(owner, journal),
     abortWorkspaceReconciliation: (owner, abortOptions) =>
       placementStore.abortWorkspaceReconciliation(owner, abortOptions),
+    isWorkspaceReconciliationRetainedForForcedAbandonment: (owner) =>
+      placementStore.isWorkspaceReconciliationRetainedForForcedAbandonment(owner),
+    retainWorkspaceReconciliationForForcedAbandonment: (owner) =>
+      placementStore.retainWorkspaceReconciliationForForcedAbandonment(owner),
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
+    listEnvironmentTeardownFences: (environmentId) =>
+      placementStore.listEnvironmentTeardownFences(environmentId),
+    canDestroyAcceptedWorkspaceResult: (claim) =>
+      placementStore.canDestroyAcceptedWorkspaceResult(claim),
+    canDestroyForceAbandonedEnvironment: (environmentId) =>
+      placementStore.canDestroyForceAbandonedEnvironment(environmentId),
     listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
     validateWorkspaceResultClaim: (claim) => placementStore.validateWorkspaceResultClaim(claim),
@@ -107,6 +121,9 @@ export function createHarness(
       return placementStore.failWorkspaceResultAndReleaseTurn(pending, error);
     },
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
+    forceAbandonPendingWorkspaceResult: (params) =>
+      placementStore.forceAbandonPendingWorkspaceResult(params),
+    forceAbandonWorkerTurn: (params) => placementStore.forceAbandonWorkerTurn(params),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
     acceptIdleWorkspaceReconciliation: (params) =>
@@ -122,6 +139,10 @@ export function createHarness(
     fail: (params) => {
       log.push("placement:failed");
       return placementStore.fail(params);
+    },
+    failPendingWorkspaceResult: (params) => {
+      log.push("placement:failed");
+      return placementStore.failPendingWorkspaceResult(params);
     },
     finishReclaim: (params) => {
       log.push("placement:reclaimed");
@@ -182,6 +203,10 @@ export function createHarness(
       return {
         assertActive: vi.fn(async () => {
           log.push("workspace:lease");
+          await options.leaseBarrier;
+          if (options.leaseError) {
+            throw options.leaseError;
+          }
           if (options.leaseFails || remainingLeaseFailures > 0) {
             remainingLeaseFailures -= 1;
             throw new Error("workspace quiescence expired");
@@ -189,6 +214,9 @@ export function createHarness(
         }),
         resume: vi.fn(async () => {
           log.push("workspace:resume");
+          if (options.resumeError) {
+            throw options.resumeError;
+          }
           if (options.resumeFails) {
             throw new Error("workspace resume failed");
           }
@@ -293,6 +321,22 @@ export function createHarness(
     ownerEpoch: 2,
     expiresAtMs: 10_000,
   };
+  const destroy = vi.fn(async (_environmentId: string) => {
+    log.push("teardown:destroy");
+    if (options.destroyFails) {
+      if (options.destroyFailureState) {
+        currentEnvironment = {
+          ...attached,
+          state: options.destroyFailureState,
+          tunnelStatus: "stopped",
+        };
+      }
+      throw new Error("destroy pending");
+    }
+    const destroyed = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
+    currentEnvironment = destroyed;
+    return destroyed;
+  });
   const environments: WorkerDispatchEnvironmentService = {
     create: vi.fn(async () => {
       fail("create");
@@ -318,24 +362,27 @@ export function createHarness(
     stopTunnel: vi.fn(async () => {
       log.push("teardown:stop");
     }),
-    destroy: vi.fn(async () => {
-      log.push("teardown:destroy");
-      if (options.destroyFails) {
-        if (options.destroyFailureState) {
-          currentEnvironment = {
-            ...attached,
-            state: options.destroyFailureState,
-            tunnelStatus: "stopped",
-          };
-        }
-        throw new Error("destroy pending");
+    destroy,
+    destroyOwned: vi.fn(async (ownedEnvironmentId, authorizeTeardown) => {
+      if (!authorizeTeardown()) {
+        throw new Error("owned teardown authorization changed");
       }
-      const destroyed = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
-      currentEnvironment = destroyed;
-      return destroyed;
+      return await destroy(ownedEnvironmentId);
     }),
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
+      if (
+        options.destroyPendingOwnerDuringEnvironmentReconcile &&
+        currentEnvironment?.state === "attached" &&
+        placementStore
+          .listPendingWorkspaceResults()
+          .some((pending) => currentEnvironment?.attachedSessionIds.includes(pending.sessionId))
+      ) {
+        // Model stale-bundle provider reconciliation: destroying the attached
+        // lease here loses an unstaged result unless placement recovery ran first.
+        log.push("environment:stale-bundle-destroy");
+        currentEnvironment = destroyedEnvironment(currentEnvironment.ownerEpoch + 1);
+      }
     }),
   };
   const service = createWorkerPlacementDispatchService({

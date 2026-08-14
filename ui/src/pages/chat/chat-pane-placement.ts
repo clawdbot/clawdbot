@@ -4,6 +4,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   requestCloudWorkerStop,
+  resolveCloudWorkerStopConfirmation,
   resolveCloudWorkerStopAction,
 } from "../../components/cloud-worker-stop.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
@@ -86,11 +87,7 @@ export async function reclaimChatPanePlacement(params: {
   }
   const { showConfirmDialog } = await import("../../components/confirm-dialog.js");
   const confirmed = await showConfirmDialog({
-    message: t("sessionsView.stopCloudWorkerConfirm", {
-      session: params.row.label || params.row.key,
-    }),
-    confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
-    danger: true,
+    ...resolveCloudWorkerStopConfirmation(action, params.row.label || params.row.key),
   });
   if (!confirmed) {
     return;

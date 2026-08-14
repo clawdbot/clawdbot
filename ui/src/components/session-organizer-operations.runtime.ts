@@ -15,7 +15,7 @@ import type {
   SidebarSessionMutationScope,
   SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
-import { requestCloudWorkerStop } from "./cloud-worker-stop.ts";
+import { requestCloudWorkerStop, resolveCloudWorkerStopConfirmation } from "./cloud-worker-stop.ts";
 import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import {
@@ -510,9 +510,7 @@ export async function stopCloudWorker(
     return;
   }
   const confirmed = await showConfirmDialog({
-    message: t("sessionsView.stopCloudWorkerConfirm", { session: session.label }),
-    confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
-    danger: true,
+    ...resolveCloudWorkerStopConfirmation(stopAction, session.label),
     signal: scope.signal,
   });
   // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`

@@ -57,6 +57,11 @@ export type WorkerWorkspaceResultConflict = {
   totalCount?: number;
 };
 
+export type WorkerTerminalRecovery = {
+  action: "force-destroy-environment";
+  dataLoss: "unreconciled-workspace-result";
+};
+
 type PersistedLocalTurnClaim = Extract<PersistedTurnClaim, { owner: "local" }>;
 
 type PlacementRecordBase<TurnClaim extends PersistedTurnClaim | null> =
@@ -69,6 +74,8 @@ type PlacementRecordBase<TurnClaim extends PersistedTurnClaim | null> =
     stateChangedAtMs: number;
     /** Process-local UI projection; deliberately absent from SQLite. */
     workspaceResultConflict?: WorkerWorkspaceResultConflict;
+    /** Durable-owner projection for the one explicitly destructive recovery path. */
+    terminalRecovery?: WorkerTerminalRecovery;
   };
 
 type UnclaimedPlacementRecordBase = PlacementRecordBase<null>;

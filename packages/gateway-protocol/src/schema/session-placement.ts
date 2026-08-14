@@ -82,6 +82,11 @@ const WorkspaceResultConflictSchema = closedObject({
   totalCount: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 });
 
+const TerminalRecoverySchema = closedObject({
+  action: Type.Literal("force-destroy-environment"),
+  dataLoss: Type.Literal("unreconciled-workspace-result"),
+});
+
 const SessionPlacementConflictProperties = {
   workspaceResultConflict: Type.Optional(WorkspaceResultConflictSchema),
 };
@@ -159,6 +164,7 @@ const FailedSessionPlacementSchema = closedObject({
   ...SessionPlacementTimingProperties,
   ...TerminalSessionPlacementProperties,
   recoveryError: NonEmptyString,
+  terminalRecovery: Type.Optional(TerminalRecoverySchema),
 });
 
 /** Gateway-visible placement projection; `state` remains the closed discriminator. */

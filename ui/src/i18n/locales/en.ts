@@ -1021,6 +1021,9 @@ export const en: TranslationMap = {
     stopCloudWorkerConfirmAction: "Stop worker",
     stopCloudWorkerStale:
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
+    abandonCloudWorkerResultConfirm:
+      'Permanently abandon the unreconciled remote workspace changes for "{session}" and stop its cloud worker? Those changes cannot be recovered.',
+    abandonCloudWorkerResultConfirmAction: "Abandon changes and stop",
     cloudWorkerStopResult: 'Cloud worker for "{session}" is {state}.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",

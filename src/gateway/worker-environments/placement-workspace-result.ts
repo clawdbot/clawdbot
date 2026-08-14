@@ -8,8 +8,13 @@ import {
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import { getRequired } from "./placement-row-codec.js";
+import { getRequired, query as placementQuery, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import {
+  assertNoRunningWorkerSessionToolOperations,
+  clearWorkerTurnToolState,
+} from "./placement-session-tool-operations.js";
+import { isRetainedFailedWorkspaceResultOwner } from "./placement-teardown-fence.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 
 type WorkspaceResultDatabase = Pick<
@@ -78,11 +83,62 @@ export function hasCurrentWorkspaceResultClaim(
   return Boolean(row && matchesWorkspaceResultClaim(placement, row, claim));
 }
 
+type WorkerWorkspaceResultOwnerIdentity = Pick<
+  WorkerWorkspacePendingResult,
+  "environmentId" | "ownerEpoch" | "placementGeneration"
+>;
+
+export function hasMatchingRetainedFailedWorkspaceResultOwner(
+  db: DatabaseSync,
+  placement: WorkerSessionPlacementRecord | undefined,
+  owner: WorkerWorkspaceResultOwnerIdentity & { sessionId: string },
+): boolean {
+  const pending = executeSqliteQuerySync(
+    db,
+    query(db)
+      .selectFrom("worker_workspace_pending_results")
+      .select(["environment_id", "owner_epoch", "placement_generation"])
+      .where("session_id", "=", owner.sessionId)
+      .where("environment_id", "=", owner.environmentId)
+      .where("owner_epoch", "=", owner.ownerEpoch),
+  ).rows[0];
+  return Boolean(
+    pending &&
+    (owner.placementGeneration === pending.placement_generation ||
+      owner.placementGeneration === pending.placement_generation + 1) &&
+    isRetainedFailedWorkspaceResultOwner(placement, {
+      environmentId: pending.environment_id,
+      ownerEpoch: pending.owner_epoch,
+      placementGeneration: pending.placement_generation,
+    }),
+  );
+}
+
 export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): void {
   executeSqliteQuerySync(
     db,
     query(db).deleteFrom("worker_workspace_pending_results").where("session_id", "=", sessionId),
   );
+}
+
+function deleteWorkerWorkspacePendingResult(
+  db: DatabaseSync,
+  pending: WorkerWorkspacePendingResult,
+): void {
+  const result = executeSqliteQuerySync(
+    db,
+    query(db)
+      .deleteFrom("worker_workspace_pending_results")
+      .where("session_id", "=", pending.sessionId)
+      .where("environment_id", "=", pending.environmentId)
+      .where("owner_epoch", "=", pending.ownerEpoch)
+      .where("placement_generation", "=", pending.placementGeneration)
+      .where("claim_id", "=", pending.claimId)
+      .where("run_id", "=", pending.runId),
+  );
+  if (result.numAffectedRows !== 1n) {
+    throw new Error(`Worker workspace result changed for ${pending.sessionId}`);
+  }
 }
 
 export function hasWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): boolean {
@@ -195,8 +251,13 @@ function markWorkerWorkspacePendingResultAccepted(
   }
 }
 
-export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime) {
-  const { instanceId, now, read, write } = runtime;
+export function createPlacementWorkspaceResultOps(
+  runtime: PlacementStoreRuntime,
+  deps: {
+    signalTurnClaimClosed: (path: string, claim: WorkerSessionTurnClaim) => void;
+  },
+) {
+  const { instanceId, now, path, read, write } = runtime;
   const assertPendingClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => {
     const placement = getRequired(db, claim.sessionId);
     const row = executeSqliteQuerySync(
@@ -318,22 +379,186 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
       });
     },
 
-    abandonWorkspaceResult(pending: WorkerWorkspacePendingResult): void {
-      write((db) => {
-        const result = executeSqliteQuerySync(
+    forceAbandonPendingWorkspaceResult(input: {
+      pending: WorkerWorkspacePendingResult;
+      recoveryError: string;
+    }): WorkerSessionPlacementRecord {
+      const { pending } = input;
+      const recoveryError = input.recoveryError.trim();
+      if (!recoveryError) {
+        throw new Error("Forced worker workspace abandonment error is required");
+      }
+      const outcome = write((db) => {
+        const current = getRequired(db, pending.sessionId);
+        const claim = current.turnClaim;
+        const expectedGeneration =
+          pending.placementGeneration + (current.state === "draining" ? 1 : 0);
+        const isCurrentOwner =
+          (current.state === "active" || current.state === "draining") &&
+          current.environmentId === pending.environmentId &&
+          current.activeOwnerEpoch === pending.ownerEpoch &&
+          current.generation === expectedGeneration &&
+          claim?.owner === "worker" &&
+          claim.claimId === pending.claimId &&
+          claim.runId === pending.runId &&
+          claim.generation === pending.placementGeneration &&
+          claim.ownerEpoch === pending.ownerEpoch;
+        const isRetainedFailedOwner = isRetainedFailedWorkspaceResultOwner(current, pending);
+        if (!isCurrentOwner && !isRetainedFailedOwner) {
+          throw new Error(
+            `Cannot force-abandon stale worker workspace result for ${pending.sessionId}`,
+          );
+        }
+
+        const updatedAtMs = now();
+        const update =
+          current.state === "failed"
+            ? placementQuery(db)
+                .updateTable("worker_session_placements")
+                .set({ recovery_error: recoveryError, updated_at_ms: updatedAtMs })
+                .where("session_id", "=", pending.sessionId)
+                .where("state", "=", "failed")
+                .where("transition_generation", "=", current.generation)
+                .where("environment_id", "=", pending.environmentId)
+                .where("active_owner_epoch", "=", pending.ownerEpoch)
+                .where("turn_claim_owner", "is", null)
+            : placementQuery(db)
+                .updateTable("worker_session_placements")
+                .set(transitionValues(current, "failed", { recoveryError }, updatedAtMs))
+                .where("session_id", "=", pending.sessionId)
+                .where("state", "=", current.state)
+                .where("transition_generation", "=", current.generation)
+                .where("environment_id", "=", pending.environmentId)
+                .where("active_owner_epoch", "=", pending.ownerEpoch)
+                .where("turn_claim_owner", "=", "worker")
+                .where("turn_claim_id", "=", pending.claimId)
+                .where("turn_claim_run_id", "=", pending.runId)
+                .where("turn_claim_generation", "=", pending.placementGeneration)
+                .where("turn_claim_owner_epoch", "=", pending.ownerEpoch);
+        const result = executeSqliteQuerySync(db, update);
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(
+            `Pending worker result owner changed during forced abandonment for ${pending.sessionId}`,
+          );
+        }
+        deleteWorkerWorkspacePendingResult(db, pending);
+        return {
+          record: getRequired(db, pending.sessionId),
+          releasedClaim: isCurrentOwner
+            ? {
+                sessionId: pending.sessionId,
+                claimId: pending.claimId,
+                runId: pending.runId,
+                placementGeneration: pending.placementGeneration,
+                owner: {
+                  kind: "worker" as const,
+                  environmentId: pending.environmentId,
+                  ownerEpoch: pending.ownerEpoch,
+                },
+              }
+            : undefined,
+        };
+      });
+      if (outcome.releasedClaim) {
+        deps.signalTurnClaimClosed(path, outcome.releasedClaim);
+      }
+      return outcome.record;
+    },
+
+    forceAbandonWorkerTurn(input: {
+      claim: WorkerSessionTurnClaim;
+      expectedGeneration: number;
+      recoveryError: string;
+    }): { record: WorkerSessionPlacementRecord; stagedResultRef?: string } {
+      const { claim } = input;
+      const recoveryError = input.recoveryError.trim();
+      if (claim.owner.kind !== "worker" || !recoveryError) {
+        throw new Error("Forced worker turn abandonment requires a worker claim and error");
+      }
+      const owner = claim.owner;
+      const outcome = write((db) => {
+        const current = getRequired(db, claim.sessionId);
+        const persisted = current.turnClaim;
+        if (
+          current.state !== "draining" ||
+          current.generation !== input.expectedGeneration ||
+          current.environmentId !== owner.environmentId ||
+          current.activeOwnerEpoch !== owner.ownerEpoch ||
+          persisted?.owner !== "worker" ||
+          persisted.claimId !== claim.claimId ||
+          persisted.runId !== claim.runId ||
+          persisted.generation !== claim.placementGeneration ||
+          persisted.ownerEpoch !== owner.ownerEpoch
+        ) {
+          throw new Error(`Cannot force-abandon stale worker turn for ${claim.sessionId}`);
+        }
+        assertNoRunningWorkerSessionToolOperations(db, {
+          sessionId: claim.sessionId,
+          claimId: claim.claimId,
+        });
+        const pending = executeSqliteQuerySync(
           db,
           query(db)
-            .deleteFrom("worker_workspace_pending_results")
-            .where("session_id", "=", pending.sessionId)
-            .where("environment_id", "=", pending.environmentId)
-            .where("owner_epoch", "=", pending.ownerEpoch)
-            .where("placement_generation", "=", pending.placementGeneration)
-            .where("claim_id", "=", pending.claimId)
-            .where("run_id", "=", pending.runId),
+            .selectFrom("worker_workspace_pending_results")
+            .select([
+              "environment_id",
+              "owner_epoch",
+              "placement_generation",
+              "claim_id",
+              "run_id",
+              "staged_result_ref",
+            ])
+            .where("session_id", "=", claim.sessionId),
+        ).rows[0];
+        if (
+          pending &&
+          (pending.environment_id !== owner.environmentId ||
+            pending.owner_epoch !== owner.ownerEpoch ||
+            pending.placement_generation !== claim.placementGeneration ||
+            pending.claim_id !== claim.claimId ||
+            pending.run_id !== claim.runId)
+        ) {
+          throw new Error(`Cannot force-abandon mismatched worker result for ${claim.sessionId}`);
+        }
+        clearWorkerTurnToolState(db, { sessionId: claim.sessionId, claimId: claim.claimId });
+        if (pending) {
+          clearWorkerWorkspacePendingResult(db, claim.sessionId);
+        }
+        const result = executeSqliteQuerySync(
+          db,
+          placementQuery(db)
+            .updateTable("worker_session_placements")
+            .set(
+              pending
+                ? transitionValues(current, "failed", { recoveryError }, now())
+                : transitionValues(current, "reconciling", {}, now()),
+            )
+            .where("session_id", "=", claim.sessionId)
+            .where("state", "=", "draining")
+            .where("transition_generation", "=", current.generation)
+            .where("environment_id", "=", owner.environmentId)
+            .where("active_owner_epoch", "=", owner.ownerEpoch)
+            .where("turn_claim_owner", "=", "worker")
+            .where("turn_claim_id", "=", claim.claimId)
+            .where("turn_claim_run_id", "=", claim.runId)
+            .where("turn_claim_generation", "=", claim.placementGeneration)
+            .where("turn_claim_owner_epoch", "=", owner.ownerEpoch),
         );
         if (result.numAffectedRows !== 1n) {
-          throw new Error(`Worker workspace result changed for ${pending.sessionId}`);
+          throw new Error(`Worker turn owner changed during abandonment for ${claim.sessionId}`);
         }
+        return {
+          record: getRequired(db, claim.sessionId),
+          stagedResultRef: pending?.staged_result_ref ?? undefined,
+        };
+      });
+      deps.signalTurnClaimClosed(path, claim);
+      return outcome;
+    },
+
+    abandonWorkspaceResult(pending: WorkerWorkspacePendingResult): void {
+      write((db) => {
+        deleteWorkerWorkspacePendingResult(db, pending);
       });
     },
   };

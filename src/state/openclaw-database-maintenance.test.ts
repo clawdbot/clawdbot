@@ -63,23 +63,32 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
-  it("keeps a newer nullable shared-state column compatible with the previous schema", () => {
-    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  removed_at INTEGER,\n  run_end_cleanup_json TEXT\n",
-      "  removed_at INTEGER\n",
-    );
-    const database = createGlobalDatabase();
-    try {
-      expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
-      expect(() =>
-        assertSqliteSchemaContains(database, "previous global schema", previousSchema, {
-          allowCompatibleAdditiveColumns: true,
-        }),
-      ).not.toThrow();
-    } finally {
-      database.close();
-    }
-  });
+  it.each([
+    {
+      current: "  removed_at INTEGER,\n  run_end_cleanup_json TEXT\n",
+      previous: "  removed_at INTEGER\n",
+    },
+    {
+      current: "  forced_abandonment_retained INTEGER,\n  created_at_ms INTEGER NOT NULL,\n",
+      previous: "  created_at_ms INTEGER NOT NULL,\n",
+    },
+  ])(
+    "keeps a newer nullable shared-state column compatible with the previous schema",
+    ({ current, previous }) => {
+      const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(current, previous);
+      const database = createGlobalDatabase();
+      try {
+        expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
+        expect(() =>
+          assertSqliteSchemaContains(database, "previous global schema", previousSchema, {
+            allowCompatibleAdditiveColumns: true,
+          }),
+        ).not.toThrow();
+      } finally {
+        database.close();
+      }
+    },
+  );
 
   it("keeps the cron authority companion table compatible with the previous schema", () => {
     const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
