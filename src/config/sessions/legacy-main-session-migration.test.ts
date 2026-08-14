@@ -13,10 +13,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import {
-  migrateLegacyMainSessionKeys,
-  type LegacyMainSessionMigrationOutcomeKind,
-} from "./legacy-main-session-migration.js";
+import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
@@ -30,6 +27,10 @@ type Fixture = {
   env: NodeJS.ProcessEnv;
   stateDir: string;
 };
+
+type LegacyMainSessionMigrationOutcomeKind = Awaited<
+  ReturnType<typeof migrateLegacyMainSessionKeys>
+>["outcomes"][number]["kind"];
 
 function createFixture(cfg: OpenClawConfig = { agents: { entries: { ops: {} } } }): Fixture {
   const rawRoot = tempDirs.make("openclaw-legacy-main-session-");

@@ -2,7 +2,7 @@ import type { SessionEntry } from "./types.js";
 
 export type LegacyMainSessionMigrationMode = "automatic" | "detect" | "doctor-fix";
 
-export type LegacyMainSessionMigrationOutcomeKind =
+type LegacyMainSessionMigrationOutcomeKind =
   | "not-armed"
   | "no-legacy-rows"
   | "migrated-in-place"

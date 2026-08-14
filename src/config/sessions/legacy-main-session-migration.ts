@@ -44,13 +44,6 @@ import {
   resolveAgentSessionStoreTargetsSync,
 } from "./targets.js";
 
-export type {
-  LegacyMainSessionMigrationMode,
-  LegacyMainSessionMigrationOutcome,
-  LegacyMainSessionMigrationOutcomeKind,
-  LegacyMainSessionMigrationResult,
-} from "./legacy-main-session-migration.contract.js";
-
 const SOURCE_KEY = "legacy-main-session-keys";
 const MIGRATION_KIND = "legacy-main-session-keys-v1";
 const REPORT_VERSION = 1;
