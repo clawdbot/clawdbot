@@ -13,7 +13,7 @@
 // they evaluate once per worker through native ESM and never re-register; dropping
 // their definitions would leave `wa-*` and friends permanently unupgraded.
 
-export type JsdomCustomElementDefinition = { name: string };
+type JsdomCustomElementDefinition = { name: string };
 
 export type CustomElementTracking = {
   registry: CustomElementRegistry;
