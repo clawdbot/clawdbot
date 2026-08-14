@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+const GIT_LS_FILES_TIMEOUT_MS = 5_000;
 const gitTrackedFilesCache = new Map<string, string[] | null>();
 
 function filterExistingRepoFiles(repoRoot: string, files: readonly string[]): string[] {
@@ -36,8 +37,11 @@ export function listGitTrackedFiles(params: {
   const result = spawnSync("git", ["ls-files", "--", ...pathspecs], {
     cwd: repoRoot,
     encoding: "utf8",
+    // Bound repository scans; SIGKILL avoids waiting on a hung Git process after timeout.
+    killSignal: "SIGKILL",
     maxBuffer: 16 * 1024 * 1024,
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: GIT_LS_FILES_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     gitTrackedFilesCache.set(cacheKey, null);

@@ -21,13 +21,9 @@ import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../gateway/net.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
-import {
-  formatPortDiagnostics,
-  inspectPortConnections,
-  inspectPortUsage,
-  isExpectedGatewayListeners,
-  type PortConnection,
-} from "../infra/ports.js";
+import { formatPortDiagnostics, isExpectedGatewayListeners } from "../infra/ports-format.js";
+import { inspectPortConnections, inspectPortUsage } from "../infra/ports-inspect.js";
+import type { PortConnection } from "../infra/ports-types.js";
 import {
   formatGatewayRestartHandoffDiagnostic,
   readGatewayRestartHandoffSync,

@@ -2,11 +2,13 @@ import { buildPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/
 import { z } from "zod";
 import { createCuaComputerCommands } from "./src/commands.js";
 
-const CuaComputerConfigSchema = z.strictObject({});
-
-const configSchema = buildPluginConfigSchema(CuaComputerConfigSchema, {
-  uiHints: {},
+const CuaComputerConfigSchema = z.strictObject({
+  // Keep the shipped daemon setting as a named no-op: strict validation accepts
+  // existing config, but direct SDK commands never receive a binary path.
+  driverPath: z.string().optional(),
 });
+
+const configSchema = buildPluginConfigSchema(CuaComputerConfigSchema);
 
 export default definePluginEntry({
   id: "cua-computer",
@@ -23,5 +25,14 @@ export default definePluginEntry({
     for (const command of createCuaComputerCommands()) {
       api.registerNodeHostCommand(command);
     }
+    // computer.act is dangerous-by-default and therefore also requires the
+    // operator's explicit gateway.nodes.commands.allow entry. The plugin
+    // policy is the final Gateway guard and the only path that may forward the
+    // already-allowlisted invocation to the paired node.
+    api.registerNodeInvokePolicy({
+      commands: ["computer.act"],
+      dangerous: true,
+      handle: async (ctx) => await ctx.invokeNode(),
+    });
   },
 });

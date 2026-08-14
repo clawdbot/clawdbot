@@ -32,7 +32,7 @@ import {
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
-  OPENROUTER_BASE_URL,
+  resolveOpenRouterApiBaseUrl,
 } from "./provider-catalog.js";
 import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
@@ -237,7 +237,9 @@ export default defineSingleProviderPluginEntry({
         name: capabilities?.name ?? ctx.modelId,
         api: "openai-completions",
         provider: PROVIDER_ID,
-        baseUrl: OPENROUTER_BASE_URL,
+        baseUrl: resolveOpenRouterApiBaseUrl(
+          ctx.providerConfig?.baseUrl ?? ctx.config?.models?.providers?.openrouter?.baseUrl,
+        ),
         reasoning:
           (capabilities?.reasoning ?? false) &&
           !isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId),
@@ -288,10 +290,13 @@ export default defineSingleProviderPluginEntry({
           if (!apiKey) {
             return null;
           }
+          const providerConfig = ctx.config.models?.providers?.openrouter;
           return {
             provider: await buildOpenrouterLiveProvider({
               apiKey,
               discoveryApiKey: auth.discoveryApiKey,
+              baseUrl: providerConfig?.baseUrl,
+              request: providerConfig?.request,
             }),
           };
         },
@@ -321,6 +326,17 @@ export default defineSingleProviderPluginEntry({
             }
           : undefined;
       },
+      classifyFailoverReason: ({ provider, errorMessage }) => {
+        if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
+          return undefined;
+        }
+        if (
+          /\b(?:api\s+key\s+budget|key)\s+limit\s*(?:exceeded|reached|hit)\b/i.test(errorMessage)
+        ) {
+          return "billing";
+        }
+        return /provider returned error/i.test(errorMessage) ? "timeout" : undefined;
+      },
       ...passthroughGeminiReplayHooks,
       buildReplayPolicy: buildOpenRouterReplayPolicy,
       resolveReasoningOutputMode: () => "native",
@@ -340,6 +356,8 @@ export default defineSingleProviderPluginEntry({
       fetchUsageSnapshot: async (ctx) =>
         await fetchOpenRouterUsage({
           token: ctx.token,
+          baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
+          request: ctx.config.models?.providers?.openrouter?.request,
           timeoutMs: ctx.timeoutMs,
           fetchFn: ctx.fetchFn,
         }),

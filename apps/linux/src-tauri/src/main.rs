@@ -5,6 +5,12 @@ mod discovery;
 mod gateway;
 mod gateway_device_identity;
 mod gateway_operation_queue;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+mod gateway_sleep;
+#[cfg(target_os = "linux")]
+mod gateway_sleep_logind;
+#[cfg(target_os = "linux")]
+mod gateway_sleep_logind_listener;
 mod gateway_ws;
 mod installer;
 mod notify;
@@ -743,6 +749,10 @@ fn main() {
         let state = DesktopState::new(window.url()?);
         app.manage(state.clone());
         app.manage(gateway_ws::GatewayClient::new());
+        #[cfg(target_os = "linux")]
+        app.manage(gateway_sleep_logind::SleepBridge::start(
+            app.handle().clone(),
+        ));
         let operation_app = app.handle().clone();
         let operation_state = state.clone();
         let error_app = app.handle().clone();
@@ -874,6 +884,9 @@ fn main() {
     app.run(|app, event| {
         #[cfg(target_os = "linux")]
         if matches!(event, tauri::RunEvent::Exit) {
+            if let Some(bridge) = app.try_state::<gateway_sleep_logind::SleepBridge>() {
+                bridge.shutdown();
+            }
             if let Some(bridge) = app.try_state::<canvas::CanvasBridge>() {
                 bridge.shutdown();
             }

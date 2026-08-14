@@ -17,8 +17,6 @@ export {
   normalizeMessageChannel,
   resolveGatewayMessageChannel,
   resolveMessageChannel,
-  type DeliverableMessageChannel,
-  type GatewayMessageChannel,
 } from "./message-channel-normalize.js";
 export {
   INTERNAL_MESSAGE_CHANNEL,

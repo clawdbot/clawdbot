@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
@@ -27,6 +28,7 @@ vi.mock("../channels/plugins/index.js", () => ({
 
 describe("resolveAgentScopedOutboundMediaAccess", () => {
   afterEach(() => {
+    __setFsSafeTestHooksForTest(undefined);
     vi.unstubAllEnvs();
     channelPluginMocks.getLoadedChannelPlugin.mockReset();
   });
@@ -209,6 +211,46 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects owned host reads when an allowed ancestor symlink retargets before open",
+    async () => {
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-media-race-"));
+      const workspaceDir = path.join(base, "workspace");
+      const insideDir = path.join(workspaceDir, "inside");
+      const outsideDir = path.join(base, "outside");
+      const aliasDir = path.join(workspaceDir, "slot");
+      const filePath = path.join(aliasDir, "report.csv");
+      await fs.mkdir(insideDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(insideDir, "report.csv"), "inside");
+      await fs.writeFile(path.join(outsideDir, "report.csv"), "outside-secret");
+      await fs.symlink(insideDir, aliasDir);
+      const result = resolveAgentScopedOutboundMediaAccess({
+        cfg: { tools: { allow: ["read"] } } as OpenClawConfig,
+        workspaceDir,
+        mediaSources: [filePath],
+      });
+      __setFsSafeTestHooksForTest({
+        afterPreOpenLstat: async (openedPath) => {
+          if (openedPath !== filePath) {
+            return;
+          }
+          await fs.rm(aliasDir);
+          await fs.symlink(outsideDir, aliasDir);
+        },
+      });
+
+      try {
+        await expect(
+          readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1024 }),
+          // fs-safe 0.5.2 reports pre-open identity drift as path-mismatch.
+        ).rejects.toMatchObject({ code: "path-mismatch" });
+      } finally {
+        await fs.rm(base, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps host reads enabled for DM sender when no group context exists", () => {
     const result = resolveAgentScopedOutboundMediaAccess({

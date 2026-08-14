@@ -51,6 +51,34 @@ struct GenericPasswordKeychainStoreTests {
         #expect(addCalls == 1)
     }
 
+    @Test func `shared access group scopes keychain mutation queries`() {
+        let accessGroup = "group.ai.openclawfoundation.app.shared"
+        var updateQuery: [String: Any] = [:]
+        var addQuery: [String: Any] = [:]
+
+        let result = GenericPasswordKeychainStore.saveDataResult(
+            Data("shared-value".utf8),
+            service: "test-service",
+            account: "test-account",
+            accessGroup: accessGroup,
+            accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            updateItem: { query, _ in
+                updateQuery = query as? [String: Any] ?? [:]
+                return errSecItemNotFound
+            },
+            addItem: { query in
+                addQuery = query as? [String: Any] ?? [:]
+                return errSecSuccess
+            })
+
+        guard case .success = result else {
+            Issue.record("expected shared keychain add to succeed")
+            return
+        }
+        #expect(updateQuery[kSecAttrAccessGroup as String] as? String == accessGroup)
+        #expect(addQuery[kSecAttrAccessGroup as String] as? String == accessGroup)
+    }
+
     @Test func `add race retries atomic update`() {
         var updateCalls = 0
 

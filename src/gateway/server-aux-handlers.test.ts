@@ -1,12 +1,38 @@
 // Gateway auxiliary handler tests cover hot config reload behavior, prepared
 // secret snapshot updates, and restart-plan side effects.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const secretStoreMocks = vi.hoisted(() => ({
+  deleteEntry: vi.fn(),
+  listEntries: vi.fn(() => []),
+  purgeEntries: vi.fn(() => 0),
+  writeEntry: vi.fn(),
+}));
+
+vi.mock("../secrets/store/secret-store.js", () => {
+  class SecretStoreValidationError extends Error {}
+  return {
+    deleteSecretStoreEntry: secretStoreMocks.deleteEntry,
+    listSecretStoreEntries: secretStoreMocks.listEntries,
+    purgeExpiredSecretStoreEntries: secretStoreMocks.purgeEntries,
+    SECRET_STORE_VALUE_MAX_BYTES: 64 * 1024,
+    SecretStoreValidationError,
+    writeSecretStoreEntry: secretStoreMocks.writeEntry,
+  };
+});
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -14,9 +40,15 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 function publishSharedGatewayGeneration(
   state: { current: string | undefined; required: string | undefined | null },
@@ -136,6 +168,21 @@ async function invokeSecretsReload(params: {
   });
 }
 
+async function invokeSecretStoreSet(params: {
+  handlers: ReturnType<typeof createGatewayAuxHandlers>["extraHandlers"];
+  respond: ReturnType<typeof vi.fn>;
+  name: string;
+}) {
+  await params.handlers["secrets.store.set"]({
+    req: { type: "req", id: "store-1", method: "secrets.store.set" },
+    params: { name: params.name, value: "next-value", kind: "secret" },
+    client: null,
+    isWebchatConnect: () => false,
+    respond: params.respond as never,
+    context: {} as never,
+  });
+}
+
 type RespondCall = [boolean, unknown, { message?: string } | undefined];
 type GatewayAuxHandlerParams = Parameters<typeof createGatewayAuxHandlers>[0];
 type ChannelName = Parameters<GatewayAuxHandlerParams["startChannel"]>[0];
@@ -166,6 +213,9 @@ type SecretsReloadHarnessParams = {
   getChannelAutostartSuppression?: GatewayAuxHandlerParams["getChannelAutostartSuppression"];
   logChannelsInfo?: GatewayAuxHandlerParams["logChannels"]["info"];
   respond?: ReturnType<typeof vi.fn>;
+  onApprovalLifecycle?: GatewayAuxHandlerParams["onApprovalLifecycle"];
+  validateAgentRuntimeDelegatedAuthority?: GatewayAuxHandlerParams["validateAgentRuntimeDelegatedAuthority"];
+  registerWorkerTurnClaimClosedHandler?: GatewayAuxHandlerParams["registerWorkerTurnClaimClosedHandler"];
 };
 
 function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
@@ -185,6 +235,9 @@ function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
     stopChannel: params.stopChannel ?? (async () => {}),
     getChannelAutostartSuppression: params.getChannelAutostartSuppression,
     logChannels: { info: params.logChannelsInfo ?? vi.fn() },
+    onApprovalLifecycle: params.onApprovalLifecycle,
+    validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
+    registerWorkerTurnClaimClosedHandler: params.registerWorkerTurnClaimClosedHandler,
   });
   const { extraHandlers } = gatewayAux;
 
@@ -221,6 +274,10 @@ function createSecretsReloadHarnessWithChannelMocks(
 beforeEach(() => {
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
+  secretStoreMocks.deleteEntry.mockReset();
+  secretStoreMocks.listEntries.mockReset().mockReturnValue([]);
+  secretStoreMocks.purgeEntries.mockReset().mockReturnValue(0);
+  secretStoreMocks.writeEntry.mockReset();
 });
 
 afterEach(() => {
@@ -243,6 +300,134 @@ describe("gateway aux handlers", () => {
     expect(first.execApprovalManager.runtimeEpoch).not.toBe(
       second.execApprovalManager.runtimeEpoch,
     );
+  });
+
+  it("settles and publishes both approval kinds from the production worker-claim observer", async () => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-aux-worker-"));
+    closeOpenClawStateDatabaseForTest();
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const placements = createWorkerSessionPlacementStore({ database });
+    const identity = {
+      sessionId: "session-worker-close",
+      agentId: "main",
+      sessionKey: "agent:main:worker-close",
+    };
+    let placement = placements.startDispatch(identity);
+    placement = placements.transition({
+      sessionId: identity.sessionId,
+      from: "requested",
+      to: "provisioning",
+      expectedGeneration: placement.generation,
+      patch: { environmentId: "worker-env" },
+    });
+    placement = placements.transition({
+      sessionId: identity.sessionId,
+      from: "provisioning",
+      to: "syncing",
+      expectedGeneration: placement.generation,
+      patch: { workerBundleHash: "a".repeat(64) },
+    });
+    placement = placements.transition({
+      sessionId: identity.sessionId,
+      from: "syncing",
+      to: "starting",
+      expectedGeneration: placement.generation,
+      patch: {
+        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+        remoteWorkspaceDir: "/workspace/worker-close",
+      },
+    });
+    placement = placements.transition({
+      sessionId: identity.sessionId,
+      from: "starting",
+      to: "active",
+      expectedGeneration: placement.generation,
+      patch: { activeOwnerEpoch: 7 },
+    });
+    if (placement.state !== "active") {
+      throw new Error("expected active worker placement");
+    }
+    const operationalRunInstance = Object.freeze({
+      instanceId: "worker-operational-instance",
+      runId: "worker-run-close",
+    });
+    const runAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const turnClaim = placements.claimTurn({
+      ...identity,
+      claimId: "worker-claim-close",
+      runId: operationalRunInstance.runId,
+      owner: {
+        kind: "worker",
+        environmentId: placement.environmentId,
+        ownerEpoch: placement.activeOwnerEpoch,
+      },
+    });
+    const authority = { kind: "worker" as const, ...runAuthority, turnClaim };
+    const validateAuthority = createAgentRuntimeApprovalAuthorityValidator(placements);
+    const lifecycle = vi.fn();
+    const gatewayAux = createSecretsReloadHarness({
+      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
+      onApprovalLifecycle: lifecycle,
+      validateAgentRuntimeDelegatedAuthority: (candidate) =>
+        validateAuthority({
+          kind: "agentRuntime",
+          agentId: identity.agentId,
+          sessionKey: identity.sessionKey,
+          operationalRunInstance: candidate.operationalRunInstance,
+          delegatedAuthority: candidate,
+        }),
+      registerWorkerTurnClaimClosedHandler: (handler) =>
+        placements.registerTurnClaimClosedHandler(handler),
+    });
+    const broadcast = vi.fn();
+    const publishResolved = vi.fn();
+    gatewayAux.bindApprovalPublicationContext({
+      broadcast,
+      broadcastToConnIds: vi.fn(),
+      approvalEvents: { publishResolved },
+      logGateway: { error: vi.fn() },
+    } as never);
+    const execRecord = gatewayAux.execApprovalManager.create(
+      { command: "echo worker", runId: turnClaim.runId },
+      60_000,
+      "exec-worker-close",
+    );
+    execRecord.agentRuntimeDelegatedAuthority = authority;
+    const execDecision = gatewayAux.execApprovalManager.register(execRecord, 60_000);
+    const pluginRecord = gatewayAux.pluginApprovalManager.create(
+      { title: "Worker action", description: "Close with worker claim", runId: turnClaim.runId },
+      60_000,
+      "plugin-worker-close",
+    );
+    pluginRecord.agentRuntimeDelegatedAuthority = authority;
+    const pluginDecision = gatewayAux.pluginApprovalManager.register(pluginRecord, 60_000);
+
+    placements.releaseTurn(turnClaim);
+
+    await expect(execDecision).resolves.toBeNull();
+    await expect(pluginDecision).resolves.toBeNull();
+    await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(2));
+    expect(publishResolved.mock.calls.map((call) => call[0])).toEqual(["exec", "plugin"]);
+    expect(broadcast.mock.calls.map((call) => call[0])).toEqual([
+      "exec.approval.resolved",
+      "plugin.approval.resolved",
+    ]);
+    expect(lifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phase: "terminal",
+        record: expect.objectContaining({ kind: "exec", status: "cancelled" }),
+      }),
+    );
+    expect(lifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phase: "terminal",
+        record: expect.objectContaining({ kind: "plugin", status: "cancelled" }),
+      }),
+    );
+    gatewayAux.unregisterApprovalAuthorityObserver();
+    releaseAgentRunDelegatedAuthority(runAuthority);
+    closeOpenClawStateDatabaseForTest();
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it("refuses secrets.reload channel restarts while crash-loop safe mode suppresses autostart", async () => {
@@ -365,6 +550,60 @@ describe("gateway aux handlers", () => {
     expect(startChannel.mock.calls).toEqual([["slack"]]);
     expect(respond).toHaveBeenNthCalledWith(1, true, { ok: true, warningCount: 0 });
     expect(respond).toHaveBeenNthCalledWith(2, true, { ok: true, warningCount: 0 });
+  });
+
+  it("runs a trailing refresh when a referenced store mutation overlaps reload", async () => {
+    const sourceConfig = asConfig({
+      models: {
+        providers: {
+          test: {
+            apiKey: { source: "store", provider: "default", id: "SERVICE_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    });
+    activateSecretsRuntimeSnapshot(createSourceSnapshot(sourceConfig));
+    let releaseFirst: (() => void) | undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted: (() => void) | undefined;
+    const firstEntered = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const activateRuntimeSecrets = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        firstStarted?.();
+        await firstBlocked;
+        return createSourceSnapshot(sourceConfig);
+      })
+      .mockResolvedValue(createSourceSnapshot(sourceConfig));
+    const { extraHandlers, reload } = createSecretsReloadHarness({ activateRuntimeSecrets });
+    const reloadPromise = reload();
+    await firstEntered;
+
+    const setRespond = vi.fn();
+    const setPromise = invokeSecretStoreSet({
+      handlers: extraHandlers,
+      respond: setRespond,
+      name: "SERVICE_API_KEY",
+    });
+    await vi.waitFor(() => expect(secretStoreMocks.writeEntry).toHaveBeenCalledOnce());
+    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
+    releaseFirst?.();
+    await Promise.all([reloadPromise, setPromise]);
+
+    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(2);
+    expect(activateRuntimeSecrets.mock.calls[1]?.[1]).toMatchObject({
+      forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
+    });
+    expect(setRespond).toHaveBeenCalledWith(true, {
+      ok: true,
+      reloaded: true,
+      warningCount: 0,
+    });
   });
 
   it("retries from the canonical source when it changes during secrets.reload preparation", async () => {
@@ -511,7 +750,7 @@ describe("gateway aux handlers", () => {
       required: "gen-old",
     });
     expect(
-      getRuntimeAuthProfileStoreSnapshot(authAgentDir)?.profiles["openai:default"],
+      getRuntimeAuthProfileStoreSnapshotCore(authAgentDir)?.profiles["openai:default"],
     ).toMatchObject({ access: "access-new", refresh: "refresh-new" });
   });
 

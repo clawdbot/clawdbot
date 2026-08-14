@@ -142,6 +142,10 @@ export const tlonPlugin = createChatChannelPlugin({
         }
         return parsed.nest;
       },
+      inferTargetChatType: ({ to }) => {
+        const target = parseTlonTarget(to);
+        return target ? (target.kind === "dm" ? "direct" : "group") : undefined;
+      },
       targetResolver: {
         looksLikeId: (target) => Boolean(parseTlonTarget(target)),
         hint: formatTargetHint(),

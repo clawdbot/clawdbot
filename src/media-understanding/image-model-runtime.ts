@@ -4,7 +4,7 @@ import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel } from "../agents/minimax-vlm.js";
 import {
   applySecretRefHeaderSentinels,
-  getApiKeyForModel,
+  getApiKeyForModelCore,
   requireApiKey,
 } from "../agents/model-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
@@ -104,7 +104,7 @@ async function prepareResolvedImageRuntime(
 ): Promise<PreparedImageRuntime> {
   let model = resolvedModel;
   const modelRuntime = getModelRegistryRuntime(modelRegistry);
-  const apiKeyInfo = await getApiKeyForModel({
+  const apiKeyInfo = await getApiKeyForModelCore({
     model,
     cfg: params.cfg,
     agentDir: params.agentDir,

@@ -42,6 +42,7 @@ export type SessionDisplayRow = {
   outputTokens?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
+  totalTokensVersion?: 1;
   model?: string;
   modelProvider?: string;
   providerOverride?: string;
@@ -87,6 +88,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     outputTokens: entry?.outputTokens,
     totalTokens: entry?.totalTokens,
     totalTokensFresh: entry?.totalTokensFresh,
+    totalTokensVersion: entry?.totalTokensVersion,
     model: entry?.model,
     modelProvider: entry?.modelProvider,
     providerOverride: entry?.providerOverride,

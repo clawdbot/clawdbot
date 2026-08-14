@@ -1,7 +1,7 @@
 /**
  * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
  */
-import { sha256HexPrefix } from "../../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 type OpenAIThinkingBlock = {
@@ -61,14 +61,7 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
 }
 
 function parseTimestampMs(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? null : parsed;
-  }
-  return null;
+  return parseDateFirstTimestampMs(value) ?? null;
 }
 
 function hasFollowingNonThinkingBlock(
@@ -106,7 +99,7 @@ function isOpenAIToolCallType(type: unknown): boolean {
 }
 
 function shortOpenAIResponsesIdHash(id: string): string {
-  return sha256HexPrefix(id, 10);
+  return sha256HexPrefixCore(id, 10);
 }
 
 function sanitizeOpenAIResponsesIdTail(value: string): string {
@@ -525,3 +518,4 @@ export function downgradeOpenAIReasoningBlocks(
 
   return anyChanged ? out : messages;
 }
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";

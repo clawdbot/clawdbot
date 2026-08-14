@@ -20,6 +20,10 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
+import {
+  modelEntryWithRuntimePolicy,
+  selectedCanonicalModelRefsForRuntimePolicy,
+} from "./legacy-runtime-model-policy.js";
 import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
 
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
@@ -706,61 +710,6 @@ function resolveLegacyAgentRuntimeIntent(raw: unknown): LegacyAgentRuntimeIntent
     (entry) => entry.cli && normalizeProviderId(entry.runtime) === runtime,
   );
   return alias ? { provider: alias.provider, runtime: alias.runtime } : undefined;
-}
-
-function selectedCanonicalModelRefsForRuntimePolicy(rawModel: unknown, provider: string): string[] {
-  const refs: string[] = [];
-  const addRef = (rawRef: unknown) => {
-    if (typeof rawRef !== "string") {
-      return;
-    }
-    const trimmed = rawRef.trim();
-    const slash = trimmed.indexOf("/");
-    if (slash <= 0 || slash >= trimmed.length - 1) {
-      return;
-    }
-    if (normalizeProviderId(trimmed.slice(0, slash)) !== normalizeProviderId(provider)) {
-      return;
-    }
-    refs.push(trimmed);
-  };
-
-  if (typeof rawModel === "string") {
-    addRef(rawModel);
-    return refs;
-  }
-  const model = getRecord(rawModel);
-  if (!model) {
-    return refs;
-  }
-  addRef(model.primary);
-  if (Array.isArray(model.fallbacks)) {
-    for (const fallback of model.fallbacks) {
-      addRef(fallback);
-    }
-  }
-  return refs;
-}
-
-function modelEntryWithRuntimePolicy(
-  entry: unknown,
-  runtime: string,
-): {
-  changed: boolean;
-  entry: Record<string, unknown>;
-} {
-  const base = getRecord(entry) ? { ...(entry as Record<string, unknown>) } : {};
-  const currentRuntime = getRecord(base.agentRuntime);
-  const currentRuntimeId =
-    typeof currentRuntime?.id === "string" ? currentRuntime.id.trim().toLowerCase() : "";
-  if (currentRuntimeId && currentRuntimeId !== "auto") {
-    return { changed: false, entry: base };
-  }
-  base.agentRuntime = {
-    ...currentRuntime,
-    id: runtime,
-  };
-  return { changed: true, entry: base };
 }
 
 function preserveLegacyWholeAgentRuntimePolicy(

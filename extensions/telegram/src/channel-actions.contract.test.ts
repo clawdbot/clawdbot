@@ -316,4 +316,31 @@ describe("telegram actions contract", () => {
       }),
     ).resolves.toEqual({ location });
   });
+
+  it("rejects retired native buttons before prepared presentation delivery", async () => {
+    const prepareSendPayload = telegramPlugin.actions?.prepareSendPayload;
+
+    await expect(
+      prepareSendPayload?.({
+        ctx: {
+          channel: "telegram",
+          action: "send",
+          cfg: {} as OpenClawConfig,
+          params: { buttons: '[[{"text":"Yes","callback_data":"yes"}]]' },
+        },
+        to: "123456",
+        payload: {
+          text: "Choose",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Yes", action: { type: "callback", value: "yes" } }],
+              },
+            ],
+          },
+        },
+      }),
+    ).rejects.toThrow(/native "buttons" is unsupported.*Use presentation/);
+  });
 });

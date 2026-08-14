@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -13,6 +14,18 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("onboarding agent target", () => {
+  it("uses the retained compatibility owner after the marker is removed", () => {
+    const config = retainLegacyDefaultAgentId(
+      { agents: { entries: { main: {}, ops: { workspace: "/srv/ops" } } } },
+      "ops",
+    );
+
+    expect(resolveOnboardingAgentTarget(config)).toMatchObject({
+      agentId: "ops",
+      workspaceDir: "/srv/ops",
+    });
+  });
+
   it("provisions the configured default agent workspace and sessions", async () => {
     const stateDir = tempDirs.make("openclaw-onboard-target-");
     const globalWorkspace = path.join(stateDir, "global-workspace");

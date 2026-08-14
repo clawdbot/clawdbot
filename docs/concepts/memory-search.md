@@ -30,15 +30,16 @@ explicitly:
 example `ollama-5080`), as long as that entry sets `api` to `"ollama"` or
 another provider id with a memory embedding adapter.
 
-For local embeddings with no API key, install the official llama.cpp provider
-plugin and set `provider: "local"`:
+For local embeddings with no API key, install and configure the official
+llama.cpp provider, then set `provider: "local"`:
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
 ```
 
-Source checkouts still need native build approval: `pnpm approve-builds`, then
-`pnpm rebuild node-llama-cpp`.
+Choose llama.cpp once in interactive setup. OpenClaw installs a verified
+`llama-server`, downloads the embedding GGUF, and writes its managed service
+configuration.
 
 Some OpenAI-compatible embedding endpoints require asymmetric `input_type`
 labels, such as `"query"` for searches and `"document"`/`"passage"` for indexed
@@ -53,7 +54,7 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 | DeepInfra         | `deepinfra`         | Yes           | Default model `BAAI/bge-m3`       |
 | Gemini            | `gemini`            | Yes           | Supports image/audio indexing     |
 | GitHub Copilot    | `github-copilot`    | No            | Uses your Copilot subscription    |
-| Local             | `local`             | No            | GGUF model, ~0.6 GB auto-download |
+| Local             | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB   |
 | LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
 | Mistral           | `mistral`           | Yes           |                                   |
 | Ollama            | `ollama`            | No            | Local/self-hosted server          |
@@ -73,7 +74,9 @@ flowchart LR
     T --> BM["BM25 search"]
     VS --> M["Weighted merge"]
     BM --> M
-    M --> R["Top results"]
+    M --> D["Recency and importance"]
+    D --> R["MMR diversity"]
+    R --> O["Top results"]
 ```
 
 - **Vector search** matches similar meaning ("gateway host" matches "the
@@ -99,6 +102,10 @@ indexes keep their previous relevance signal. Dated daily notes decay with a
 This follows the relevance, recency, and importance result in
 [Generative Agents (arXiv:2304.03442)](https://arxiv.org/abs/2304.03442) without
 adding a query-time model call.
+
+MMR then reorders the scored hybrid candidate set to reduce redundant
+snippets. It does not change scores, threshold eligibility, or make another
+provider call.
 
 ## Deterministic trigger recall
 
@@ -132,7 +139,7 @@ ranking.
 
 ## Improving search quality
 
-Two optional features help with a large note history.
+Two deterministic ranking passes are enabled by default for hybrid search.
 
 ### Recency decay
 
@@ -144,11 +151,16 @@ evergreen and never decayed; only dated `memory/YYYY-MM-DD.md` files decay.
 ### MMR (diversity)
 
 Reduces redundant results. If five notes all mention the same router config,
-MMR ensures the top results cover different topics instead of repeating.
+MMR favors a similarly relevant result with different content instead of
+repeating near-identical snippets. The fixed relevance-biased setting uses
+lambda `0.7` with Jaccard overlap over snippet tokens. Its local work is
+`O(k²)`: ordinary defaults request 24 candidates per retrieval leg, for at
+most 48 unique non-exact candidates before overlap; broader project and
+identifier searches remain separately capped.
 
 <Tip>
-Enable this if `memory_search` keeps returning near-duplicate snippets from
-different daily notes.
+No configuration is required. FTS-only and vector-only fallback paths do not
+run the hybrid MMR pass.
 </Tip>
 
 ## Multimodal memory
@@ -178,11 +190,6 @@ from its watched groups. Use a per-peer `dmScope` for DM isolation, or set
 visibility to `"self"` to opt out of ambient watched-session reads. Other
 unrelated same-agent sessions still require `"agent"` visibility.
 
-When using the QMD backend, also set `memory.qmd.sessions.enabled: true` so
-transcripts get exported into the QMD collection; `experimental.sessionMemory`
-and `sources` alone do not export transcripts into QMD. See
-[configuration reference](/reference/memory-config#session-memory-search-experimental).
-
 ## Troubleshooting
 
 **No results?** Run `openclaw memory status` to check the index. If empty, run
@@ -192,8 +199,8 @@ and `sources` alone do not export transcripts into QMD. See
 `openclaw memory status --deep`.
 
 **Local embeddings time out?** `ollama`, `lmstudio`, and `local` use longer
-provider-owned batch deadlines. Check provider health and rerun
-`openclaw memory index --force`.
+provider-owned batch deadlines. Run `openclaw memory status --deep` to inspect
+the managed server endpoints before rebuilding the index.
 
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.

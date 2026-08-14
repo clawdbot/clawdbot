@@ -311,9 +311,9 @@ This example gives the `research` agent a writable primary workspace, read-only 
         scope: "agent",
       },
     },
-    list: [
-      {
-        id: "research",
+    entries: {
+      research: {
+        default: true,
         workspace: "/srv/openclaw/research-workspace",
         sandbox: {
           workspaceAccess: "rw",
@@ -324,7 +324,7 @@ This example gives the `research` agent a writable primary workspace, read-only 
           },
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -364,16 +364,16 @@ openclaw sandbox recreate --agent research
         },
       },
     },
-    list: [
-      {
-        id: "build",
+    entries: {
+      build: {
+        default: true,
         sandbox: {
           docker: {
             binds: ["/mnt/cache:/cache:rw"],
           },
         },
       },
-    ],
+    },
   },
 }
 ```

@@ -1,5 +1,6 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { setConfiguredMcpServer, unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
-import { setConfiguredMcpServer, unsetConfiguredMcpServer } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
@@ -72,7 +73,7 @@ export async function applyClawMcpUpdate(
       try {
         await revert();
       } catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error));
+        failures.push(coerceErrorMessage(error));
       }
     }
     if (failures.length > 0) {
@@ -201,12 +202,12 @@ export async function applyClawMcpUpdate(
       await rollback();
     } catch (rollbackError) {
       throw new ClawMcpUpdateError(
-        `${error instanceof Error ? error.message : String(error)}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        `${coerceErrorMessage(error)}; rollback failed: ${coerceErrorMessage(rollbackError)}`,
         true,
       );
     }
     throw new ClawMcpUpdateError(
-      error instanceof Error ? error.message : String(error),
+      coerceErrorMessage(error),
       configMutationUncertain || (error instanceof ClawMcpUpdateError && error.partial),
     );
   }

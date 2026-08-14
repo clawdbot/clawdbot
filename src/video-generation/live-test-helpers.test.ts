@@ -4,18 +4,29 @@ import type { OpenClawConfig } from "../config/types.js";
 import {
   canRunBufferBackedImageToVideoLiveLane,
   canRunBufferBackedVideoToVideoLiveLane,
-  parseCsvFilter,
+  parseVideoProviderFilter,
   parseProviderModelMap,
   redactLiveApiKey,
   resolveConfiguredLiveVideoModels,
   resolveLiveVideoAuthStore,
+  resolveLiveVideoResolution,
 } from "./live-test-helpers.js";
 
 describe("video-generation live-test helpers", () => {
+  it.each([
+    ["alibaba", "alibaba/wan2.6-t2v", "720P"],
+    ["qwen", "qwen/wan2.6-t2v", "720P"],
+    ["minimax", "minimax/MiniMax-Hailuo-2.3", "768P"],
+    ["pixverse", "pixverse/v6", "540P"],
+    ["google", "google/veo-3.1-fast-generate-preview", "480P"],
+  ] as const)("uses a supported %s live resolution", (providerId, modelRef, expected) => {
+    expect(resolveLiveVideoResolution({ providerId, modelRef })).toBe(expected);
+  });
+
   it("parses provider filters and treats empty/all as unfiltered", () => {
-    expect(parseCsvFilter()).toBeNull();
-    expect(parseCsvFilter("all")).toBeNull();
-    expect(parseCsvFilter(" google , openai ")).toEqual(new Set(["google", "openai"]));
+    expect(parseVideoProviderFilter()).toBeNull();
+    expect(parseVideoProviderFilter("all")).toBeNull();
+    expect(parseVideoProviderFilter(" google , openai ")).toEqual(new Set(["google", "openai"]));
   });
 
   it("parses provider model overrides by provider id", () => {

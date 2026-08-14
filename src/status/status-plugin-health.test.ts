@@ -165,7 +165,7 @@ describe("plugin health status formatting", () => {
         {
           level: "error",
           pluginId: "openclaw-beads",
-          code: "hook-blocked",
+          code: "hook-registration-blocked",
           message,
         },
       ],
@@ -196,7 +196,7 @@ describe("plugin health status formatting", () => {
         {
           level: "error",
           pluginId: "ghost-plugin",
-          code: "hook-blocked",
+          code: "hook-registration-blocked",
           message: "orphaned blocked-hook diagnostic",
         },
       ],

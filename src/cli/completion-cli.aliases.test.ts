@@ -1,13 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { getCompletionScript } from "./completion-cli.js";
 import {
   createAliasedCompletionProgram,
   itWithFish,
   itWithPowerShell,
+  PowerShellCompletionRunner,
   runGeneratedBashCompletion,
   runGeneratedFishCompletion,
-  runGeneratedPowerShellCompletion,
 } from "./completion-cli.test-support.js";
+
+const powerShellCompletion = new PowerShellCompletionRunner();
+
+afterAll(async () => {
+  await powerShellCompletion.close();
+});
 
 // Aliases are typeable commands, so every shell must preserve their nested command paths.
 describe("completion-cli command aliases", () => {
@@ -136,9 +142,9 @@ describe("completion-cli command aliases", () => {
     ["repeated global options", "openclaw --profile first --profile second cron create --a"],
     ["an inherited option after the parent", "openclaw cron --profile work create --a"],
     ["the canonical nested command", "openclaw --profile work cron add --a"],
-  ])("completes real PowerShell nested aliases after %s", (_name, commandLine) => {
-    expect(runGeneratedPowerShellCompletion(createAliasedCompletionProgram(), commandLine)).toEqual(
-      ["--at"],
-    );
+  ])("completes real PowerShell nested aliases after %s", async (_name, commandLine) => {
+    expect(
+      await powerShellCompletion.complete(createAliasedCompletionProgram(), commandLine),
+    ).toEqual(["--at"]);
   });
 });

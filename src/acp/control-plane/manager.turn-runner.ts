@@ -72,6 +72,9 @@ export async function runManagerTurn(params: {
   writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<void> {
   const { input, sessionKey } = params;
+  if (input.admittedRunContext.operationalRunInstance.runId !== input.requestId) {
+    throw new Error("ACP operational run instance disagrees with the admitted request");
+  }
   const turnStartedAt = Date.now();
   const actorKey = normalizeActorKey(sessionKey);
   const taskContext =
@@ -121,6 +124,7 @@ export async function runManagerTurn(params: {
         ? new AcpRuntimeError(
             error.code,
             `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
+            { detailCode: error.detailCode },
           )
         : error;
     params.recordTurnCompletion({

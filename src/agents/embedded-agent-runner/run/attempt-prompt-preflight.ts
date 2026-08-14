@@ -11,8 +11,8 @@ import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
-import type { AttemptContextEngine } from "./attempt.context-engine-helpers.js";
-import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
+import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
@@ -105,6 +105,24 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
       logMidTurnPrecheck(
         request.route,
         `handled=true truncatedCount=${truncationResult.truncatedCount}`,
+      );
+      return { preflightRecovery };
+    }
+
+    if (truncationResult.reason === "no oversized or aggregate tool results") {
+      const preflightRecovery = {
+        route: "truncate_tool_results_only" as const,
+        source: "mid-turn" as const,
+        ...buildPreflightRecoveryBudgetSnapshot(request),
+        handled: true as const,
+        truncatedCount: 0,
+      };
+      // The mid-turn estimate sees the in-memory prompt view, while persisted
+      // recovery may already have capped the same tool results. Retry without
+      // manufacturing compaction when the persisted branch has nothing to trim.
+      logMidTurnPrecheck(
+        request.route,
+        `handled=true truncatedCount=0 truncateSkippedReason=${truncationResult.reason}`,
       );
       return { preflightRecovery };
     }

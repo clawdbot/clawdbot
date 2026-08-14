@@ -13,7 +13,7 @@ import {
 } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
-import { sendDurableMessageBatch } from "../message/send.js";
+import { sendDurableMessageBatchCore } from "../message/send.js";
 import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
 import type { ChannelDeliveryInfo, ChannelDeliveryResult } from "./types.js";
 
@@ -99,7 +99,7 @@ function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult
 }
 
 function resolveDurableSuppression(
-  send: Extract<Awaited<ReturnType<typeof sendDurableMessageBatch>>, { status: "suppressed" }>,
+  send: Extract<Awaited<ReturnType<typeof sendDurableMessageBatchCore>>, { status: "suppressed" }>,
 ): NonNullable<ChannelDeliveryResult["suppression"]> {
   const hookEffect = send.payloadOutcomes?.find(
     (outcome) => outcome.status === "suppressed",
@@ -145,7 +145,7 @@ function markDurableInboundReplyDeliveryErrorVisible(error: unknown): unknown {
 }
 
 /** Delivers final inbound replies through the durable message-send context when supported. */
-export async function deliverInboundReplyWithMessageSendContext(
+export async function deliverInboundReplyWithMessageSendContextCore(
   params: DurableInboundReplyDeliveryParams,
 ): Promise<DurableInboundReplyDeliveryResult> {
   if (params.info.kind !== "final") {
@@ -178,6 +178,7 @@ export async function deliverInboundReplyWithMessageSendContext(
   try {
     support = await resolveOutboundDurableFinalDeliverySupport({
       cfg: params.cfg,
+      agentId: params.agentId,
       channel,
       requirements: requiredCapabilities,
     });
@@ -204,8 +205,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     requesterSenderUsername: params.ctxPayload.SenderUsername,
     requesterSenderE164: params.ctxPayload.SenderE164,
   });
-
-  const send = await sendDurableMessageBatch({
+  const send = await sendDurableMessageBatchCore({
     cfg: params.cfg,
     channel,
     to,
@@ -220,7 +220,9 @@ export async function deliverInboundReplyWithMessageSendContext(
     mediaAccess: params.mediaAccess,
     silent: params.silent,
     durability,
-    ...(durability === "required" ? { requireUnknownSendReconciliation: true } : {}),
+    ...(requiredCapabilities.reconcileUnknownSend === true
+      ? { requireUnknownSendReconciliation: true }
+      : {}),
     session,
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });

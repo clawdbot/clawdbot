@@ -8,6 +8,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createWebhookInFlightLimiter } from "./webhook-request-guards.js";
 import {
+  canonicalizeWebhookRouteKey,
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
   rejectNonPostWebhookRequest,
@@ -51,6 +52,17 @@ function createPipelineRequest(url: string): IncomingMessage {
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
+});
+
+describe("canonicalizeWebhookRouteKey", () => {
+  it.each([
+    ["hook", "/hook"],
+    ["/Hooks//Zalo/Media/", "/hooks/zalo/media"],
+    ["/hooks/./zalo/media", "/hooks/zalo/media"],
+    ["/hooks/%257Aalo/media", "/hooks/zalo/media"],
+  ])("canonicalizes %s for Gateway route identity", (raw, expected) => {
+    expect(canonicalizeWebhookRouteKey(raw)).toBe(expected);
+  });
 });
 
 describe("registerWebhookTarget", () => {
@@ -163,6 +175,88 @@ describe("registerWebhookTargetWithPluginRoute", () => {
     registeredB.unregister();
     expect(registry.httpRoutes).toHaveLength(0);
   });
+
+  it("does not store a target when strict route registration is rejected", () => {
+    const registry = createEmptyPluginRegistry();
+    const existingRoute = {
+      path: "/hook",
+      match: "exact" as const,
+      auth: "plugin" as const,
+      handler: () => {},
+      pluginId: "existing",
+      source: "existing-webhook",
+    };
+    registry.httpRoutes.push(existingRoute);
+    setActivePluginRegistry(registry);
+    const targets = new Map<string, Array<{ path: string; id: string }>>();
+
+    expect(() =>
+      registerWebhookTargetWithPluginRoute({
+        targetsByPath: targets,
+        target: { path: "/hook", id: "A" },
+        route: {
+          auth: "plugin",
+          pluginId: "demo",
+          source: "demo-webhook",
+          throwOnFailure: true,
+          handler: () => {},
+        },
+      }),
+    ).toThrow("route replacement denied");
+
+    expect(targets.size).toBe(0);
+    expect(registry.httpRoutes).toEqual([existingRoute]);
+  });
+
+  it.each(["first", "second"] as const)(
+    "keeps one canonical route until the %s alias target is the final owner",
+    (unregisterFirst) => {
+      const registry = createEmptyPluginRegistry();
+      setActivePluginRegistry(registry);
+      const targets = new Map<string, Array<{ path: string; id: string }>>();
+
+      const first = registerWebhookTargetWithPluginRoute({
+        targetsByPath: targets,
+        target: { path: "/Hooks//Zalo/Media/", id: "A" },
+        route: {
+          auth: "plugin",
+          match: "prefix",
+          pluginId: "zalo",
+          source: "zalo-hosted-media",
+          handler: () => {},
+        },
+      });
+      const second = registerWebhookTargetWithPluginRoute({
+        targetsByPath: targets,
+        target: { path: "/hooks/zalo/media", id: "B" },
+        route: {
+          auth: "plugin",
+          match: "prefix",
+          pluginId: "zalo",
+          source: "zalo-hosted-media",
+          handler: () => {},
+        },
+      });
+
+      expect(targets).toEqual(
+        new Map([
+          [
+            "/hooks/zalo/media",
+            [
+              { path: "/hooks/zalo/media", id: "A" },
+              { path: "/hooks/zalo/media", id: "B" },
+            ],
+          ],
+        ]),
+      );
+      expect(registry.httpRoutes).toHaveLength(1);
+
+      (unregisterFirst === "first" ? first : second).unregister();
+      expect(registry.httpRoutes).toHaveLength(1);
+      (unregisterFirst === "first" ? second : first).unregister();
+      expect(registry.httpRoutes).toHaveLength(0);
+    },
+  );
 });
 
 describe("resolveWebhookTargets", () => {
@@ -181,6 +275,15 @@ describe("resolveWebhookTargets", () => {
       requestPath: "/missing",
       targets: new Map<string, Array<{ id: string }>>(),
       expected: null,
+    },
+    {
+      name: "resolves a canonical alias after an exact-key miss",
+      requestPath: "/Hooks//Zalo/Media/",
+      targets: new Map([["/hooks/zalo/media", [{ id: "A" }]]]),
+      expected: {
+        path: "/hooks/zalo/media",
+        targets: [{ id: "A" }],
+      },
     },
   ])("$name", ({ requestPath, targets, expected }) => {
     expect(resolveWebhookTargets(createRequest("POST", requestPath), targets)).toEqual(expected);

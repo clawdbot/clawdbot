@@ -12,12 +12,16 @@ function isRuntimePluginRecordLoaded(plugin: PluginRecord): boolean {
   return plugin.status === "loaded" && (plugin.format === "bundle" || plugin.imported !== false);
 }
 
-export function listLoadedRuntimePluginIds(): string[] {
+/** Lists runtime-loaded plugin ids from an immutable/request-scoped registry handle. */
+export function listRuntimePluginIdsFromRegistry(registry: PluginRegistry): string[] {
   return normalizeSortedUniqueStringEntries(
-    (getActivePluginRegistry()?.plugins ?? [])
-      .filter(isRuntimePluginRecordLoaded)
-      .map((plugin) => plugin.id),
+    registry.plugins.filter(isRuntimePluginRecordLoaded).map((plugin) => plugin.id),
   );
+}
+
+export function listLoadedRuntimePluginIds(): string[] {
+  const registry = getActivePluginRegistry();
+  return registry ? listRuntimePluginIdsFromRegistry(registry) : [];
 }
 
 function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefined {

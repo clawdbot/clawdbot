@@ -10,7 +10,7 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../tool-search.js";
 import { testing } from "../tool-search.test-support.js";
-import { createAgentHarnessToolSurfaceRuntime as createAgentHarnessToolSurfaceRuntimeBase } from "./tool-surface-bridge.js";
+import { createAgentHarnessToolSurfaceRuntimeCore as createAgentHarnessToolSurfaceRuntimeBase } from "./tool-surface-bridge.js";
 
 function createAgentHarnessToolSurfaceRuntime(
   params: Parameters<typeof createAgentHarnessToolSurfaceRuntimeBase>[0],

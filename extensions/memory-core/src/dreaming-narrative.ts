@@ -17,6 +17,7 @@ import {
   DREAMING_SESSION_KEY_PREFIX,
   scrubDreamingNarrativeArtifacts,
 } from "./dreaming-session-cleanup.js";
+import { extractAssistantText } from "./dreaming-shared.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -349,44 +350,6 @@ function buildNarrativePrompt(data: NarrativePhaseData): string {
   return lines.join("\n");
 }
 
-// ── Message extraction ─────────────────────────────────────────────────
-
-function extractNarrativeText(messages: unknown[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
-      continue;
-    }
-    const record = msg as Record<string, unknown>;
-    if (record.role !== "assistant") {
-      continue;
-    }
-    const content = record.content;
-    if (typeof content === "string" && content.trim().length > 0) {
-      return content.trim();
-    }
-    if (Array.isArray(content)) {
-      const text = content
-        .filter(
-          (part: unknown) =>
-            part &&
-            typeof part === "object" &&
-            !Array.isArray(part) &&
-            ((part as Record<string, unknown>).type === "text" ||
-              (part as Record<string, unknown>).type === "output_text") &&
-            typeof (part as Record<string, unknown>).text === "string",
-        )
-        .map((part) => (part as { text: string }).text)
-        .join("\n")
-        .trim();
-      if (text.length > 0) {
-        return text;
-      }
-    }
-  }
-  return null;
-}
-
 function waitForNarrativeMessagesToSettle(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, delayMs);
@@ -401,7 +364,7 @@ async function readNarrativeText(params: {
     sessionKey: params.sessionKey,
     limit: NARRATIVE_MESSAGE_FETCH_LIMIT,
   });
-  return extractNarrativeText(messages);
+  return extractAssistantText(messages);
 }
 
 async function readSettledNarrativeText(params: {
@@ -830,7 +793,8 @@ async function generateAndAppendDreamNarrative(
   params: DreamNarrativeRequest,
 ): Promise<DreamNarrativeOutcome> {
   // `runDreamNarrative` is the only entry point and already dropped empty narrative data.
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowMs =
+    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   const runKey = buildNarrativeRunKey({
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
@@ -1076,7 +1040,8 @@ export async function runDreamNarrative(
     : async () => {
         await appendFallbackNarrativeEntry({
           ...rest,
-          nowMs: Number.isFinite(rest.nowMs) ? (rest.nowMs as number) : Date.now(),
+          nowMs:
+            typeof rest.nowMs === "number" && Number.isFinite(rest.nowMs) ? rest.nowMs : Date.now(),
           reason: "the dreaming sweep has no owning agent id",
         });
         return { status: "completed" as const };

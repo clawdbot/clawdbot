@@ -97,6 +97,12 @@ describe("chat sidebar region", () => {
         tab.textContent?.trim(),
       ),
     ).toEqual(["Chat", "Details", "Discussion"]);
+    expect(regionRoot(region).querySelectorAll(".sidebar-column__tabs")).toHaveLength(0);
+    expect(
+      Array.from(regionRoot(region).querySelectorAll(".rail-header__title"), (title) =>
+        title.textContent?.trim(),
+      ),
+    ).toEqual(["Chat", "Details", "Discussion"]);
     expect(regionRoot(region).querySelector("[data-primary]")).not.toBeNull();
   });
 

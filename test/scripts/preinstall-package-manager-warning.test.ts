@@ -1,7 +1,6 @@
 // Preinstall Package Manager Warning tests cover preinstall package manager warning script behavior.
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory.ts";
@@ -99,7 +98,7 @@ describe("install runtime enforcement", () => {
   });
 
   it("exits nonzero when the packed entrypoint sees an unsupported runtime", () => {
-    const root = tempDirs.make("openclaw-preinstall-", realpathSync(tmpdir()));
+    const root = tempDirs.make("openclaw-preinstall-");
     const scriptsDir = join(root, "scripts");
     mkdirSync(scriptsDir);
     const scriptPath = join(scriptsDir, "preinstall-package-manager-warning.mjs");

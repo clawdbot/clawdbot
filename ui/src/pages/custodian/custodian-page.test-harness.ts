@@ -1,3 +1,4 @@
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
 import { vi } from "vitest";
 import type {
   GatewayBrowserClient,
@@ -38,6 +39,7 @@ export function createContext(
   options: {
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     channelsSnapshot?: ChannelsStatusSnapshot | null;
+    gatewayCapabilities?: string[];
   } = {},
 ): ContextHarness {
   const client = { request } as unknown as GatewayBrowserClient;
@@ -50,7 +52,12 @@ export function createContext(
       type: "hello-ok" as const,
       protocol: 1,
       auth: { role: "operator", scopes: ["operator.admin"] },
-      features: { methods },
+      features: {
+        methods,
+        capabilities: options.gatewayCapabilities ?? [
+          GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
+        ],
+      },
     },
     assistantAgentId: "main",
     sessionKey: "main",

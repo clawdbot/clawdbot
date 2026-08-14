@@ -28,7 +28,8 @@ describe("linux-node config", () => {
   });
 
   it("exports the same strict shape through the plugin schema", () => {
-    const safeParse = createLinuxNodePluginConfigSchema().safeParse;
+    const schema = createLinuxNodePluginConfigSchema();
+    const safeParse = schema.safeParse;
     if (!safeParse) {
       throw new Error("missing config schema validator");
     }
@@ -37,5 +38,6 @@ describe("linux-node config", () => {
       unexpected: true,
     });
     expect(result.success).toBe(false);
+    expect(schema).not.toHaveProperty("uiHints");
   });
 });

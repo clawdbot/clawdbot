@@ -1,6 +1,7 @@
 // Discord tests cover monitor plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { typedCases } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Guild } from "./internal/discord.js";
 import {
@@ -103,21 +104,6 @@ describe("registerDiscordListener", () => {
 });
 
 describe("DiscordMessageListener", () => {
-  function createDeferred() {
-    let resolve: (() => void) | null = null;
-    const promise = new Promise<void>((done) => {
-      resolve = done;
-    });
-    return {
-      promise,
-      resolve: () => {
-        if (typeof resolve === "function") {
-          (resolve as () => void)();
-        }
-      },
-    };
-  }
-
   async function flushAsyncWork() {
     await Promise.resolve();
     await Promise.resolve();
@@ -125,7 +111,7 @@ describe("DiscordMessageListener", () => {
 
   it("waits for the durable handler handoff", async () => {
     let handlerResolved = false;
-    const deferred = createDeferred();
+    const deferred = createDeferred<void>();
     const handler = vi.fn(async () => {
       await deferred.promise;
       handlerResolved = true;
@@ -149,8 +135,8 @@ describe("DiscordMessageListener", () => {
   });
 
   it("dispatches subsequent events concurrently without blocking on prior handler", async () => {
-    const first = createDeferred();
-    const second = createDeferred();
+    const first = createDeferred<void>();
+    const second = createDeferred<void>();
     let runCount = 0;
     const handler = vi.fn(async () => {
       runCount += 1;
@@ -206,7 +192,7 @@ describe("DiscordMessageListener", () => {
   });
 
   it("does not apply its own slow-listener logging", async () => {
-    const deferred = createDeferred();
+    const deferred = createDeferred<void>();
     const handler = vi.fn(() => deferred.promise);
     const logger = {
       warn: vi.fn(),
@@ -923,7 +909,10 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
 }));
 
 const channelRuntimeModule = await import("openclaw/plugin-sdk/system-event-runtime");
-vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
+vi.spyOn(channelRuntimeModule, "enqueueRoutedSystemEvent").mockImplementation(
+  (text, route, options) =>
+    enqueueSystemEventSpy(text, { ...options, sessionKey: route.sessionKey }) as boolean,
+);
 
 const routingModule = await import("openclaw/plugin-sdk/routing");
 vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
@@ -949,12 +938,7 @@ function firstMockArg(mock: MockWithCalls, label: string) {
   return firstMockCall(mock, label)[0];
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function makeReactionEvent(overrides?: {
   guildId?: string;

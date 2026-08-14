@@ -53,8 +53,9 @@ export type ChannelHealthPolicy = {
 /** Keep channel-authored terminal detail above the shared unhealthy projection. */
 export function resolveChannelHealthState(
   snapshot: ChannelHealthSnapshot,
-  evaluation: ChannelHealthEvaluation,
+  policy: ChannelHealthPolicy,
 ): string | undefined {
+  const evaluation = evaluateChannelHealth(snapshot, policy);
   return !evaluation.healthy && !(snapshot.lifecycle === "blocked" && snapshot.healthState)
     ? evaluation.reason
     : snapshot.healthState;

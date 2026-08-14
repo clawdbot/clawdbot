@@ -3,7 +3,6 @@ import { Command } from "commander";
 import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
-import { shouldMigrateStateFromPath } from "../argv.js";
 import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
 import { setCommandJsonMode } from "./json-mode.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
@@ -258,10 +257,6 @@ describe("registerPreActionHooks", () => {
       .command("pending")
       .option("--json")
       .action(() => {});
-    programLocal
-      .command("commitments")
-      .option("--json")
-      .action(() => {});
     programLocal.command("configure").action(() => {});
     programLocal.command("onboard").action(() => {});
     const channels = programLocal.command("channels");
@@ -363,7 +358,6 @@ describe("registerPreActionHooks", () => {
 
   it.each([
     ["approvals", "pending"],
-    ["commitments"],
     ["skills"],
     ["skills", "list"],
     ["skills", "check"],
@@ -976,7 +970,6 @@ describe("registerPreActionHooks", () => {
       commandPath: ["gateway", "call"],
       suppressDoctorStdout: true,
     });
-    expect(shouldMigrateStateFromPath(bootstrap?.commandPath ?? [])).toBe(false);
   });
 
   it("uses the shared skip policy for gateway health on the Commander path", async () => {

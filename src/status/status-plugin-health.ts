@@ -232,7 +232,7 @@ function shouldSuppressBlockedHookDiagnostic(
   diagnostic: PluginDiagnosticRecord,
   blockedHooks: readonly BlockedPluginHookRecord[],
 ): boolean {
-  if (diagnostic.code !== "hook-blocked") {
+  if (diagnostic.code !== "hook-registration-blocked") {
     return false;
   }
   // Same rule as channel failures: only suppress when the blocked-hook section

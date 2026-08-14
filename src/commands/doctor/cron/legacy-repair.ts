@@ -64,6 +64,7 @@ export type LegacyCronRepairState = {
   legacyImportCount: number;
   sqliteProjectionBackfillCount: number;
   invalidConfigRows: QuarantinedCronConfigJob[];
+  projectedOwnersByJobId: ReadonlyMap<string, { agentId?: unknown; sessionKey?: unknown }>;
   rawJobs: Array<Record<string, unknown>>;
 };
 
@@ -90,10 +91,13 @@ function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
 
 export async function loadLegacyCronRepairState(params: {
   cfg: OpenClawConfig;
+  storePath?: string;
+  env?: NodeJS.ProcessEnv;
   onlyIfLegacyDetected?: boolean;
   readOnly?: boolean;
 }): Promise<LegacyCronRepairState | null> {
-  const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
+  const storePath =
+    params.storePath ?? resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg), params.env);
   const legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
   const legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);
   const legacyQuarantine = await loadLegacyCronQuarantineForMigration(storePath);
@@ -107,8 +111,17 @@ export async function loadLegacyCronRepairState(params: {
   }
 
   const loaded = params.readOnly
-    ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath)
+    ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath, params.env)
     : await loadCronJobsStoreWithConfigJobs(storePath);
+  const projectedOwnersByJobId = new Map(
+    loaded.store.jobs.map((job) => [
+      job.id,
+      {
+        ...(Object.hasOwn(job, "agentId") ? { agentId: job.agentId } : {}),
+        ...(Object.hasOwn(job, "sessionKey") ? { sessionKey: job.sessionKey } : {}),
+      },
+    ]),
+  );
   const currentEntries = loaded.configJobs.map((job, index) => ({
     sourceIndex: loaded.configJobIndexes[index] ?? index,
     job: mergeRuntimeEntryIntoConfigJob({
@@ -178,6 +191,7 @@ export async function loadLegacyCronRepairState(params: {
     legacyImportCount,
     sqliteProjectionBackfillCount,
     invalidConfigRows,
+    projectedOwnersByJobId,
     rawJobs,
   };
 }

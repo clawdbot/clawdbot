@@ -12,9 +12,10 @@ import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
-import { ensureLmstudioModelLoaded } from "./models.fetch.js";
+import { ensureLmstudioModelLoaded, fetchLmstudioModels } from "./models.fetch.js";
 import {
   normalizeLmstudioConfiguredCatalogEntries,
+  resolveLmstudioCanonicalModelKey,
   resolveLmstudioInferenceBase,
   resolveLmstudioServerBase,
 } from "./models.js";
@@ -156,9 +157,31 @@ function resolveLmstudioLocalServiceBaseUrl(
   return /\/api\/v1$/iu.test(configuredPath) ? `${serverBaseUrl}/api/v1` : `${serverBaseUrl}/v1`;
 }
 
+async function resolveLmstudioEmbeddingModelKey(params: {
+  baseUrl: string;
+  apiKey?: string;
+  headers: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
+  model: string;
+}): Promise<string> {
+  const discovered = await fetchLmstudioModels({
+    baseUrl: params.baseUrl,
+    apiKey: params.apiKey,
+    headers: params.headers,
+    ssrfPolicy: params.ssrfPolicy,
+  });
+  if (!discovered.reachable || (discovered.status !== undefined && discovered.status >= 400)) {
+    return params.model;
+  }
+  return resolveLmstudioCanonicalModelKey({
+    modelKey: params.model,
+    models: discovered.models,
+  });
+}
+
 /** Creates the LM Studio embedding provider client and preloads the target model before return. */
 export async function createLmstudioEmbeddingProvider(
-  options: MemoryEmbeddingProviderCreateOptions,
+  options: LocalServiceAwareEmbeddingOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: LmstudioEmbeddingClient }> {
   const resolvedProvider = resolveConfiguredLmstudioProvider(options);
   const providerConfig = resolvedProvider?.config;
@@ -225,7 +248,7 @@ export async function createLmstudioEmbeddingProvider(
           headers,
         }
       : undefined;
-  const acquireLocalService = (options as LocalServiceAwareEmbeddingOptions).acquireLocalService;
+  const acquireLocalService = options.acquireLocalService;
   const withLocalServiceLease = async <T>(
     signal: AbortSignal | undefined,
     action: () => Promise<T>,
@@ -241,25 +264,55 @@ export async function createLmstudioEmbeddingProvider(
     }
   };
 
-  await withLocalServiceLease(undefined, async () => {
+  // The provider-owned JIT opt-out applies to embeddings as well as chat.
+  if (providerConfig?.params?.preload !== false) {
+    await withLocalServiceLease(undefined, async () => {
+      try {
+        client.model = await ensureLmstudioModelLoaded({
+          baseUrl,
+          apiKey,
+          headers: headerOverrides,
+          ssrfPolicy,
+          modelKey: model,
+          requestedContextLength,
+          timeoutMs: 120_000,
+        });
+      } catch (error) {
+        // Discovery still identifies the wire model when the subsequent load fails.
+        if (error instanceof Error && "resolvedModelKey" in error) {
+          const resolvedModelKey = error.resolvedModelKey;
+          if (typeof resolvedModelKey === "string" && resolvedModelKey.trim()) {
+            client.model = resolvedModelKey.trim();
+          }
+        }
+        log.warn("lmstudio embeddings warmup failed; continuing without preload", {
+          baseUrl,
+          model,
+          error: formatErrorMessage(error),
+        });
+      }
+    });
+  } else if (model.includes("@")) {
+    // Variant aliases are not accepted by LM Studio's inference routes. Resolve
+    // only the stable wire/cache identity here; JIT still owns the actual load.
     try {
-      await ensureLmstudioModelLoaded({
-        baseUrl,
-        apiKey,
-        headers: headerOverrides,
-        ssrfPolicy,
-        modelKey: model,
-        requestedContextLength,
-        timeoutMs: 120_000,
+      await withLocalServiceLease(undefined, async () => {
+        client.model = await resolveLmstudioEmbeddingModelKey({
+          baseUrl,
+          apiKey,
+          headers: headerOverrides,
+          ssrfPolicy,
+          model,
+        });
       });
     } catch (error) {
-      log.warn("lmstudio embeddings warmup failed; continuing without preload", {
+      log.debug("lmstudio embedding variant discovery failed; using requested model", {
         baseUrl,
         model,
         error: formatErrorMessage(error),
       });
     }
-  });
+  }
 
   const remoteProvider = createRemoteEmbeddingProvider({
     id: LMSTUDIO_PROVIDER_ID,

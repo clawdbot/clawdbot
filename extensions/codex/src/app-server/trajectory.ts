@@ -2,7 +2,7 @@
  * Records optional Codex runtime trajectory events with bounded, redacted
  * context and completion payloads.
  */
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";

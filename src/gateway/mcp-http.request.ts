@@ -62,6 +62,7 @@ type McpRequestContext = McpLoopbackRequestContext;
 type McpLoopbackRequestAuth = {
   senderIsOwner: boolean;
   boundSessionKey?: string;
+  boundAgentId?: string;
   boundContext?: McpLoopbackRequestContext;
   boundCaptureKey?: string;
   boundGrantToken?: string;
@@ -149,7 +150,11 @@ function resolveMcpSender(params: {
   }
   const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
   if (grant) {
-    return { senderIsOwner: false, boundSessionKey: grant.sessionKey };
+    return {
+      senderIsOwner: false,
+      boundSessionKey: grant.sessionKey,
+      ...(grant.agentId ? { boundAgentId: grant.agentId } : {}),
+    };
   }
   return undefined;
 }
@@ -279,6 +284,7 @@ export function validateMcpLoopbackRequest(params: {
   return {
     senderIsOwner: sender.senderIsOwner,
     boundSessionKey: sender.boundSessionKey,
+    boundAgentId: sender.boundAgentId,
     boundContext: sender.boundContext,
     boundCaptureKey: sender.boundCaptureKey,
     boundGrantToken: sender.boundGrantToken,
@@ -416,11 +422,12 @@ export function resolveMcpRequestContext(
     // session, channel, capability, or ownership headers.
     return structuredClone(auth.boundContext);
   }
-  // Grant-authenticated callers get only their server-bound session; spoofable
-  // delivery/action headers stay reserved for the gateway-launched loopback client.
+  // Grant-authenticated callers get only their server-bound session and optional
+  // global-session agent owner; spoofable delivery/action headers stay reserved.
   if (auth.boundSessionKey) {
     return {
       sessionKey: auth.boundSessionKey,
+      agentId: auth.boundAgentId,
       sessionId: undefined,
       messageProvider: undefined,
       clientCaps: undefined,

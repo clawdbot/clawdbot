@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
+import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import {
   collectBundledPluginPublicSurfaceArtifacts,
   collectBundledPluginRuntimeSidecarArtifacts,
@@ -121,7 +121,7 @@ function collectBundledPluginMetadata(
       collectBundledPluginRuntimeSidecarArtifacts(publicSurfaceArtifacts);
     const channelConfigs =
       includeChannelConfigs && includeSyntheticChannelConfigs
-        ? collectBundledChannelConfigs({
+        ? collectBundledChannelConfigsCore({
             pluginDir,
             manifest: manifestResult.manifest,
             packageManifest,

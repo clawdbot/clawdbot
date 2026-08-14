@@ -1,8 +1,9 @@
-// Browser tests cover server.agent contract form layout act commands plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+// Browser tests cover server.agent contract form layout act commands plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it } from "vitest";
 import "../test-support/browser-security.mock.js";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
@@ -176,16 +177,7 @@ async function withSymlinkPathEscape<T>(params: {
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
   const record = requireRecord(value, label);

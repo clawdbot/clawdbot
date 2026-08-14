@@ -36,7 +36,7 @@ export type SystemAgentCommandDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
   ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store.js").ensureAuthProfileStore;
   resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
-  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
   formatOverview?: SystemAgentOverviewFormatter;
   loadOverview?: SystemAgentOverviewLoader;
   createAgent?: typeof import("../agents/agent-create.js").createAgent;
@@ -86,7 +86,7 @@ const CONFIG_SCHEMA_RE = new RegExp(
   "i",
 );
 const CONFIG_SET_REF_RE = new RegExp(
-  String.raw`^(?:config\s+set-ref|set\s+secretref|set\s+secret\s+ref)\s+(?<path>${CONFIG_PATH})\s+(?:(?<source>env|file|exec)\s+)?(?<id>\S+)(?:\s+provider\s+(?<provider>[A-Za-z0-9_-]+))?$`,
+  String.raw`^(?:config\s+set-ref|set\s+secretref|set\s+secret\s+ref)\s+(?<path>${CONFIG_PATH})\s+(?:(?<source>env|file|exec|store)\s+)?(?<id>\S+)(?:\s+provider\s+(?<provider>[A-Za-z0-9_-]+))?$`,
   "i",
 );
 const SETUP_RE = new RegExp(
@@ -194,7 +194,7 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     return {
       kind: "config-set-ref",
       path: configSetRefMatch.groups.path,
-      source: source as "env" | "file" | "exec",
+      source: source as "env" | "file" | "exec" | "store",
       id: configSetRefMatch.groups.id.trim(),
       ...(configSetRefMatch.groups.provider ? { provider: configSetRefMatch.groups.provider } : {}),
     };

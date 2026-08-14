@@ -57,7 +57,13 @@ function createHarness(initialScopeId: string) {
           pendingAuthStatus = null;
           await gate;
         }
-        return { ts: 1, providers: [] };
+        return {
+          ts: 1,
+          providers: [],
+          providerCapabilities: [
+            { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+          ],
+        };
       }
       case "models.list":
         return { models: [] };

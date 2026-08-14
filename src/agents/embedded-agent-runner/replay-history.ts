@@ -2,6 +2,7 @@
  * Sanitizes and validates replayed session history before model calls.
  */
 import { isDeepStrictEqual } from "node:util";
+import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -520,10 +521,6 @@ function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["co
   // turns a real zero-dollar total back into a local estimate during later accounting.
   const totalOrigin = cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined;
   return { input, output, cacheRead, cacheWrite, total, ...(totalOrigin ? { totalOrigin } : {}) };
-}
-
-function toFiniteCostNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[] {

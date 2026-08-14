@@ -31,7 +31,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false)
         .option(
           "--force-document",
-          "Send media as document to avoid channel compression (Telegram, WhatsApp). Applies to images, GIFs, and videos.",
+          "Preserve original image bytes on Slack, or send images, GIFs, and videos as documents on Telegram and WhatsApp, to avoid channel compression.",
           false,
         )
         .option(

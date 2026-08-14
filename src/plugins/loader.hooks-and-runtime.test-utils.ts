@@ -7,7 +7,7 @@ import { createHookRunner } from "./hooks.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   useNoBundledPlugins,
   writePlugin,
@@ -22,7 +22,7 @@ import {
   updatePluginManifest,
   writeBundledPlugin,
 } from "./loader.test-harness.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -80,7 +80,7 @@ function createSetupFailureFixture(params: {
   channelId?: string;
   setupEntrySource: string;
 }) {
-  const pluginDir = makeTempDir();
+  const pluginDir = makePluginLoaderTempDir();
   writeFixtureJson(pluginDir, "package.json", {
     name: `@openclaw/${params.id}`,
     openclaw: {
@@ -152,9 +152,11 @@ type BuiltArtifactScenario = {
 };
 
 function loadBuiltArtifactScenario(scenario: BuiltArtifactScenario) {
-  const repoRoot = makeTempDir();
+  const repoRoot = makePluginLoaderTempDir();
   const pluginDir =
-    scenario.origin === "bundled" ? path.join(repoRoot, "extensions", scenario.id) : makeTempDir();
+    scenario.origin === "bundled"
+      ? path.join(repoRoot, "extensions", scenario.id)
+      : makePluginLoaderTempDir();
   const packageManifest = scenario.packageEntry
     ? { openclaw: { extensions: [scenario.packageEntry] } }
     : undefined;
@@ -202,7 +204,7 @@ function loadBuiltArtifactScenario(scenario: BuiltArtifactScenario) {
 describe("loadOpenClawPlugins", () => {
   it("setup-loads a trusted global channel plugin when the caller scopes to it", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "trusted-global-channel-imported.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "trusted-global-channel-imported.txt");
     withStateDir((stateDir) => {
       const globalDir = path.join(stateDir, "extensions", "trusted-global-channel");
       mkdirSafe(globalDir);
@@ -257,7 +259,10 @@ ${channelPluginSource({
 
   it("does not setup-load an auto-enabled config-origin channel plugin without explicit trust", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "auto-enabled-load-path-channel-imported.txt");
+    const marker = path.join(
+      makePluginLoaderTempDir(),
+      "auto-enabled-load-path-channel-imported.txt",
+    );
     const plugin = writePlugin({
       id: "auto-enabled-load-path-channel",
       filename: "auto-enabled-load-path-channel.cjs",
@@ -411,7 +416,10 @@ ${channelPluginSource({
         setupBlurb: "setup runtime bundled contract runtime",
         configured: false,
         useBundledSetupEntryContract: true,
-        bundledSetupRuntimeMarker: path.join(makeTempDir(), "setup-runtime-applied.txt"),
+        bundledSetupRuntimeMarker: path.join(
+          makePluginLoaderTempDir(),
+          "setup-runtime-applied.txt",
+        ),
       },
       loadOptions: { setupIntent: true },
       expectFullLoaded: true,
@@ -430,7 +438,10 @@ ${channelPluginSource({
         configured: false,
         useBundledFullEntryContract: true,
         useBundledSetupEntryContract: true,
-        bundledFullRuntimeMarker: path.join(makeTempDir(), "bundled-runtime-applied.txt"),
+        bundledFullRuntimeMarker: path.join(
+          makePluginLoaderTempDir(),
+          "bundled-runtime-applied.txt",
+        ),
       },
       loadOptions: { setupIntent: true },
       expectFullLoaded: true,
@@ -510,7 +521,7 @@ ${channelPluginSource({
   );
 
   it("applies the bundled runtime setter before loading the merged setup-runtime plugin", () => {
-    const runtimeMarker = path.join(makeTempDir(), "setup-runtime-before-load.txt");
+    const runtimeMarker = path.join(makePluginLoaderTempDir(), "setup-runtime-before-load.txt");
     const built = createSetupEntryChannelPluginFixture({
       id: "setup-runtime-order-test",
       label: "Setup Runtime Order Test",
@@ -634,7 +645,7 @@ ${channelPluginSource({
   });
 
   it("rejects mismatched bundled runtime entry ids before applying setup-runtime setters", () => {
-    const runtimeMarker = path.join(makeTempDir(), "setup-runtime-mismatch.txt");
+    const runtimeMarker = path.join(makePluginLoaderTempDir(), "setup-runtime-mismatch.txt");
     const built = createSetupEntryChannelPluginFixture({
       id: "setup-runtime-mismatch-test",
       bundledFullEntryId: "wrong-runtime-id",
@@ -664,7 +675,7 @@ ${channelPluginSource({
   });
 
   it("rejects mismatched bundled setup export ids before loading setup-runtime entry code", () => {
-    const runtimeMarker = path.join(makeTempDir(), "setup-runtime-mismatch.txt");
+    const runtimeMarker = path.join(makePluginLoaderTempDir(), "setup-runtime-mismatch.txt");
     const built = createSetupEntryChannelPluginFixture({
       id: "setup-export-mismatch-test",
       bundledSetupEntryId: "wrong-setup-id",
@@ -854,7 +865,7 @@ ${channelPluginSource({
   });
 
   it("ignores built artifacts when the bundled source plugin opts out of core dist", () => {
-    const repoRoot = makeTempDir();
+    const repoRoot = makePluginLoaderTempDir();
     const sourceDir = path.join(repoRoot, "extensions", "source-only-artifact-test");
     const builtPluginDir = path.join(repoRoot, "dist", "extensions", "source-only-artifact-test");
     mkdirSafe(path.join(repoRoot, ".git"));
@@ -913,7 +924,7 @@ ${channelPluginSource({
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
       () => {
-        const manifestRegistry = loadPluginManifestRegistry({ config });
+        const manifestRegistry = loadPluginManifestRegistryCore({ config });
         return loadOpenClawPlugins({
           cache: false,
           preferBuiltPluginArtifacts: true,
@@ -985,8 +996,8 @@ ${channelPluginSource({
 
   it("keeps package-local dist artifacts inside the plugin root boundary", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
-    const outsideDistDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
+    const outsideDistDir = makePluginLoaderTempDir();
     writeFixtureJson(pluginDir, "package.json", {
       openclaw: { extensions: ["./src/index.mts"] },
     });
@@ -1072,13 +1083,13 @@ ${channelPluginSource({
     });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
       diag.message.includes(
-        "blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
+        "blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false; the handler is not registered and will never run",
       ),
     );
     expect(blockedDiagnostics).toHaveLength(1);
     // Explicit operator denial: stays a warning, never escalated to error.
     expect(blockedDiagnostics[0]?.level).toBe("warn");
-    expect(blockedDiagnostics[0]?.code).toBe("hook-blocked");
+    expect(blockedDiagnostics[0]?.code).toBe("hook-registration-blocked");
     expect(registry.blockedHooks).toStrictEqual([
       {
         pluginId: "hook-policy",
@@ -1087,7 +1098,7 @@ ${channelPluginSource({
         severity: "warn",
         configPath: "plugins.entries.hook-policy.hooks.allowPromptInjection",
         message:
-          'typed hook "before_prompt_build" blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false',
+          'typed hook "before_prompt_build" blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false; the handler is not registered and will never run',
         source: expect.any(String),
       },
     ]);
@@ -1374,7 +1385,7 @@ ${channelPluginSource({
 
     expect(registry.typedHooks).toStrictEqual([]);
     const blockedDiagnostics = registry.diagnostics.filter(
-      (diag) => diag.code === "hook-blocked" && diag.pluginId === "conversation-hooks",
+      (diag) => diag.code === "hook-registration-blocked" && diag.pluginId === "conversation-hooks",
     );
     expect(blockedDiagnostics).toHaveLength(9);
     // Implicit deny: the operator never expressed an opinion, so the plugin is
@@ -1456,14 +1467,59 @@ ${channelPluginSource({
         severity: "warn",
         configPath: "plugins.entries.bundled-conversation-denied.hooks.allowConversationAccess",
         message:
-          'typed hook "before_prompt_build" blocked by plugins.entries.bundled-conversation-denied.hooks.allowConversationAccess=false',
+          'typed hook "before_prompt_build" blocked by plugins.entries.bundled-conversation-denied.hooks.allowConversationAccess=false; the handler is not registered and will never run',
         source: expect.any(String),
       },
     ]);
-    const blockedDiagnostics = registry.diagnostics.filter((diag) => diag.code === "hook-blocked");
+    const blockedDiagnostics = registry.diagnostics.filter((diag) => diag.code === "hook-registration-blocked");
     expect(blockedDiagnostics).toHaveLength(1);
     // Deliberate configuration is not an error.
     expect(blockedDiagnostics[0]?.level).toBe("warn");
+  });
+
+  it("keeps an explicit NON-bundled conversation-access denial at warn, not error", () => {
+    // Regression: `origin !== "bundled" && access !== true` also matches an
+    // explicit `false`, so a deliberate denial on a non-bundled plugin used to
+    // be reported as the implicit-deny error — raising the severity of a choice
+    // the operator made and telling them to set a key they had already set.
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "nonbundled-conversation-denied",
+      filename: "nonbundled-conversation-denied.cjs",
+      body: `module.exports = { id: "nonbundled-conversation-denied", register(api) {
+    api.on("before_prompt_build", () => undefined);
+  } };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["nonbundled-conversation-denied"],
+        entries: {
+          "nonbundled-conversation-denied": {
+            hooks: {
+              allowConversationAccess: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "nonbundled-conversation-denied")?.origin,
+    ).not.toBe("bundled");
+    expect(registry.typedHooks).toStrictEqual([]);
+    expect(registry.blockedHooks).toHaveLength(1);
+    expect(registry.blockedHooks[0]?.reason).toBe("conversation-access-denied");
+    expect(registry.blockedHooks[0]?.severity).toBe("warn");
+    const blockedDiagnostics = registry.diagnostics.filter(
+      (diag) => diag.code === "hook-registration-blocked",
+    );
+    expect(blockedDiagnostics).toHaveLength(1);
+    expect(blockedDiagnostics[0]?.level).toBe("warn");
+    // The implicit-deny copy tells the operator the key is unset; it must not
+    // appear for a key they explicitly set.
+    expect(blockedDiagnostics[0]?.message).not.toContain("is unset");
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
@@ -1552,45 +1608,6 @@ ${channelPluginSource({
       undefined,
       undefined,
     ]);
-  });
-
-  it("normalizes legacy deactivate typed hooks onto gateway_stop", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "legacy-deactivate-hook",
-      filename: "legacy-deactivate-hook.cjs",
-      body: `module.exports = { id: "legacy-deactivate-hook", register(api) {
-    api.on("deactivate", () => undefined);
-  } };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["legacy-deactivate-hook"],
-        entries: {
-          "legacy-deactivate-hook": {
-            hooks: {
-              timeoutMs: 250,
-            },
-          },
-        },
-      },
-    });
-
-    expect(registry.plugins.find((entry) => entry.id === "legacy-deactivate-hook")?.status).toBe(
-      "loaded",
-    );
-    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["gateway_stop"]);
-    expect(registry.typedHooks[0]?.timeoutMs).toBe(250);
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.pluginId === "legacy-deactivate-hook" &&
-          diag.message ===
-            'typed hook "deactivate" is deprecated (legacy-deactivate-hook-alias); use "gateway_stop". This compatibility alias will be removed after 2026-08-16.',
-      ),
-    ).toBe(true);
   });
 
   it("warns when plugins register deprecated subagent_spawning typed hooks", () => {

@@ -53,7 +53,6 @@ import type {
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
 
-const LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT = getPluginCompatRecord("legacy-deactivate-hook-alias");
 const LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT = getPluginCompatRecord("legacy-subagent-spawning-hook");
 
 function normalizeEligibleTriggers(value: unknown) {
@@ -67,17 +66,8 @@ function normalizeEligibleTriggers(value: unknown) {
   return uniqueValues(triggers);
 }
 
-function formatLegacyDeactivateHookAliasDiagnostic(): string {
-  const removeAfter =
-    LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.removeAfter ?? "a future breaking release";
-  return (
-    `typed hook "deactivate" is deprecated (${LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.code}); ` +
-    `use "gateway_stop". This compatibility alias will be removed after ${removeAfter}.`
-  );
-}
-
 function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string | undefined {
-  if (!isDeprecatedPluginHookName(hookName) || hookName === "deactivate") {
+  if (!isDeprecatedPluginHookName(hookName)) {
     return undefined;
   }
   const deprecation = DEPRECATED_PLUGIN_HOOKS[hookName];
@@ -337,6 +327,22 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     pluginConfig: unknown,
   ) => {
     const normalizedEvents = normalizeStringEntries(Array.isArray(events) ? events : [events]);
+    // Typed lifecycle names (before_tool_call, message_received, ...) are dispatched only by
+    // the typed hook runner; registerHook uses the legacy internal-hook path so they never
+    // fire. Warn so authors move to `api.on(...)` instead of trusting a false "loaded".
+    for (const event of normalizedEvents) {
+      if (isPluginHookName(event)) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            `hook event "${event}" is dispatched by the typed hook runner only; ` +
+            `api.registerHook registrations for it are not invoked. ` +
+            `Use api.on("${event}", ...) instead.`,
+        });
+      }
+    }
     const entry = opts?.entry ?? null;
     const hookName = entry?.hook.name ?? opts?.name?.trim();
     if (!hookName) {
@@ -434,28 +440,19 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    const effectiveHookName = hookName === "deactivate" ? "gateway_stop" : hookName;
-    if (hookName === "deactivate") {
+    const diagnostic = formatDeprecatedTypedHookDiagnostic(hookName);
+    if (diagnostic) {
       pushDiagnostic({
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: formatLegacyDeactivateHookAliasDiagnostic(),
+        message: diagnostic,
       });
-    } else {
-      const diagnostic = formatDeprecatedTypedHookDiagnostic(hookName);
-      if (diagnostic) {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: diagnostic,
-        });
-      }
     }
-    const effectiveHandler = handler;
     // Records the refusal on the registry as well as emitting the diagnostic, so
-    // "is any hook of mine refused?" stays answerable after the startup scroll.
+    // "is any hook of mine refused?" stays answerable after the startup scroll
+    // is gone. `api.on()` returns void, so the plugin itself can never observe
+    // that its handler was refused.
     const blockTypedHook = (params: {
       reason: PluginBlockedHookReason;
       severity: "warn" | "error";
@@ -466,12 +463,12 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         level: params.severity,
         pluginId: record.id,
         source: record.source,
-        code: "hook-blocked",
+        code: "hook-registration-blocked",
         message: params.message,
       });
       registry.blockedHooks.push({
         pluginId: record.id,
-        hookName: effectiveHookName,
+        hookName,
         reason: params.reason,
         severity: params.severity,
         configPath: params.configPath,
@@ -479,72 +476,77 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         source: record.source,
       });
     };
-    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
+    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
       // Deliberate operator configuration: stays a warning.
       const configPath = `plugins.entries.${record.id}.hooks.allowPromptInjection`;
       blockTypedHook({
         reason: "prompt-injection-denied",
         severity: "warn",
         configPath,
-        message: `typed hook "${effectiveHookName}" blocked by ${configPath}=false`,
+        message:
+          `typed hook "${hookName}" blocked by ${configPath}=false; ` +
+          `the handler is not registered and will never run`,
       });
       return;
     }
-    if (isConversationHookName(effectiveHookName)) {
+    if (isConversationHookName(hookName)) {
       const explicitConversationAccess = policy?.allowConversationAccess;
       const configPath = `plugins.entries.${record.id}.hooks.allowConversationAccess`;
+      // An operator who wrote `false` chose this outcome, whatever the plugin's
+      // origin, so it stays a warning. This check must come first: a non-bundled
+      // plugin with an explicit `false` also satisfies the implicit-deny
+      // condition below, and reporting that as an error would raise the severity
+      // of a decision the operator made and tell them to set a key they already
+      // set.
+      if (explicitConversationAccess === false) {
+        blockTypedHook({
+          reason: "conversation-access-denied",
+          severity: "warn",
+          configPath,
+          message:
+            `typed hook "${hookName}" blocked by ${configPath}=false; ` +
+            `the handler is not registered and will never run`,
+        });
+        return;
+      }
       if (record.origin !== "bundled" && explicitConversationAccess !== true) {
-        // Implicit deny — nobody chose this. See the formatter's note.
+        // Implicit deny: nobody expressed an opinion. See the formatter's note.
         blockTypedHook({
           reason: "conversation-access-missing",
           severity: "error",
           configPath,
           message: formatImplicitConversationAccessBlockDiagnostic({
             pluginId: record.id,
-            hookName: effectiveHookName,
+            hookName,
             configPath,
           }),
         });
         return;
       }
-      if (record.origin === "bundled" && explicitConversationAccess === false) {
-        // Deliberate operator configuration: stays a warning.
-        blockTypedHook({
-          reason: "conversation-access-denied",
-          severity: "warn",
-          configPath,
-          message: `typed hook "${effectiveHookName}" blocked by ${configPath}=false`,
-        });
-        return;
-      }
     }
-    const timeoutMs = resolveTypedHookTimeoutMs({ hookName: effectiveHookName, opts, policy });
+    const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
     const eligibleTriggers =
-      effectiveHookName === "before_agent_reply"
+      hookName === "before_agent_reply"
         ? normalizeEligibleTriggers(opts?.eligibleTriggers)
         : undefined;
     const matcher =
-      effectiveHookName === "before_tool_call" || effectiveHookName === "after_tool_call"
+      hookName === "before_tool_call" || hookName === "after_tool_call"
         ? normalizePluginToolMatcher(opts?.matcher)
         : undefined;
-    if (
-      opts?.matcher &&
-      effectiveHookName !== "before_tool_call" &&
-      effectiveHookName !== "after_tool_call"
-    ) {
+    if (opts?.matcher && hookName !== "before_tool_call" && hookName !== "after_tool_call") {
       pushDiagnostic({
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: `typed hook "${effectiveHookName}" ignores tool matcher`,
+        message: `typed hook "${hookName}" ignores tool matcher`,
       });
     }
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
       ...(opts?.registrationId ? { registrationId: opts.registrationId } : {}),
-      hookName: effectiveHookName,
-      handler: effectiveHandler,
+      hookName,
+      handler,
       ...(matcher ? { matcher } : {}),
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),

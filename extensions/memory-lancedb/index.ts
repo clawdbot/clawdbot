@@ -12,7 +12,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isIncognitoSessionKey, normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
@@ -154,7 +154,7 @@ export default definePluginEntry({
           ...(typeof cfg.embedding.dimensions === "number"
             ? { dimensions: cfg.embedding.dimensions }
             : {}),
-          ...asRecord(runtimePluginConfig.embedding),
+          ...asOptionalRecord(runtimePluginConfig.embedding),
         },
         ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
         dbPath: cfg.dbPath,
@@ -163,7 +163,7 @@ export default definePluginEntry({
         captureMaxChars: cfg.captureMaxChars,
         recallMaxChars: cfg.recallMaxChars,
         ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
-        ...asRecord(runtimePluginConfig),
+        ...asOptionalRecord(runtimePluginConfig),
       });
     };
     const readMemoryRecallCooldown = (agentId: string): { error: string } | undefined => {
@@ -231,6 +231,7 @@ export default definePluginEntry({
                   let vector: number[];
                   try {
                     vector = await embeddings.embed(
+                      agentId,
                       normalizeRecallQuery(query, currentCfg.recallMaxChars),
                       { timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS },
                     );
@@ -369,7 +370,7 @@ export default definePluginEntry({
               };
             }
 
-            const vector = await embeddings.embed(text);
+            const vector = await embeddings.embed(agentId, text);
 
             const existing = await findCleanDuplicateMemory(db, agentId, vector);
             if (existing) {
@@ -442,6 +443,7 @@ export default definePluginEntry({
             if (query) {
               const currentCfg = resolveCurrentHookConfig();
               const vector = await embeddings.embed(
+                agentId,
                 normalizeRecallQuery(query, currentCfg.recallMaxChars),
               );
               const results = await db.search(agentId, vector, 5, 0.7);
@@ -536,7 +538,7 @@ export default definePluginEntry({
           task: async () => {
             let vector: number[];
             try {
-              vector = await embeddings.embed(recallQuery, {
+              vector = await embeddings.embed(agentId, recallQuery, {
                 timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
               });
             } catch (error) {
@@ -639,7 +641,7 @@ export default definePluginEntry({
               }
 
               const category = detectCategory(sanitized);
-              const vector = await embeddings.embed(sanitized);
+              const vector = await embeddings.embed(agentId, sanitized);
 
               const existing = await findCleanDuplicateMemory(db, agentId, vector);
               if (existing) {

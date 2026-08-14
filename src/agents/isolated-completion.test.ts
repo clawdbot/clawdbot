@@ -1,15 +1,36 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  type AgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "./admitted-run-context.js";
 import type { AgentHarness } from "./harness/types.js";
+import { createEmptyPluginMetadataSnapshot } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
+
+type IsolatedCliRunParams = {
+  preparedRunAdmission: PreparedAgentRunAdmission;
+  prompt: string;
+  runId: string;
+  sessionId: string;
+};
 
 const mocks = vi.hoisted(() => ({
   acquireAgentRunPreparedModelRuntime: vi.fn(),
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
   getRegisteredAgentHarness: vi.fn(),
+  ensureAuthProfileStore: vi.fn(),
   isCliRuntimeAliasForProvider: vi.fn(() => false),
   prepareSimpleCompletionModel: vi.fn(),
+  prepareAgentRuntimeAuth: vi.fn(),
+  resolveModelWithRegistry: vi.fn(),
   resolveCliRuntimeCanonicalProvider: vi.fn(() => undefined),
   resolveCliBackendConfig: vi.fn<
     () => { config: { command: string; modelAliases?: Record<string, string> } } | undefined
@@ -17,7 +38,7 @@ const mocks = vi.hoisted(() => ({
   resolveCliRuntimeExecutionProvider: vi.fn<() => string | undefined>(() => undefined),
   resolveEmbeddedCliBackendDispatchEligibility: vi.fn(() => undefined),
   resolveEffectiveAgentRuntime: vi.fn(() => "codex"),
-  runCliAgent: vi.fn(),
+  runCliAgent: vi.fn<(params: IsolatedCliRunParams) => Promise<unknown>>(),
 }));
 
 vi.mock("./agent-scope.js", () => ({
@@ -32,6 +53,9 @@ vi.mock("./cli-backends.js", () => ({
 vi.mock("./embedded-agent-runner/cli-backend-dispatch-eligibility.js", () => ({
   resolveEmbeddedCliBackendDispatchEligibility: mocks.resolveEmbeddedCliBackendDispatchEligibility,
 }));
+vi.mock("./embedded-agent-runner/model.js", () => ({
+  resolveModelWithRegistry: mocks.resolveModelWithRegistry,
+}));
 vi.mock("./harness/registry.js", () => ({
   getRegisteredAgentHarness: mocks.getRegisteredAgentHarness,
 }));
@@ -42,11 +66,32 @@ vi.mock("./model-runtime-aliases.js", () => ({
   isCliRuntimeAliasForProvider: mocks.isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider: mocks.resolveCliRuntimeExecutionProvider,
 }));
+vi.mock("./model-auth.js", () => ({ ensureAuthProfileStore: mocks.ensureAuthProfileStore }));
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: mocks.acquireAgentRunPreparedModelRuntime,
 }));
 vi.mock("./simple-completion-runtime.js", () => ({
   prepareSimpleCompletionModel: mocks.prepareSimpleCompletionModel,
+}));
+vi.mock("./runtime-plan/prepare-auth.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-plan/prepare-auth.js")>(
+    "./runtime-plan/prepare-auth.js",
+  );
+  return { ...actual, prepareAgentRuntimeAuth: mocks.prepareAgentRuntimeAuth };
+});
+vi.mock("./runtime-plan/resolve-auth.js", () => ({
+  scopeAuthProfileStoreToPreparedPlan: (
+    store: { version: number; profiles: Record<string, unknown> },
+    plan: { forwardedAuthProfileCandidateIds?: string[] },
+  ) => ({
+    ...store,
+    profiles: Object.fromEntries(
+      (plan.forwardedAuthProfileCandidateIds ?? []).flatMap((profileId) => {
+        const profile = store.profiles[profileId];
+        return profile ? [[profileId, profile]] : [];
+      }),
+    ),
+  }),
 }));
 vi.mock("./thinking-runtime.js", () => ({
   resolveEffectiveAgentRuntime: mocks.resolveEffectiveAgentRuntime,
@@ -100,7 +145,13 @@ function request() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.acquireAgentRunPreparedModelRuntime.mockResolvedValue({
-    snapshot: { pluginRegistry: createEmptyPluginRegistry() },
+    snapshot: {
+      config: {},
+      metadataSnapshot: createEmptyPluginMetadataSnapshot("/tmp/workspace"),
+      pluginRegistry: createEmptyPluginRegistry(),
+      workspaceDir: "/tmp/workspace",
+      createStores: () => ({ modelRegistry: {} }),
+    },
     release: vi.fn(),
   });
   mocks.isCliRuntimeAliasForProvider.mockReturnValue(false);
@@ -111,9 +162,372 @@ beforeEach(() => {
     auth: { apiKey: "secret", source: "profile:openai:test", mode: "oauth" },
     sourceAuthFingerprint: "fingerprint",
   });
+  mocks.resolveModelWithRegistry.mockReturnValue({
+    provider: "openai",
+    id: "gpt-test",
+    api: "openai-chatgpt-responses",
+  });
+  mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+  const plan = {
+    providerForAuth: "openai",
+    modelId: "gpt-test",
+    harnessAuthProvider: "openai",
+    modelRoute: { authRequirement: "subscription" },
+  };
+  mocks.prepareAgentRuntimeAuth.mockReturnValue({
+    plan,
+    attempts: [{ kind: "implicit", plan }],
+  });
 });
 
 describe("runIsolatedCompletion", () => {
+  it("hands harness-owned authorization to the V2 owner without resolving a host key", async () => {
+    const runIsolatedCompletionV2 = vi.fn(async () => ({
+      assistant: assistant([{ type: "text", text: "native result" }]),
+    }));
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletionV2,
+      } satisfies AgentHarness,
+    });
+
+    await expect(runIsolatedCompletion(request())).resolves.toMatchObject({
+      text: "native result",
+      owner: { kind: "harness", id: "codex" },
+    });
+    expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(expect.any(Object), {
+      catalogMode: "static",
+    });
+    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({ owner: "harness" }),
+      }),
+    );
+  });
+
+  it("clamps V2 output tokens to the resolved physical model limit", async () => {
+    mocks.resolveModelWithRegistry.mockReturnValueOnce({
+      provider: "openai",
+      id: "gpt-test",
+      api: "openai-chatgpt-responses",
+      maxTokens: 1_024,
+    });
+    const runIsolatedCompletionV2 = vi.fn(async () => ({
+      assistant: assistant([{ type: "text", text: "native result" }]),
+    }));
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletionV2,
+      } satisfies AgentHarness,
+    });
+
+    await runIsolatedCompletion({
+      ...request(),
+      streamParams: { maxTokens: 4_096, temperature: 0.2 },
+    });
+
+    expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
+      expect.objectContaining({ streamParams: { maxTokens: 1_024, temperature: 0.2 } }),
+    );
+  });
+
+  it("keeps automatic harness fallback core-owned and scopes one profile per call", async () => {
+    const firstPlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:first",
+      forwardedAuthProfileSource: "auto" as const,
+      forwardedAuthProfileCandidateIds: ["openai:first", "openai:backup"],
+      modelRoute: { authRequirement: "subscription" as const },
+    };
+    const backupPlan = {
+      ...firstPlan,
+      forwardedAuthProfileId: "openai:backup",
+      forwardedAuthProfileCandidateIds: ["openai:backup"],
+    };
+    mocks.ensureAuthProfileStore.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "openai:first": { type: "token", provider: "openai", token: "first" },
+        "openai:backup": { type: "token", provider: "openai", token: "backup" },
+      },
+    });
+    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
+      plan: firstPlan,
+      attempts: [
+        { kind: "profile", plan: firstPlan, profileId: "openai:first" },
+        { kind: "profile", plan: backupPlan, profileId: "openai:backup" },
+      ],
+    });
+    const runIsolatedCompletionV2 = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("first profile unavailable"))
+      .mockResolvedValueOnce({
+        assistant: assistant([{ type: "text", text: "backup result" }]),
+      });
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletionV2,
+      } satisfies AgentHarness,
+    });
+
+    await expect(runIsolatedCompletion(request())).resolves.toMatchObject({
+      text: "backup result",
+    });
+    expect(runIsolatedCompletionV2).toHaveBeenCalledTimes(2);
+    expect(
+      runIsolatedCompletionV2.mock.calls.map(([params]) => ({
+        profileId:
+          params.authorization.owner === "harness"
+            ? params.authorization.plan.forwardedAuthProfileId
+            : undefined,
+        candidateIds:
+          params.authorization.owner === "harness"
+            ? params.authorization.plan.forwardedAuthProfileCandidateIds
+            : undefined,
+        profiles:
+          params.authorization.owner === "harness"
+            ? Object.keys(params.authorization.authProfileStore.profiles)
+            : [],
+      })),
+    ).toEqual([
+      {
+        profileId: "openai:first",
+        candidateIds: ["openai:first"],
+        profiles: ["openai:first"],
+      },
+      {
+        profileId: "openai:backup",
+        candidateIds: ["openai:backup"],
+        profiles: ["openai:backup"],
+      },
+    ]);
+    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+  });
+
+  it("does not unlock direct auth when a prepared profile becomes cooldown-blocked", async () => {
+    const profilePlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:first",
+      forwardedAuthProfileSource: "auto" as const,
+      forwardedAuthProfileCandidateIds: ["openai:first"],
+      modelRoute: { authRequirement: "subscription" as const },
+    };
+    const directPlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      modelRoute: { authRequirement: "api-key" as const },
+    };
+    mocks.ensureAuthProfileStore.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "openai:first": { type: "token", provider: "openai", token: "first" },
+      },
+      usageStats: {
+        "openai:first": { cooldownUntil: Date.now() + 60_000 },
+      },
+    });
+    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
+      plan: profilePlan,
+      attempts: [
+        { kind: "profile", plan: profilePlan, profileId: "openai:first" },
+        {
+          kind: "direct",
+          plan: directPlan,
+          allowAuthProfileFallback: false,
+          requiresPriorProfileAttempt: true,
+        },
+      ],
+    });
+    const runIsolatedCompletionV2 = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("profile unavailable"))
+      .mockResolvedValueOnce({ assistant: assistant([{ type: "text", text: "direct result" }]) });
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletionV2,
+      } satisfies AgentHarness,
+    });
+
+    await expect(runIsolatedCompletion(request())).rejects.toThrow("temporarily unavailable");
+    expect(runIsolatedCompletionV2).not.toHaveBeenCalled();
+    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+  });
+
+  it("skips a cooled profile without hiding a prepared healthy backup", async () => {
+    const firstPlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:first",
+      forwardedAuthProfileSource: "auto" as const,
+      forwardedAuthProfileCandidateIds: ["openai:first", "openai:backup"],
+      modelRoute: { authRequirement: "subscription" as const },
+    };
+    const backupPlan = {
+      ...firstPlan,
+      forwardedAuthProfileId: "openai:backup",
+      forwardedAuthProfileCandidateIds: ["openai:backup"],
+    };
+    mocks.ensureAuthProfileStore.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "openai:first": { type: "token", provider: "openai", token: "first" },
+        "openai:backup": { type: "token", provider: "openai", token: "backup" },
+      },
+      usageStats: {
+        "openai:first": { cooldownUntil: Date.now() + 60_000 },
+      },
+    });
+    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
+      plan: firstPlan,
+      attempts: [
+        { kind: "profile", plan: firstPlan, profileId: "openai:first" },
+        { kind: "profile", plan: backupPlan, profileId: "openai:backup" },
+      ],
+    });
+    const runIsolatedCompletionV2 = vi.fn(async () => ({
+      assistant: assistant([{ type: "text", text: "backup result" }]),
+    }));
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletionV2,
+      } satisfies AgentHarness,
+    });
+
+    await expect(runIsolatedCompletion(request())).resolves.toMatchObject({
+      text: "backup result",
+    });
+    expect(runIsolatedCompletionV2).toHaveBeenCalledOnce();
+    expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          owner: "harness",
+          plan: expect.objectContaining({ forwardedAuthProfileId: "openai:backup" }),
+        }),
+      }),
+    );
+  });
+
+  it("allows direct auth after a prepared profile was actually dispatched", async () => {
+    const profilePlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:first",
+      forwardedAuthProfileSource: "auto" as const,
+      forwardedAuthProfileCandidateIds: ["openai:first"],
+      modelRoute: { authRequirement: "subscription" as const },
+    };
+    const directPlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      modelRoute: { authRequirement: "api-key" as const },
+    };
+    mocks.ensureAuthProfileStore.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "openai:first": { type: "token", provider: "openai", token: "first" },
+      },
+    });
+    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
+      plan: profilePlan,
+      attempts: [
+        { kind: "profile", plan: profilePlan, profileId: "openai:first" },
+        {
+          kind: "direct",
+          plan: directPlan,
+          allowAuthProfileFallback: false,
+          requiresPriorProfileAttempt: true,
+        },
+      ],
+    });
+    const runIsolatedCompletionV2 = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("profile unavailable"))
+      .mockResolvedValueOnce({ assistant: assistant([{ type: "text", text: "direct result" }]) });
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletionV2,
+      } satisfies AgentHarness,
+    });
+
+    await expect(runIsolatedCompletion(request())).resolves.toMatchObject({
+      text: "direct result",
+    });
+    expect(runIsolatedCompletionV2).toHaveBeenCalledTimes(2);
+    expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
+  });
+
+  it("uses host authorization for V2 API-key routes", async () => {
+    const plan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      modelRoute: { authRequirement: "api-key" as const },
+    };
+    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
+      plan,
+      attempts: [{ kind: "implicit", plan }],
+    });
+    const runIsolatedCompletionV2 = vi.fn(async () => ({
+      assistant: assistant([{ type: "text", text: "key result" }]),
+    }));
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletionV2,
+      } satisfies AgentHarness,
+    });
+
+    await runIsolatedCompletion(request());
+
+    expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
+    expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
+      expect.objectContaining({ authorization: expect.objectContaining({ owner: "host" }) }),
+    );
+  });
+
   it("passes one prepared route to the selected harness and returns text", async () => {
     const runIsolatedCompletionHarness = vi.fn(async () => ({
       assistant: assistant([{ type: "text", text: '{"ok":true}' }]),
@@ -277,11 +691,60 @@ describe("runIsolatedCompletion", () => {
     });
   });
 
+  it.each(["error", "aborted"] as const)(
+    "rejects %s harness output before usage reaches the runtime finalizer",
+    async (stopReason) => {
+      mocks.getRegisteredAgentHarness.mockReturnValue({
+        harness: {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn(),
+          runIsolatedCompletion: vi.fn(async () => ({
+            assistant: assistant([{ type: "text", text: "partial" }], stopReason),
+          })),
+        } satisfies AgentHarness,
+      });
+
+      await expect(runIsolatedCompletion(request())).rejects.toMatchObject({
+        code: "output-rejected",
+        message: expect.stringContaining(`stop reason ${stopReason}`),
+      });
+    },
+  );
+
+  it("rejects thinking-only harness output before usage reaches the runtime finalizer", async () => {
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletion: vi.fn(async () => ({
+          assistant: assistant([{ type: "thinking", thinking: "hidden" }]),
+        })),
+      } satisfies AgentHarness,
+    });
+
+    await expect(runIsolatedCompletion(request())).rejects.toMatchObject({
+      code: "output-rejected",
+      message: expect.stringContaining("empty output"),
+    });
+  });
+
   it("routes CLI owners through one exact empty-tool run without direct preparation", async () => {
     mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
     mocks.runCliAgent.mockResolvedValue({
       payloads: [{ text: '{"cli":true}' }],
-      meta: { durationMs: 1 },
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "claude-test",
+          usage: { input: 8, output: 3, cacheRead: 2, total: 13 },
+        },
+      },
     });
 
     await expect(
@@ -296,6 +759,7 @@ describe("runIsolatedCompletion", () => {
       provider: "anthropic",
       model: "claude-test",
       owner: { kind: "cli", id: "claude-cli" },
+      usage: { input: 8, output: 3, cacheRead: 2, total: 13 },
     });
     expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.runCliAgent).toHaveBeenCalledWith(
@@ -309,6 +773,105 @@ describe("runIsolatedCompletion", () => {
         cliToolAvailability: { native: [], openClaw: [] },
       }),
     );
+  });
+
+  it("keeps concurrent CLI isolated completions independently admitted", async () => {
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const firstStarted = createDeferred();
+    const bothStarted = createDeferred();
+    const calls: Array<{
+      admitted: AdmittedRunContext;
+      authority: AgentRunDelegatedAuthority;
+      params: IsolatedCliRunParams;
+      release: ReturnType<typeof createDeferred<void>>;
+    }> = [];
+    mocks.runCliAgent.mockImplementation(async (params) => {
+      const admitted = await params.preparedRunAdmission.admit("embedded");
+      const authority = getAdmittedRunDelegatedAuthority(admitted);
+      if (!authority) {
+        throw new Error("expected active isolated completion authority");
+      }
+      const release = createDeferred();
+      calls.push({ admitted, authority, params, release });
+      if (calls.length === 1) {
+        firstStarted.resolve();
+      }
+      if (calls.length === 2) {
+        bothStarted.resolve();
+      }
+      await release.promise;
+      return { payloads: [{ text: `done: ${params.prompt}` }] };
+    });
+
+    const first = runIsolatedCompletion({ ...request(), prompt: "first" });
+    let second: ReturnType<typeof runIsolatedCompletion> | undefined;
+    try {
+      await Promise.race([
+        firstStarted.promise,
+        first.then(() => {
+          throw new Error("first isolated completion settled before reaching the barrier");
+        }),
+      ]);
+      second = runIsolatedCompletion({ ...request(), prompt: "second" });
+      await Promise.race([
+        bothStarted.promise,
+        Promise.all([first, second]).then(() => {
+          throw new Error("isolated completions settled before reaching the barrier");
+        }),
+      ]);
+      const firstCall = calls.find(({ params }) => params.prompt === "first");
+      const secondCall = calls.find(({ params }) => params.prompt === "second");
+      if (!firstCall || !secondCall) {
+        throw new Error("expected both isolated completions to start");
+      }
+      expect(firstCall.params.runId).toBe(firstCall.params.sessionId);
+      expect(secondCall.params.runId).toBe(secondCall.params.sessionId);
+      expect(firstCall.params.runId).not.toBe(secondCall.params.runId);
+      expect(firstCall.admitted.operationalRunInstance.runId).toBe(firstCall.params.runId);
+      expect(secondCall.admitted.operationalRunInstance.runId).toBe(secondCall.params.runId);
+      expect(validateAgentRunDelegatedAuthority(firstCall.authority)).toBe(true);
+      expect(validateAgentRunDelegatedAuthority(secondCall.authority)).toBe(true);
+
+      firstCall.release.resolve();
+      await expect(first).resolves.toMatchObject({ text: "done: first" });
+      expect(validateAgentRunDelegatedAuthority(firstCall.authority)).toBe(false);
+      expect(validateAgentRunDelegatedAuthority(secondCall.authority)).toBe(true);
+
+      secondCall.release.resolve();
+      await expect(second).resolves.toMatchObject({ text: "done: second" });
+      expect(validateAgentRunDelegatedAuthority(secondCall.authority)).toBe(false);
+    } finally {
+      for (const call of calls) {
+        call.release.resolve();
+      }
+      await Promise.allSettled(second ? [first, second] : [first]);
+      clock.mockRestore();
+    }
+  });
+
+  it("keeps unavailable CLI usage absent", async () => {
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    mocks.runCliAgent.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "claude-test",
+        },
+      },
+    });
+
+    const result = await runIsolatedCompletion({
+      ...request(),
+      provider: "anthropic",
+      model: "claude-test",
+      agentHarnessRuntimeOverride: "claude-cli",
+    });
+
+    expect(result).not.toHaveProperty("usage");
   });
 
   it("forwards one explicit auth profile unchanged to a CLI owner", async () => {

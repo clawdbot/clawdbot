@@ -3,6 +3,7 @@ import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
   redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
@@ -11,14 +12,15 @@ import {
 import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
-} from "../../../infra/node-pairing.js";
-import { listProfiles } from "../../../state/user-profiles.js";
+} from "../../../infra/device-pairing-node.js";
+import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import {
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
+import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
@@ -36,6 +38,7 @@ export async function sendGatewayHello(
   context: GatewayConnectPhaseContext,
   state: DeviceAuthorizedGatewayConnect,
   pluginSurfaceUrls: Record<string, string>,
+  authenticatedUserProfileId?: string,
 ): Promise<void> {
   const {
     connId,
@@ -65,28 +68,47 @@ export async function sendGatewayHello(
     hasTokenAuth,
     hasPasswordAuth,
     bootstrapTokenCandidate,
+    authResult,
     authMethod,
+    sessionSharedGatewaySessionGeneration,
     issuedBootstrapProfile,
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
     controlUiDeviceAuthMigrationPending,
   } = state;
+  // Prefer the authenticated human; principal scopes never inherit device-token rows.
+  const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
+  const recoveryScopeMaterial = authenticatedPrincipal
+    ? ["principal", authenticatedPrincipal, device?.id ?? ""]
+    : deviceToken?.token
+      ? ["device-token", deviceToken.token]
+      : sessionSharedGatewaySessionGeneration
+        ? ["shared-auth", sessionSharedGatewaySessionGeneration, device?.id ?? ""]
+        : device?.id
+          ? ["device", device.id]
+          : undefined;
+  const recoveryScope =
+    role === "operator" && recoveryScopeMaterial
+      ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
+      : undefined;
+  const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
+    includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth) {
     snapshot.health = cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
-  const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
-  const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes, {
+  const controlUiTabs = listControlUiPluginTabs(scopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
-  const controlUiWidgetKinds = listControlUiPluginWidgetKinds(helloOkAuthScopes);
+  const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
   const helloOk = {
     type: "hello-ok",
+    // Admission already verified range overlap; this field reports the server's current protocol.
     protocol: PROTOCOL_VERSION,
     server: {
       version: resolveRuntimeServiceVersion(process.env),
@@ -98,7 +120,9 @@ export async function sendGatewayHello(
       capabilities: [
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
+        GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
       ],
     },
     snapshot,
@@ -110,7 +134,9 @@ export async function sendGatewayHello(
       : {}),
     auth: {
       role,
-      scopes: helloOkAuthScopes,
+      scopes,
+      ...(recoveryScope ? { recoveryScope } : {}),
+      ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
       ...(deviceToken
         ? {
             deviceToken: deviceToken.token,
@@ -127,8 +153,7 @@ export async function sendGatewayHello(
       tickIntervalMs: TICK_INTERVAL_MS,
       attachments: resolveChatAttachmentPolicy(context.configSnapshot),
       allowedSessionVisibilities: allowedSessionVisibilities(context.configSnapshot),
-      hasMultipleSessionSharingIdentities:
-        listProfiles().filter((profile) => !profile.mergedInto).length >= 2,
+      hasMultipleSessionSharingIdentities: hasMultipleSessionSharingIdentities(),
     },
   };
   advanceHandshakePhase("hello_payload_prepared");
@@ -196,7 +221,7 @@ export async function sendGatewayHello(
     authMethod,
     authProvided,
     role,
-    scopes: helloOkAuthScopes,
+    scopes,
     clientMode: connectParams.client.mode,
     deviceId: device?.id,
   });

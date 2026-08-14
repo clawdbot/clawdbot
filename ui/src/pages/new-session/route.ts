@@ -14,7 +14,13 @@ async function loadNewSessionData(
   const requestedLocation = newSessionLocationFromSearch(search);
   const requestedAgentId = requestedLocation.agentId.trim();
   if (!requestedLocation.catalogId) {
-    return { ...requestedLocation, requestedAgentId, model: "", catalogLabel: "" };
+    return {
+      ...requestedLocation,
+      requestedAgentId,
+      model: "",
+      catalogLabel: "",
+      startTerminal: false,
+    };
   }
   const { resolveAgentId, resolveCreateTarget } = await import("./catalog-target.ts");
   const unresolved = (agentId = ""): NewSessionRouteData => ({
@@ -23,6 +29,7 @@ async function loadNewSessionData(
     requestedAgentId,
     model: "",
     catalogLabel: "",
+    startTerminal: false,
   });
   const initialGateway = context.gateway.snapshot;
   const initialAgentsState = context.agents.state;

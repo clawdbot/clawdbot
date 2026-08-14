@@ -1,14 +1,13 @@
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type {
-  CliPlanUpdate,
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
   CliToolUseStartDelta,
-} from "../cli-output.js";
+} from "../cli-output-contracts.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
-import { sanitizeToolArgs, sanitizeToolResult } from "../embedded-agent-subscribe.tools.js";
+import { sanitizeToolArgs, sanitizeToolResult } from "../embedded-agent-tool-results.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
@@ -129,7 +128,7 @@ export function createCliEventHandlers(params: {
           toolCallId: event.toolCallId,
           isError: event.isError,
           result: sanitizeToolResult(event.result),
-          ...(startedArgs ? { args: startedArgs } : {}),
+          ...(startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
       });
@@ -166,6 +165,7 @@ export function createCliEventHandlers(params: {
     observedCliActivity = true;
     recordToolResult(event);
     if (emitLiveEvents) {
+      toolArgsByCallId.delete(event.toolCallId);
       emitAgentEvent({
         runId: runParams.runId,
         stream: "tool",
@@ -370,17 +370,6 @@ export function createCliEventHandlers(params: {
     }
   };
 
-  const emitCliPlanUpdate = ({ steps }: CliPlanUpdate) => {
-    observedCliActivity = true;
-    if (emitLiveEvents) {
-      emitAgentEvent({
-        runId: runParams.runId,
-        stream: "plan",
-        data: { phase: "update", title: "Plan updated", source: "codex-exec", steps },
-      });
-    }
-  };
-
   return {
     emitLiveEvents,
     emitCliToolUseStart,
@@ -394,7 +383,6 @@ export function createCliEventHandlers(params: {
     emitCliAssistantDelta,
     emitCliThinkingDelta,
     emitCliThinkingProgress,
-    emitCliPlanUpdate,
     hasObservedCliActivity: () => observedCliActivity,
     activeParsedToolCount: () => activeParsedTools.size,
     getToolSummary,

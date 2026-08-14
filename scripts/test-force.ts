@@ -58,7 +58,7 @@ function runTests() {
   const isolatedLock =
     process.env.OPENCLAW_GATEWAY_LOCK ??
     path.join(os.tmpdir(), `openclaw-gateway.lock.test.${Date.now()}`);
-  const result = spawnSync(process.execPath, ["scripts/test-projects.mjs"], {
+  const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/test-projects.mts"], {
     stdio: "inherit",
     env: {
       ...process.env,

@@ -12,7 +12,7 @@ import {
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-event/envelope.js";
 import { createChannelReplyPipeline } from "./message/reply-pipeline.js";
-import { dispatchChannelInboundTurn } from "./turn/kernel.js";
+import { dispatchRoutedChannelTurn } from "./turn/lifecycle.js";
 import type { ChannelTurnPlan } from "./turn/types.js";
 export {
   createPreCryptoDirectDmAuthorizer,
@@ -121,7 +121,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
       timestamp: params.timestamp,
     }),
   );
-  await dispatchChannelInboundTurn(buildDirectDmTurnPlan(params, route, ctxPayload));
+  await dispatchRoutedChannelTurn(buildDirectDmTurnPlan(params, route, ctxPayload));
 
   return { route, ctxPayload };
 }

@@ -11,6 +11,8 @@ import {
   runDevicePairingHealth,
   runGatewayDaemonHealth,
   runGatewayServicesHealth,
+  runHostDesktopHealth,
+  runGitHubProjectHealth,
   runOpenAIOAuthTlsHealth,
   runSecurityHealth,
   runStartupChannelMaintenanceHealth,
@@ -32,6 +34,7 @@ import {
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
 import type {
+  DoctorHealthCheckContext,
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
@@ -53,6 +56,20 @@ export function resolveFinalDoctorHealthContributions(params: {
         "core/doctor/gateway-services/platform-notes",
       ],
       run: runGatewayServicesHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:host-desktop",
+      label: "Host desktop",
+      healthChecks: {
+        description: "Gateway-host desktop enablement, reachability, and RFB security state.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectHostDesktopHealthFindings } =
+            await import("../commands/doctor-host-desktop.js");
+          return collectHostDesktopHealthFindings(ctx.cfg);
+        },
+      },
+      run: runHostDesktopHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:default-account-routing",
@@ -120,6 +137,11 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: runWebFetchProxyHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:github-projects",
+      label: "GitHub projects",
+      run: runGitHubProjectHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:browser",
       label: "Browser",
       healthCheckIds: ["core/doctor/browser", "core/doctor/browser-clawd-profile-residue"],
@@ -184,7 +206,12 @@ export function resolveFinalDoctorHealthContributions(params: {
             cfg: ctx.cfg,
             options: { nonInteractive: true, allowExec: ctx.allowExecSecretRefs === true },
           });
-          return collectWorkspaceStatusHealthFindings(ctx.cfg, { pluginVersionDrift });
+          const runWithPluginMetadataSnapshot = (ctx as DoctorHealthCheckContext)
+            .runWithPluginMetadataSnapshot;
+          return collectWorkspaceStatusHealthFindings(ctx.cfg, {
+            pluginVersionDrift,
+            ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
+          });
         },
       },
       run: runWorkspaceStatusHealth,
@@ -199,31 +226,6 @@ export function resolveFinalDoctorHealthContributions(params: {
           }),
         ]
       : []),
-    createDoctorHealthContribution({
-      id: "doctor:skill-curator",
-      label: "Skill curator",
-      healthChecks: {
-        description: "Stalled skill lifecycle curation is reported as a warning.",
-        defaultEnabled: false,
-        async detect() {
-          const { getSkillCuratorDoctorWarning } = await import("../skills/workshop/curator.js");
-          const warning = getSkillCuratorDoctorWarning();
-          return warning
-            ? [
-                {
-                  checkId: "core/doctor/skill-curator",
-                  severity: "warning" as const,
-                  source: "doctor",
-                  message: warning,
-                  target: "skill-curator",
-                  requirement:
-                    "latest sweep succeeds and attempts do not trail success by seven days",
-                },
-              ]
-            : [];
-        },
-      },
-    }),
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",

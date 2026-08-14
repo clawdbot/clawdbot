@@ -1,6 +1,7 @@
 // Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealth,
   resolveStatusGatewayHealthSafe,
   resolveStatusRuntimeSnapshot,
@@ -369,6 +370,22 @@ describe("status-runtime-shared", () => {
       config: { gateway: {} },
       url: "ws://127.0.0.1:18789",
       token: "tok",
+    });
+  });
+
+  it("requests the typed exporter stability projection", async () => {
+    await resolveStatusGatewayDiagnosticsSafe({
+      config: { gateway: {} },
+      timeoutMs: 4321,
+      gatewayReachable: true,
+      type: "telemetry.exporter",
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "diagnostics.stability",
+      params: { limit: 1000, type: "telemetry.exporter" },
+      timeoutMs: 4321,
+      config: { gateway: {} },
     });
   });
 

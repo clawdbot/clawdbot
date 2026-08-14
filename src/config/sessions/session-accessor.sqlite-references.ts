@@ -2,7 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { SessionEntry } from "./types.js";
 
 /** Every transcript generation retained by one canonical logical-session record. */
-export function collectSqliteSessionStateIdsForEntry(entry: SessionEntry): string[] {
+export function collectSessionStateIdsForEntry(entry: SessionEntry): string[] {
   const sessionIds: string[] = [];
   const add = (sessionId: string | undefined) => {
     const normalized = sessionId?.trim();

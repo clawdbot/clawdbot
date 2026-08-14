@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -27,23 +30,27 @@ vi.mock("../session-utils.js", async (importOriginal) => {
 vi.mock("../session-event-payload.js", () => ({
   buildGatewaySessionEventFields: ({
     sessionRow,
+    hasActiveRun,
+    activeRunIds,
   }: {
     sessionRow: { key: string; label: string };
-  }) => ({ key: sessionRow.key, label: sessionRow.label }),
-}));
-
-vi.mock("./session-active-runs.js", () => ({
-  resolveVisibleActiveSessionRunState: () => ({ active: false, runIds: [] }),
+    hasActiveRun?: boolean;
+    activeRunIds?: string[];
+  }) => ({ key: sessionRow.key, label: sessionRow.label, hasActiveRun, activeRunIds }),
 }));
 
 const { emitSessionsChanged, flushPendingSessionsChangedEvents, readSessionsMutationVersion } =
   await import("./session-change-event.js");
 
-function createContext(receivers = new Set(["conn-1"])) {
+function createContext(
+  receivers = new Set(["conn-1"]),
+  config: OpenClawConfig = {},
+  chatAbortControllers: GatewayRequestContext["chatAbortControllers"] = new Map(),
+) {
   return {
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    getRuntimeConfig: () => ({}),
+    chatAbortControllers,
+    getRuntimeConfig: () => config,
     getSessionEventSubscriberConnIds: () => receivers,
   } as unknown as GatewayRequestContext;
 }
@@ -92,6 +99,84 @@ describe("sessions.changed coalescing", () => {
 
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
     expect(mocks.loadRow).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not adopt the compatibility owner's ownerless run for another agent", () => {
+    const config = retainLegacyDefaultAgentId(
+      {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      },
+      "ops",
+    );
+    const sessionId = "agent:research:shared-session-id";
+    const context = createContext(
+      new Set(["conn-1"]),
+      config,
+      new Map([
+        [
+          "compat-owner-run",
+          {
+            controller: new AbortController(),
+            expiresAtMs: 60_000,
+            sessionId,
+            sessionKey: "legacy-unscoped",
+            startedAtMs: 0,
+          } satisfies ChatAbortControllerEntry,
+        ],
+      ]),
+    );
+
+    emitSessionsChanged(context, {
+      reason: "update",
+      sessionKey: "agent:research:shared-session",
+    });
+
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ hasActiveRun: false, activeRunIds: [] }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("projects active bare-global runs through the persisted fixed-store owner", () => {
+    const config = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+    const context = createContext(
+      new Set(["conn-1"]),
+      config,
+      new Map([
+        [
+          "ops-global-run",
+          {
+            agentId: "ops",
+            controller: new AbortController(),
+            expiresAtMs: 60_000,
+            sessionId: "global-id",
+            sessionKey: "global",
+            startedAtMs: 0,
+          } satisfies ChatAbortControllerEntry,
+        ],
+      ]),
+    );
+
+    emitSessionsChanged(context, { reason: "update", sessionKey: "global" });
+
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        activeRunIds: ["ops-global-run"],
+        hasActiveRun: true,
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it("advances the mutation fence without loading rows when nobody receives events", () => {

@@ -3,13 +3,19 @@ import { randomInt } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
+import {
+  formatCliBackendVersionAdvisory,
+  resolveCliBackendVersionGuidance,
+} from "../agents/cli-backend-version-support.js";
+import { resolveCliBackendLiveSessionRequirement } from "../agents/cli-backends.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../system-agent/probes.js";
@@ -45,10 +51,12 @@ type DetectInferenceBackendsDeps = {
   readGeminiCliCredentials?: () => { type: string } | null;
   detectCodexLoginState?: typeof detectCodexLoginState;
   randomInt?: (maxExclusive: number) => number;
+  resolveClaudeLiveSessionRequirement?: typeof resolveCliBackendLiveSessionRequirement;
 };
 
 type DetectInferenceBackendsOptions = {
   config?: OpenClawConfig;
+  agentId?: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   deps?: DetectInferenceBackendsDeps;
@@ -77,14 +85,39 @@ function detectCliCredentialState(params: {
   return params.platform === "darwin" ? undefined : false;
 }
 
-function describeCliDetail(credentials: boolean | undefined, loginHint: string): string {
-  if (credentials === true) {
+type CliAuthKind = "api-key" | "chatgpt-subscription" | "claude-subscription";
+type CliLoginState = { credentials: boolean | undefined; authKind?: CliAuthKind };
+
+const CLI_AUTH_KIND_LABEL: Record<CliAuthKind, string> = {
+  "api-key": "API key (usage-billed)",
+  "chatgpt-subscription": "ChatGPT subscription",
+  "claude-subscription": "Claude subscription",
+};
+
+function describeCliDetail(state: CliLoginState, loginHint: string): string {
+  if (state.authKind) {
+    return `logged in · ${CLI_AUTH_KIND_LABEL[state.authKind]}`;
+  }
+  if (state.credentials === true) {
     return "logged in";
   }
-  if (credentials === false) {
+  if (state.credentials === false) {
     return `installed, not logged in — ${loginHint}, then check again`;
   }
   return "installed";
+}
+
+function classifyClaudeCliAuth(
+  credential: { type: string } | null,
+  env: NodeJS.ProcessEnv,
+): CliAuthKind | undefined {
+  if (env.ANTHROPIC_API_KEY?.trim() || credential?.type === "api_key_helper") {
+    return "api-key";
+  }
+  if (credential?.type === "oauth" || credential?.type === "token") {
+    return "claude-subscription";
+  }
+  return undefined;
 }
 
 function describeGeminiCliDetail(credentials: boolean | undefined): string {
@@ -93,17 +126,34 @@ function describeGeminiCliDetail(credentials: boolean | undefined): string {
     : "installed; login status unavailable";
 }
 
+async function classifyCodexLoginStatus(
+  probe: typeof probeLocalCommand,
+  command: string,
+): Promise<CliLoginState> {
+  const status = await probe(command, ["login", "status"], { timeoutMs: 3_000 });
+  if (status.error) {
+    // Codex login status covers its own auth store, not custom model-provider
+    // credentials. Keep failures indeterminate so the live probe decides usability.
+    return { credentials: undefined };
+  }
+  if (status.version === "Logged in using ChatGPT") {
+    return { credentials: true, authKind: "chatgpt-subscription" };
+  }
+  if (/^Logged in using an API key - .+$/u.test(status.version ?? "")) {
+    return { credentials: true, authKind: "api-key" };
+  }
+  return { credentials: true };
+}
+
+// Deliberately boolean-shaped: this signature is reachable from the exported
+// detectInferenceBackends options type and therefore part of the plugin-sdk
+// agent-harness API contract. Widening it would bump the contract hash — the
+// rich classification stays module-local in classifyCodexLoginStatus.
 async function detectCodexLoginState(
   probe: typeof probeLocalCommand,
   command: string,
 ): Promise<boolean | undefined> {
-  const status = await probe(command, ["login", "status"], { timeoutMs: 3_000 });
-  if (!status.error) {
-    return true;
-  }
-  // Codex login status covers its own auth store, not custom model-provider
-  // credentials. Keep failures indeterminate so the live probe decides usability.
-  return undefined;
+  return (await classifyCodexLoginStatus(probe, command)).credentials;
 }
 
 function randomizeClaudeCodexTie(
@@ -163,11 +213,6 @@ async function detectNativeCodexAppServer(
   });
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.onboardInferenceTestApi")] = {
-    detectNativeCodexAppServer,
-  };
-}
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
  * for backends that exist on this machine; the first entry is the bootstrap
@@ -191,10 +236,13 @@ export async function detectInferenceBackends(
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
 
   const candidates: InferenceBackendCandidate[] = [];
-  const defaultAgentId = options.config ? resolveDefaultAgentId(options.config) : undefined;
-  const defaultAgentModel = options.config
-    ? resolveAgentConfig(options.config, resolveDefaultAgentId(options.config))?.model
+  const defaultAgentId = options.config
+    ? options.agentId?.trim() || tryResolveLegacyCompatibilityAgentId(options.config)
     : undefined;
+  const defaultAgentModel =
+    options.config && defaultAgentId
+      ? resolveAgentConfig(options.config, defaultAgentId)?.model
+      : undefined;
   const existingModel =
     resolveAgentModelPrimaryValue(defaultAgentModel) ??
     resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
@@ -224,6 +272,13 @@ export async function detectInferenceBackends(
   const cliCandidates: InferenceBackendCandidate[] = [];
   const subscriptionPromotionEligibleCliKinds = new Set<InferenceBackendKind>();
   if (claudeProbe.found && !claudeProbe.timedOut) {
+    const liveSessionRequirement =
+      (
+        options.deps?.resolveClaudeLiveSessionRequirement ?? resolveCliBackendLiveSessionRequirement
+      )("claude-cli") ?? undefined;
+    const versionGuidance = liveSessionRequirement
+      ? resolveCliBackendVersionGuidance(claudeProbe.version, liveSessionRequirement)
+      : { status: "unknown" as const };
     const claudeCredential = readClaude();
     const credentials = detectCliCredentialState({
       probe: claudeProbe,
@@ -233,25 +288,44 @@ export async function detectInferenceBackends(
     if (credentials === true && claudeCredential?.type === "oauth") {
       subscriptionPromotionEligibleCliKinds.add("claude-cli");
     }
+    const detail = describeCliDetail(
+      { credentials, authKind: classifyClaudeCliAuth(claudeCredential, env) },
+      "run `claude auth login`",
+    );
+    // Only the live init record can prove capability support. Keep backports and
+    // wrappers selectable here even when their version predates the known release.
     cliCandidates.push({
       kind: "claude-cli",
       modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       label: "Claude Code",
-      detail: describeCliDetail(credentials, "run `claude auth login`"),
+      detail:
+        versionGuidance.status === "below-known-floor" && liveSessionRequirement
+          ? `${detail}; ${formatCliBackendVersionAdvisory({
+              label: "Claude Code",
+              requirement: liveSessionRequirement,
+              version: versionGuidance.version,
+            })}`
+          : detail,
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
   if (codexProbe.found && !codexProbe.timedOut) {
     const codexCredential = readCodex();
-    const credentials = options.deps?.detectCodexLoginState
-      ? await options.deps.detectCodexLoginState(probe, codexProbe.command)
+    const loginState: CliLoginState = options.deps?.detectCodexLoginState
+      ? { credentials: await options.deps.detectCodexLoginState(probe, codexProbe.command) }
       : options.deps?.readCodexCliCredentials
-        ? detectCliCredentialState({
-            probe: codexProbe,
-            hasStoredCredentials: codexCredential !== null,
-            platform,
-          })
-        : await detectCodexLoginState(probe, codexProbe.command);
+        ? {
+            credentials: detectCliCredentialState({
+              probe: codexProbe,
+              hasStoredCredentials: codexCredential !== null,
+              platform,
+            }),
+            ...(codexCredential?.type === "oauth"
+              ? { authKind: "chatgpt-subscription" as const }
+              : {}),
+          }
+        : await classifyCodexLoginStatus(probe, codexProbe.command);
+    const credentials = loginState.credentials;
     // Promote only prompt-free ChatGPT OAuth tokens. Status-only logins may be metered;
     // keychain-only ChatGPT users conservatively stay usable in the fallback tier.
     if (credentials === true && codexCredential?.type === "oauth") {
@@ -261,7 +335,7 @@ export async function detectInferenceBackends(
       kind: "codex-cli",
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       label: "Codex",
-      detail: describeCliDetail(credentials, "run `codex login`"),
+      detail: describeCliDetail(loginState, "run `codex login`"),
       ...(credentials === undefined ? {} : { credentials }),
     });
   }

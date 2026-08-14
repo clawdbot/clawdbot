@@ -23,6 +23,14 @@ describe.skipIf(!hasBrowserLayout)("dream diary browser layout", () => {
     viewState.activeSubTab = "diary";
     viewState.activeDiarySubTab = "dreams";
     const props: Parameters<typeof renderDreaming>[0] = {
+      access: {
+        canOpenConfig: true,
+        canBackfillDiary: true,
+        canDedupeDreamDiary: true,
+        canResetDiary: true,
+        canResetGroundedShortTerm: true,
+        canRepairDreamingArtifacts: true,
+      },
       viewState,
       active: true,
       selectedAgentId: "main",

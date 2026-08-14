@@ -1,7 +1,10 @@
 // Verifies configured model ref resolution and OpenRouter compatibility aliases.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveAllowedModelRef, resolveConfiguredModelRef } from "./model-selection-resolve.js";
+import {
+  resolveAllowedModelRefCore,
+  resolveConfiguredModelRef,
+} from "./model-selection-resolve.js";
 
 describe("model-selection-resolve OpenRouter compat aliases", () => {
   it("keeps inherited policy aliases bound to default metadata for per-agent selection", () => {
@@ -30,7 +33,7 @@ describe("model-selection-resolve OpenRouter compat aliases", () => {
     ];
 
     expect(
-      resolveAllowedModelRef({
+      resolveAllowedModelRefCore({
         cfg,
         catalog,
         raw: "approved",
@@ -39,7 +42,7 @@ describe("model-selection-resolve OpenRouter compat aliases", () => {
       }),
     ).toEqual({ error: "model not allowed: anthropic/claude-sonnet-4-6" });
     expect(
-      resolveAllowedModelRef({
+      resolveAllowedModelRefCore({
         cfg,
         catalog,
         raw: "openai/gpt-5.5",
@@ -75,7 +78,7 @@ describe("model-selection-resolve OpenRouter compat aliases", () => {
     ];
 
     expect(
-      resolveAllowedModelRef({
+      resolveAllowedModelRefCore({
         cfg,
         catalog,
         raw: "approved",
@@ -87,7 +90,7 @@ describe("model-selection-resolve OpenRouter compat aliases", () => {
       ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
     });
     expect(
-      resolveAllowedModelRef({
+      resolveAllowedModelRefCore({
         cfg,
         catalog,
         raw: "openai/gpt-5.5",
@@ -120,7 +123,7 @@ describe("model-selection-resolve OpenRouter compat aliases", () => {
     } as unknown as OpenClawConfig;
 
     expect(
-      resolveAllowedModelRef({
+      resolveAllowedModelRefCore({
         cfg,
         catalog: [],
         raw: "litellm/cron",
@@ -172,7 +175,7 @@ describe("model-selection-resolve OpenRouter compat aliases", () => {
     ];
 
     expect(
-      resolveAllowedModelRef({
+      resolveAllowedModelRefCore({
         cfg,
         catalog,
         raw: "openrouter:free",

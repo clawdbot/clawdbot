@@ -21,7 +21,7 @@ export const lineConfigAdapter = createScopedChannelConfigAdapter<
   resolveAccount: (cfg, accountId) =>
     resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
   defaultAccountId: resolveDefaultLineAccountId,
-  clearBaseFields: ["channelSecret", "tokenFile", "secretFile"],
+  clearBaseFields: ["channelAccessToken", "channelSecret", "tokenFile", "secretFile", "name"],
   resolveAllowFrom: (account) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) => normalizeStringEntries(allowFrom).map(normalizeLineAllowFrom),
 });

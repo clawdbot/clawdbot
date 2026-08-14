@@ -66,7 +66,7 @@ OpenAI-compatible, so OpenClaw talks to it over the same
 
 ```json5
 {
-  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
   agents: {
     defaults: {
       model: { primary: "openrouter/auto" },
@@ -101,12 +101,14 @@ under `agents.defaults.mediaModels.image`:
 
 ```json5
 {
-  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "openrouter/google/gemini-3.1-flash-image-preview",
-        timeoutMs: 180_000,
+      mediaModels: {
+        image: {
+          primary: "openrouter/google/gemini-3.1-flash-image-preview",
+          timeoutMs: 180000,
+        },
       },
     },
   },
@@ -127,11 +129,13 @@ OpenRouter can back the `video_generate` tool through its asynchronous
 
 ```json5
 {
-  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "openrouter/google/veo-3.1-fast",
+      mediaModels: {
+        video: {
+          primary: "openrouter/google/veo-3.1-fast",
+        },
       },
     },
   },
@@ -155,12 +159,14 @@ output. Set an OpenRouter audio model under
 
 ```json5
 {
-  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
   agents: {
     defaults: {
-      musicGenerationModel: {
-        primary: "openrouter/google/lyria-3-pro-preview",
-        timeoutMs: 180_000,
+      mediaModels: {
+        music: {
+          primary: "openrouter/google/lyria-3-pro-preview",
+          timeoutMs: 180000,
+        },
       },
     },
   },
@@ -210,10 +216,14 @@ media understanding preflight.
 {
   tools: {
     media: {
-      audio: {
-        enabled: true,
-        models: [{ provider: "openrouter", model: "openai/whisper-large-v3-turbo" }],
-      },
+      models: [
+        {
+          provider: "openrouter",
+          model: "openai/whisper-large-v3-turbo",
+          capabilities: ["audio"],
+        },
+      ],
+      audio: { enabled: true },
     },
   },
 }
@@ -238,11 +248,11 @@ openclaw models set openrouter/openrouter/fusion
 Configure Fusion's panel and judge through the model's `params.extraBody`;
 those fields forward directly into the OpenRouter chat-completions request
 body. Fusion works with either OAuth or API-key onboarding; if you use OAuth,
-omit the `env.OPENROUTER_API_KEY` line below.
+omit the `env.vars.OPENROUTER_API_KEY` line below.
 
 ```json5
 {
-  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
   agents: {
     defaults: {
       model: { primary: "openrouter/openrouter/fusion" },

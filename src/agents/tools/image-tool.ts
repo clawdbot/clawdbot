@@ -1,6 +1,7 @@
 import { resolve, isAbsolute } from "node:path";
 import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
+import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../../config/types.tools.js";
 import {
@@ -9,7 +10,6 @@ import {
   resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
 import { matchesMediaEntryCapability } from "../../media-understanding/entry-capabilities.js";
-import { normalizeMediaProviderId } from "../../media-understanding/provider-id.js";
 import {
   buildMediaUnderstandingRegistry as buildProviderRegistry,
   getMediaUnderstandingProvider,

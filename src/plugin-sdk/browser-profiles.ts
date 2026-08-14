@@ -6,7 +6,7 @@ import type { BrowserConfig } from "../config/types.browser.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./browser-types.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 export type {
   ResolvedBrowserConfig,
   ResolvedBrowserProfile,
@@ -44,12 +44,11 @@ type BrowserProfilesSurface = {
 let cachedBrowserProfilesSurface: BrowserProfilesSurface | undefined;
 
 function loadBrowserProfilesSurface(): BrowserProfilesSurface {
-  cachedBrowserProfilesSurface ??= loadBundledPluginPublicSurfaceModuleSync<BrowserProfilesSurface>(
-    {
+  cachedBrowserProfilesSurface ??=
+    loadBundledPluginPublicSurfaceModuleSyncCore<BrowserProfilesSurface>({
       dirName: "browser",
       artifactBasename: "browser-profiles.js",
-    },
-  );
+    });
   return cachedBrowserProfilesSurface;
 }
 

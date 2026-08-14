@@ -4,6 +4,7 @@
  * Stores lifecycle drivers for binding targets that carry mutable external session state.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,
@@ -41,7 +42,10 @@ export type StatefulBindingTargetDriver = {
   }) => Promise<StatefulBindingTargetResetResult>;
 };
 
-const registeredStatefulBindingTargetDrivers = new Map<string, StatefulBindingTargetDriver>();
+const registeredStatefulBindingTargetDrivers = resolveGlobalMap<
+  string,
+  StatefulBindingTargetDriver
+>(Symbol.for("openclaw.statefulBindingTargetDrivers"), "plugin-registry");
 
 function listStatefulBindingTargetDrivers(): StatefulBindingTargetDriver[] {
   return [...registeredStatefulBindingTargetDrivers.values()];

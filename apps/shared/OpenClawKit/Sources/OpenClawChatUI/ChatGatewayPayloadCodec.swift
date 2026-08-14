@@ -162,18 +162,23 @@ public enum OpenClawChatGatewayPayloadCodec {
                       as: OpenClawAgentEventPayload.self)
             else { return nil }
             return .agent(agent)
+        default:
+            return self.secondaryEvent(from: frame)
+        }
+    }
+
+    private static func secondaryEvent(from frame: EventFrame) -> OpenClawChatTransportEvent? {
+        guard let payload = frame.payload else { return nil }
+        switch frame.event {
+        case "task":
+            return (try? GatewayPayloadDecoding.decode(payload, as: OpenClawChatTaskEvent.self))
+                .map(OpenClawChatTransportEvent.task)
         case "question.requested":
-            guard let payload = frame.payload,
-                  let question = try? GatewayPayloadDecoding.decode(payload, as: QuestionRecord.self)
-            else { return nil }
-            return .questionRequested(question)
+            return (try? GatewayPayloadDecoding.decode(payload, as: QuestionRecord.self))
+                .map(OpenClawChatTransportEvent.questionRequested)
         case "question.resolved":
-            guard let payload = frame.payload,
-                  let resolved = try? GatewayPayloadDecoding.decode(
-                      payload,
-                      as: OpenClawQuestionResolvedEvent.self)
-            else { return nil }
-            return .questionResolved(resolved)
+            return (try? GatewayPayloadDecoding.decode(payload, as: OpenClawQuestionResolvedEvent.self))
+                .map(OpenClawChatTransportEvent.questionResolved)
         default:
             return nil
         }

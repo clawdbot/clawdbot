@@ -38,8 +38,6 @@ const searchMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../plugins/management-service.js", () => ({
   ManagedPluginLifecycleError: managementMocks.ManagedPluginLifecycleError,
-  formatManagedPluginLifecycleError: (error: unknown) =>
-    error instanceof Error ? error.message : String(error),
   installManagedPlugin: (...args: unknown[]) => managementMocks.install(...args),
   listManagedPlugins: (...args: unknown[]) => managementMocks.list(...args),
   setManagedPluginEnabled: (...args: unknown[]) => managementMocks.setEnabled(...args),

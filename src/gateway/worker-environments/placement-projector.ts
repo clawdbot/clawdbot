@@ -1,13 +1,22 @@
-import type { SessionPlacement } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionPlacement,
+  SessionPlacementDiskSpace,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
 
 export type WorkerSessionPlacementReader = {
   getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
 };
 
+export type WorkerPlacementDiskSpaceReader = {
+  read(record: WorkerSessionPlacementRecord): SessionPlacementDiskSpace | undefined;
+  version(): number;
+};
+
 /** Removes gateway-only identity and turn-claim fields from the operator projection. */
 export function projectWorkerSessionPlacement(
   record: WorkerSessionPlacementRecord,
+  diskSpace?: SessionPlacementDiskSpace,
 ): SessionPlacement {
   const timing = {
     generation: record.generation,
@@ -18,6 +27,10 @@ export function projectWorkerSessionPlacement(
   const conflict = record.workspaceResultConflict
     ? { workspaceResultConflict: record.workspaceResultConflict }
     : {};
+  const terminal = {
+    ...(record.terminalReason ? { terminalReason: record.terminalReason } : {}),
+    ...(record.terminalAtMs !== null ? { terminalAtMs: record.terminalAtMs } : {}),
+  };
   switch (record.state) {
     case "local":
       return { state: "local", ...timing };
@@ -60,6 +73,7 @@ export function projectWorkerSessionPlacement(
         ...(record.lastLiveEventAckCursor !== null
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
+        ...(diskSpace ? { diskSpace } : {}),
         ...conflict,
       };
     case "draining":
@@ -114,6 +128,7 @@ export function projectWorkerSessionPlacement(
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
         ...conflict,
+        ...terminal,
       };
     case "failed":
       return {
@@ -134,6 +149,7 @@ export function projectWorkerSessionPlacement(
           : {}),
         ...conflict,
         recoveryError: record.recoveryError,
+        ...terminal,
       };
   }
   // Exhaustive over placement states; the return satisfies consistent-return.
