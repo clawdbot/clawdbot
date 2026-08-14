@@ -221,13 +221,6 @@ function resolveSkillsWorkspaceForCommand(
   return resolveSkillsWorkspace({ agentId: resolveAgentOption(command ?? undefined, opts) });
 }
 
-function resolveClawHubTargetWorkspaceDir(
-  command: Command | undefined,
-  opts: { agent?: string; global?: boolean },
-): string | undefined {
-  return resolveClawHubTargetWorkspace(command, opts)?.workspaceDir;
-}
-
 function resolveClawHubTargetWorkspace(
   command: Command | undefined,
   opts: { agent?: string; global?: boolean },

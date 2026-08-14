@@ -6,7 +6,6 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
@@ -31,6 +30,10 @@ import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-n
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
+import {
+  renderSessionAttentionIcon,
+  sessionAttentionSubtitle,
+} from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
@@ -156,21 +159,21 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const agentId = host.activeChipAgent().activeId;
   const mainKey = host.selectedAgentMainSessionKey(agentId);
   const mainRow = host.mainSessionRow(agentId);
-  const approvalNeeded = sessionHasPendingApproval(
-    host.sessionData.approvalBadgeSnapshot(),
-    mainKey,
-  );
-  const outboxCount = host.outboxCountForSessionKey(mainKey);
+  const attention = host.resolveHomeSessionAttention(mainKey, mainRow);
+  const attentionLabel = sessionAttentionSubtitle(attention);
+  const outboxCount = host.outboxCountForSession(mainKey);
   const active =
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const hasComposerDraft = !active && host.hasSessionDraft(mainKey);
   const running = mainRow?.hasActiveRun === true;
   const unread = mainRow?.unread === true && !active;
-  // Home shares the sidebar's leading-slot contract: run state rings its icon
-  // instead of drifting to the row edge, which stays reserved for counts.
+  // Home rings run state around its leading icon; the trailing slot stays reserved for counts.
   const homeGlyph = renderSessionGlyph({
-    content: html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`,
+    content:
+      attention.kind === "none"
+        ? html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`
+        : renderSessionAttentionIcon(attention),
     running,
     badge: unread ? renderSessionUnreadBadge() : nothing,
   });
@@ -186,6 +189,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         preferenceDerivedFace: true,
       }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
+      aria-label=${attentionLabel ? `${t("nav.home")} · ${attentionLabel}` : nothing}
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
@@ -195,8 +199,8 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         host.openMainSession(agentId);
       }}
     >
-      ${running
-        ? html`<openclaw-tooltip .content=${t("sessionsView.activeRun")}
+      ${attentionLabel || running
+        ? html`<openclaw-tooltip .content=${attentionLabel ?? t("sessionsView.activeRun")}
             >${homeGlyph}</openclaw-tooltip
           >`
         : homeGlyph}
@@ -211,18 +215,8 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
             >
           </openclaw-tooltip>`
         : nothing}
-      ${approvalNeeded || outboxCount > 0 || hasComposerDraft
+      ${outboxCount > 0 || hasComposerDraft
         ? html`<span class="nav-item__state sidebar-home-session-states">
-            ${approvalNeeded
-              ? html`<openclaw-tooltip .content=${t("sessionsView.approvalNeeded")}>
-                  <span
-                    class="session-approval-badge"
-                    role="img"
-                    aria-label=${t("sessionsView.approvalNeeded")}
-                    >${icons.alertTriangle}</span
-                  >
-                </openclaw-tooltip>`
-              : nothing}
             ${renderSessionRowBadges({ hasAutomation: false, outboxCount, hasComposerDraft })}
           </span>`
         : nothing}

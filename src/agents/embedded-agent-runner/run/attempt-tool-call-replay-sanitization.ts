@@ -9,7 +9,10 @@ import {
   validateGeminiTurns,
 } from "../../embedded-agent-helpers.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
-import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
+import {
+  sanitizeToolUseResultPairing,
+  sanitizeToolUseResultPairingForModel,
+} from "../../session-transcript-repair.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultIds,
@@ -429,10 +432,7 @@ export function sanitizeReplayToolCallIdsForStream(params: {
 
 /** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
-  const repaired = sanitizeToolUseResultPairing(messages, {
-    erroredAssistantResultPolicy: "drop",
-    missingToolResultText: "aborted",
-  });
+  const repaired = sanitizeToolUseResultPairingForModel(messages, true);
   return downgradeOpenAIFunctionCallReasoningPairs(
     normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(repaired)),
   );
@@ -479,10 +479,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       (model as { api?: unknown }).api === "azure-openai-responses";
     const replayInputsChanged = sanitized.messages !== messages;
     let nextMessages = isOpenAIResponsesApi
-      ? sanitizeToolUseResultPairing(sanitized.messages, {
-          erroredAssistantResultPolicy: "drop",
-          missingToolResultText: "aborted",
-        })
+      ? sanitizeToolUseResultPairingForModel(sanitized.messages, true)
       : replayInputsChanged
         ? sanitizeToolUseResultPairing(sanitized.messages)
         : sanitized.messages;
