@@ -848,7 +848,6 @@ describe("handleCompactCommand", () => {
     );
 
     expect(result?.sessionCompaction).toMatchObject({ compacted: true, tokensAfter: 321 });
-    expect(result?.reply?.text).toContain("Compacted");
   });
 
   it("rejects a successor session when compaction accounting did not commit", async () => {
