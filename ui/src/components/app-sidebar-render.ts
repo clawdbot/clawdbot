@@ -304,7 +304,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                   >`
                 : nothing}
         </span>
-        <span class="sidebar-identity-card__more" aria-hidden="true">${icons.moreHorizontal}</span>
+        <span class="sidebar-identity-card__more" aria-hidden="true">${icons.ellipsis}</span>
       </button>
       <span class="sidebar-identity-card__status" role="status" aria-live="polite"
         >${host.offline ? t("connection.reconnecting") : ""}</span

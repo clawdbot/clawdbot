@@ -3567,7 +3567,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-identity-card__text {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   flex-direction: column;
   min-width: 0;
   gap: 1px;
@@ -3582,9 +3582,9 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-identity-card__name {
   color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: calc(13.5px * var(--control-ui-text-scale));
   font-weight: 600;
-  line-height: 1.2;
+  line-height: 18px;
 }
 
 .sidebar-identity-card__subtitle {
