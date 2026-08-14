@@ -1,4 +1,12 @@
 import type { SessionRow } from "@openclaw/gateway-protocol";
+import type { GatewaySessionMessageSubscriptionCoordinator } from "../browser.js";
+import {
+  ControlModelConversation,
+  ControlModelCommandError,
+  type ControlModelConversationBounds,
+  type ControlModelConversationHost,
+  type ControlModelGatewayEventFrame,
+} from "./conversation.js";
 import { createSessionEventRefreshCoordinator } from "./session-event-refresh.js";
 
 export type DeepReadonly<T> = T extends (...args: infer _Args) => infer _Result
@@ -35,6 +43,8 @@ export type ControlModelGatewayBinding = Readonly<{
   getConnectionSnapshot(): ControlModelConnectionSnapshot;
   subscribeConnection(listener: () => void): () => void;
   subscribeSessionCatalogInvalidations(listener: () => void): () => void;
+  subscribeEvents(listener: (frame: ControlModelGatewayEventFrame) => void): () => void;
+  getMessageSubscriptionCoordinator(): GatewaySessionMessageSubscriptionCoordinator;
   request<T>(
     method: string,
     params: Record<string, unknown>,
@@ -63,14 +73,24 @@ export type ControlModelSubscriber = () => void | Promise<void>;
 export type ControlModelBounds = Readonly<{
   maxSessions?: number;
   maxSubscribers?: number;
+  maxInactiveConversations?: number;
+  maxConversationMessages?: number;
+  maxConversationRuns?: number;
+  maxConversationTools?: number;
+  maxConversationApprovals?: number;
+  maxConversationQuestions?: number;
+  maxConversationProgressUpdates?: number;
+  maxConversationProgressBytes?: number;
 }>;
 
 export type ControlModelOptions = Readonly<{
   gateway: ControlModelGatewayBinding;
+  agentId?: string;
   bounds?: ControlModelBounds;
   now?: () => number;
   onSubscriberError?: (error: unknown) => void;
   onBackgroundError?: (error: unknown) => void;
+  generateId?: (prefix: string) => string;
 }>;
 
 export type ControlModel = Readonly<{
@@ -78,6 +98,8 @@ export type ControlModel = Readonly<{
   subscribe(subscriber: ControlModelSubscriber): () => void;
   start(): void;
   refreshSessions(options?: ControlModelRequestOptions): Promise<void>;
+  conversation(sessionKey: string): ControlModelConversation;
+  releaseConversation(sessionKey: string): Promise<void>;
   dispose(): void;
 }>;
 
@@ -89,6 +111,7 @@ type SessionsListResponse = Readonly<{
 
 const DEFAULT_MAX_SESSIONS = 200;
 const DEFAULT_MAX_SUBSCRIBERS = 100;
+const DEFAULT_MAX_INACTIVE_CONVERSATIONS = 32;
 
 export class ControlModelDisposedError extends Error {
   constructor() {
@@ -178,6 +201,11 @@ class ControlModelImpl implements ControlModel {
   readonly #gateway: ControlModelGatewayBinding;
   readonly #maxSessions: number;
   readonly #maxSubscribers: number;
+  readonly #maxInactiveConversations: number;
+  readonly #conversationBounds: ControlModelConversationBounds;
+  readonly #agentId: string | undefined;
+  readonly #generateId: (prefix: string) => string;
+  readonly #conversations = new Map<string, ControlModelConversation>();
   readonly #now: () => number;
   readonly #onSubscriberError?: (error: unknown) => void;
   readonly #onBackgroundError?: (error: unknown) => void;
@@ -185,6 +213,7 @@ class ControlModelImpl implements ControlModel {
   #snapshot: ControlModelSnapshot;
   #unsubscribeConnection: (() => void) | null = null;
   #unsubscribeSessionCatalogInvalidations: (() => void) | null = null;
+  #unsubscribeEvents: (() => void) | null = null;
   #refreshLoop: Promise<void> | null = null;
   #refreshRequested = false;
   #refreshOptions: ControlModelRequestOptions | undefined;
@@ -195,6 +224,25 @@ class ControlModelImpl implements ControlModel {
     this.#gateway = options.gateway;
     this.#maxSessions = normalizeBound(options.bounds?.maxSessions, DEFAULT_MAX_SESSIONS);
     this.#maxSubscribers = normalizeBound(options.bounds?.maxSubscribers, DEFAULT_MAX_SUBSCRIBERS);
+    this.#maxInactiveConversations = normalizeBound(
+      options.bounds?.maxInactiveConversations,
+      DEFAULT_MAX_INACTIVE_CONVERSATIONS,
+    );
+    this.#agentId = options.agentId?.trim() || undefined;
+    this.#generateId =
+      options.generateId ??
+      ((prefix) =>
+        `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+    this.#conversationBounds = {
+      maxSubscribers: this.#maxSubscribers,
+      maxMessages: normalizeBound(options.bounds?.maxConversationMessages, 200),
+      maxRuns: normalizeBound(options.bounds?.maxConversationRuns, 200),
+      maxTools: normalizeBound(options.bounds?.maxConversationTools, 100),
+      maxApprovals: normalizeBound(options.bounds?.maxConversationApprovals, 100),
+      maxQuestions: normalizeBound(options.bounds?.maxConversationQuestions, 100),
+      maxProgressUpdates: normalizeBound(options.bounds?.maxConversationProgressUpdates, 100),
+      maxProgressBytes: normalizeBound(options.bounds?.maxConversationProgressBytes, 64_000),
+    };
     this.#now = options.now ?? Date.now;
     this.#onSubscriberError = options.onSubscriberError;
     this.#onBackgroundError = options.onBackgroundError;
@@ -241,6 +289,7 @@ class ControlModelImpl implements ControlModel {
       this.#gateway.subscribeSessionCatalogInvalidations(() => {
         this.#eventRefreshCoordinator.schedule();
       });
+    this.#unsubscribeEvents = this.#gateway.subscribeEvents((frame) => this.#handleEvent(frame));
     this.#publish({
       ...this.#snapshot,
       lifecycle: "running",
@@ -250,6 +299,7 @@ class ControlModelImpl implements ControlModel {
     if (this.#snapshot.connection.status === "connected") {
       this.#eventRefreshCoordinator.schedule();
       this.#eventRefreshCoordinator.flush();
+      this.#startConversations();
     }
   }
 
@@ -281,8 +331,12 @@ class ControlModelImpl implements ControlModel {
     }
     this.#unsubscribeConnection?.();
     this.#unsubscribeSessionCatalogInvalidations?.();
+    this.#unsubscribeEvents?.();
     this.#unsubscribeConnection = null;
     this.#unsubscribeSessionCatalogInvalidations = null;
+    this.#unsubscribeEvents = null;
+    for (const conversation of this.#conversations.values()) conversation.dispose();
+    this.#conversations.clear();
     this.#refreshRequested = false;
     this.#eventRefreshCoordinator.dispose();
     this.#publish({
@@ -413,6 +467,13 @@ class ControlModelImpl implements ControlModel {
     this.#eventRefreshCoordinator.setActive(
       this.#snapshot.lifecycle === "running" && connection.status === "connected",
     );
+    if (epochChanged || connection.status !== "connected") {
+      for (const conversation of this.#conversations.values()) {
+        if (connection.status === "connected")
+          conversation.onConnection(connection, this.#gateway.getMessageSubscriptionCoordinator());
+        else conversation.onDisconnected(connection);
+      }
+    }
     if (
       connection.status === "connected" &&
       (epochChanged || this.#snapshot.sessionCatalog.status === "idle")
@@ -420,6 +481,83 @@ class ControlModelImpl implements ControlModel {
       this.#eventRefreshCoordinator.schedule();
       this.#eventRefreshCoordinator.flush();
     }
+    if (connection.status === "connected") {
+      this.#startConversations();
+    }
+  }
+
+  conversation(sessionKey: string): ControlModelConversation {
+    this.#assertActive();
+    const key = sessionKey.trim();
+    if (!key)
+      throw new ControlModelCommandError({
+        category: "invalid-input",
+        code: "EMPTY_SESSION_KEY",
+        message: "Session key is required",
+        command: "conversation",
+      });
+    const existing = this.#conversations.get(key);
+    if (existing) {
+      existing.startIfNeeded();
+      return existing;
+    }
+    while (true) {
+      const inactive = [...this.#conversations.values()]
+        .filter((conversation) => conversation.isEvictable)
+        .sort((left, right) => left.lastUsed - right.lastUsed);
+      if (inactive.length < this.#maxInactiveConversations) break;
+      const candidate = inactive[0];
+      if (!candidate) break;
+      candidate.dispose();
+      this.#conversations.delete(candidate.sessionKey);
+    }
+    const host: ControlModelConversationHost = {
+      gateway: this.#gateway,
+      agentId: this.#agentId,
+      bounds: this.#conversationBounds,
+      getConnectionSnapshot: () => this.#gateway.getConnectionSnapshot(),
+      isRunning: () => this.#snapshot.lifecycle === "running",
+      getMessageSubscriptionCoordinator: () => this.#gateway.getMessageSubscriptionCoordinator(),
+      onConversationReleased: async (conversation) => {
+        if (this.#conversations.get(conversation.sessionKey) !== conversation) return;
+        conversation.dispose();
+        this.#conversations.delete(conversation.sessionKey);
+      },
+      now: this.#now,
+      generateId: this.#generateId,
+      reportSubscriberError: (error) => this.#reportSubscriberError(error),
+      reportBackgroundError: (error) => this.#reportBackgroundError(error),
+    };
+    const conversation = new ControlModelConversation(host, key);
+    this.#conversations.set(key, conversation);
+    conversation.startIfNeeded();
+    return conversation;
+  }
+
+  async releaseConversation(sessionKey: string): Promise<void> {
+    this.#assertActive();
+    const key = sessionKey.trim();
+    if (!key)
+      throw new ControlModelCommandError({
+        category: "invalid-input",
+        code: "EMPTY_SESSION_KEY",
+        message: "Session key is required",
+        command: "releaseConversation",
+      });
+    const conversation = this.#conversations.get(key);
+    if (!conversation) return;
+    await conversation.release();
+  }
+
+  #startConversations(): void {
+    for (const conversation of this.#conversations.values()) conversation.startIfNeeded();
+  }
+
+  #handleEvent(frame: ControlModelGatewayEventFrame): void {
+    if (this.#snapshot.lifecycle !== "running") return;
+    const connection = this.#gateway.getConnectionSnapshot();
+    if (connection.status !== "connected" || frame.connectionEpoch !== connection.epoch) return;
+    for (const conversation of this.#conversations.values()) conversation.handleEvent(frame);
   }
 
   #isCurrentEpoch(epoch: number): boolean {

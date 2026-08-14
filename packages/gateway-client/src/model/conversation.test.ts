@@ -1,0 +1,907 @@
+import { describe, expect, it, vi } from "vitest";
+import { GatewaySessionMessageSubscriptionCoordinator } from "../browser.js";
+import {
+  ControlModelCommandError,
+  createControlModel,
+  type ControlModelConnectionSnapshot,
+  type ControlModelGatewayBinding,
+  type ControlModelGatewayEventFrame,
+  type ControlModelRequestOptions,
+} from "./index.js";
+
+type RequestCall = {
+  method: string;
+  params: Record<string, unknown>;
+  options?: ControlModelRequestOptions;
+};
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function message(sequence: number, content = `message-${sequence}`) {
+  return {
+    role: sequence % 2 ? "user" : "assistant",
+    content,
+    __openclaw: { id: `message-${sequence}`, seq: sequence },
+  };
+}
+
+function messageIds(
+  snapshot: ReturnType<ReturnType<typeof createControlModel>["conversation"]>["getSnapshot"],
+) {
+  return snapshot.messages.map((entry) =>
+    String((entry.raw as { __openclaw?: { id?: string } }).__openclaw?.id),
+  );
+}
+
+function createHarness(
+  initial: ControlModelConnectionSnapshot = { status: "disconnected", epoch: 0 },
+  options: {
+    questions?: unknown[];
+    approvalReplay?: unknown;
+    history?: unknown;
+  } = {},
+) {
+  let connection = initial;
+  const connectionListeners = new Set<() => void>();
+  const eventListeners = new Set<(frame: ControlModelGatewayEventFrame) => void>();
+  const calls: RequestCall[] = [];
+  const responses = new Map<string, unknown[]>();
+  const histories = new Map<number, unknown[]>();
+  const defaultHistory = options.history ?? {
+    messages: [],
+    completeSnapshot: true,
+    totalMessages: 0,
+  };
+
+  const take = (method: string) => responses.get(method)?.shift();
+  const request = vi.fn(
+    async (
+      method: string,
+      params: Record<string, unknown>,
+      requestOptions?: ControlModelRequestOptions,
+    ) => {
+      calls.push({ method, params, options: requestOptions });
+      const queued = take(method);
+      if (queued !== undefined) {
+        if (queued instanceof Error) throw queued;
+        return await queued;
+      }
+      if (method === "sessions.list") return { sessions: [] };
+      if (method === "sessions.messages.subscribe")
+        return {
+          key: params.key,
+          ...(params.includeApprovals ? { approvalReplay: options.approvalReplay } : {}),
+        };
+      if (method === "sessions.messages.unsubscribe") return {};
+      if (method === "question.list") return { questions: options.questions ?? [] };
+      if (method === "chat.history") {
+        const offset = typeof params.offset === "number" ? params.offset : 0;
+        return await (histories.get(offset)?.shift() ?? defaultHistory);
+      }
+      if (method === "chat.send") return { runId: "run-default", status: "accepted" };
+      if (method === "chat.abort")
+        return { aborted: true, runIds: typeof params.runId === "string" ? [params.runId] : [] };
+      if (method === "approval.resolve") return { applied: true };
+      if (method === "question.resolve") return { status: "answered" };
+      return {};
+    },
+  );
+  let coordinator: GatewaySessionMessageSubscriptionCoordinator;
+  const gateway: ControlModelGatewayBinding = {
+    getConnectionSnapshot: () => connection,
+    subscribeConnection(listener) {
+      connectionListeners.add(listener);
+      return () => connectionListeners.delete(listener);
+    },
+    subscribeSessionCatalogInvalidations() {
+      return () => undefined;
+    },
+    subscribeEvents(listener) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
+    getMessageSubscriptionCoordinator() {
+      return coordinator;
+    },
+    request,
+  };
+  coordinator = new GatewaySessionMessageSubscriptionCoordinator(gateway);
+
+  return {
+    gateway,
+    calls,
+    request,
+    queue(method: string, value: unknown) {
+      const queue = responses.get(method) ?? [];
+      queue.push(value);
+      responses.set(method, queue);
+    },
+    defer(method: string) {
+      const pending = deferred<unknown>();
+      const queue = responses.get(method) ?? [];
+      queue.push(pending.promise);
+      responses.set(method, queue);
+      return pending;
+    },
+    setHistory(offset: number, ...values: unknown[]) {
+      const queue = histories.get(offset) ?? [];
+      queue.push(...values);
+      histories.set(offset, queue);
+    },
+    callsFor(method: string) {
+      return calls.filter((call) => call.method === method);
+    },
+    setConnection(next: ControlModelConnectionSnapshot, times = 1) {
+      connection = next;
+      for (let index = 0; index < times; index += 1)
+        for (const listener of connectionListeners) listener();
+    },
+    pingConnection(times = 1) {
+      for (let index = 0; index < times; index += 1)
+        for (const listener of connectionListeners) listener();
+    },
+    emit(
+      frame: Omit<ControlModelGatewayEventFrame, "connectionEpoch"> & { connectionEpoch?: number },
+    ) {
+      const next = { ...frame, connectionEpoch: frame.connectionEpoch ?? connection.epoch };
+      for (const listener of eventListeners) listener(next);
+    },
+  };
+}
+
+async function flush() {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+}
+
+async function activatedConversation(
+  harness = createHarness({ status: "connected", epoch: 1 }),
+  bounds?: Parameters<typeof createControlModel>[0]["bounds"],
+) {
+  const model = createControlModel({
+    gateway: harness.gateway,
+    bounds,
+    generateId: (prefix) => `${prefix}-fixed`,
+  });
+  model.start();
+  const conversation = model.conversation("agent:main:one");
+  await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(1));
+  return { harness, model, conversation };
+}
+
+describe("Control Model conversations", () => {
+  it("activates exactly once per epoch and retires/release leases safely", async () => {
+    const harness = createHarness();
+    const model = createControlModel({ gateway: harness.gateway });
+    model.start();
+    const conversation = model.conversation(" agent:main:one ");
+
+    harness.setConnection({ status: "connected", epoch: 1 });
+    await vi.waitFor(() => expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(2));
+    expect(
+      harness.callsFor("sessions.messages.subscribe").map((call) => call.params.includeApprovals),
+    ).toEqual([undefined, true]);
+    expect(harness.callsFor("chat.history")).toHaveLength(1);
+    expect(harness.callsFor("question.list")).toHaveLength(1);
+
+    expect(model.conversation("agent:main:one")).toBe(conversation);
+    harness.pingConnection(3);
+    await flush();
+    expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(2);
+    expect(harness.callsFor("chat.history")).toHaveLength(1);
+    expect(harness.callsFor("sessions.list")).toHaveLength(1);
+
+    harness.setConnection({ status: "connected", epoch: 2 });
+    await vi.waitFor(() => expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(4));
+    expect(harness.callsFor("chat.history")).toHaveLength(2);
+    harness.pingConnection(2);
+    await flush();
+    expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(4);
+    expect(harness.callsFor("sessions.messages.unsubscribe")).toHaveLength(0);
+
+    await conversation.release();
+    await vi.waitFor(() =>
+      expect(harness.callsFor("sessions.messages.unsubscribe")).toHaveLength(1),
+    );
+    expect(model.conversation("agent:main:one")).not.toBe(conversation);
+    model.dispose();
+  });
+
+  it("retries a failed observer activation within the same connection epoch", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    harness.queue(
+      "sessions.messages.subscribe",
+      Object.assign(new Error("observer unavailable"), {
+        code: "UNAVAILABLE",
+        retryable: true,
+      }),
+    );
+    const model = createControlModel({ gateway: harness.gateway });
+    model.start();
+    const conversation = model.conversation("agent:main:one");
+    await vi.waitFor(() => expect(conversation.getSnapshot().status).toBe("error"));
+
+    expect(model.conversation("agent:main:one")).toBe(conversation);
+    await vi.waitFor(() => expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(3));
+    expect(harness.callsFor("chat.history")).toHaveLength(1);
+    model.dispose();
+  });
+
+  it("bounds only inactive handles, pins subscriptions, and enforces subscriber limits", () => {
+    const harness = createHarness();
+    const model = createControlModel({
+      gateway: harness.gateway,
+      bounds: { maxInactiveConversations: 1, maxSubscribers: 1 },
+      now: (() => {
+        let now = 0;
+        return () => ++now;
+      })(),
+    });
+    model.start();
+    const first = model.conversation("agent:main:one");
+    const second = model.conversation("agent:main:two");
+    expect(first.getSnapshot().status).toBe("disposed");
+
+    const unsubscribe = second.subscribe(() => undefined);
+    const third = model.conversation("agent:main:three");
+    expect(third.sessionKey).toBe("agent:main:three");
+    expect(second.getSnapshot().status).not.toBe("disposed");
+    expect(() => second.subscribe(() => undefined)).toThrow(ControlModelCommandError);
+    try {
+      second.subscribe(() => undefined);
+    } catch (error) {
+      expect(error).toMatchObject({ code: "SUBSCRIBER_LIMIT" });
+    }
+    unsubscribe();
+    const fourth = model.conversation("agent:main:four");
+    expect(fourth.sessionKey).toBe("agent:main:four");
+    expect(third.getSnapshot().status).toBe("disposed");
+    model.dispose();
+  });
+
+  it("keeps ordered unique live/history messages across overlap and out-of-order snapshots", async () => {
+    const harness = createHarness(
+      { status: "connected", epoch: 1 },
+      {
+        history: { messages: [message(2)], completeSnapshot: true, totalMessages: 1 },
+      },
+    );
+    const { model, conversation } = await activatedConversation(harness);
+    const refresh = harness.defer("chat.history");
+    harness.emit({
+      event: "session.message",
+      payload: { sessionKey: "agent:main:one", message: message(3) },
+    });
+    harness.emit({
+      event: "session.message",
+      payload: { sessionKey: "agent:main:one", message: message(1) },
+    });
+    refresh.resolve({
+      messages: [message(3), message(2), message(1), message(3)],
+      completeSnapshot: true,
+      totalMessages: 3,
+    });
+    await vi.waitFor(() =>
+      expect(messageIds(conversation.getSnapshot())).toEqual([
+        "message-1",
+        "message-2",
+        "message-3",
+      ]),
+    );
+    model.dispose();
+  });
+
+  it("keeps a bounded observable older history window and restores the newest tail", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const tail = {
+      messages: [message(3), message(4)],
+      hasMore: true,
+      nextOffset: 2,
+      totalMessages: 4,
+    };
+    harness.setHistory(0, tail);
+    harness.setHistory(2, {
+      messages: [message(1), message(2)],
+      hasMore: false,
+      totalMessages: 4,
+    });
+    const { model, conversation } = await activatedConversation(harness, {
+      maxConversationMessages: 2,
+    });
+    expect(messageIds(conversation.getSnapshot())).toEqual(["message-3", "message-4"]);
+    expect(conversation.getSnapshot().history).toMatchObject({
+      window: "newest",
+      truncatedBefore: true,
+      truncatedAfter: false,
+      completeSnapshot: false,
+    });
+    harness.emit({
+      event: "session.message",
+      payload: { sessionKey: "agent:main:one", message: message(3) },
+    });
+    harness.emit({
+      event: "session.message",
+      payload: { sessionKey: "agent:main:one", message: message(4) },
+    });
+
+    await conversation.loadMoreHistory();
+    expect(messageIds(conversation.getSnapshot())).toEqual(["message-1", "message-2"]);
+    expect(conversation.getSnapshot().history).toMatchObject({
+      window: "older",
+      hasMore: false,
+      truncatedBefore: false,
+      truncatedAfter: true,
+      completeSnapshot: false,
+    });
+    expect(conversation.getSnapshot().status).toBe("partial");
+
+    const historyCalls = harness.callsFor("chat.history").length;
+    harness.emit({
+      event: "session.message",
+      payload: { sessionKey: "agent:main:one", message: message(5) },
+    });
+    await flush();
+    expect(messageIds(conversation.getSnapshot())).toEqual(["message-1", "message-2"]);
+    expect(conversation.getSnapshot().history.window).toBe("older");
+    expect(harness.callsFor("chat.history")).toHaveLength(historyCalls);
+
+    harness.setHistory(0, tail);
+    await conversation.refreshHistory();
+    expect(messageIds(conversation.getSnapshot())).toEqual(["message-3", "message-4"]);
+    expect(conversation.getSnapshot().history).toMatchObject({
+      window: "newest",
+      truncatedBefore: true,
+      truncatedAfter: false,
+    });
+    model.dispose();
+  });
+
+  it("marks a gap partial, schedules authoritative history, and ignores retired event/history failures", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const backgroundErrors: unknown[] = [];
+    const model = createControlModel({
+      gateway: harness.gateway,
+      onBackgroundError: (error) => backgroundErrors.push(error),
+    });
+    model.start();
+    const conversation = model.conversation("agent:main:one");
+    await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(1));
+
+    const authoritative = harness.defer("chat.history");
+    harness.emit({
+      event: "session.message",
+      gap: true,
+      payload: { sessionKey: "agent:main:one", message: message(2) },
+    });
+    await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(2));
+    expect(conversation.getSnapshot().partialReasons).toContain("transport-gap");
+    authoritative.resolve({ messages: [message(2)], completeSnapshot: true, totalMessages: 1 });
+    await vi.waitFor(() => expect(conversation.getSnapshot().history.status).toBe("ready"));
+
+    const oldHistory = harness.defer("chat.history");
+    harness.emit({
+      event: "session.message",
+      payload: { sessionKey: "agent:main:one" },
+    });
+    await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(3));
+    harness.setConnection({ status: "connected", epoch: 2 });
+    harness.emit({
+      connectionEpoch: 1,
+      event: "session.message",
+      payload: { sessionKey: "agent:main:one", message: message(99) },
+    });
+    oldHistory.reject(Object.assign(new Error("retired"), { code: "UNAVAILABLE" }));
+    await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(4));
+    await flush();
+    expect(messageIds(conversation.getSnapshot())).not.toContain("message-99");
+    expect(conversation.getSnapshot().history.error).toBeNull();
+    expect(backgroundErrors).toEqual([]);
+    model.dispose();
+  });
+
+  it("treats an explicit frame gap as global even when its payload targets another session", async () => {
+    const { harness, model, conversation } = await activatedConversation();
+    const refresh = harness.defer("chat.history");
+    harness.emit({
+      event: "session.message",
+      gap: true,
+      payload: { sessionKey: "agent:main:other", message: message(9) },
+    });
+    await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(2));
+    expect(conversation.getSnapshot().partialReasons).toContain("transport-gap");
+    expect(messageIds(conversation.getSnapshot())).not.toContain("message-9");
+    refresh.resolve({ messages: [], completeSnapshot: true, totalMessages: 0 });
+    model.dispose();
+  });
+
+  it("projects pending sends before acknowledgement, rekeys them, removes failures, and forwards signals", async () => {
+    const { harness, model, conversation } = await activatedConversation();
+    const pending = harness.defer("chat.send");
+    const controller = new AbortController();
+    const send = conversation.send(
+      { message: "hello", idempotencyKey: "idem-1" },
+      {
+        signal: controller.signal,
+      },
+    );
+    expect(conversation.getSnapshot().messages).toHaveLength(1);
+    expect(conversation.getSnapshot().messages[0]).toMatchObject({
+      pending: true,
+      runId: "idem-1",
+    });
+    expect(harness.callsFor("chat.send")[0]?.options?.signal).toBe(controller.signal);
+    pending.resolve({ runId: "run-1", status: "accepted" });
+    await expect(send).resolves.toEqual({
+      runId: "run-1",
+      status: "accepted",
+      idempotencyKey: "idem-1",
+    });
+    expect(conversation.getSnapshot().messages[0]).toMatchObject({ pending: true, runId: "run-1" });
+    harness.emit({
+      event: "session.message",
+      payload: {
+        sessionKey: "agent:main:one",
+        message: {
+          ...message(1, "hello"),
+          __openclaw: { id: "sent-1", seq: 1 },
+        },
+        runId: "run-1",
+      },
+    });
+    expect(conversation.getSnapshot().messages).toHaveLength(1);
+    expect(conversation.getSnapshot().messages[0]).toMatchObject({ pending: false });
+
+    harness.queue("chat.send", Object.assign(new Error("forbidden"), { code: "FORBIDDEN" }));
+    await expect(conversation.send("not allowed")).rejects.toMatchObject({ category: "forbidden" });
+    expect(conversation.getSnapshot().messages).toHaveLength(1);
+    model.dispose();
+  });
+
+  it("normalizes command errors for forbidden, conflict, timeout, abort, disconnected, stale, and disposal", async () => {
+    const { harness, model, conversation } = await activatedConversation();
+    for (const [error, category] of [
+      [Object.assign(new Error("forbidden"), { code: "FORBIDDEN" }), "forbidden"],
+      [Object.assign(new Error("conflict"), { code: "CONFLICT" }), "conflict"],
+      [Object.assign(new Error("timeout"), { code: "TIMEOUT" }), "timeout"],
+      [Object.assign(new Error("cancelled"), { name: "AbortError" }), "aborted"],
+    ] as const) {
+      harness.queue("chat.send", error);
+      await expect(conversation.send("test")).rejects.toMatchObject({ category });
+    }
+    await expect(conversation.abort()).rejects.toMatchObject({ category: "conflict" });
+    harness.setConnection({ status: "disconnected", epoch: 1 });
+    await expect(conversation.send("offline")).rejects.toMatchObject({ category: "disconnected" });
+
+    harness.setConnection({ status: "connected", epoch: 2 });
+    await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(2));
+    const stale = harness.defer("chat.send");
+    const staleSend = conversation.send("stale");
+    harness.setConnection({ status: "connected", epoch: 3 });
+    stale.resolve({ runId: "old-run" });
+    await expect(staleSend).rejects.toMatchObject({ category: "stale", code: "STALE_EPOCH" });
+
+    await conversation.release();
+    await expect(conversation.send("disposed")).rejects.toMatchObject({ category: "disposed" });
+    model.dispose();
+  });
+
+  it("projects chat delta, final, and abort run states", async () => {
+    const { harness, model, conversation } = await activatedConversation();
+    harness.emit({
+      event: "chat",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "run-1",
+        state: "delta",
+        message: message(2),
+      },
+    });
+    expect(conversation.getSnapshot().activeRun).toMatchObject({
+      runId: "run-1",
+      status: "streaming",
+    });
+    harness.emit({
+      event: "chat",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "run-1",
+        state: "final",
+        message: message(2, "final"),
+      },
+    });
+    expect(conversation.getSnapshot().runs).toContainEqual(
+      expect.objectContaining({
+        runId: "run-1",
+        status: "completed",
+      }),
+    );
+
+    harness.emit({
+      event: "chat",
+      payload: { sessionKey: "agent:main:one", runId: "run-2", state: "delta" },
+    });
+    await conversation.abort("run-2");
+    expect(conversation.getSnapshot().runs).toContainEqual(
+      expect.objectContaining({
+        runId: "run-2",
+        status: "aborted",
+      }),
+    );
+    model.dispose();
+  });
+
+  it("does not report an abort when the Gateway confirms that no run was aborted", async () => {
+    const { harness, model, conversation } = await activatedConversation();
+    harness.emit({
+      event: "chat",
+      payload: { sessionKey: "agent:main:one", runId: "run-raced", state: "delta" },
+    });
+    harness.queue("chat.abort", { aborted: false, runIds: [] });
+    await conversation.abort("run-raced");
+    expect(conversation.getSnapshot().activeRun).toMatchObject({
+      runId: "run-raced",
+      status: "streaming",
+    });
+    model.dispose();
+  });
+
+  it("retires epoch-local runs and tools, then restores the authoritative in-flight run", async () => {
+    const { harness, model, conversation } = await activatedConversation();
+    harness.emit({
+      event: "chat",
+      payload: { sessionKey: "agent:main:one", runId: "run-old", state: "delta" },
+    });
+    harness.emit({
+      event: "agent",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "run-old",
+        stream: "tool",
+        data: { phase: "start", toolCallId: "tool-old", name: "read" },
+      },
+    });
+    harness.setHistory(0, {
+      messages: [],
+      completeSnapshot: true,
+      inFlightRun: { runId: "run-current", text: "restored" },
+    });
+    harness.setConnection({ status: "connected", epoch: 2 });
+    await vi.waitFor(() => expect(conversation.getSnapshot().activeRun?.runId).toBe("run-current"));
+    expect(conversation.getSnapshot().runs.some((run) => run.runId === "run-old")).toBe(false);
+    expect(conversation.getSnapshot().tools).toEqual([]);
+    model.dispose();
+  });
+
+  it("bounds retained live projection entries instead of only slicing the public snapshot", async () => {
+    const { harness, model, conversation } = await activatedConversation(undefined, {
+      maxConversationMessages: 3,
+    });
+    for (let sequence = 1; sequence <= 10; sequence += 1)
+      harness.emit({
+        event: "session.message",
+        payload: { sessionKey: "agent:main:one", message: message(sequence) },
+      });
+    expect(messageIds(conversation.getSnapshot())).toEqual([
+      "message-8",
+      "message-9",
+      "message-10",
+    ]);
+    expect(conversation.getSnapshot().bounds.messagesTruncated).toBe(true);
+    expect(conversation.getSnapshot().partialReasons).toContain("messages-truncated");
+    model.dispose();
+  });
+
+  it("rejects global-session events carrying a different explicit agent identity", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const model = createControlModel({ gateway: harness.gateway, agentId: "alpha" });
+    model.start();
+    const conversation = model.conversation("global");
+    await vi.waitFor(() => expect(harness.callsFor("chat.history")).toHaveLength(1));
+    harness.emit({
+      event: "chat",
+      payload: {
+        sessionKey: "global",
+        agentId: "beta",
+        runId: "wrong-agent",
+        state: "delta",
+      },
+    });
+    expect(conversation.getSnapshot().activeRun).toBeNull();
+    harness.emit({
+      event: "session.approval",
+      payload: {
+        sessionKey: "global",
+        approval: {
+          id: "wrong-agent-approval",
+          status: "pending",
+          presentation: { agentId: "beta" },
+        },
+      },
+    });
+    expect(conversation.getSnapshot().approvals).toEqual([]);
+    harness.emit({
+      event: "chat",
+      payload: {
+        sessionKey: "global",
+        agentId: "ALPHA",
+        runId: "right-agent",
+        state: "delta",
+      },
+    });
+    expect(conversation.getSnapshot().activeRun?.runId).toBe("right-agent");
+    model.dispose();
+  });
+
+  it("accepts scoped early tool events, rejects unscoped unknown runs, and projects terminal states", async () => {
+    const { harness, model, conversation } = await activatedConversation();
+    harness.emit({
+      event: "agent",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "early-run",
+        stream: "tool",
+        data: { phase: "start", name: "read", toolCallId: "tool-1", args: { path: "a" } },
+      },
+    });
+    expect(conversation.getSnapshot().tools).toContainEqual(
+      expect.objectContaining({
+        runId: "early-run",
+        toolCallId: "tool-1",
+        status: "running",
+      }),
+    );
+    harness.emit({
+      event: "agent",
+      payload: {
+        runId: "unknown-run",
+        stream: "tool",
+        data: { phase: "start", name: "ignored", toolCallId: "ignored" },
+      },
+    });
+    expect(conversation.getSnapshot().tools).toHaveLength(1);
+    harness.emit({
+      event: "agent",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "early-run",
+        stream: "tool",
+        data: { phase: "update", name: "read", toolCallId: "tool-1", partialResult: { stage: 1 } },
+      },
+    });
+    harness.emit({
+      event: "chat",
+      payload: { sessionKey: "agent:main:one", runId: "known-run", state: "delta" },
+    });
+    harness.emit({
+      event: "agent",
+      payload: {
+        runId: "known-run",
+        stream: "tool",
+        data: { phase: "start", name: "known", toolCallId: "known-tool" },
+      },
+    });
+    expect(conversation.getSnapshot().tools).toContainEqual(
+      expect.objectContaining({
+        runId: "known-run",
+        toolCallId: "known-tool",
+      }),
+    );
+
+    harness.emit({
+      event: "agent",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "early-run",
+        stream: "tool",
+        data: { phase: "result", name: "read", toolCallId: "tool-1", result: { ok: true } },
+      },
+    });
+    harness.emit({
+      event: "agent",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "early-run",
+        stream: "tool",
+        data: { phase: "error", name: "write", toolCallId: "tool-2", error: "nope" },
+      },
+    });
+    harness.emit({
+      event: "agent",
+      payload: {
+        sessionKey: "agent:main:one",
+        runId: "early-run",
+        stream: "tool",
+        data: { phase: "cancel", name: "exec", toolCallId: "tool-3" },
+      },
+    });
+    expect(conversation.getSnapshot().tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ toolCallId: "tool-1", status: "succeeded" }),
+        expect.objectContaining({ toolCallId: "tool-2", status: "failed" }),
+        expect.objectContaining({ toolCallId: "tool-3", status: "cancelled" }),
+      ]),
+    );
+    model.dispose();
+  });
+
+  it("bounds tool progress by retained values and keeps oversized structured values typed", async () => {
+    const { harness, model, conversation } = await activatedConversation(undefined, {
+      maxConversationProgressBytes: 64,
+      maxConversationProgressUpdates: 2,
+    });
+    const emitTool = (data: Record<string, unknown>) =>
+      harness.emit({
+        event: "agent",
+        payload: { sessionKey: "agent:main:one", runId: "tool-run", stream: "tool", data },
+      });
+    emitTool({ phase: "start", toolCallId: "structured", args: { secret: "x".repeat(200) } });
+    emitTool({ phase: "input_delta", toolCallId: "structured", input_delta: "later" });
+    const structured = conversation
+      .getSnapshot()
+      .tools.find((tool) => tool.toolCallId === "structured");
+    expect(structured).toMatchObject({
+      truncated: true,
+      input: { kind: "truncated", reason: "max-progress-bytes" },
+    });
+    expect(structured?.progress).toMatchObject({ bytes: expect.any(Number), truncated: true });
+    expect(structured?.progress.bytes).toBeLessThanOrEqual(64);
+    expect(Object.isFrozen(structured?.input)).toBe(true);
+
+    emitTool({ phase: "start", toolCallId: "replacement", args: "i" });
+    emitTool({ phase: "update", toolCallId: "replacement", output: "first" });
+    emitTool({ phase: "result", toolCallId: "replacement", output: "second" });
+    const replacement = conversation
+      .getSnapshot()
+      .tools.find((tool) => tool.toolCallId === "replacement");
+    expect(replacement).toMatchObject({ output: "second" });
+    expect(replacement?.progress.bytes).toBe(
+      JSON.stringify("i").length + JSON.stringify("second").length,
+    );
+    model.dispose();
+  });
+
+  it("hydrates approvals, rejects forbidden decisions locally, and projects terminal approval events", async () => {
+    const approval = {
+      id: "approval-1",
+      status: "pending",
+      sessionKey: "agent:main:one",
+      presentation: { kind: "exec", allowedDecisions: ["allow-once", "deny"] },
+    };
+    const harness = createHarness(
+      { status: "connected", epoch: 1 },
+      {
+        approvalReplay: { approvals: [approval], truncated: false },
+      },
+    );
+    const { model, conversation } = await activatedConversation(harness);
+    expect(conversation.getSnapshot().approvals).toContainEqual(
+      expect.objectContaining({ id: "approval-1" }),
+    );
+    await expect(conversation.resolveApproval("approval-1", "maybe")).rejects.toMatchObject({
+      category: "forbidden",
+    });
+    await expect(conversation.resolveApproval("approval-1", "allow-once")).resolves.toEqual({
+      applied: true,
+    });
+    harness.emit({
+      event: "session.approval",
+      payload: { approval: { ...approval, status: "expired" } },
+    });
+    expect(conversation.getSnapshot().approvals).toContainEqual(
+      expect.objectContaining({
+        id: "approval-1",
+        status: "expired",
+      }),
+    );
+    model.dispose();
+  });
+
+  it("hydrates questions, processes requested/resolved events, and preflights answers and cancellation", async () => {
+    const question = { id: "question-1", status: "pending", sessionKey: "agent:main:one" };
+    const harness = createHarness({ status: "connected", epoch: 1 }, { questions: [question] });
+    const { model, conversation } = await activatedConversation(harness);
+    expect(conversation.getSnapshot().questions).toContainEqual(
+      expect.objectContaining({ id: "question-1" }),
+    );
+    await expect(conversation.answerQuestion("missing", { choice: ["yes"] })).rejects.toMatchObject(
+      {
+        category: "not-found",
+      },
+    );
+    await conversation.answerQuestion("question-1", { choice: ["yes"] });
+    expect(harness.callsFor("question.resolve")[0]?.params).toMatchObject({
+      id: "question-1",
+      answers: { answers: { choice: ["yes"] } },
+    });
+    harness.emit({
+      event: "question.requested",
+      payload: { question: { id: "question-2", status: "pending", sessionKey: "agent:main:one" } },
+    });
+    await conversation.cancelQuestion("question-2");
+    expect(harness.callsFor("question.resolve")[1]?.params).toMatchObject({
+      id: "question-2",
+      cancel: true,
+    });
+    harness.emit({
+      event: "question.resolved",
+      payload: { id: "question-2", status: "cancelled" },
+    });
+    expect(conversation.getSnapshot().questions).toContainEqual(
+      expect.objectContaining({
+        id: "question-2",
+        status: "cancelled",
+      }),
+    );
+    harness.setConnection({ status: "connected", epoch: 2 });
+    await vi.waitFor(() => expect(harness.callsFor("question.list")).toHaveLength(2));
+    model.dispose();
+  });
+
+  it("removes stale pending approvals and questions from authoritative reconnect sets", async () => {
+    const approval = {
+      id: "approval-stale",
+      status: "pending",
+      sessionKey: "agent:main:one",
+      presentation: { kind: "exec", allowedDecisions: ["allow-once", "deny"] },
+    };
+    const question = {
+      id: "question-stale",
+      status: "pending",
+      sessionKey: "agent:main:one",
+    };
+    const harness = createHarness(
+      { status: "connected", epoch: 1 },
+      {
+        approvalReplay: { approvals: [approval], truncated: false },
+        questions: [question],
+      },
+    );
+    const { model, conversation } = await activatedConversation(harness);
+    expect(conversation.getSnapshot().approvals).toHaveLength(1);
+    expect(conversation.getSnapshot().questions).toHaveLength(1);
+
+    harness.queue("sessions.messages.subscribe", { key: "agent:main:one" });
+    harness.queue("sessions.messages.subscribe", {
+      key: "agent:main:one",
+      approvalReplay: { approvals: [], truncated: false },
+    });
+    harness.queue("question.list", { questions: [] });
+    harness.setConnection({ status: "connected", epoch: 2 });
+    await vi.waitFor(() => expect(harness.callsFor("question.list")).toHaveLength(2));
+    await vi.waitFor(() => expect(conversation.getSnapshot().approvals).toEqual([]));
+    expect(conversation.getSnapshot().questions).toEqual([]);
+    model.dispose();
+  });
+
+  it("deep-freezes snapshots and stops copied subscriber delivery after disposal", async () => {
+    const { harness, model, conversation } = await activatedConversation();
+    const later = vi.fn();
+    conversation.subscribe(() => conversation.dispose());
+    conversation.subscribe(later);
+    harness.emit({
+      event: "session.message",
+      payload: { sessionKey: "agent:main:one", message: { ...message(1), nested: { value: 1 } } },
+    });
+    await flush();
+    const snapshot = conversation.getSnapshot();
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.messages)).toBe(true);
+    expect(Object.isFrozen(snapshot.messages[0]?.raw)).toBe(true);
+    expect(Object.isFrozen((snapshot.messages[0]?.raw as { nested?: unknown }).nested)).toBe(true);
+    expect(later).not.toHaveBeenCalled();
+    model.dispose();
+  });
+});
