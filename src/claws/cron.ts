@@ -186,7 +186,7 @@ export function clawCronSchedulerJobFromResult(value: unknown): { id: string } |
   return undefined;
 }
 
-function schedulerJobByDeclarationKey(
+function schedulerJobRecordByDeclarationKey(
   value: unknown,
   declarationKey: string,
 ): Record<string, unknown> | undefined {
@@ -206,6 +206,14 @@ function schedulerJobByDeclarationKey(
   );
   const match = matches.length === 1 ? matches[0] : undefined;
   return match;
+}
+
+function schedulerJobByDeclarationKey(
+  value: unknown,
+  declarationKey: string,
+): { id: string } | undefined {
+  const match = schedulerJobRecordByDeclarationKey(value, declarationKey);
+  return match ? { id: match.id as string } : undefined;
 }
 
 export function clawCronGatewayInput(
@@ -328,7 +336,7 @@ export async function installClawCronJobs(
         await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
         agentAvailable = true;
       }
-      const listedJob = schedulerJobByDeclarationKey(
+      const listedJob = schedulerJobRecordByDeclarationKey(
         await options.gateway.list(plan.agent.finalId),
         pending.declarationKey,
       );
@@ -362,18 +370,10 @@ export async function installClawCronJobs(
         agentAvailable = true;
       }
       if (options.gateway.list) {
-        const listedJob = schedulerJobByDeclarationKey(
+        result = schedulerJobByDeclarationKey(
           await options.gateway.list(plan.agent.finalId),
           pending.declarationKey,
         );
-        if (listedJob) {
-          if (!clawCronGatewayJobMatchesRef(plan.agent.finalId, pending, listedJob)) {
-            throw new Error(
-              `Cron declaration ${JSON.stringify(pending.manifestId)} changed after an ambiguous write.`,
-            );
-          }
-          result = { id: listedJob.id as string };
-        }
       }
       result ??= clawCronSchedulerJobFromResult(
         await options.gateway.add(clawCronGatewayInput(plan.agent.finalId, pending)),

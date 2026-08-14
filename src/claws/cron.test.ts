@@ -264,13 +264,17 @@ describe("installClawCronJobs", () => {
       cronJobs: [{ status: "pending" }],
     });
 
-    const [pending] = readClawCronRefs("worker-two", { env: current.env });
     const refs = await installClawCronJobs(current.plan, {
       env: current.env,
       gateway: {
         add,
         list: vi.fn().mockResolvedValue({
-          jobs: [listedCronJob("worker-two", pending!, "scheduler-after-lost-response")],
+          jobs: [
+            {
+              id: "scheduler-after-lost-response",
+              declarationKey: "claw:worker-two:daily-report",
+            },
+          ],
         }),
       },
     });
