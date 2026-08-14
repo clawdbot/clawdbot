@@ -168,6 +168,32 @@ describe("check-env-var-count", () => {
     expect(() => main(["--base", "HEAD"], root)).toThrow(/exceeds budget|over budget/u);
   });
 
+  it("requires an explicit approval annotation when the budget increases", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-approved-grow-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "1\n");
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), "process.env.OPENCLAW_ONE;\n");
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
+      { cwd: root, stdio: "ignore" },
+    );
+
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), "OPENCLAW_ONE OPENCLAW_TWO\n");
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "2\n");
+    expect(() => main(["--base", "HEAD"], root)).toThrow(/budget grew/u);
+
+    fs.writeFileSync(
+      path.join(root, "config/env-var-count-budget.txt"),
+      "# Approved increase: 1 -> 2\n2\n",
+    );
+    expect(() => main(["--base", "HEAD"], root)).not.toThrow();
+  });
+
   it("passes when the count exactly matches the budget", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-exact-"));
     tempDirs.push(root);

@@ -125,7 +125,8 @@ export function main(argv: string[] = process.argv.slice(2), root = process.cwd(
     : fs.readFileSync(path.join(root, BUDGET_PATH), "utf8");
   const budget = parseBudget(budgetSource);
   const baseBudget = readBaseBudget(root, baseRef);
-  if (baseBudget !== null && budget > baseBudget) {
+  const growthApproval = `# Approved increase: ${baseBudget} -> ${budget}`;
+  if (baseBudget !== null && budget > baseBudget && !budgetSource.includes(growthApproval)) {
     throw new Error(`OPENCLAW_* budget grew from ${baseBudget} to ${budget}`);
   }
   const names = collectEnvVarNames(root, { staged });
