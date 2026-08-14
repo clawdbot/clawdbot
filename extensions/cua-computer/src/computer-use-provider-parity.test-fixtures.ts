@@ -9,51 +9,7 @@
  * source commit below; that catalog contains 26 tools, not the previously
  * documented 25.
  */
-
-export const COMPUTER_USE_V2_ACTION_NAMES = [
-  "screenshot",
-  "left_click",
-  "right_click",
-  "middle_click",
-  "double_click",
-  "triple_click",
-  "mouse_move",
-  "left_click_drag",
-  "left_mouse_down",
-  "left_mouse_up",
-  "scroll",
-  "type",
-  "key",
-  "hold_key",
-  "wait",
-  "list_apps",
-  "list_windows",
-  "get_accessibility_tree",
-  "get_cursor_position",
-  "get_window_state",
-  "launch_app",
-  "kill_app",
-  "bring_to_front",
-  "set_value",
-  "zoom",
-  "get_browser_state",
-  "browser_prepare",
-  "browser_navigate",
-  "browser_click",
-  "browser_type",
-  "browser_dialog",
-  "browser_set_input_files",
-  "browser_download",
-  "browser_pointer",
-  "escalate_scope",
-  "get_recording_state",
-  "start_recording",
-  "stop_recording",
-  "replay_trajectory",
-  "invoke_menu",
-] as const;
-
-export type ComputerUseV2ActionName = (typeof COMPUTER_USE_V2_ACTION_NAMES)[number];
+import type { ComputerUseV2ActionName } from "openclaw/plugin-sdk/computer-use";
 export type ComputerUseProviderId = "cua" | "peekaboo";
 export type ComputerUseDeliveryMode = "background" | "foreground";
 

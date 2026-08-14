@@ -79,6 +79,43 @@ async function execution(session: CuaDriverSession) {
 }
 
 describe("cua-computer provider", () => {
+  it("advertises only its current foreground coordinate capability", () => {
+    const { session } = driver();
+    const descriptor = createCuaComputerProvider({
+      platform: "linux",
+      driver: session,
+    }).capabilities();
+    expect(descriptor).toEqual({
+      contractVersion: 2,
+      provider: {
+        id: "cua-computer",
+        label: "CUA Computer",
+        generation: "cua-computer-coordinate-v1",
+      },
+      actions: [
+        "screenshot",
+        "left_click",
+        "right_click",
+        "middle_click",
+        "double_click",
+        "triple_click",
+        "mouse_move",
+        "left_click_drag",
+        "left_mouse_down",
+        "left_mouse_up",
+        "scroll",
+        "type",
+        "key",
+        "hold_key",
+        "wait",
+      ],
+      targets: ["screen"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    });
+  });
+
   it("uses one typed session for snapshot and frame-authorized click", async () => {
     const { session, getDesktopState, getScreenSize, click } = driver();
     const computer = await execution(session);

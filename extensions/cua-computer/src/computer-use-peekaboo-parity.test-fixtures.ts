@@ -10,10 +10,10 @@
  * documented 25.
  */
 
+import type { ComputerUseV2ActionName } from "openclaw/plugin-sdk/computer-use";
 import type {
   ComputerUseDeliveryMode,
   ComputerUseProviderId,
-  ComputerUseV2ActionName,
   CuaMcpToolName,
 } from "./computer-use-provider-parity.test-fixtures.js";
 

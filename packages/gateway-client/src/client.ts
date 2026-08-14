@@ -265,6 +265,7 @@ export type GatewayClientOptions = {
   scopes?: string[];
   caps?: string[];
   commands?: string[];
+  computerUse?: ConnectParams["computerUse"];
   workerRuns?: ConnectParams["workerRuns"];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
@@ -462,12 +463,15 @@ export class GatewayClient {
   updateNodeManifest(manifest: {
     caps: string[];
     commands: string[];
+    computerUse?: ConnectParams["computerUse"];
     workerRuns?: ConnectParams["workerRuns"];
   }): void {
     this.opts = {
       ...this.opts,
       caps: [...manifest.caps],
       commands: [...manifest.commands],
+      computerUse:
+        manifest.computerUse === undefined ? undefined : structuredClone(manifest.computerUse),
       workerRuns: manifest.workerRuns ? structuredClone(manifest.workerRuns) : undefined,
     };
     // Node command declarations are connect metadata. Reconnect so the Gateway
@@ -763,6 +767,7 @@ export class GatewayClient {
         },
         caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
         commands: Array.isArray(this.opts.commands) ? this.opts.commands : undefined,
+        computerUse: useLegacyNodeProtocolEnvelope ? undefined : this.opts.computerUse,
         workerRuns: useLegacyNodeProtocolEnvelope ? undefined : this.opts.workerRuns,
         permissions:
           this.opts.permissions && typeof this.opts.permissions === "object"

@@ -48,6 +48,8 @@ export const ConnectParamsSchema = closedObject({
   }),
   caps: Type.Optional(Type.Array(NonEmptyString, { default: [] })),
   commands: Type.Optional(Type.Array(NonEmptyString)),
+  /** Additive Computer Use declaration; the owning core contract validates its bounded shape. */
+  computerUse: Type.Optional(Type.Unknown()),
   /** Additive node-local worker build identity; presence advertises session hosting. */
   workerRuns: Type.Optional(WorkerAdmissionHandshakeSchema),
   permissions: Type.Optional(Type.Record(NonEmptyString, Type.Boolean())),

@@ -1,3 +1,4 @@
+import { COMPUTER_USE_V2_ACTION_NAMES } from "openclaw/plugin-sdk/computer-use";
 import { describe, expect, it } from "vitest";
 import {
   COMPUTER_USE_V2_PROVIDER_ACTION_SUPPORT,
@@ -7,7 +8,6 @@ import {
   PEEKABOO_PROVIDER_PARITY_SOURCE,
 } from "./computer-use-peekaboo-parity.test-fixtures.js";
 import {
-  COMPUTER_USE_V2_ACTION_NAMES,
   CUA_MCP_TOOL_NAMES,
   CUA_MCP_TOOL_PARITY,
   CUA_PROVIDER_PARITY_SOURCE,
