@@ -34,7 +34,7 @@ async function openUpdateCard(page: Page, baseUrl: string) {
   expect((await page.goto(`${baseUrl}chat`))?.status()).toBe(200);
   await gateway.waitForRequest("chat.startup");
   await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
-  const updateButton = page.getByRole("button", { name: /Update Gateway/ });
+  const updateButton = page.getByRole("button", { name: "Update", exact: true });
   await updateButton.waitFor({ timeout: 10_000 });
   return { gateway, updateButton };
 }

@@ -53,7 +53,7 @@ describe("AppSidebar update card wiring", () => {
     const card = footer?.querySelector("openclaw-sidebar-update-card");
     expect(card).not.toBeNull();
     const restoreDialogPolyfill = installDialogPolyfill();
-    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__cta")?.click();
     const { modal } = await waitForRenderedModalDialog(document.body);
     [...modal.querySelectorAll("button")]
       .find((button) => button.textContent?.trim() === "Update and restart")

@@ -17,7 +17,7 @@ const MANAGED_UPDATE_HANDOFF_RESPONSE = {
 } as const;
 
 suite.define(() => {
-  it("identifies a beta release in the visible Gateway update card", async () => {
+  it("renders the informational CTA for a beta release", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-beta-channel");
     await suite.withPage(
       {
@@ -39,11 +39,8 @@ suite.define(() => {
           },
         });
 
-        await page
-          .getByRole("button", {
-            name: /Update Gateway · v2026\.7\.2-beta\.5 \(beta\)/u,
-          })
-          .waitFor({ timeout: 10_000 });
+        await page.getByText("New version available", { exact: true }).waitFor({ timeout: 10_000 });
+        await page.getByRole("button", { name: "Update", exact: true }).waitFor();
         await page.screenshot({ path: path.join(artifactDir, "beta-update-card.png") });
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
       },
@@ -81,7 +78,7 @@ suite.define(() => {
           },
         });
 
-        await page.getByRole("button", { name: /Update Gateway/ }).click();
+        await page.getByRole("button", { name: "Update", exact: true }).click();
         await page.getByRole("button", { name: "Update and restart", exact: true }).click();
         const dialog = page.locator("openclaw-modal-dialog");
         await dialog
@@ -132,7 +129,7 @@ suite.define(() => {
           },
         });
 
-        await page.getByRole("button", { name: /Update Gateway/ }).click();
+        await page.getByRole("button", { name: "Update", exact: true }).click();
         await page.getByRole("button", { name: "Update and restart", exact: true }).click();
         await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
 
@@ -221,7 +218,7 @@ suite.define(() => {
             },
           });
 
-          await page.getByRole("button", { name: /Update Gateway/ }).click();
+          await page.getByRole("button", { name: "Update", exact: true }).click();
           await page.getByRole("button", { name: "Update and restart", exact: true }).click();
           await gateway.waitForRequest("update.run");
           if (responseFirst) {
@@ -294,7 +291,7 @@ suite.define(() => {
         },
       });
 
-      await page.getByRole("button", { name: /Update Mac app \+ Gateway/ }).click();
+      await page.getByRole("button", { name: "Update", exact: true }).click();
       await page.getByRole("button", { name: "Update Mac app and restart", exact: true }).click();
       expect(
         await page.evaluate(
@@ -307,7 +304,7 @@ suite.define(() => {
         Reflect.deleteProperty(window, "webkit");
         window.dispatchEvent(new CustomEvent(eventName));
       }, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT);
-      await page.getByRole("button", { name: /Update Gateway/ }).click();
+      await page.getByRole("button", { name: "Update", exact: true }).click();
       await page.getByRole("button", { name: "Update and restart", exact: true }).click();
 
       expect(await gateway.getRequests("update.run")).toHaveLength(1);

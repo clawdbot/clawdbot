@@ -394,6 +394,8 @@ export const en: TranslationMap = {
       commitsBehind: "{count} commits behind",
     },
     sidebar: {
+      available: "New version available",
+      action: "Update",
       campaignTarget: "{status} · {target}",
       updating: "Updating Gateway…",
     },
@@ -4888,7 +4890,6 @@ export const en: TranslationMap = {
     commandPaletteTitle: "Search or jump to… (⌘K)",
     openCommandPalette: "Open command palette",
     updating: "Updating…",
-    dismissUpdateBanner: "Dismiss update banner",
     actions: {
       copyAsMarkdown: "Copy as markdown",
       dismissError: "Dismiss error",

@@ -1513,7 +1513,6 @@ openclaw-settings-save-indicator {
 }
 
 .sidebar-update-card {
-  position: relative;
   margin: 0 8px 10px;
 }
 
@@ -1556,23 +1555,47 @@ html.openclaw-native-macos
   margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
 }
 
-.sidebar-update-card__action {
+.sidebar-update-card__action,
+.sidebar-update-card__availability {
   min-width: 0;
   flex: 1 1 auto;
   min-height: 34px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 34px 4px 8px;
+  padding: 4px 8px;
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
   border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
   color: var(--text);
-  cursor: var(--cursor-action);
   text-align: left;
+}
+
+.sidebar-update-card__action {
+  background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
+  cursor: var(--cursor-action);
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
+}
+
+.sidebar-update-card__availability {
+  gap: 5px;
+  border-color: color-mix(in srgb, var(--info) 18%, var(--border));
+  background: color-mix(in srgb, var(--info) 8%, var(--bg-elevated));
+}
+
+.sidebar-update-card__availability .sidebar-update-card__icon {
+  width: 18px;
+  height: 18px;
+}
+
+.sidebar-update-card__availability .sidebar-update-card__icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.sidebar-update-card__availability .sidebar-update-card__text {
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-update-card__action:hover:not(:disabled),
@@ -1582,8 +1605,7 @@ html.openclaw-native-macos
 }
 
 .sidebar-update-card__action:focus-visible,
-.sidebar-update-card__hold:focus-visible,
-.sidebar-update-card__dismiss:focus-visible {
+.sidebar-update-card__hold:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
   outline-offset: 1px;
 }
@@ -1665,21 +1687,13 @@ body.update-dialog-open .sidebar-update-card__status {
   background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
 
-.sidebar-update-card__action--undismissable {
-  padding-right: 8px;
-}
-
-.sidebar-update-card__icon,
-.sidebar-update-card__dismiss {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .sidebar-update-card__icon {
+  display: inline-flex;
   width: 24px;
   height: 24px;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);
@@ -1695,6 +1709,41 @@ body.update-dialog-open .sidebar-update-card__status {
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-update-card__cta {
+  flex: 0 0 auto;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--info);
+  color: var(--bg-elevated);
+  cursor: var(--cursor-action);
+  font: inherit;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.sidebar-update-card__cta:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--info) 90%, white);
+}
+
+.sidebar-update-card__cta:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--info) 28%, transparent);
+}
+
+.sidebar-update-card__cta:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .sidebar-update-card__text--stacked {
@@ -1716,28 +1765,7 @@ body.update-dialog-open .sidebar-update-card__status {
   white-space: nowrap;
 }
 
-.sidebar-update-card__dismiss {
-  position: absolute;
-  top: 50%;
-  right: 5px;
-  transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-}
-
-.sidebar-update-card__dismiss:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.sidebar-update-card__icon svg,
-.sidebar-update-card__dismiss svg {
+.sidebar-update-card__icon svg {
   width: 16px;
   height: 16px;
   stroke: currentColor;
@@ -1745,6 +1773,17 @@ body.update-dialog-open .sidebar-update-card__status {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.sidebar-shell__footer .sidebar-update-card {
+  margin: 0 0 2px;
+}
+
+.sidebar-shell__footer .sidebar-update-card__availability {
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
 }
 
 .sidebar-nav {
