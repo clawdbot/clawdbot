@@ -602,39 +602,38 @@ export function createNodeWorkspaceTransferService(options: {
         params.signal.throwIfAborted();
         assertAuthorizationCurrent(authorization);
       };
-      assertCurrent();
-      const contentLength = Number(params.request.headers["content-length"]);
-      if (
-        !Number.isSafeInteger(contentLength) ||
-        contentLength < 8 ||
-        contentLength > MAX_UPLOAD_BYTES
-      ) {
-        throw new NodeWorkspaceTransferLimitError(
-          "Workspace transfer upload exceeds its byte limit",
-        );
-      }
-      const reader = new RequestByteReader(params.request, params.signal, assertCurrent);
-      const readManifest = async (expectedRef?: string) => {
-        const bytes = (await reader.readExactly(4)).readUInt32BE();
-        if (bytes < 2 || bytes > MAX_WORKSPACE_MANIFEST_BYTES) {
+      let stagingRoot: string | undefined;
+      try {
+        assertCurrent();
+        const contentLength = Number(params.request.headers["content-length"]);
+        if (
+          !Number.isSafeInteger(contentLength) ||
+          contentLength < 8 ||
+          contentLength > MAX_UPLOAD_BYTES
+        ) {
           throw new NodeWorkspaceTransferLimitError(
-            "Workspace transfer manifest exceeds its byte limit",
+            "Workspace transfer upload exceeds its byte limit",
           );
         }
-        const raw = (await reader.readExactly(bytes)).toString("utf8");
-        const ref = expectedRef ?? `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-        return { raw, ref, manifest: parseWorkerWorkspaceManifest(raw, ref) };
-      };
-      const base = await readManifest(operation.baseManifestRef);
-      assertCurrent();
-      const current = await readManifest();
-      assertCurrent();
-      const transferPaths = workerWorkspaceTransferPaths(current.manifest, base.manifest);
-      const transferPathSet = new Set(transferPaths);
-      const stagingRoot = await fsp.mkdtemp(
-        path.join(authorization.context.temporaryRoot, "upload-"),
-      );
-      try {
+        const reader = new RequestByteReader(params.request, params.signal, assertCurrent);
+        const readManifest = async (expectedRef?: string) => {
+          const bytes = (await reader.readExactly(4)).readUInt32BE();
+          if (bytes < 2 || bytes > MAX_WORKSPACE_MANIFEST_BYTES) {
+            throw new NodeWorkspaceTransferLimitError(
+              "Workspace transfer manifest exceeds its byte limit",
+            );
+          }
+          const raw = (await reader.readExactly(bytes)).toString("utf8");
+          const ref = expectedRef ?? `sha256:${createHash("sha256").update(raw).digest("hex")}`;
+          return { raw, ref, manifest: parseWorkerWorkspaceManifest(raw, ref) };
+        };
+        const base = await readManifest(operation.baseManifestRef);
+        assertCurrent();
+        const current = await readManifest();
+        assertCurrent();
+        const transferPaths = workerWorkspaceTransferPaths(current.manifest, base.manifest);
+        const transferPathSet = new Set(transferPaths);
+        stagingRoot = await fsp.mkdtemp(path.join(authorization.context.temporaryRoot, "upload-"));
         const currentByPath = new Map(current.manifest.entries.map((entry) => [entry.path, entry]));
         for (const relative of transferPaths) {
           const entry = currentByPath.get(relative);
@@ -680,7 +679,9 @@ export function createNodeWorkspaceTransferService(options: {
         operation.state = "completed";
         return { manifestRef: current.ref };
       } catch (error) {
-        await fsp.rm(stagingRoot, { recursive: true, force: true });
+        if (stagingRoot) {
+          await fsp.rm(stagingRoot, { recursive: true, force: true });
+        }
         if (authorization.context.upload === operation) {
           authorization.context.upload = undefined;
         }
