@@ -3455,9 +3455,9 @@ openclaw-sidebar-attention {
 .sidebar-issues-button {
   position: relative;
   display: inline-grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   place-items: center;
   padding: 0;
   border: 0;
@@ -3485,12 +3485,16 @@ openclaw-sidebar-attention {
 
 .sidebar-issues-button__icon,
 .sidebar-issues-button__icon svg {
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
 }
 
 .sidebar-issues-button__icon {
   display: inline-flex;
+}
+
+.sidebar-issues-button__icon svg {
+  stroke-width: 1.5px;
 }
 
 .sidebar-issues-button__count,
@@ -3510,9 +3514,14 @@ openclaw-sidebar-attention {
 
 .sidebar-issues-button__count {
   position: absolute;
-  inset: 1px 0 auto auto;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
   background: var(--danger);
-  color: var(--danger-foreground, white);
+  color: var(--bg);
+  box-shadow: 0 0 0 2px var(--sidebar-bg);
 }
 
 .sidebar-automation-attention-badge {
@@ -3533,44 +3542,53 @@ openclaw-sidebar-attention {
 .sidebar-issues-panel {
   position: fixed;
   z-index: 121;
+  display: flex;
   width: min(304px, calc(100vw - 16px));
-  max-height: min(560px, 60vh);
+  max-height: 60vh;
+  flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--menu-radius);
+  border: 0;
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--text);
-  box-shadow: var(--shadow-md);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--border-strong) 72%, transparent),
+    var(--shadow-lg);
   animation: menu-in 140ms var(--ease-out);
 }
 
 .sidebar-issues-panel__header {
-  padding: 12px 12px 8px;
+  padding: 10px 12px 6px;
 }
 
 .sidebar-issues-panel__heading {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--control-ui-text-sm);
-  font-weight: 650;
-  line-height: 1.2;
+  font-weight: 600;
+  line-height: 18px;
 }
 
 .sidebar-issues-panel__list {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
   max-height: min(508px, calc(60vh - 44px));
   overflow-y: auto;
-  padding: 0 6px 6px;
+  padding: 0 4px 8px;
 }
 
 .sidebar-issues-panel__row {
   display: flex;
   width: 100%;
-  min-height: 46px;
+  min-height: 48px;
   align-items: center;
-  gap: 9px;
-  padding: 6px;
+  gap: 8px;
+  padding: 6px 8px;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -3582,7 +3600,7 @@ openclaw-sidebar-attention {
 }
 
 .sidebar-issues-panel__row:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-hover) 56%, transparent);
 }
 
 .sidebar-issues-panel__row:focus-visible {
@@ -3592,23 +3610,24 @@ openclaw-sidebar-attention {
 
 .sidebar-issues-panel__icon {
   display: inline-grid;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
   place-items: center;
   border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
   color: var(--muted);
 }
 
 .sidebar-issues-panel__row--blocking .sidebar-issues-panel__icon {
-  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  background: var(--warn-subtle);
   color: var(--warn);
 }
 
 .sidebar-issues-panel__icon svg,
 .sidebar-issues-panel__chevron svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }
 
 .sidebar-issues-panel__content {
@@ -3616,7 +3635,7 @@ openclaw-sidebar-attention {
   min-width: 0;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
 }
 
 .sidebar-issues-panel__entity,
@@ -3629,25 +3648,38 @@ openclaw-sidebar-attention {
 .sidebar-issues-panel__entity {
   color: var(--text-strong);
   font-size: var(--control-ui-text-sm);
-  font-weight: 550;
+  font-weight: 500;
+  line-height: 18px;
 }
 
 .sidebar-issues-panel__state {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
+  font-weight: 450;
+  line-height: 16px;
 }
 
 .sidebar-issues-panel__action {
   flex: none;
-  color: var(--accent);
+  color: var(--danger);
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
 }
 
 .sidebar-issues-panel__chevron {
   display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
   flex: none;
   color: var(--muted);
+}
+
+.sidebar-issues-panel__chevron svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 1.7px;
 }
 
 .sidebar-identity-card {

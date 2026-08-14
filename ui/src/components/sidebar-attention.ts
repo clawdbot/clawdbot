@@ -265,7 +265,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const width = Math.min(304, globalThis.innerWidth - 16);
     this.panelTrigger = trigger;
     this.panelPosition = {
-      left: Math.max(8, Math.min(rect.right - width, globalThis.innerWidth - width - 8)),
+      left: Math.max(8, Math.min(rect.left, globalThis.innerWidth - width - 8)),
       bottom: Math.max(8, globalThis.innerHeight - rect.top + 6),
     };
     this.panelOpen = true;
@@ -343,9 +343,8 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         </span>
         ${actionLabel
           ? html`<span class="sidebar-issues-panel__action">${actionLabel}</span>`
-          : html`<span class="sidebar-issues-panel__chevron" aria-hidden="true"
-              >${icons.chevronRight}</span
-            >`}
+          : nothing}
+        <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
     `;
   }

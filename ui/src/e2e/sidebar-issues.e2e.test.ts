@@ -106,6 +106,19 @@ async function openIssuesPanel(sidebar: Locator) {
   await bell.click();
   const panel = sidebar.locator(".sidebar-issues-panel");
   await panel.waitFor();
+  await expect
+    .poll(async () => {
+      const bellBox = await bell.boundingBox();
+      const panelBox = await panel.boundingBox();
+      return bellBox && panelBox
+        ? {
+            bellSize: [bellBox.width, bellBox.height],
+            bottomGap: Math.round(bellBox.y - (panelBox.y + panelBox.height)),
+            leftGap: Math.round(panelBox.x - bellBox.x),
+          }
+        : null;
+    })
+    .toEqual({ bellSize: [28, 28], bottomGap: 6, leftGap: 0 });
   return { bell, panel };
 }
 
@@ -241,6 +254,18 @@ suite.define(() => {
           hasText: "Reconnect",
         });
         const reconnect = reconnectRow.getByText("Reconnect", { exact: true });
+        expect(await reconnectRow.locator(".sidebar-issues-panel__chevron").count()).toBe(1);
+        expect(
+          await reconnect.evaluate((element) => {
+            const style = getComputedStyle(element);
+            const dangerProbe = document.createElement("span");
+            dangerProbe.style.color = "var(--danger)";
+            document.body.append(dangerProbe);
+            const usesDangerColor = style.color === getComputedStyle(dangerProbe).color;
+            dangerProbe.remove();
+            return { backgroundColor: style.backgroundColor, usesDangerColor };
+          }),
+        ).toEqual({ backgroundColor: "rgba(0, 0, 0, 0)", usesDangerColor: true });
         expect(await bell.evaluate((element) => Boolean(element.closest("openclaw-tooltip")))).toBe(
           false,
         );
