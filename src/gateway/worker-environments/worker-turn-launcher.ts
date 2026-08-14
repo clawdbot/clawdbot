@@ -18,6 +18,7 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import { resolveWorkerBrowserLaunchPlan } from "./worker-browser-launch-plan.js";
 import {
   claimWorkerTurn,
@@ -302,7 +303,26 @@ async function executeWorkerTurn(params: {
   turn.userTurnTranscriptRecorder?.markSentToProvider?.();
   turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
   const handoffAbort = new AbortController();
-  params.onHandoff();
+  let handoffError: Error | undefined;
+  let dispatchReady = false;
+  const onDispatchReady = () => {
+    if (dispatchReady) {
+      return;
+    }
+    dispatchReady = true;
+    params.onHandoff();
+    turn.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
+    try {
+      if (!params.environments.acknowledgeCredentialDelivery(credential)) {
+        handoffError = new Error("Cloud worker credential owner changed during process handoff");
+      }
+    } catch (error) {
+      handoffError = new Error("Cloud worker credential handoff failed", { cause: error });
+    }
+    if (handoffError) {
+      handoffAbort.abort(handoffError);
+    }
+  };
   const processPromise = tunnel.launchTurn({
     plan,
     placementGeneration: placement.generation,
@@ -310,22 +330,15 @@ async function executeWorkerTurn(params: {
     signal: turn.abortSignal
       ? AbortSignal.any([turn.abortSignal, handoffAbort.signal])
       : handoffAbort.signal,
+    onDispatchReady,
   });
-  turn.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
-  let credentialDelivered: boolean;
-  try {
-    credentialDelivered = params.environments.acknowledgeCredentialDelivery(credential);
-  } catch (error) {
-    handoffAbort.abort();
-    await processPromise.catch(() => undefined);
-    throw new Error("Cloud worker credential handoff failed", { cause: error });
-  }
-  if (!credentialDelivered) {
-    handoffAbort.abort();
-    await processPromise.catch(() => undefined);
-    throw new Error("Cloud worker credential owner changed during process handoff");
-  }
   const processResult = await processPromise;
+  if (handoffError) {
+    throw handoffError;
+  }
+  if (!dispatchReady) {
+    throw new Error("Cloud worker launch completed before transport dispatch");
+  }
   if (processResult.code !== 0 || processResult.signal !== null || processResult.killed) {
     // Boxes are destroyed on failure, so the redacted stderr tail is the only forensics.
     const detail = truncateUtf16Safe(
@@ -611,6 +624,10 @@ export function createWorkerSessionTurnPlacementProvider(
           // A recovery sweep owns the still-live worker claim. Teardown here
           // could discard the terminal event's durably fenced file results.
           options.placements.handoffWorkspaceResultRecovery(turnClaim);
+          throw error;
+        }
+        if (error instanceof WorkerRunnerUnavailableError && !handedOff) {
+          await releaseClaimIfOwned(options.placements, turnClaim);
           throw error;
         }
         if (error instanceof WorkerWorkspaceReconciliationError && !handedOff) {
