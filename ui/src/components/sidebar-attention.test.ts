@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
+import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
@@ -37,6 +37,18 @@ function cronJob(id: string): CronJob {
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "test" },
     state: { lastRunStatus: "error" },
+  };
+}
+
+function cronListResponse(jobs: CronJob[]): CronJobsListResult {
+  return {
+    jobs,
+    snapshotRevision: "sidebar-attention-cron-fixture",
+    total: jobs.length,
+    offset: 0,
+    limit: 50,
+    hasMore: false,
+    nextOffset: null,
   };
 }
 
@@ -167,7 +179,7 @@ describe("sidebar attention refresh ownership", () => {
       "cron.list": [firstCron, secondCron],
       "models.authStatus": [firstAuth, secondAuth],
     };
-    const request = vi.fn((method: keyof typeof responses) => {
+    const request = vi.fn((method: keyof typeof responses, _params?: unknown) => {
       const response = responses[method].shift();
       if (!response) {
         throw new Error(`Unexpected request: ${method}`);
@@ -214,13 +226,16 @@ describe("sidebar attention refresh ownership", () => {
     provider.append(element);
     document.body.append(provider);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls.find(([method]) => method === "models.authStatus")?.[1]).toEqual({
+      agentId: "main",
+    });
 
     document.dispatchEvent(new Event("visibilitychange"));
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
 
     const currentAuth = { ts: 2, providers: [] } as ModelAuthStatusResult;
     now = 200_000;
-    secondCron.resolve({ jobs: [cronJob("current")] });
+    secondCron.resolve(cronListResponse([cronJob("current")]));
     secondAuth.resolve(currentAuth);
     await waitForFast(() => expect(element.loadedAtMs).toBe(200_000));
     expect(element.cronJobs.map((job) => job.id)).toEqual(["current"]);
@@ -228,7 +243,7 @@ describe("sidebar attention refresh ownership", () => {
     expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
 
     now = 300_000;
-    firstCron.resolve({ jobs: [cronJob("stale")] });
+    firstCron.resolve(cronListResponse([cronJob("stale")]));
     firstAuth.resolve({ ts: 1, providers: [] });
     await Promise.all([firstCron.promise, firstAuth.promise]);
     await new Promise<void>((resolve) => {
@@ -244,7 +259,7 @@ describe("sidebar attention refresh ownership", () => {
 
   it("clears a stale failure alert when the gateway reports an automation change", async () => {
     const responses = {
-      "cron.list": [{ jobs: [cronJob("failed")] }, { jobs: [] }],
+      "cron.list": [cronListResponse([cronJob("failed")]), cronListResponse([])],
       "models.authStatus": [{ ts: 1, providers: [] }],
     };
     const request = vi.fn((method: keyof typeof responses) => {

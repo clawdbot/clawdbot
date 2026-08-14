@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
@@ -328,27 +329,42 @@ function renderCatalogHostGroup(
               const sectionId = `catalog-project:${catalog.id}:${host.hostId}:${group.key}`;
               const collapsed = params.collapsedSections.has(sectionId);
               return html`
-                <button
-                  type="button"
-                  class="sidebar-session-catalog-project__head"
-                  data-session-catalog-project=${group.key}
-                  aria-expanded=${String(!collapsed)}
-                  title=${group.title}
-                  @click=${() => params.onToggleSection(sectionId)}
-                >
-                  <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
-                    >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                <div class="sidebar-session-catalog-project" role="listitem">
+                  <button
+                    type="button"
+                    class="sidebar-session-catalog-project__head"
+                    data-session-catalog-project=${group.key}
+                    aria-expanded=${String(!collapsed)}
+                    title=${group.title}
+                    @click=${() => params.onToggleSection(sectionId)}
                   >
-                  <span class="sidebar-session-catalog-project__label">${group.label}</span>
-                  <span class="sidebar-session-catalog-project__count" aria-hidden="true"
-                    >${group.sessions.length}</span
-                  >
-                </button>
-                ${collapsed
-                  ? nothing
-                  : group.sessions.map((session) =>
-                      renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params, true),
-                    )}
+                    <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
+                      >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                    >
+                    <span class="sidebar-session-catalog-project__label">${group.label}</span>
+                    <span class="sidebar-session-catalog-project__count" aria-hidden="true"
+                      >${group.sessions.length}</span
+                    >
+                  </button>
+                  ${collapsed
+                    ? nothing
+                    : html`<div
+                        class="sidebar-session-catalog-project__sessions"
+                        role="list"
+                        aria-label=${`${host.label}: ${group.label}`}
+                      >
+                        ${group.sessions.map((session) =>
+                          renderCatalogSessionRow(
+                            catalog,
+                            host,
+                            session,
+                            liveRowsByKey,
+                            params,
+                            true,
+                          ),
+                        )}
+                      </div>`}
+                </div>
               `;
             })}
             ${projectGroups.ungrouped.map((session) =>
@@ -421,6 +437,14 @@ function renderCatalogSessionRow(
       y,
       trigger,
     );
+  const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
+    handleContextMenuEvent(
+      event,
+      event instanceof KeyboardEvent
+        ? (event.currentTarget as HTMLElement).querySelector("[data-catalog-session-menu]")
+        : null,
+      (trigger, x, y) => openMenu(x, y, trigger ?? undefined),
+    );
   return html`
     <div
       class="sidebar-recent-session session-row-host ${active
@@ -430,10 +454,8 @@ function renderCatalogSessionRow(
         : ""}"
       data-session-key=${key}
       role="listitem"
-      @contextmenu=${(event: MouseEvent) => {
-        event.preventDefault();
-        openMenu(event.clientX, event.clientY);
-      }}
+      @contextmenu=${openMenuFromEvent}
+      @keydown=${openMenuFromEvent}
     >
       <a
         href=${href}
@@ -464,7 +486,11 @@ function renderCatalogSessionRow(
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
         ${running
-          ? html`<span class="session-row-state" id=${stateId} aria-label=${stateDescription}
+          ? html`<span
+              class="session-row-state"
+              id=${stateId}
+              role="img"
+              aria-label=${stateDescription}
               >${renderSessionRunSpinner(false)}</span
             >`
           : nothing}

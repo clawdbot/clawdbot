@@ -6,7 +6,7 @@ import {
   mergeOverrides,
   parsePnpmPackageKey,
   readNpmLockOverrides,
-} from "../scripts/generate-npm-package-lock.mjs";
+} from "../scripts/generate-npm-package-lock.mts";
 
 type PnpmBuildConfig = {
   allowBuilds?: Record<string, boolean>;
@@ -71,8 +71,11 @@ describe("package manager build policy", () => {
     expect(packageJson.files).toEqual(
       expect.arrayContaining([
         "scripts/crabbox-wrapper.mjs",
-        "scripts/crabbox-wrapper-providers.mjs",
-        "scripts/testbox-lease-freshness.mjs",
+        "scripts/crabbox-wrapper.mts",
+        "scripts/crabbox-wrapper-providers.mts",
+        "scripts/crabbox-routing-policy.mts",
+        "scripts/testbox-lease-freshness.mts",
+        "scripts/lib/tsx-cli-shim.mjs",
       ]),
     );
   });

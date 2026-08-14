@@ -1,5 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { logVerbose } from "../../globals.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
@@ -79,7 +80,9 @@ export function createAgentTurnPresentation(params: {
     if (!text) {
       return { skip: true };
     }
-    const sanitized = sanitizeUserFacingText(text, { errorContext });
+    const sanitized = errorContext
+      ? renderUserFacingText(text, { errorContext: true })
+      : sanitizeUserFacingText(text);
     return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
   };
 

@@ -2,6 +2,10 @@
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  parseJsonObjectPreservingUnsafeIntegers,
+  parseJsonPreservingUnsafeIntegers,
+} from "openclaw/plugin-sdk/json-unsafe-integers";
 import type {
   AssistantMessage,
   StopReason,
@@ -18,14 +22,14 @@ import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { estimateStringChars, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
-import {
-  parseJsonObjectPreservingUnsafeIntegers,
-  parseJsonPreservingUnsafeIntegers,
-} from "./ollama-json.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
   createOllamaVisibleContentSanitizer,
@@ -35,6 +39,7 @@ import {
   type OllamaThinkValue,
   resolveOllamaConfiguredNumCtx,
   resolveOllamaThinkParamValue,
+  supportsNativeOllamaMax,
   shouldForwardNativeOllamaThink,
 } from "./stream-compat.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
@@ -245,7 +250,7 @@ function resolveOllamaTopLevelParams(
       }
     }
   }
-  const think = resolveOllamaThinkParamValue(params);
+  const think = resolveOllamaThinkParamValue(params, supportsNativeOllamaMax(model));
   if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
     requestParams.think = think;
   }
@@ -662,7 +667,7 @@ type OllamaAssistantMessageBuildOptions = OllamaToolCallNameOptions & {
 };
 
 function readOllamaToolCallId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(value);
 }
 
 function extractToolCalls(

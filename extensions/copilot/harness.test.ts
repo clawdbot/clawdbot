@@ -3,10 +3,12 @@ import type { CopilotClient } from "@github/copilot-sdk";
 import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AgentHarness,
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
+  AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -15,13 +17,17 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 import type { resolvePoolAcquire } from "./src/attempt.js";
+import { createCopilotTestHostCapabilities } from "./src/host-capability.test-support.js";
 import type { CopilotClientPool, PoolKey } from "./src/runtime.js";
 
 type AgentHarnessIsolatedCompletionParams = Parameters<
-  NonNullable<AgentHarness["runIsolatedCompletion"]>
+  NonNullable<AgentHarness["runIsolatedCompletionV2"]>
 >[0];
 
 type CanonicalAttemptResult = Extract<AgentHarnessAttemptResult, { terminal: unknown }>;
+type SettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
 
 const COPILOT_BYOK_PROVIDER_ERROR =
   "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl";
@@ -59,7 +65,17 @@ vi.mock("./src/runtime.js", () => ({
 }));
 
 function asAttemptParams(value: Record<string, unknown>): AgentHarnessAttemptParams {
-  return value as unknown as AgentHarnessAttemptParams;
+  return {
+    hostCapabilities: createCopilotTestHostCapabilities(),
+    ...value,
+  } as unknown as AgentHarnessAttemptParams;
+}
+
+function asFinalizationAttempt(
+  params: AgentHarnessAttemptParams,
+): SettledTurnFinalizationAttemptParams {
+  const { hostCapabilities: _hostCapabilities, ...attempt } = params;
+  return attempt;
 }
 
 function asAttemptResult(value: Record<string, unknown>): AgentHarnessAttemptResult {
@@ -105,25 +121,28 @@ const TEST_SESSION_CONFIG = {
 const ISOLATED_COMPLETION_PARAMS = {
   provider: "github-copilot",
   modelId: "gpt-4.1",
-  model: {
-    id: "gpt-4.1",
-    name: "GPT-4.1",
-    api: "openai-responses",
-    provider: "github-copilot",
-    baseUrl: "https://api.githubcopilot.com",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8_192,
+  authorization: {
+    owner: "host",
+    model: {
+      id: "gpt-4.1",
+      name: "GPT-4.1",
+      api: "openai-responses",
+      provider: "github-copilot",
+      baseUrl: "https://api.githubcopilot.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8_192,
+    },
+    auth: {
+      apiKey: "prepared-github-token",
+      profileId: "github:work",
+      source: "profile",
+      mode: "oauth",
+    },
+    sourceAuthFingerprint: "prepared-owner-fingerprint",
   },
-  auth: {
-    apiKey: "prepared-github-token",
-    profileId: "github:work",
-    source: "profile",
-    mode: "oauth",
-  },
-  sourceAuthFingerprint: "prepared-owner-fingerprint",
   config: {},
   agentId: "test",
   agentDir: "/tmp/agent",
@@ -159,16 +178,6 @@ function makeSessionStoreMock() {
       delete: vi.fn((key: string) => entries.delete(key)),
     },
   };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 async function flushAsyncWork() {
@@ -469,7 +478,10 @@ describe("createCopilotAgentHarness", () => {
 
     await expect(harness.runAttempt(params)).resolves.toBe(settledResult);
     await expect(
-      harness.finalizeSettledTurn?.({ attempt: params, settledAttempt: settledResult }),
+      harness.finalizeSettledTurn?.({
+        attempt: asFinalizationAttempt(params),
+        settledAttempt: settledResult,
+      }),
     ).resolves.toEqual({ assistant: finalAssistant });
 
     expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(2);
@@ -501,7 +513,10 @@ describe("createCopilotAgentHarness", () => {
     });
 
     await expect(
-      harness.finalizeSettledTurn?.({ attempt: params, settledAttempt: ATTEMPT_RESULT }),
+      harness.finalizeSettledTurn?.({
+        attempt: asFinalizationAttempt(params),
+        settledAttempt: ATTEMPT_RESULT,
+      }),
     ).rejects.toThrow(
       "cannot safely finalize a settled tool turn without its compatible SDK session",
     );
@@ -534,7 +549,7 @@ describe("createCopilotAgentHarness", () => {
     const harness = createCopilotAgentHarness({ pool });
 
     await expect(
-      harness.runIsolatedCompletion?.({
+      harness.runIsolatedCompletionV2?.({
         ...ISOLATED_COMPLETION_PARAMS,
         streamParams: { maxTokens: 800, temperature: 0.2 },
       }),
@@ -609,6 +624,26 @@ describe("createCopilotAgentHarness", () => {
     expect(pool.release).toHaveBeenCalledWith(expect.objectContaining({ client }));
   });
 
+  it("rejects harness-owned authorization before acquiring a client", async () => {
+    const pool = makePoolMock();
+    const harness = createCopilotAgentHarness({ pool });
+
+    await expect(
+      harness.runIsolatedCompletionV2?.({
+        ...ISOLATED_COMPLETION_PARAMS,
+        authorization: {
+          owner: "harness",
+          plan: {
+            providerForAuth: "github-copilot",
+            authProfileProviderForAuth: "github-copilot",
+          },
+          authProfileStore: { version: 1, profiles: {} },
+        },
+      }),
+    ).rejects.toThrow("requires host-prepared authorization");
+    expect(pool.acquire).not.toHaveBeenCalled();
+  });
+
   it("returns tool-shaped output for core to reject with its stable code", async () => {
     const session = {
       abort: vi.fn().mockResolvedValue(undefined),
@@ -633,7 +668,7 @@ describe("createCopilotAgentHarness", () => {
     pool.acquire.mockResolvedValue({ client, key: TEST_POOL_KEY });
     const harness = createCopilotAgentHarness({ pool });
 
-    await expect(harness.runIsolatedCompletion?.(ISOLATED_COMPLETION_PARAMS)).resolves.toEqual({
+    await expect(harness.runIsolatedCompletionV2?.(ISOLATED_COMPLETION_PARAMS)).resolves.toEqual({
       assistant: expect.objectContaining({
         content: [{ type: "toolCall", id: "call-1", name: "shell", arguments: {} }],
         stopReason: "toolUse",
@@ -650,7 +685,7 @@ describe("createCopilotAgentHarness", () => {
       const harness = createCopilotAgentHarness({ pool });
 
       await expect(
-        harness.runIsolatedCompletion?.({ ...ISOLATED_COMPLETION_PARAMS, thinkLevel }),
+        harness.runIsolatedCompletionV2?.({ ...ISOLATED_COMPLETION_PARAMS, thinkLevel }),
       ).rejects.toThrow(`does not support thinking level ${thinkLevel}`);
       expect(pool.acquire).not.toHaveBeenCalled();
     },
@@ -674,7 +709,7 @@ describe("createCopilotAgentHarness", () => {
     const harness = createCopilotAgentHarness({ pool });
 
     await expect(
-      harness.runIsolatedCompletion?.({
+      harness.runIsolatedCompletionV2?.({
         ...ISOLATED_COMPLETION_PARAMS,
         abortSignal: controller.signal,
       }),
@@ -711,7 +746,7 @@ describe("createCopilotAgentHarness", () => {
     const harness = createCopilotAgentHarness({ pool });
 
     await expect(
-      harness.runIsolatedCompletion?.({
+      harness.runIsolatedCompletionV2?.({
         ...ISOLATED_COMPLETION_PARAMS,
         abortSignal: controller.signal,
       }),
@@ -732,7 +767,7 @@ describe("createCopilotAgentHarness", () => {
     const harness = createCopilotAgentHarness({ pool });
 
     await expect(
-      harness.runIsolatedCompletion?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
+      harness.runIsolatedCompletionV2?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
     ).rejects.toThrow("timed out after 5ms");
     deferred.resolve(lateHandle);
     await flushAsyncWork();
@@ -755,7 +790,7 @@ describe("createCopilotAgentHarness", () => {
     const harness = createCopilotAgentHarness({ pool });
 
     await expect(
-      harness.runIsolatedCompletion?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
+      harness.runIsolatedCompletionV2?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
     ).rejects.toThrow("timed out after 5ms");
     deferred.resolve(lateSession);
     await flushAsyncWork();
@@ -785,7 +820,7 @@ describe("createCopilotAgentHarness", () => {
     pool.acquire.mockResolvedValue({ client, key: TEST_POOL_KEY });
     const harness = createCopilotAgentHarness({ pool });
 
-    await expect(harness.runIsolatedCompletion?.(ISOLATED_COMPLETION_PARAMS)).resolves.toEqual({
+    await expect(harness.runIsolatedCompletionV2?.(ISOLATED_COMPLETION_PARAMS)).resolves.toEqual({
       assistant: expect.objectContaining({ content: [{ type: "text", text: "Done." }] }),
     });
     expect(disconnect).toHaveBeenCalledOnce();
@@ -813,24 +848,28 @@ describe("createCopilotAgentHarness", () => {
       ...ISOLATED_COMPLETION_PARAMS,
       provider: "custom-openai",
       modelId: "prepared-model",
-      model: {
-        ...ISOLATED_COMPLETION_PARAMS.model,
-        id: "prepared-model",
-        name: "Prepared model",
-        provider: "custom-openai",
-        baseUrl: "https://inference.example/v1",
-        headers: { "x-tenant": "tenant-a" },
-      },
-      auth: {
-        apiKey: "prepared-byok-key",
-        profileId: "custom:work",
-        source: "profile",
-        mode: "api-key" as const,
+      authorization: {
+        owner: "host",
+        model: {
+          ...ISOLATED_COMPLETION_PARAMS.authorization.model,
+          id: "prepared-model",
+          name: "Prepared model",
+          provider: "custom-openai",
+          baseUrl: "https://inference.example/v1",
+          headers: { "x-tenant": "tenant-a" },
+        },
+        auth: {
+          apiKey: "prepared-byok-key",
+          profileId: "custom:work",
+          source: "profile",
+          mode: "api-key" as const,
+        },
+        sourceAuthFingerprint: "prepared-owner-fingerprint",
       },
       streamParams: { maxTokens: 321 },
     } satisfies AgentHarnessIsolatedCompletionParams;
 
-    await expect(harness.runIsolatedCompletion?.(params)).resolves.toEqual({
+    await expect(harness.runIsolatedCompletionV2?.(params)).resolves.toEqual({
       assistant: expect.objectContaining({
         content: [{ type: "text", text: "Done." }],
         model: "prepared-model",

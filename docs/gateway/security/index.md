@@ -245,7 +245,7 @@ What helps in practice:
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
 - If you allowlist interpreters (`python`, `node`, `ruby`, `perl`, `php`, `lua`, `osascript`), enable `tools.exec.strictInlineEval` so inline eval forms (`-c`, `-e`, and similar) still need explicit approval. In allowlist mode, any heredoc segment (`<<`) always requires reviewer or explicit approval, regardless of quoting - an allowlisted command cannot use a heredoc body to bypass allowlist review.
 - Reduce blast radius by using a read-only or tool-disabled **reader agent** to summarize untrusted content, then pass the summary to your main agent.
-- For Gmail hooks, the built-in per-message session isolates conversation context but does not remove the target agent's tool or workspace permissions. Route untrusted mail to a dedicated reader agent, apply [per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools), and constrain any handoff to the main agent with [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent). See [Gmail integration](/gateway/configuration-reference#gmail-integration).
+- For Gmail hooks, the built-in per-message session isolates conversation context but does not remove the target agent's tool or workspace permissions. Route untrusted mail to a dedicated reader agent, apply [per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools), and constrain any handoff to the main agent with [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent). See [Gmail integration](/gateway/configuration-reference#gmail-integration).
 - Keep `web_search` / `web_fetch` / `browser` off for tool-enabled agents unless needed.
 - For OpenResponses URL inputs (`input_file` / `input_image`), set a tight `gateway.http.endpoints.responses.files.urlAllowlist` / `images.urlAllowlist` and keep `maxUrlParts` low (empty allowlists count as unset). Use `files.allowUrl: false` / `images.allowUrl: false` to disable URL fetching entirely.
 - Keep secrets out of prompts; pass them via env/config on the gateway host instead.
@@ -287,7 +287,7 @@ Hook payloads are untrusted content even when delivery comes from systems you co
 
 ## Command authorization
 
-Slash commands and directives are honored only for authorized senders, derived from channel allowlists/pairing plus `commands.useAccessGroups` (see [Configuration](/gateway/configuration) and [Slash commands](/tools/slash-commands)). If a channel allowlist is empty or includes `"*"`, commands are effectively open for that channel.
+Slash commands and directives are honored only for authorized senders. Configure an explicit per-provider `commands.allowFrom` list, or let command authorization follow channel allowlists and pairing state. Access-group entries referenced by channel allowlists are resolved automatically; there is no opt-in toggle. If a channel allowlist is empty or includes `"*"`, commands are effectively open for that channel. See [Access groups](/channels/access-groups) and [Slash commands](/tools/slash-commands).
 
 `/exec` is a session-only convenience for authorized operators - it does not write config or change other sessions.
 
@@ -396,9 +396,13 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 ```json5
 {
   agents: {
-    list: [
-      { id: "personal", workspace: "~/.openclaw/workspace-personal", sandbox: { mode: "off" } },
-    ],
+    entries: {
+      personal: {
+        default: true,
+        workspace: "~/.openclaw/workspace-personal",
+        sandbox: { mode: "off" },
+      },
+    },
   },
 }
 ```
@@ -408,9 +412,9 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "family",
+    entries: {
+      family: {
+        default: true,
         workspace: "~/.openclaw/workspace-family",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro" },
         tools: {
@@ -418,7 +422,7 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
           deny: ["write", "edit", "apply_patch", "exec", "process", "browser"],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -427,17 +431,17 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 
 ```json5
 {
+  // Session tools can reveal transcript data. Default scope is current + spawned;
+  // reads also include same-agent groups watched through ambient group awareness.
+  // Use visibility: "self" to exclude those watched sessions.
+  tools: { sessions: { visibility: "tree" } }, // self | tree | agent | all
   agents: {
-    list: [
-      {
-        id: "public",
+    entries: {
+      public: {
+        default: true,
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {
-          // Session tools can reveal transcript data. Default scope is current + spawned;
-          // reads also include same-agent groups watched through ambient group awareness.
-          // Use visibility: "self" to exclude those watched sessions.
-          sessions: { visibility: "tree" }, // self | tree | agent | all
           allow: [
             "sessions_list",
             "sessions_history",
@@ -465,7 +469,7 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
           ],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -492,6 +496,21 @@ Enabling browser control gives the model a real browser. If that profile already
   window. This temporarily accepts old Bearer, Basic, and token-subprotocol
   relay clients. Update every relay client, then set it to `false`. V2 clients
   never downgrade after a failed proof or unsupported response.
+- Chrome extension pairing stores its access mode in extension-owned Chrome
+  storage, not Gateway config. **All tabs** exposes every eligible ordinary tab
+  in that Chrome profile except session-paused tabs; **Selected tabs** uses the
+  OpenClaw tab group as its ACL. Existing pairings migrate to **Selected tabs**,
+  while new personal-browser pairings recommend **All tabs**. Incognito and
+  internal Chrome pages remain excluded in either mode.
+- Automatic Chrome extension setup uses an origin-locked native messaging
+  manifest discovered from an exact unpacked extension path in Chrome profile
+  metadata. The one-shot host accepts only a versioned request with a fresh
+  nonce, caps input at 4 KiB, validates the Chrome-supplied origin, and returns
+  only a locally owned pairing. It never transfers a remote Gateway key.
+- Native-host manifests, launchers, and status output contain no pairing key.
+  OpenClaw refuses symlinks, unsafe ownership/modes, wildcard origins, and
+  foreign registrations using the same host name. Windows uses the manual
+  pairing fallback until an executable native-host path is supported.
 - Run a **node host** on the browser machine and let the Gateway proxy browser actions when the Gateway is remote from the browser (see [Browser tool](/tools/browser)); treat node pairing like admin access, keep Gateway and node host on the same tailnet, and avoid exposing relay/control ports over LAN, public internet, or Tailscale Funnel.
 
 ### Browser SSRF policy (strict by default)
@@ -500,7 +519,7 @@ Private/internal destinations stay blocked unless you explicitly opt in.
 
 - Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset, so private/internal/special-use destinations stay blocked. Legacy alias `allowPrivateNetwork` still accepted.
 - Opt-in: set `dangerouslyAllowPrivateNetwork: true` to allow those destinations.
-- In strict mode, use `hostnameAllowlist` (patterns like `*.example.com`) and `allowedHostnames` (exact host exceptions, including otherwise-blocked names like `localhost`) for explicit exceptions.
+- In strict mode, use wildcard-aware `allowedHostnames` entries for patterns like `*.example.com` and exact host exceptions, including otherwise-blocked names like `localhost`.
 - Direct navigation requests are preflight checked. During the action and bounded post-action grace, guarded Playwright interactions (click, coordinate click, hover, drag, scroll, select, press, type, form fill, and evaluate) intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
 - Before each fresh managed Chrome launch, OpenClaw best-effort disables network prediction, suppressing Chromium's observed speculative preconnect for those denied loads. This is defense in depth, not a policy boundary: a browser reused across a control-service restart and other browser backends may not share the hardening. Page routing remains request-level interception, not a network firewall: redirect hops, a popup's first request, Service Worker traffic, page code that runs after the bounded guard window, and some background/subresource paths can bypass it. Final-URL checks remain detection/quarantine defense; complete prevention requires owner-side egress isolation or a policy-enforcing proxy.
 
@@ -509,8 +528,7 @@ Private/internal destinations stay blocked unless you explicitly opt in.
   browser: {
     ssrfPolicy: {
       dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["*.example.com", "example.com"],
-      allowedHostnames: ["localhost"],
+      allowedHostnames: ["*.example.com", "example.com", "localhost"],
     },
   },
 }
@@ -723,7 +741,7 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
 ## Deployment and host trust
 
 - Full-disk encryption on the gateway host; prefer a dedicated OS user account for the Gateway if the host is shared.
-- Published package dependency lock: source checkouts use `pnpm-lock.yaml`; the published `openclaw` npm package and OpenClaw-owned npm plugin packages include `npm-shrinkwrap.json` so installs use the reviewed transitive dependency graph from the release instead of resolving a fresh graph at install time. This is a supply-chain hardening and release reproducibility boundary, not a sandbox - see [npm shrinkwrap](/gateway/security/shrinkwrap).
+- Published package dependency lock: source checkouts use `pnpm-lock.yaml`; the published `openclaw` npm package and OpenClaw-owned npm plugin packages include `npm-shrinkwrap.json` so installs use the reviewed transitive dependency graph from the release instead of resolving a fresh graph at install time. This is a supply-chain hardening and release reproducibility boundary, not a sandbox - see [npm shrinkwrap](/gateway/security/dependency-locking).
 - Secure file operations: OpenClaw uses `@openclaw/fs-safe` for root-bounded file access, atomic writes, archive extraction, temp workspaces, and secret-file helpers. Optional native acceleration defaults **off**; set `OPENCLAW_FS_SAFE_NATIVE_MODE=auto` to use an installed platform binding or `require` to fail closed when native support is unavailable. Details: [Secure file operations](/gateway/security/secure-file-operations).
 - Shared Slack workspace risk: if everyone in Slack can message the bot, the core risk is delegated tool authority - any allowed sender can induce tool calls (`exec`, browser, network/file tools) within the agent's policy, prompt/content injection from one sender can affect shared state/devices/outputs, and if the shared agent has sensitive credentials/files, any allowed sender can potentially drive exfiltration via tool usage. Use separate agents/gateways with minimal tools for team workflows; keep personal-data agents private.
 - Company-shared agent (acceptable pattern): fine when everyone using the agent is in the same trust boundary (for example one company team) and the agent is strictly business-scoped. Run it on a dedicated machine/VM/container, use a dedicated OS user + dedicated browser/profile/accounts, and do not sign that runtime into personal Apple/Google accounts or personal password-manager/browser profiles. Mixing personal and company identities on the same runtime collapses the separation and increases personal-data exposure risk.
@@ -754,7 +772,7 @@ Also useful for backup decisions:
 
 - WhatsApp: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
 - Telegram bot token: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
-- Discord bot token: config/env or SecretRef (env/file/exec providers)
+- Discord bot token: config/env or SecretRef (env/file/exec/store providers)
 - Slack tokens: config/env (`channels.slack.*`)
 - Pairing allowlists: `~/.openclaw/credentials/<channel>-allowFrom.json` (default account) / `<channel>-<accountId>-allowFrom.json` (non-default accounts)
 - Model auth profiles: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (`auth_profile_store`)

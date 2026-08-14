@@ -527,6 +527,19 @@ describe("configured plugin install release step", () => {
         })
       ).channelIds,
     ).toStrictEqual([]);
+
+    expect(
+      (
+        await collectReleaseConfiguredPluginIdsThroughDoctor({
+          cfg: {
+            channels: {
+              Matrix: { enabled: false, accessToken: "test" },
+            },
+          },
+          env: { MATRIX_ACCESS_TOKEN: "test" },
+        })
+      ).channelIds,
+    ).toStrictEqual([]);
   });
 
   it("marks the release step complete when there is nothing to install", async () => {

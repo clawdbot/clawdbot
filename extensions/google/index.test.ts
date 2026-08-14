@@ -2,6 +2,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderReplaySessionEntry,
@@ -42,16 +43,6 @@ const googleProviderPlugin = {
     registerGoogleGeminiCliProvider(api);
   },
 };
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 function createMockRealtimeBridge(connectImpl: () => Promise<void> = async () => {}) {
   const connect = vi.fn(connectImpl);

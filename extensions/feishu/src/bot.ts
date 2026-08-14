@@ -431,6 +431,7 @@ export async function handleFeishuMessage(params: {
       // The API returns all sub-messages in the items array
       const client = createFeishuClient(account);
       const response = (await client.im.message.get({
+        params: { card_msg_content_type: "user_card_content" },
         path: { message_id: event.message.message_id },
       })) as { code?: number; data?: { items?: unknown[] } };
 

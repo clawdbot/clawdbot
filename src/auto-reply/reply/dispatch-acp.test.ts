@@ -17,7 +17,7 @@ import {
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
-import { tryDispatchAcpReply } from "./dispatch-acp.js";
+import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
 import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
 import {
   appendRecentHistoryImageContext,
@@ -136,6 +136,8 @@ const bindingServiceMocks = vi.hoisted(() => ({
 
 vi.mock("./dispatch-acp-manager.runtime.js", () => ({
   getAcpSessionManager: () => managerMocks,
+  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+    sessionMetaMocks.readAcpSessionEntry(params),
   getSessionBindingService: () => ({
     listBySession: (targetSessionKey: string) =>
       bindingServiceMocks.listBySession(targetSessionKey),
@@ -176,7 +178,7 @@ vi.mock("../../infra/outbound/message-action-runner.js", () => ({
   runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
 }));
 
-vi.mock("./dispatch-acp-tts.runtime.js", () => ({
+vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
@@ -245,18 +247,8 @@ vi.mock("./dispatch-acp-media.runtime.js", async () => {
   };
 });
 
-vi.mock("./dispatch-acp-session.runtime.js", () => ({
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    sessionMetaMocks.readAcpSessionEntry(params),
-}));
-
 vi.mock("../../logging/diagnostic.js", () => ({
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
-  isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
-    config?.diagnostics?.enabled !== false,
-  requestStuckDiagnosticSessionRecovery: vi.fn(),
-  resolveStuckSessionWarnMs: () => 120_000,
-  resolveStuckSessionAbortMs: () => 360_000,
 }));
 
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
@@ -373,7 +365,7 @@ async function runDispatch(params: {
   markIdle?: (reason: string) => void;
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
-  return tryDispatchAcpReply({
+  return tryDispatchAcpReplyCore({
     ctx: buildTestCtx({
       Provider: "discord",
       Surface: "discord",
@@ -399,6 +391,7 @@ async function runDispatch(params: {
         }
       : {}),
     shouldSendToolSummaries: true,
+    shouldSendFullToolDetails: false,
     bypassForCommand: false,
     toolsAllow: params.toolsAllow,
     ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
@@ -488,7 +481,7 @@ function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) 
   }
 }
 
-describe("tryDispatchAcpReply", () => {
+describe("tryDispatchAcpReplyCore", () => {
   beforeEach(() => {
     auditMocks.emitAcpLifecycleStart.mockReset();
     auditMocks.emitAcpRuntimeEvent.mockReset();
@@ -627,6 +620,40 @@ describe("tryDispatchAcpReply", () => {
     expect(routePayload().text).toBe("hello");
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("records channel transform suppression without an ACP delivery claim", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("private reply");
+    const transport = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({
+      deliver: transport,
+      transformReplyPayload: () => null,
+    });
+    const recordProcessed = vi.fn();
+
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      recordProcessed,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(transport).not.toHaveBeenCalled();
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(recordProcessed).toHaveBeenCalledWith("completed", {
+      reason: "channel_transform",
+    });
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.finalText).toBe("");
   });
 
   it("persists ACP transcript when routed delivery fails", async () => {
@@ -1139,7 +1166,7 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
-  it("passes the ACP agent directory to media understanding", async () => {
+  it("passes the ACP agent directory without declaring host-path access", async () => {
     setReadyAcpResolution();
     mockVisibleTextTurn("image turn");
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
@@ -1169,12 +1196,55 @@ describe("tryDispatchAcpReply", () => {
         },
       });
 
-      expect(
-        requireRecord(
-          mockArg(mediaUnderstandingMocks.applyMediaUnderstanding, 0, 0, "media understanding"),
-          "media understanding",
-        ).agentDir,
-      ).toBe(agentDir);
+      const mediaUnderstandingParams = requireRecord(
+        mockArg(mediaUnderstandingMocks.applyMediaUnderstanding, 0, 0, "media understanding"),
+        "media understanding",
+      );
+      expect(mediaUnderstandingParams.agentDir).toBe(agentDir);
+      expect(mediaUnderstandingParams.selfServeLocalPaths).toBeUndefined();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes exactly the resolved attachment indexes as delivered images", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("image turn");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "delivered.png");
+    try {
+      // Real PNG bytes: the turn-attachment resolver byte-sniffs image MIME
+      // through the harness buffer map keyed by local path.
+      await fs.writeFile(imagePath, ACP_PNG_IMAGE_BYTES);
+      acpAttachmentBuffers.set(imagePath, ACP_PNG_IMAGE_BYTES);
+
+      await runDispatch({
+        bodyForAgent: "describe both images",
+        cfg: createAcpTestConfig({
+          channels: {
+            imessage: {
+              attachmentRoots: [tempDir],
+            },
+          },
+        }),
+        ctxOverrides: {
+          Provider: "imessage",
+          Surface: "imessage",
+          media: [
+            { path: imagePath, contentType: "image/png", kind: "image" },
+            { url: "https://cdn.example.test/photos/remote.png", contentType: "image/png" },
+          ],
+        },
+      });
+
+      // The delivered set must mirror the resolver: local image in, remote-url
+      // image out — an empty or over-broad set reintroduces false skip claims.
+      const delivered = requireRecord(
+        mockArg(mediaUnderstandingMocks.applyMediaUnderstanding, 0, 0, "media understanding"),
+        "media understanding",
+      ).deliveredImageIndexes as ReadonlySet<number>;
+      expect(delivered.has(0)).toBe(true);
+      expect(delivered.has(1)).toBe(false);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -2365,7 +2435,29 @@ describe("tryDispatchAcpReply", () => {
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
-    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain("runtime toolsAllow");
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain(
+      "cannot enforce its tool policy",
+    );
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+  });
+
+  it("fails visibly when a bound ACP runtime receives restrictive conversation policy", async () => {
+    setReadyAcpResolution();
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      ctxOverrides: { ConversationToolPolicy: { deny: ["exec"] } },
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(dispatcherCall(dispatcher.sendFinalReply)).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("use an embedded runtime"),
+    });
     expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
       expect.objectContaining({ terminalOutcome: "blocked" }),
     );
@@ -2987,6 +3079,61 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("Visible.  Done.");
+  });
+
+  it.each([
+    {
+      expectedText: "Private ACP speech.",
+      ttsReply: { text: "Private ACP speech." },
+      finalReply: {},
+      streamedText: "[[tts:text]]Private ACP speech.[[/tts:text]]",
+    },
+    {
+      expectedText: undefined,
+      ttsReply: {
+        text: "Private ACP speech.",
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+      },
+      finalReply: {
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+      },
+      streamedText: "[[tts:text]]Private ACP speech.[[/tts:text]]",
+    },
+    {
+      expectedText: "Visible ACP answer. ",
+      ttsReply: { text: "Visible ACP answer." },
+      finalReply: undefined,
+      streamedText: "Visible ACP answer. [[tts:text]]Private speech.[[/tts:text]]",
+    },
+  ])("keeps tagged ACP TTS delivery single for $streamedText", async (testCase) => {
+    setReadyAcpResolution();
+    queueTtsReplies(testCase.ttsReply as MockTtsReply);
+    mockVisibleTextTurn(testCase.streamedText);
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg: createAcpTestConfig({
+        acp: { enabled: true, stream: { deliveryMode: "live" } },
+        tts: { auto: "tagged" },
+      }),
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    const blockReply = vi.mocked(dispatcher.sendBlockReply).mock.calls[0]?.[0];
+    const deliveredPayload = testCase.finalReply
+      ? dispatcherCall(dispatcher.sendFinalReply)
+      : blockReply;
+    expect(deliveredPayload?.text).toBe(testCase.expectedText);
+    if (testCase.finalReply) {
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+      expect(deliveredPayload).toMatchObject(testCase.finalReply);
+    } else {
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    }
   });
 
   it("falls back to Telegram ACP text when a routed captioned voice is suppressed", async () => {

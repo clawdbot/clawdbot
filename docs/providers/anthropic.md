@@ -79,7 +79,7 @@ OpenClaw release:
 
     ```json5
     {
-      env: { ANTHROPIC_API_KEY: "example-anthropic-key-not-real" },
+      env: { vars: { ANTHROPIC_API_KEY: "example-anthropic-key-not-real" } },
       agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
     }
     ```
@@ -469,10 +469,10 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
             },
           },
         },
-        list: [
-          { id: "research", default: true },
-          { id: "alerts", params: { cacheRetention: "none" } },
-        ],
+        entries: {
+          research: { default: true },
+          alerts: { params: { cacheRetention: "none" } },
+        },
       },
     }
     ```

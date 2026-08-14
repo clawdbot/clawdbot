@@ -11,7 +11,7 @@ import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../se
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { resolveConfiguredFallbackModel } from "./agent-runner-core.js";
+import { resolveFallbackOriginModel } from "./agent-runner-core.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -137,6 +137,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
   const replyUsageState = buildReplyUsageState({
     config: cfg,
+    agentDir: followupRun.run.agentDir,
     provider: providerUsed,
     model: modelUsed,
     fallbackExhausted,
@@ -176,7 +177,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   );
   const fallbackStateEntry =
     activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
-  const configuredFallbackModel = resolveConfiguredFallbackModel({
+  const configuredFallbackModel = resolveFallbackOriginModel({
     run: followupRun.run,
     fallbackStateEntry,
   });
@@ -248,12 +249,14 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     storePath,
     sessionKey,
     cfg,
+    agentDir: followupRun.run.agentDir,
     usage,
     lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
     compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
     promptTokens,
     isHeartbeat,
-    preserveRuntimeModel: fallbackExhausted,
+    preserveRuntimeModel:
+      fallbackExhausted || fallbackTransition.nextState.selectedModel !== undefined,
     preserveUserFacingSessionModelState: preserveUserFacingSessionState,
     modelUsed,
     providerUsed,

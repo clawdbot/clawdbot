@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
@@ -13,7 +14,7 @@ import {
 import { formatSessionArchiveTimestamp, type SessionArchiveReason } from "./artifacts.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 
-export type SqliteSessionStateDeleteSnapshot = {
+export type SessionStateDeleteSnapshot = {
   acpParentStreamEventCount: number;
   generation: string | null;
   lastSeq: number | null;
@@ -22,38 +23,38 @@ export type SqliteSessionStateDeleteSnapshot = {
   transcriptUpdatedAt: number | null;
 };
 
-export type SqliteSessionStateDeletePlan = {
+export type SessionStateDeletePlan = {
   agentId: string;
   archiveDirectory: string;
   archiveTranscript: boolean;
   databasePath: string;
   reason: "deleted" | "reset";
   sessionId: string;
-  snapshot: SqliteSessionStateDeleteSnapshot;
+  snapshot: SessionStateDeleteSnapshot;
 };
 
-export type MaterializedSqliteSessionStateDeletePlan = SqliteSessionStateDeletePlan & {
+export type MaterializedSessionStateDeletePlan = SessionStateDeletePlan & {
   archivedTranscript: SessionLifecycleArchivedTranscript | null;
 };
 
-export type SqliteTranscriptArchiveWorkerPlan = Pick<
-  SqliteSessionStateDeletePlan,
+export type TranscriptArchiveWorkerPlan = Pick<
+  SessionStateDeletePlan,
   "agentId" | "archiveDirectory" | "databasePath" | "reason" | "sessionId" | "snapshot"
 >;
 
-export type SqliteTranscriptArchiveWorkerResult = {
+export type TranscriptArchiveWorkerResult = {
   archivedPath: string | null;
   sessionId: string;
 };
 
-export type SqliteTranscriptArchiveWorkerMessage = {
+export type TranscriptArchiveWorkerMessage = {
   type: "done";
-  results: SqliteTranscriptArchiveWorkerResult[];
+  results: TranscriptArchiveWorkerResult[];
 };
 
 export function sqliteSessionStateDeleteSnapshotsEqual(
-  left: SqliteSessionStateDeleteSnapshot,
-  right: SqliteSessionStateDeleteSnapshot,
+  left: SessionStateDeleteSnapshot,
+  right: SessionStateDeleteSnapshot,
 ): boolean {
   return (
     left.acpParentStreamEventCount === right.acpParentStreamEventCount &&
@@ -120,7 +121,7 @@ function findMatchingSqliteTranscriptArchive(params: {
 }
 
 /** Writes or reuses a transcript archive and returns its durable path. */
-export function writeSqliteTranscriptArchive(params: {
+export function writeTranscriptArchive(params: {
   archiveDirectory: string;
   content: string;
   reason: SessionArchiveReason;
@@ -205,13 +206,9 @@ function resolveSourceWorkerExecArgv(): string[] {
   return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
 }
 
-function normalizeArchiveWorkerError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
 function spawnSqliteTranscriptArchiveWorker(
-  plans: readonly SqliteTranscriptArchiveWorkerPlan[],
-): Promise<SqliteTranscriptArchiveWorkerResult[]> {
+  plans: readonly TranscriptArchiveWorkerPlan[],
+): Promise<TranscriptArchiveWorkerResult[]> {
   const workerUrl = resolveSqliteTranscriptArchiveWorkerUrl();
   let worker: Worker;
   try {
@@ -223,19 +220,19 @@ function spawnSqliteTranscriptArchiveWorker(
       execArgv: sourceWorkerExecArgv,
     });
   } catch (error) {
-    return Promise.reject(normalizeArchiveWorkerError(error));
+    return Promise.reject(toStringifiedError(error));
   }
 
   return new Promise((resolve, reject) => {
-    let results: SqliteTranscriptArchiveWorkerResult[] | undefined;
+    let results: TranscriptArchiveWorkerResult[] | undefined;
     let workerError: Error | undefined;
-    worker.once("message", (message: SqliteTranscriptArchiveWorkerMessage) => {
+    worker.once("message", (message: TranscriptArchiveWorkerMessage) => {
       results = message.results;
     });
     worker.once("error", (error) => {
       // An uncaught Worker error is followed by exit. Wait for that event so
       // callers never race the Worker's SQLite/file handles on Windows.
-      workerError = normalizeArchiveWorkerError(error);
+      workerError = toStringifiedError(error);
     });
     worker.once("exit", (code) => {
       worker.removeAllListeners();
@@ -262,8 +259,8 @@ const sqliteTranscriptArchiveWorkerQueue = new KeyedAsyncQueue();
 const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
 
 function runSqliteTranscriptArchiveWorker(
-  plans: readonly SqliteTranscriptArchiveWorkerPlan[],
-): Promise<SqliteTranscriptArchiveWorkerResult[]> {
+  plans: readonly TranscriptArchiveWorkerPlan[],
+): Promise<TranscriptArchiveWorkerResult[]> {
   return sqliteTranscriptArchiveWorkerQueue.enqueue(
     SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
     () => spawnSqliteTranscriptArchiveWorker(plans),
@@ -274,9 +271,9 @@ function runSqliteTranscriptArchiveWorker(
 // SQLite write transactions and off the gateway event loop. The lifecycle
 // Worker queue and per-call dedupe prevent concurrent whole-buffer spikes
 // within this path.
-export async function materializeSqliteSessionStateDeletePlans(
-  plans: readonly SqliteSessionStateDeletePlan[],
-): Promise<MaterializedSqliteSessionStateDeletePlan[]> {
+export async function materializeSessionStateDeletePlans(
+  plans: readonly SessionStateDeletePlan[],
+): Promise<MaterializedSessionStateDeletePlan[]> {
   const deduped = dedupeSqliteSessionStateDeletePlans(plans);
   const archivePlans = deduped.filter((plan) => plan.archiveTranscript);
   const workerResults =
@@ -304,9 +301,9 @@ export async function materializeSqliteSessionStateDeletePlans(
 // Multiple removed entries can point at one transcript session. If any owner
 // asked to keep an archive, the shared row gets exported once.
 function dedupeSqliteSessionStateDeletePlans(
-  plans: readonly SqliteSessionStateDeletePlan[],
-): SqliteSessionStateDeletePlan[] {
-  const deduped = new Map<string, SqliteSessionStateDeletePlan>();
+  plans: readonly SessionStateDeletePlan[],
+): SessionStateDeletePlan[] {
+  const deduped = new Map<string, SessionStateDeletePlan>();
   for (const plan of plans) {
     const existing = deduped.get(plan.sessionId);
     if (!existing) {

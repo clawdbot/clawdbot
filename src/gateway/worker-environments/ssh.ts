@@ -197,7 +197,7 @@ function isWorkerSshTransportFailure(result: WorkerSshCommandResult): boolean {
   return result.termination === "exit" && result.code === 255;
 }
 
-/** Retries only SSH's transport-level exit 255 under one operation deadline. */
+/** Retries SSH's transport-level exit 255 under one deadline and records proven exits. */
 export async function runWorkerSshCandidates<T extends WorkerSshCommandResult>(
   prepared: PreparedWorkerSsh,
   timeoutMs: number,

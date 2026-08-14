@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
@@ -10,7 +14,7 @@ import {
   SCHEDULED_HOSTED_WORKFLOWS,
   workflowRunQueryPaths,
   workflowRunPageCount,
-} from "../../scripts/verify-pr-hosted-gates.mjs";
+} from "../../scripts/verify-pr-hosted-gates.mts";
 
 const sha = "773ffd87a1e1e34451ad6e38fda37380c2569a50";
 const previousSha = "8d86c44c6144f8f726a460914cddb8c9c201f119";
@@ -98,18 +102,8 @@ function collectHostedGateEvidence(options: Omit<CollectHostedGateOptions, "nowM
 }
 
 type GitExec = (args: string[], options?: { input?: string }) => string;
-type CollectHostedGateOptions = Parameters<typeof collectHostedGateEvidenceRaw>[0] & {
-  loadCiReuseCandidates?: () => Array<Record<string, unknown>>;
-  execGit?: GitExec;
-};
-type HostedGateEvidence = ReturnType<typeof collectHostedGateEvidenceRaw> & {
-  reusedFromSha?: string;
-  reusedRunId?: unknown;
-  patchIdMatched?: boolean;
-};
-const collectHostedGateEvidenceWithReuse = collectHostedGateEvidenceRaw as unknown as (
-  options: CollectHostedGateOptions,
-) => HostedGateEvidence;
+type CollectHostedGateOptions = Parameters<typeof collectHostedGateEvidenceRaw>[0];
+const collectHostedGateEvidenceWithReuse = collectHostedGateEvidenceRaw;
 
 function priorSuccessfulCiRun(overrides: Partial<WorkflowRunFixture> = {}): WorkflowRunFixture {
   return {
@@ -180,6 +174,53 @@ function patchReuseOptions(
 }
 
 describe("verify-pr-hosted-gates", () => {
+  it("starts from an older target cwd without current normalization helpers", () => {
+    const targetRoot = mkdtempSync(join(tmpdir(), "openclaw-hosted-gates-old-cwd-"));
+    try {
+      const normalizationRoot = join(targetRoot, "packages/normalization-core/src");
+      mkdirSync(normalizationRoot, { recursive: true });
+      writeFileSync(
+        join(targetRoot, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: {
+            baseUrl: ".",
+            paths: {
+              "@openclaw/normalization-core/*": ["packages/normalization-core/src/*"],
+            },
+          },
+        }),
+      );
+      writeFileSync(join(normalizationRoot, "number-coercion.ts"), "export const legacy = true;\n");
+      writeFileSync(
+        join(normalizationRoot, "record-coerce.ts"),
+        [
+          "export function isRecord(value: unknown): value is Record<string, unknown> {",
+          '  return typeof value === "object" && value !== null && !Array.isArray(value);',
+          "}",
+          "export function readStringField(record: Record<string, unknown>, key: string) {",
+          "  const value = record[key];",
+          '  return typeof value === "string" ? value : undefined;',
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [join(process.cwd(), "scripts/verify-pr-hosted-gates.mjs"), "--older-cwd-startup-probe"],
+        {
+          cwd: targetRoot,
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Unknown option: --older-cwd-startup-probe");
+    } finally {
+      rmSync(targetRoot, { force: true, recursive: true });
+    }
+  });
+
   it("derives hosted-gate applicability from declared workflow path filters", () => {
     expect(notApplicableScheduledHostedWorkflows([".github/workflows/ci.yml"])).toEqual([]);
     expect(

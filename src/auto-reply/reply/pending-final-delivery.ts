@@ -1,5 +1,7 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-completion.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -8,7 +10,6 @@ import {
   stripLeadingSilentToken,
   stripSilentToken,
 } from "../tokens.js";
-import type { ReplyPayload } from "../types.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 
@@ -38,12 +39,16 @@ export function buildRecoverablePendingFinalDeliveryText(
     if (payload.isReasoning === true) {
       continue;
     }
-    const deliveryPayloads = normalizeReplyPayloadsForDelivery([payload]);
+    const recoveryPayload =
+      payload.replyToId && getReplyPayloadMetadata(payload)?.replyToIdExplicit !== true
+        ? { ...payload, replyToId: undefined }
+        : payload;
+    const deliveryPayloads = normalizeReplyPayloadsForDelivery([recoveryPayload]);
     if (deliveryPayloads.length === 0) {
       continue;
     }
     if (
-      hasUnsupportedDurableRecoveryShape(payload) ||
+      hasUnsupportedDurableRecoveryShape(recoveryPayload) ||
       deliveryPayloads.some(hasUnrecoverableNormalizedDeliveryShape)
     ) {
       return undefined;
@@ -78,7 +83,7 @@ export function buildRecoverablePendingFinalDeliveryText(
 }
 
 /** Build the restart-recovery text represented by one or more final payloads. */
-export function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
+function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
   const text = payloads
     .filter((payload) => payload.isReasoning !== true)
     .map((payload) => payload.text)
@@ -92,6 +97,15 @@ export function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string 
 export const PENDING_FINAL_DELIVERY_CLEAR_PATCH = {
   pendingFinalDelivery: undefined,
 } as const satisfies Partial<SessionEntry>;
+
+export function resolvePendingFinalDeliveryCompletion(
+  payloads: readonly ReplyPayload[] | undefined,
+): Extract<DurableDeliveryCompletion, { kind: "pending-final" }> | undefined {
+  const completion = payloads
+    ?.map((payload) => getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion)
+    .find(Boolean);
+  return completion ? { kind: "pending-final", ...completion } : undefined;
+}
 
 function collectDurableMediaDirectives(payload: ReplyPayload): string[] {
   if (payload.sensitiveMedia === true) {
@@ -122,8 +136,8 @@ function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
     payload.channelData !== undefined ||
     payload.location !== undefined ||
     payload.replyToId !== undefined ||
-    payload.replyToTag !== undefined ||
-    payload.replyToCurrent !== undefined ||
+    payload.replyToTag === true ||
+    payload.replyToCurrent === true ||
     payload.audioAsVoice === true ||
     payload.videoAsNote === true ||
     payload.spokenText !== undefined ||

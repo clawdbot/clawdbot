@@ -2,8 +2,9 @@
 // Control UI tests cover skills behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createRuntimeConfigCapability } from "../config/index.ts";
+import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import { searchClawHub } from "./clawhub-search.ts";
 import {
   clawhubVerdictKey,
@@ -23,14 +24,6 @@ import {
 type SkillsState = Parameters<typeof loadSkills>[0];
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
@@ -77,7 +70,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     clawhubSearchLoading: false,
     clawhubSearchError: "old error",
     clawhubDetail: null,
-    clawhubDetailSlug: null,
+    clawhubDetailRef: null,
     clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,
@@ -1003,7 +996,7 @@ describe("skill mutations", () => {
       firstMethod: "skills.install",
       start: (state: SkillsState) => installFromClawHub(state, "github"),
       blocked: (state: SkillsState) => updateSkillEnabled(state, "calendar", true),
-      expectedMutation: { kind: "clawhub", slug: "github" } as const,
+      expectedMutation: { kind: "clawhub", ref: "github" } as const,
     },
   ])("serializes $name and locks API key edits", async (fixture) => {
     const { state, request } = createState();
@@ -1295,7 +1288,7 @@ describe("skill mutations", () => {
       text:
         "Review the ClawHub warning before installing this skill.\n\n" +
         "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-      acknowledgeSlug: "github",
+      acknowledgeRef: "github",
       acknowledgeVersion: "1.2.3",
       acknowledgeLabel: "Acknowledge risk and install",
     });
@@ -1380,7 +1373,7 @@ describe("reconcileSkillsAgentId", () => {
       managedSkillsDir: "/tmp/skills",
       skills: [],
     };
-    state.skillOperation = { kind: "clawhub", slug: "calendar" };
+    state.skillOperation = { kind: "clawhub", ref: "calendar" };
 
     reconcileSkillsAgentId(state, {
       defaultId: "main",
@@ -1392,7 +1385,7 @@ describe("reconcileSkillsAgentId", () => {
     expect(state.skillsAgentId).toBeNull();
     expect(state.skillsAgentRevision).toBe(1);
     expect(state.skillsReport).toBeNull();
-    expect(state.skillOperation).toEqual({ kind: "clawhub", slug: "calendar" });
+    expect(state.skillOperation).toEqual({ kind: "clawhub", ref: "calendar" });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -27,7 +27,7 @@ describe("qa scenario catalog channel contracts", () => {
       (scenario) => scenario.execution.flowKind === "module",
     );
 
-    expect(moduleFlows).toHaveLength(143);
+    expect(moduleFlows).toHaveLength(144);
     expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
   });
 
@@ -204,12 +204,19 @@ describe("qa scenario catalog channel contracts", () => {
 
     expect(scenario.execution.channel).toBeUndefined();
     expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
+    expect(scenario.execution.retryCount).toBe(0);
     expect(scenario.coverage?.primary).toEqual(["channels.streaming-final-reply"]);
     expect(scenario.coverage?.secondary).toEqual([`${agentRuntime}.streaming-replies-delivery`]);
     expect(scenario.gatewayConfigPatch).toMatchObject({
       channels: { telegram: { streaming: { mode: "partial" } } },
     });
     expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
+  });
+
+  it("keeps the shared channel canary eligible for QA Channel and Telegram", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("channel-canary"));
+
+    expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
   });
 
   it("keeps transcript-role delivery on the Crabline driver", () => {

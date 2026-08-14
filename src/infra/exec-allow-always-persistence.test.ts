@@ -1,7 +1,11 @@
 // Tests shared allow-always persistence decisions for command authorization plans.
 import { describe, expect, it } from "vitest";
 import { resolveCommandResolutionFromArgv } from "./exec-approvals-analysis.js";
-import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import {
+  makeExecutable,
+  makePathEnv,
+  makeExecApprovalsTempDir,
+} from "./exec-approvals-test-helpers.js";
 import {
   resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovalAllowedDecisions,
@@ -16,7 +20,7 @@ function plannedSegments(plan: Awaited<ReturnType<typeof planShellAuthorization>
 
 describe("resolveAllowAlwaysPersistenceDecision", () => {
   it("chooses reusable patterns for allow-always planner candidates", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const gitPath = makeExecutable(dir, "git");
     const env = makePathEnv(dir);
     const plan = await planShellAuthorization({ command: "git status", cwd: dir, env });
@@ -38,7 +42,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("persists package-manager exec approvals against the inner executable", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "pnpm");
     const tsxPath = makeExecutable(dir, "tsx");
     const env = makePathEnv(dir);
@@ -62,7 +66,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("keeps pnpm cwd exec approvals one-shot", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "pnpm");
     makeExecutable(dir, "tsx");
     const env = makePathEnv(dir);
@@ -87,7 +91,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["env --", "nice"])(
     "persists dispatch-wrapped package-manager exec approvals against the inner executable: %s",
     async (wrapper) => {
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       for (const executable of ["env", "nice", "pnpm"]) {
         makeExecutable(dir, executable);
       }
@@ -116,7 +120,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["--package=tsx", "--package tsx", "--workspace=a", "--workspace a", "--workspaces"])(
     "keeps npm workspace exec approvals one-shot: %s",
     async (workspaceOption) => {
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       makeExecutable(dir, "npm");
       makeExecutable(dir, "tsx");
       const env = makePathEnv(dir);
@@ -140,7 +144,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   );
 
   it("keeps npm cwd exec approvals one-shot", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "npm");
     makeExecutable(dir, "tsx");
     const env = makePathEnv(dir);
@@ -170,7 +174,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     "exec tsx ./run.ts -C ./package",
     "x --workspaces --",
   ])("keeps npm post-subcommand context approvals one-shot: %s", async (npmExec) => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "npm");
     makeExecutable(dir, "tsx");
     const env = makePathEnv(dir);
@@ -193,7 +197,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("keeps pnpm dlx allow-build approvals one-shot", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "pnpm");
     makeExecutable(dir, "tsx");
     const env = makePathEnv(dir);
@@ -218,7 +222,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["-C ./package", "--workspace-root", "-w"])(
     "keeps post-dlx pnpm context approvals one-shot: %s",
     async (contextOption) => {
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       makeExecutable(dir, "pnpm");
       makeExecutable(dir, "tsx");
       const env = makePathEnv(dir);
@@ -244,7 +248,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["--allow-build=tsx", "--package=tsx", "--config ./npmrc"])(
     "keeps leading pnpm dlx context approvals one-shot: %s",
     async (contextOption) => {
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       makeExecutable(dir, "pnpm");
       makeExecutable(dir, "tsx");
       const env = makePathEnv(dir);
@@ -268,7 +272,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   );
 
   it("persists npm x approvals against the inner executable", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "npm");
     const tsxPath = makeExecutable(dir, "tsx");
     const env = makePathEnv(dir);
@@ -292,7 +296,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("persists chained package-manager exec approvals against the final inner executable", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     for (const executable of ["pnpm", "npm"]) {
       makeExecutable(dir, executable);
     }
@@ -320,7 +324,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["exec --", "dlx"])(
     "persists yarn %s approvals against the inner executable",
     async (subcommand) => {
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       makeExecutable(dir, "yarn");
       const tsxPath = makeExecutable(dir, "tsx");
       const env = makePathEnv(dir);
@@ -345,7 +349,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   );
 
   it("keeps package-manager shell carriers one-shot", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "pnpm");
     makeExecutable(dir, "sh");
     makeExecutable(dir, "echo");
@@ -375,7 +379,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["--workspace=a", "--workspace a", "--workspaces"])(
     "keeps npm workspace shell carriers one-shot: %s",
     async (workspaceOption) => {
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       for (const executable of ["npm", "sh", "echo"]) {
         makeExecutable(dir, executable);
       }
@@ -400,7 +404,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   );
 
   it("keeps npm x shell carriers one-shot", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     for (const executable of ["npm", "sh", "echo"]) {
       makeExecutable(dir, executable);
     }
@@ -424,7 +428,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("keeps chained package-manager shell carriers one-shot", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     for (const executable of ["pnpm", "npm", "sh", "echo"]) {
       makeExecutable(dir, executable);
     }
@@ -450,7 +454,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["yarn run sh -c 'echo warmup-ok'", "yarn sh -c 'echo warmup-ok'"])(
     "keeps yarn script or bin fallback carriers one-shot: %s",
     async (command) => {
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       makeExecutable(dir, "yarn");
       for (const executable of ["sh", "echo"]) {
         makeExecutable(dir, executable);
@@ -477,7 +481,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   it.each(["env --", "nice"])(
     "keeps dispatch-wrapped package-manager shell carriers one-shot: %s",
     async (wrapper) => {
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       for (const executable of ["env", "nice", "pnpm", "sh"]) {
         makeExecutable(dir, executable);
       }
@@ -510,7 +514,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   ])(
     "keeps pnpm shell-mode exec approvals one-shot: $wrapper pnpm exec $flag",
     async ({ flag, wrapper }) => {
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       for (const executable of ["env", "pnpm"]) {
         makeExecutable(dir, executable);
       }
@@ -535,7 +539,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   );
 
   it("keeps package-manager shell-call modes one-shot", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "npx");
     const env = makePathEnv(dir);
     const command = "npx --call \"sh -c 'echo warmup-ok'\"";
@@ -557,7 +561,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("keeps shell wrappers without reusable patterns one-shot", async () => {
-    const cwd = makeTempDir();
+    const cwd = makeExecApprovalsTempDir();
     const command = "sh -c './scripts/run.sh'";
     const plan = await planShellAuthorization({ command, cwd });
 
@@ -649,7 +653,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
   });
 
   it("keeps failed authorization plans one-shot even when fallback segments have patterns", async () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const env = makePathEnv(dir);
     makeExecutable(dir, "git");
     const command = 'echo "$HOME"; git status';

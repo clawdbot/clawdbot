@@ -73,6 +73,16 @@ describe("SessionSchema maintenance extensions", () => {
     ).toBe(true);
   });
 
+  it.each([0, "0", "0b", "0.4b"])("accepts zero-resolving highWaterBytes: %s", (highWaterBytes) => {
+    expect(SessionSchema.safeParse({ maintenance: { highWaterBytes } }).success).toBe(true);
+  });
+
+  it.each([-1, "-1", "-1b", "-0.4b"])("rejects negative highWaterBytes: %s", (highWaterBytes) => {
+    const result = SessionSchema.safeParse({ maintenance: { highWaterBytes } });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toContain("highWaterBytes");
+  });
+
   it("accepts resetArchiveRetention: false (documented disable)", () => {
     expect(SessionSchema.safeParse({ maintenance: { resetArchiveRetention: false } }).success).toBe(
       true,

@@ -5,9 +5,10 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
   resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "./agent-scope.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
@@ -24,7 +25,14 @@ import {
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
-import { prepareScopedReadOnlyModelCatalog } from "./prepared-model-runtime.scoped-catalog.js";
+import {
+  prepareScopedReadOnlyLiveModelCatalog,
+  prepareScopedReadOnlyModelCatalog,
+} from "./prepared-model-runtime.scoped-catalog.js";
+import {
+  hasResolvedThinkingCatalogEntry,
+  normalizeThinkingCatalogProviders,
+} from "./thinking-runtime.js";
 
 export type LoadPreparedModelCatalogParams = {
   agentId?: string;
@@ -34,6 +42,8 @@ export type LoadPreparedModelCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   providerDiscoveryProviderIds?: readonly string[];
+  /** Scoped read-only loads may run live discovery for the scoped providers only. */
+  scopedLiveProviderDiscovery?: boolean;
   allowGatewaySubagentBinding?: boolean;
 };
 
@@ -73,12 +83,12 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
 } {
   const config = params.config ?? getRuntimeConfig();
   const explicitOrDefaultAgentId =
-    params.agentId ?? (params.agentDir === undefined ? resolveDefaultAgentId(config) : undefined);
+    params.agentId ??
+    (params.agentDir === undefined
+      ? (tryResolveLegacyCompatibilityAgentId(config) ?? resolveDefaultAgentId(config))
+      : undefined);
   const agentDir =
-    params.agentDir ??
-    (explicitOrDefaultAgentId
-      ? resolveAgentDir(config, explicitOrDefaultAgentId)
-      : resolveDefaultAgentDir(config, params.env));
+    params.agentDir ?? resolveAgentDir(config, explicitOrDefaultAgentId as string, params.env);
   const matchingAgentIds =
     params.agentDir === undefined
       ? []
@@ -86,12 +96,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
           (candidateAgentId) => resolveAgentDir(config, candidateAgentId) === agentDir,
         );
   const agentId =
-    explicitOrDefaultAgentId ??
-    (params.agentDir === undefined
-      ? resolveDefaultAgentId(config)
-      : matchingAgentIds.length === 1
-        ? matchingAgentIds[0]
-        : undefined);
+    explicitOrDefaultAgentId ?? (matchingAgentIds.length === 1 ? matchingAgentIds[0] : undefined);
   const explicitWorkspaceDir = params.workspaceDir === undefined ? undefined : params.workspaceDir;
   const activationWorkspaceDir =
     explicitWorkspaceDir ?? (agentId ? resolveAgentWorkspaceDir(config, agentId) : undefined);
@@ -100,7 +105,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
     agentDir,
     config,
     ...(params.env ? { env: params.env } : {}),
-    inheritedAuthDir: resolveDefaultAgentDir(config, params.env),
+    inheritedAuthDir: resolveLegacyInheritedAuthDir(config, params.env),
     ...(explicitWorkspaceDir ? { workspaceDir: explicitWorkspaceDir } : {}),
     ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
   };
@@ -287,9 +292,59 @@ async function loadScopedReadOnlyModelCatalog(
       }
     }
   }
-  return prepareScopedReadOnlyModelCatalog(
-    activationExact,
-    params.providerDiscoveryProviderIds ?? [],
+  const prepareScoped =
+    params.scopedLiveProviderDiscovery === true
+      ? prepareScopedReadOnlyLiveModelCatalog
+      : prepareScopedReadOnlyModelCatalog;
+  return prepareScoped(activationExact, params.providerDiscoveryProviderIds ?? []);
+}
+
+/**
+ * Turn-path capability reads (thinking levels and similar per-model facts) must stay off the
+ * full live catalog build: manifest metadata first, then a provider-scoped read-only catalog,
+ * then scoped live discovery only for providers whose models exist solely at runtime.
+ */
+export async function loadProviderScopedThinkingCatalog(params: {
+  config: OpenClawConfig;
+  provider: string;
+  model: string;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+}): Promise<ModelCatalogEntry[]> {
+  const { loadManifestModelCatalog } = await import("./model-catalog.js");
+  const manifestCatalog = normalizeThinkingCatalogProviders(
+    loadManifestModelCatalog({
+      config: params.config,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    }),
+  );
+  const scopedParams = {
+    config: params.config,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    readOnly: true,
+    providerDiscoveryProviderIds: [params.provider],
+  } satisfies LoadPreparedModelCatalogParams;
+  const entryResolved = (catalog: readonly ModelCatalogEntry[]) =>
+    hasResolvedThinkingCatalogEntry({ catalog, provider: params.provider, model: params.model });
+  if (entryResolved(manifestCatalog)) {
+    return manifestCatalog;
+  }
+  const scopedStatic = normalizeThinkingCatalogProviders(
+    (await loadPreparedModelCatalogSnapshot(scopedParams)).entries,
+  );
+  if (entryResolved(scopedStatic)) {
+    return scopedStatic;
+  }
+  return normalizeThinkingCatalogProviders(
+    (
+      await loadPreparedModelCatalogSnapshot({
+        ...scopedParams,
+        scopedLiveProviderDiscovery: true,
+      })
+    ).entries,
   );
 }
 

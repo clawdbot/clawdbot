@@ -20,11 +20,13 @@ import {
   GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../../utils/message-channel.js";
+import type { OperatorScope } from "../../operator-scopes.js";
 import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import { formatForLog } from "../../ws-log.js";
@@ -32,14 +34,14 @@ import { truncateCloseReason } from "../close-reason.js";
 import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
 import type { GatewayConnectPhaseContext } from "./message-handler-types.js";
 
-export function resolveTrustedProxyControlUiScopes(params: {
-  requestedScopes: string[];
+export function applyConnectionScopeCap(params: {
+  scopes: string[];
   upgradeReq: IncomingMessage;
 }): string[] {
   const header = params.upgradeReq.headers["x-openclaw-scopes"];
   const rawHeader = Array.isArray(header) ? header[0] : header;
   if (rawHeader === undefined) {
-    return params.requestedScopes;
+    return params.scopes;
   }
   const declaredScopes = new Set(
     rawHeader
@@ -49,7 +51,43 @@ export function resolveTrustedProxyControlUiScopes(params: {
   );
   return declaredScopes.size === 0
     ? []
-    : params.requestedScopes.filter((scope) => declaredScopes.has(scope));
+    : params.scopes.filter((scope) => declaredScopes.has(scope));
+}
+
+export function resolveEffectiveConnectionScopes(params: {
+  role: string;
+  deviceScopes: string[];
+  verifiedIdentity?: string;
+  identityScopes?: Record<string, OperatorScope[]>;
+  upgradeReq: IncomingMessage;
+}): { scopes: string[]; addedIdentityScopes: OperatorScope[] } {
+  const verifiedIdentity = params.verifiedIdentity;
+  let identityScopes: OperatorScope[] = [];
+  if (params.role === "operator" && verifiedIdentity) {
+    const exactIdentityScopes = params.identityScopes?.[verifiedIdentity];
+    identityScopes = exactIdentityScopes ?? [];
+    if (exactIdentityScopes === undefined && verifiedIdentity.includes("@")) {
+      const normalizedIdentity = verifiedIdentity.toLowerCase();
+      identityScopes =
+        Object.entries(params.identityScopes ?? {}).find(
+          ([identity]) => identity.includes("@") && identity.toLowerCase() === normalizedIdentity,
+        )?.[1] ?? [];
+    }
+  }
+  const scopes = applyConnectionScopeCap({
+    scopes: [...new Set([...params.deviceScopes, ...identityScopes])],
+    upgradeReq: params.upgradeReq,
+  });
+  const addedIdentityScopes = identityScopes.filter(
+    (scope) =>
+      scopes.includes(scope) &&
+      !roleScopesAllow({
+        role: "operator",
+        requestedScopes: [scope],
+        allowedScopes: params.deviceScopes,
+      }),
+  );
+  return { scopes, addedIdentityScopes };
 }
 
 export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {

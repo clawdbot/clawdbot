@@ -7,12 +7,11 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogListResult,
   SessionsCatalogReadResult,
-  TaskSuggestion,
-  TaskSuggestionsAcceptResult,
-  TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
@@ -33,25 +32,6 @@ import { openSlot } from "./sidebar-layout.ts";
 afterEach(() => {
   vi.unstubAllGlobals();
 });
-
-const suggestion: TaskSuggestion = {
-  id: "task_123",
-  title: "Remove stale adapter",
-  prompt: "Delete the stale adapter and update tests.",
-  tldr: "The adapter is unreachable and adds maintenance cost.",
-  cwd: "/repo",
-  sessionKey: "agent:main:current",
-  agentId: "main",
-  createdAt: 1,
-};
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
 
 function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
   const event = new KeyboardEvent("keydown", {
@@ -103,6 +83,7 @@ function createInitializationContext(): ApplicationContext {
     agentSelection: { state: { selectedId: "main" } },
     agents: { state: { agentsList: null } },
     initialUserMessage: createInitialUserMessageHandoff(),
+    chatAttachmentHandoff: createChatAttachmentHandoff(),
     sessions: {},
   } as unknown as ApplicationContext;
 }
@@ -116,6 +97,34 @@ function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
 }
 
 describe("chat pane header state", () => {
+  it("forks through the shared session organizer flow and selects the new session", async () => {
+    const create = vi.fn(async () => "agent:main:forked");
+    const sessions = {
+      create,
+      state: { error: null },
+    } as unknown as SessionCapability;
+    const { pane } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+    Object.assign(pane.context.gateway.snapshot.hello?.features ?? {}, {
+      methods: ["sessions.patch", "sessions.create"],
+    });
+    const onPaneSessionChange = vi.fn();
+    pane.onPaneSessionChange = onPaneSessionChange;
+    const session = {
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+
+    await pane.handleHeaderSessionAction({ kind: "fork" }, session);
+
+    expect(create).toHaveBeenCalledWith({
+      parentSessionKey: session.key,
+      fork: true,
+      agentId: "main",
+    });
+    expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");
+  });
+
   it("commits a trimmed label and clears with null", async () => {
     const patch = vi.fn(async () => ({}));
     const sessions = { patch } as unknown as SessionCapability;
@@ -502,10 +511,16 @@ describe("chat pane initialization", () => {
     } as unknown as ApplicationContext;
     pane.sessionKey = "main";
     state.sessionKey = canonicalSessionKey;
+    state.settings = {
+      sessionKey: canonicalSessionKey,
+      lastActiveSessionKey: canonicalSessionKey,
+    } as ChatPageHost["settings"];
     state.hello = hello;
     state.loadAssistantIdentity = vi.fn(async () => {});
     pane.connectedClient = null;
     pane.onPaneSessionChange = navigate;
+    pane.active = true;
+    pane.presented = true;
 
     pane.applyGatewaySnapshot(snapshot);
 
@@ -546,11 +561,6 @@ describe("chat pane initialization", () => {
     state.chatRunId = "run-reconnected";
     state.chatStream = "The response survived navigation.";
     pane.sessionKey = canonicalSessionKey;
-    const switchPaneSession = vi.spyOn(pane, "switchPaneSession").mockImplementation((next) => {
-      state.sessionKey = next;
-      state.chatRunId = null;
-      state.chatStream = null;
-    });
 
     (
       pane as TestChatPane & {
@@ -559,7 +569,6 @@ describe("chat pane initialization", () => {
     ).willUpdate(new Map([["sessionKey", "main"]]));
 
     expect(state.sessionKey).toBe(canonicalSessionKey);
-    expect(switchPaneSession).not.toHaveBeenCalled();
     expect(state.chatRunId).toBe("run-reconnected");
     expect(state.chatStream).toBe("The response survived navigation.");
   });
@@ -1031,67 +1040,5 @@ describe("chat pane catalog session lifecycle", () => {
 
     expect(pane.loadOlderMessages).toHaveBeenCalledOnce();
     expect(pane.historyAutoLoadBlocked).toBe(false);
-  });
-});
-
-describe("chat pane task suggestion lifecycle", () => {
-  it("keeps accept ownership when the resolved event arrives before the response", async () => {
-    const accepted = createDeferred<TaskSuggestionsAcceptResult>();
-    const client = {
-      request: vi.fn((method: string) =>
-        method === "taskSuggestions.accept"
-          ? accepted.promise
-          : Promise.resolve({ suggestions: [] } satisfies TaskSuggestionsListResult),
-      ),
-    } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
-    const { pane } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-
-    const pending = pane.acceptTaskSuggestion(suggestion);
-    pane.handleTaskSuggestionEvent({
-      action: "resolved",
-      taskId: suggestion.id,
-      resolution: "accepted",
-    });
-    accepted.resolve({ taskId: suggestion.id, key: "agent:main:task" });
-
-    await pending;
-    expect(navigate).toHaveBeenCalledWith("single", "agent:main:task");
-  });
-
-  it("drops an accept response after a same-client reconnect", async () => {
-    const accepted = createDeferred<TaskSuggestionsAcceptResult>();
-    const client = {
-      request: vi.fn(() => accepted.promise),
-    } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
-    const { pane } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-
-    const pending = pane.acceptTaskSuggestion(suggestion);
-    pane.connectionGeneration += 1;
-    accepted.resolve({ taskId: suggestion.id, key: "agent:main:stale" });
-
-    await pending;
-    expect(navigate).not.toHaveBeenCalled();
-  });
-
-  it("drops a list response after a same-client reconnect", async () => {
-    const listed = createDeferred<TaskSuggestionsListResult>();
-    const client = {
-      request: vi.fn(() => listed.promise),
-    } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
-    const { pane } = createTestChatPane({ client, sessions });
-
-    const pending = pane.refreshTaskSuggestions();
-    pane.connectionGeneration += 1;
-    listed.resolve({ suggestions: [suggestion] });
-
-    await pending;
-    expect(pane.taskSuggestions).toEqual([]);
   });
 });

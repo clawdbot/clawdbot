@@ -5,7 +5,6 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
-import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -21,9 +20,10 @@ import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-app
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
-import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
+import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
+import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
-import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
+import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -193,11 +193,20 @@ export type AgentCommandOpts = {
   mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
   /** Gateway already consumed this automatic recovery run's durable reservation. */
   mainRestartRecoveryAdmitted?: boolean;
+  /** Exact durable recovery attempt allowed to bind post-admission execution identity. */
+  mainRestartRecoveryAttempt?: number;
   /** Private recovery correlation; public ingress callers cannot author identity evidence. */
-  executionIdentityAdmission?: {
-    token: ExecutionIdentityAdmissionToken;
-    retryOnly: boolean;
-  };
+  executionIdentityAdmission?: ReturnType<
+    (typeof import("../admitted-run-context.js"))["createExecutionIdentityRecoveryAdmission"]
+  >;
+  /** Gateway-owned exact operational instance shared with its abort controller. */
+  operationalRunInstance?: import("../admitted-run-context.js").OperationalRunInstanceRef;
+  /** Gateway-minted exact-run capability for late Codex creator-authority capture. */
+  cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
+  /** Private exact-instance binding hook invoked after delegated authority admission. */
+  onAdmittedRunContext?: (
+    context: import("../admitted-run-context.js").AdmittedRunContext,
+  ) => void | Promise<void>;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when every candidate in the run's model fallback chain failed. */
@@ -221,7 +230,15 @@ export type AgentCommandOpts = {
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  "senderIsOwner" | "allowModelOverride" | "executionIdentityAdmission"
+  | "senderIsOwner"
+  | "allowModelOverride"
+  | "mainRestartRecoveryOwnerLease"
+  | "mainRestartRecoveryAdmitted"
+  | "mainRestartRecoveryAttempt"
+  | "executionIdentityAdmission"
+  | "operationalRunInstance"
+  | "cronCreatorAuthorityCapability"
+  | "onAdmittedRunContext"
 > & {
   /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
   senderIsOwner?: boolean;
@@ -231,4 +248,13 @@ export type AgentCommandIngressOpts = Omit<
 
 /** Gateway-only ingress extends the public Plugin SDK surface with private recovery correlation. */
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
-  Pick<AgentCommandOpts, "executionIdentityAdmission">;
+  Pick<
+    AgentCommandOpts,
+    | "mainRestartRecoveryOwnerLease"
+    | "mainRestartRecoveryAdmitted"
+    | "mainRestartRecoveryAttempt"
+    | "executionIdentityAdmission"
+    | "operationalRunInstance"
+    | "cronCreatorAuthorityCapability"
+    | "onAdmittedRunContext"
+  >;

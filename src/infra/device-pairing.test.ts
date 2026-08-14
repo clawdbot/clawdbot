@@ -9,6 +9,11 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import {
+  approveNodePairing,
+  requestNodePairing,
+  updatePairedNodeBins,
+} from "./device-pairing-node.js";
+import {
   loadDevicePairingStoreState,
   persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
@@ -35,7 +40,6 @@ import {
   withPairedDeviceRecords,
   type PairedDevice,
 } from "./device-pairing.js";
-import { approveNodePairing, requestNodePairing, updatePairedNodeBins } from "./node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "./push-apns.js";
 
 type RotateDeviceTokenResult = Awaited<ReturnType<typeof rotateDeviceToken>>;

@@ -3,7 +3,7 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -13,11 +13,11 @@ import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   collectSessionEntryLookupKeys,
   readSessionEntryRow,
-  readSqliteSessionIdentitySnapshot,
+  readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
-import { loadSqliteTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
+import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
   normalizeSqliteSessionKey,
@@ -58,9 +58,11 @@ type MessageCut = {
 
 type SessionTranscriptMutationResult =
   | SessionMessageCutMutationResult
-  | SessionBranchSwitchMutationResult;
+  | SessionBranchSwitchMutationResult
+  | { status: "conflict" };
 
 type SessionTranscriptMutationMode = "fork" | "rewind" | "switch";
+type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
 
 const BRANCH_HEADLINE_MAX_CHARS = 120;
 const SESSION_BRANCH_CACHE_MAX_ENTRIES = 32;
@@ -118,9 +120,7 @@ function loadSessionBranchSummaries(
     return cloneSessionBranchSummaries(cached.branches);
   }
 
-  const branches = summarizeSessionBranches(
-    loadSqliteTranscriptEventsFromDatabase(database, sessionId),
-  );
+  const branches = summarizeSessionBranches(loadTranscriptEventsFromDatabase(database, sessionId));
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, { ...watermark, branches });
   pruneMapToMaxSize(sessionBranchCache, SESSION_BRANCH_CACHE_MAX_ENTRIES);
@@ -133,7 +133,7 @@ function invalidateSessionBranchCache(databasePath: string, sessionIds: readonly
   }
 }
 
-export async function listSqliteSessionBranches(
+export async function listSessionBranches(
   params: SessionBranchListParams,
 ): Promise<SessionBranchListResult> {
   const sourceKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
@@ -165,36 +165,46 @@ export function resolveSessionTranscriptActiveLeafEntryId(
   return scanSessionTranscriptTree(events).leafId ?? undefined;
 }
 
-export async function rewindSqliteSessionToMessage(
+export async function rewindSessionToMessage(
   params: SessionMessageCutMutationParams,
-): Promise<SessionMessageCutMutationResult> {
-  return await mutateSqliteSessionAtMessage(params, "rewind");
+  expectedState?: SessionEntryExpectedState,
+): Promise<SessionMessageCutMutationResult | { status: "conflict" }> {
+  return await mutateSqliteSessionAtMessage(params, "rewind", expectedState);
 }
 
-export async function forkSqliteSessionAtMessage(
+export async function forkSessionAtMessage(
   params: SessionMessageCutMutationParams & { targetKey: string },
-): Promise<SessionMessageCutMutationResult> {
-  return await mutateSqliteSessionAtMessage(params, "fork");
+  expectedState?: SessionEntryExpectedState,
+): Promise<SessionMessageCutMutationResult | { status: "conflict" }> {
+  return await mutateSqliteSessionAtMessage(params, "fork", expectedState);
 }
 
-export async function switchSqliteSessionBranch(
+export async function switchSessionBranch(
   params: SessionBranchSwitchMutationParams,
-): Promise<SessionBranchSwitchMutationResult> {
-  return await mutateSqliteSessionAtMessage({ ...params, entryId: params.leafEntryId }, "switch");
+  expectedState?: SessionEntryExpectedState,
+): Promise<SessionBranchSwitchMutationResult | { status: "conflict" }> {
+  return await mutateSqliteSessionAtMessage(
+    { ...params, entryId: params.leafEntryId },
+    "switch",
+    expectedState,
+  );
 }
 
 function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "fork" | "rewind",
-): Promise<SessionMessageCutMutationResult>;
+  expectedState?: SessionEntryExpectedState,
+): Promise<SessionMessageCutMutationResult | { status: "conflict" }>;
 function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "switch",
-): Promise<SessionBranchSwitchMutationResult>;
+  expectedState?: SessionEntryExpectedState,
+): Promise<SessionBranchSwitchMutationResult | { status: "conflict" }>;
 
 async function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
+  expectedState?: SessionEntryExpectedState,
 ): Promise<SessionTranscriptMutationResult> {
   const canonicalSourceKey = normalizeSqliteSessionKey(params.sessionKey);
   const sourceKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
@@ -206,6 +216,18 @@ async function mutateSqliteSessionAtMessage(
     sessionKey: sourceKey,
     ...(params.storePath ? { storePath: params.storePath } : {}),
   });
+  const preparedEntry = readSessionEntryRow(
+    openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
+    sourceKey,
+  )?.entry;
+  const preparedExpectedState =
+    expectedState ??
+    (preparedEntry?.sessionId
+      ? {
+          sessionId: preparedEntry.sessionId,
+          lifecycleRevision: preparedEntry.lifecycleRevision,
+        }
+      : undefined);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let previousIdentity = new Map<string, SessionEntry>();
     let currentIdentity = new Map<string, SessionEntry>();
@@ -216,16 +238,17 @@ async function mutateSqliteSessionAtMessage(
         ...collectSessionEntryLookupKeys(database, sourceKey),
         ...collectSessionEntryLookupKeys(database, targetKey),
       ]);
-      previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+      previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
       const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
         entryId: params.entryId,
         canonicalSourceKey,
         creation: params.creation,
         mode,
+        expectedState: preparedExpectedState,
         sourceKey,
         targetKey,
       });
-      currentIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+      currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
       return mutationResult;
     }, toDatabaseOptions(resolved));
     if (result.status === "created" && databasePath) {
@@ -248,6 +271,7 @@ function mutateSqliteSessionAtMessageInTransaction(
     canonicalSourceKey: string;
     creation?: SessionMessageCutMutationParams["creation"];
     entryId: string;
+    expectedState: SessionEntryExpectedState | undefined;
     mode: SessionTranscriptMutationMode;
     sourceKey: string;
     targetKey: string;
@@ -257,7 +281,14 @@ function mutateSqliteSessionAtMessageInTransaction(
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
   }
-  const events = loadSqliteTranscriptEventsFromDatabase(database, currentEntry.sessionId);
+  if (
+    !params.expectedState ||
+    currentEntry.sessionId !== params.expectedState.sessionId ||
+    currentEntry.lifecycleRevision !== params.expectedState.lifecycleRevision
+  ) {
+    return { status: "conflict" };
+  }
+  const events = loadTranscriptEventsFromDatabase(database, currentEntry.sessionId);
   const cut = params.mode === "switch" ? undefined : resolveMessageCut(events, params.entryId);
   if (cut && "status" in cut) {
     return cut;
@@ -405,7 +436,7 @@ function extractHeadlineText(messageValue: unknown): string | undefined {
   }
   const text =
     message.role === "assistant"
-      ? extractAssistantVisibleText(message)
+      ? extractAssistantPhaseText(message)
       : extractEditorText(message.content ?? message.text);
   const normalized = text?.replace(/\s+/g, " ").trim();
   return normalized || undefined;

@@ -20,7 +20,11 @@ import {
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createAgent } from "../../agents/agent-create.js";
-import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
+import {
+  findOverlappingWorkspaceAgentIds,
+  formatSharedAuthStoreOwnerDeleteError,
+  isSharedAuthStoreOwner,
+} from "../../agents/agent-delete-safety.js";
 import {
   isPathOwnedByAnotherRegisteredAgent,
   normalizeAgentDirRegistryPath,
@@ -34,12 +38,17 @@ import {
   beginAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../../agents/agent-lifecycle-registry.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  tryResolveSoleAgentId,
 } from "../../agents/agent-scope.js";
+import {
+  resolveSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../../agents/auth-profiles/path-resolve.js";
+import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import {
   createAgentIdentityConfig,
   mergeIdentityMarkdownContent,
@@ -47,6 +56,7 @@ import {
   sanitizeAgentIdentityLine,
 } from "../../agents/identity-file.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
+import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited-auth-dir.js";
 import {
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
@@ -78,7 +88,7 @@ import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
-import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   readAgentDeletionJournal,
   type AgentDeletionJournalCleanupPath,
@@ -332,6 +342,16 @@ type AgentDeletePathOutcome =
   | { failed: AgentDeleteFailedPath };
 
 class AgentCleanupIdentityMismatchError extends Error {}
+class AgentSharedAuthStoreOwnerError extends Error {}
+
+function agentOwnsSharedAuthStore(cfg: OpenClawConfig, agentId: string): boolean {
+  const agentDir = resolveAgentDir(cfg, agentId);
+  return isSharedAuthStoreOwner({
+    ownership: resolveSharedAuthStoreOwnership(),
+    agentAuthDbPath: resolveAuthProfileDatabasePath(agentDir),
+    sharedAuthDbPath: resolveSharedAuthStorePath(),
+  });
+}
 
 function cleanupFailure(pathname: string, error: unknown): AgentDeletePathOutcome {
   const reason = error instanceof Error && error.message ? error.message : String(error);
@@ -1010,13 +1030,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = context.getRuntimeConfig();
     const agentId = normalizeAgentId(params.agentId);
-    // agents/main/agent also owns the shipped shared legacy auth store.
-    // Keep main undeletable until named agents make auth-store ownership explicit.
-    if (agentId === LEGACY_IMPLICIT_AGENT_ID) {
+    if (agentOwnsSharedAuthStore(cfg, agentId)) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `"${LEGACY_IMPLICIT_AGENT_ID}" cannot be deleted`),
+        errorShape(ErrorCodes.INVALID_REQUEST, formatSharedAuthStoreOwnerDeleteError(agentId)),
       );
       return;
     }
@@ -1028,13 +1046,25 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respondAgentNotFound(respond, agentId);
       return;
     }
-    if (agentId === resolveDefaultAgentId(cfg)) {
+    if (agentId === tryResolveSoleAgentId(cfg)) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `Agent "${agentId}" is the default and cannot be deleted. Reassign default first.`,
+          `Agent "${agentId}" is the only configured agent and cannot be deleted.`,
+        ),
+      );
+      return;
+    }
+    if (agentId === normalizeAgentId(resolveLegacyInheritedAuthAgentId(cfg))) {
+      // H2-2 owns credential relocation; deleting this directory first destroys the shared store.
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
         ),
       );
       return;
@@ -1046,12 +1076,18 @@ export const agentsHandlers: GatewayRequestHandlers = {
       const result = await withConfigMutationExclusive(async (lockedConfig) => {
         let lockedJournal = readAgentDeletionJournal(agentId);
         const configured = isConfiguredAgent(lockedConfig, agentId);
+        if (agentOwnsSharedAuthStore(lockedConfig, agentId)) {
+          throw new AgentSharedAuthStoreOwnerError(formatSharedAuthStoreOwnerDeleteError(agentId));
+        }
         if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
           throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
         }
-        if (agentId === resolveDefaultAgentId(lockedConfig)) {
+        if (agentId === tryResolveSoleAgentId(lockedConfig)) {
+          throw new AgentConfigPreconditionError(`agent "${agentId}" is the only configured agent`);
+        }
+        if (agentId === normalizeAgentId(resolveLegacyInheritedAuthAgentId(lockedConfig))) {
           throw new AgentConfigPreconditionError(
-            `agent "${agentId}" is the default; reassign default first`,
+            `agent "${agentId}" owns agents.defaults.authInheritance.agentId; relocate credentials and re-point it first`,
           );
         }
         if (configured && lockedJournal?.cleanupCompleted) {
@@ -1463,6 +1499,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
       });
       respond(true, result, undefined);
     } catch (error) {
+      if (error instanceof AgentSharedAuthStoreOwnerError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
       if (error instanceof AgentConfigPreconditionError) {
         respondAgentNotFound(respond, agentId);
         return;
@@ -1593,5 +1633,4 @@ export const agentsHandlers: GatewayRequestHandlers = {
     );
   },
 };
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

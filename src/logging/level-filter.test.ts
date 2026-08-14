@@ -1,20 +1,12 @@
 // Level filter tests cover logger filtering by configured log level.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { readLoggingConfigMock, shouldSkipMutatingLoggingConfigReadMock } = vi.hoisted(() => ({
+const { readLoggingConfigMock } = vi.hoisted(() => ({
   readLoggingConfigMock: vi.fn(() => undefined),
-  shouldSkipMutatingLoggingConfigReadMock: vi.fn(() => false),
 }));
 
 vi.mock("./config.js", () => ({
   readLoggingConfig: readLoggingConfigMock,
-  shouldSkipMutatingLoggingConfigRead: shouldSkipMutatingLoggingConfigReadMock,
-}));
-
-vi.mock("./node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => () => {
-    throw new Error("config fallback not used");
-  },
 }));
 
 let logging: typeof import("../logging.js");
@@ -27,8 +19,6 @@ beforeEach(() => {
   delete process.env.OPENCLAW_TEST_FILE_LOG;
   delete process.env.OPENCLAW_LOG_LEVEL;
   readLoggingConfigMock.mockClear();
-  shouldSkipMutatingLoggingConfigReadMock.mockReset();
-  shouldSkipMutatingLoggingConfigReadMock.mockReturnValue(false);
   logging.resetLogger();
   logging.setLoggerOverride(null);
 });

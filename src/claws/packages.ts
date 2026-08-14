@@ -1,10 +1,10 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { runPluginInstallCommand } from "../cli/plugins-install-command.js";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
-import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import {
@@ -674,7 +674,7 @@ async function installClawPackagesUnlocked(
           );
         } catch (rollbackError) {
           rollbackErrors.push(
-            `could not remove plugin ${installedPlugin.installId}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+            `could not remove plugin ${installedPlugin.installId}: ${coerceErrorMessage(rollbackError)}`,
           );
           continue;
         } finally {
@@ -685,7 +685,7 @@ async function installClawPackagesUnlocked(
           }
         }
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       if (rollbackErrors.length > 0) {
         throw new ClawPackageInstallError(
           "package_rollback_failed",

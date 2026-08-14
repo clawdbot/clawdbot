@@ -116,6 +116,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
       return;
     }
     state.completed = true;
+    steeringQueueRef.current?.cancel();
     turnWatches.clearAllTimers();
     resolveCompletion();
   };

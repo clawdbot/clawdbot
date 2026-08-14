@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { SessionEntry } from "../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -87,6 +87,7 @@ vi.mock("./model-catalog.js", () => ({
 }));
 
 vi.mock("./model-catalog.runtime.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
     entries: [],
     routeVariants: [],
@@ -303,7 +304,7 @@ function requireStorePath(): string {
 }
 
 function findStoredSessionEntry(sessionKey: string): SessionEntry | undefined {
-  return listSessionEntries({ storePath: requireStorePath() }).find(
+  return listSessionEntriesCore({ storePath: requireStorePath() }).find(
     (candidate) => candidate.sessionKey === sessionKey,
   )?.entry;
 }
@@ -442,7 +443,7 @@ describe("agentCommand compaction transcript rotation", () => {
     });
 
     const storeAfterRotation = Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
+      listSessionEntriesCore({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
     );
     const entriesAfterRotation = Object.entries(storeAfterRotation);
     expect(entriesAfterRotation).toHaveLength(1);
@@ -827,7 +828,7 @@ describe("agentCommand compaction transcript rotation", () => {
     },
   );
 
-  it("skips post-turn compaction before delivering sendable finals that pending text cannot replay", async () => {
+  it("compacts after persisting transport ownership for finals that text cannot replay", async () => {
     const sessionId = "unrecoverable-media-before-compaction";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const payloads = [{ mediaUrl: "/tmp/reply.ogg", audioAsVoice: true }];
@@ -844,7 +845,7 @@ describe("agentCommand compaction transcript rotation", () => {
       deliver: true,
     });
 
-    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
       expect.objectContaining({ payloads }),
@@ -976,7 +977,7 @@ describe("agentCommand compaction transcript rotation", () => {
       sessionId: "rotated-session",
     });
     const persisted = Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ entry, sessionKey: key }) => [key, entry]),
+      listSessionEntriesCore({ storePath }).map(({ entry, sessionKey: key }) => [key, entry]),
     );
     expect(persisted[sessionKey]).toMatchObject({
       sessionId: "rotated-session",

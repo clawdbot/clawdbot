@@ -9,7 +9,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { resolveInspectedChannelAccount } from "../../channels/account-inspection.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
-  buildChannelAccountSnapshot,
+  buildChannelAccountSummary,
   formatChannelAllowFrom,
 } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
@@ -79,7 +79,7 @@ async function resolveChannelAccountRow(
     sourceConfig,
     accountId,
   });
-  const snapshot = buildChannelAccountSnapshot({
+  const snapshot = buildChannelAccountSummary({
     plugin,
     cfg,
     accountId,

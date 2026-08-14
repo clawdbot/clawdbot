@@ -4,17 +4,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { FollowupRun } from "./queue.js";
 
-/** Creates an externally resolved promise for queue-order tests. */
-export function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 /** Builds a minimal queued follow-up run fixture. */
 export function createQueueTestRun(params: {
   prompt: string;

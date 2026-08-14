@@ -13,10 +13,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { parseStrictBooleanArg } from "../lib/arg-utils.mts";
+import { coerceErrorMessage, toStringifiedError } from "../lib/error-format.mts";
 import { sleep } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
-import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
+import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import { readTextFileTail } from "./lib/text-file-utils.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
 
 type CommandResult = {
@@ -65,6 +69,7 @@ type Options = {
   envFile?: string;
   expect: string[];
   gatewayPort: number;
+  humanDelayFixedMs?: number;
   idleTimeout: string;
   keepBox: boolean;
   leaseId?: string;
@@ -219,6 +224,7 @@ function usageText() {
     "Useful options:",
     "  --class <name>                Crabbox machine class. Default: standard.",
     "  --desktop-chat-title <name>   Telegram Desktop chat to select before recording.",
+    "  --human-delay-fixed-ms <ms>   Set a fixed custom human delay before Gateway startup.",
     "  --id <cbx_id>                 Reuse an existing Crabbox desktop lease.",
     "  --keep-box                    Leave the Crabbox lease running for VNC debugging.",
     "  --link-preview <true|false>   Set channels.telegram.linkPreview before Gateway startup.",
@@ -299,16 +305,6 @@ function parseTcpPort(value: string, label: string) {
     throw new Error(`${label} must be a TCP port from 1 to 65535.`);
   }
   return parsed;
-}
-
-function parseBoolean(value: string, label: string) {
-  if (value === "true") {
-    return true;
-  }
-  if (value === "false") {
-    return false;
-  }
-  throw new Error(`${label} must be true or false.`);
 }
 
 function createTelegramProofRunId() {
@@ -408,6 +404,8 @@ export function parseArgs(argvInput: string[]): Options {
       opts.expect.push(readValue({ repeatable: true }));
     } else if (arg === "--gateway-port") {
       opts.gatewayPort = parseTcpPort(readValue(), "--gateway-port");
+    } else if (arg === "--human-delay-fixed-ms") {
+      opts.humanDelayFixedMs = parsePositiveTimerMs(readValue(), "--human-delay-fixed-ms");
     } else if (arg === "--id") {
       opts.leaseId = readValue();
     } else if (arg === "--idle-timeout") {
@@ -415,7 +413,7 @@ export function parseArgs(argvInput: string[]): Options {
     } else if (arg === "--keep-box") {
       opts.keepBox = true;
     } else if (arg === "--link-preview") {
-      opts.linkPreview = parseBoolean(readValue(), "--link-preview");
+      opts.linkPreview = parseStrictBooleanArg(readValue(), "--link-preview");
     } else if (arg === "--mock-port") {
       opts.mockPort = parseTcpPort(readValue(), "--mock-port");
     } else if (arg === "--mock-response-file") {
@@ -508,6 +506,9 @@ export function parseArgs(argvInput: string[]): Options {
   }
   if (command === "publish" && !opts.publishPr) {
     throw new Error("publish requires --pr.");
+  }
+  if (command !== "start" && opts.humanDelayFixedMs !== undefined) {
+    throw new Error("--human-delay-fixed-ms is available only for start sessions.");
   }
   if (opts.mcpAppFixture && command !== "start") {
     throw new Error("--mcp-app-fixture is available only for start sessions.");
@@ -690,21 +691,17 @@ function shellQuote(value: string) {
 
 type AppendCommandStdoutResult = { ok: true; value: string } | { ok: false; message: string };
 
-function appendCommandText(current: string, chunk: Buffer): string {
-  return current + chunk.toString("utf8");
-}
-
-function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
-  const next = appendCommandText(current, chunk);
-  return next.length > maxChars ? next.slice(-maxChars) : next;
+function appendCommandTextTail(current: string, chunk: string, maxChars: number): string {
+  const next = current + chunk;
+  return next.length > maxChars ? sliceUtf16Safe(next, -maxChars) : next;
 }
 
 function appendCommandStdout(
   current: string,
-  chunk: Buffer,
+  chunk: string,
   maxChars = COMMAND_STDOUT_MAX_CHARS,
 ): AppendCommandStdoutResult {
-  const next = appendCommandText(current, chunk);
+  const next = current + chunk;
   if (next.length > maxChars) {
     return { ok: false, message: `command stdout exceeded ${maxChars} characters` };
   }
@@ -713,7 +710,7 @@ function appendCommandStdout(
 
 function appendCommandStderrTail(
   current: string,
-  chunk: Buffer,
+  chunk: string,
   maxChars = COMMAND_STDERR_TAIL_CHARS,
 ): string {
   return appendCommandTextTail(current, chunk, maxChars);
@@ -722,9 +719,7 @@ function appendCommandStderrTail(
 function commandFailureOutput(stdout: string, stderr: string): string {
   const stdoutTail =
     stdout.length > COMMAND_FAILURE_STDOUT_TAIL_CHARS
-      ? `\n[stdout truncated to last ${COMMAND_FAILURE_STDOUT_TAIL_CHARS} characters]\n${stdout.slice(
-          -COMMAND_FAILURE_STDOUT_TAIL_CHARS,
-        )}`
+      ? `\n[stdout truncated to last ${COMMAND_FAILURE_STDOUT_TAIL_CHARS} characters]\n${sliceUtf16Safe(stdout, -COMMAND_FAILURE_STDOUT_TAIL_CHARS)}`
       : stdout;
   return `${stdoutTail}${stderr}`;
 }
@@ -917,10 +912,11 @@ export function runCommand(params: {
       killTimer.unref?.();
     }, timeoutMs);
     timeout.unref?.();
-    child.stdout.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
       if (params.outputFile) {
-        fs.appendFileSync(params.outputFile, text);
+        fs.appendFileSync(params.outputFile, chunk);
         stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
       } else if (params.stdio === "inherit") {
         stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
@@ -934,17 +930,16 @@ export function runCommand(params: {
         }
       }
       if (params.stdio === "inherit") {
-        process.stdout.write(text);
+        process.stdout.write(chunk);
       }
     });
-    child.stderr.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stderr.on("data", (chunk: string) => {
       if (params.outputFile) {
-        fs.appendFileSync(params.outputFile, text);
+        fs.appendFileSync(params.outputFile, chunk);
       }
       stderr = appendCommandStderrTail(stderr, chunk);
       if (params.stdio === "inherit") {
-        process.stderr.write(text);
+        process.stderr.write(chunk);
       }
     });
     child.on("error", (error) => {
@@ -970,8 +965,7 @@ export function runCommand(params: {
           timeoutKillGraceMs,
         }).then(
           () => reject(error),
-          (cleanupError: unknown) =>
-            reject(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError))),
+          (cleanupError: unknown) => reject(toStringifiedError(cleanupError)),
         );
         return;
       }
@@ -1012,7 +1006,7 @@ function spawnLogged(command: string, args: string[], options: SpawnOptionsWitho
   child.stderr.setEncoding("utf8");
   let output = "";
   const capture = (chunk: string) => {
-    output = `${output}${chunk}`.slice(-12000);
+    output = sliceUtf16Safe(`${output}${chunk}`, -12000);
   };
   child.stdout.on("data", capture);
   child.stderr.on("data", capture);
@@ -1036,7 +1030,7 @@ function waitForOutput(
     const timeout = setTimeout(() => {
       reject(
         new Error(
-          `${label} did not become ready within ${resolvedTimeoutMs}ms\n${output().slice(-4000)}`,
+          `${label} did not become ready within ${resolvedTimeoutMs}ms\n${sliceUtf16Safe(output(), -4000)}`,
         ),
       );
     }, resolvedTimeoutMs);
@@ -1050,7 +1044,7 @@ function waitForOutput(
       cleanup();
       reject(
         new Error(
-          `${label} exited before ready with code ${code ?? "unknown"}\n${output().slice(-4000)}`,
+          `${label} exited before ready with code ${code ?? "unknown"}\n${sliceUtf16Safe(output(), -4000)}`,
         ),
       );
     };
@@ -1176,25 +1170,7 @@ function waitForChildExit(child: ChildProcess) {
 }
 
 export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): string {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(logPath);
-  } catch {
-    return "";
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    return "";
-  }
-  const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
-  const buffer = Buffer.alloc(bytesToRead);
-  const fd = fs.openSync(logPath, "r");
-  let bytesRead;
-  try {
-    bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
-  } finally {
-    fs.closeSync(fd);
-  }
-  return buffer.subarray(0, bytesRead).toString("utf8");
+  return readTextFileTail(logPath, Math.max(1, maxBytes));
 }
 
 export async function waitForLog(
@@ -1214,7 +1190,9 @@ export async function waitForLog(
     });
   }
   const text = readLogTail(logPath);
-  throw new Error(`${label} did not become ready within ${timeoutMs}ms\n${text.slice(-4000)}`);
+  throw new Error(
+    `${label} did not become ready within ${timeoutMs}ms\n${sliceUtf16Safe(text, -4000)}`,
+  );
 }
 
 async function telegram(token: string, method: string, body: JsonObject = {}) {
@@ -1269,6 +1247,7 @@ function telegramResultObject(value: unknown, label: string): JsonObject {
 export function writeSutConfig(params: {
   gatewayPort: number;
   groupId: string;
+  humanDelayFixedMs?: number;
   linkPreview?: boolean;
   mcpAppFixture?: boolean;
   mockPort: number;
@@ -1285,6 +1264,15 @@ export function writeSutConfig(params: {
   const config = {
     agents: {
       defaults: {
+        ...(params.humanDelayFixedMs === undefined
+          ? {}
+          : {
+              humanDelay: {
+                maxMs: params.humanDelayFixedMs,
+                minMs: params.humanDelayFixedMs,
+                mode: "custom",
+              },
+            }),
         model: { primary: "openai/gpt-5.6-luna" },
         models: {
           "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
@@ -1396,6 +1384,7 @@ export async function startLocalSut(
   params: {
     gatewayPort: number;
     groupId: string;
+    humanDelayFixedMs?: number;
     mockResponseText: string;
     mockPort: number;
     linkPreview?: boolean;
@@ -1676,9 +1665,7 @@ function destroyLocalSutRuntime(sut: { containerName?: string; tempRoot?: string
 }
 
 function cleanupFailureMessage(message: string, cleanupErrors: unknown[]) {
-  const details = cleanupErrors.map((error) =>
-    error instanceof Error ? error.message : String(error),
-  );
+  const details = cleanupErrors.map(coerceErrorMessage);
   return [message, ...details.map((detail) => `Cleanup failure: ${detail}`)].join("\n");
 }
 
@@ -1698,6 +1685,7 @@ async function startLocalSutDaemon(params: {
   funnelBridge?: FunnelBridge;
   gatewayPort: number;
   groupId: string;
+  humanDelayFixedMs?: number;
   mockResponseText: string;
   mockPort: number;
   linkPreview?: boolean;
@@ -2081,12 +2069,12 @@ function sshArgs(inspect: CrabboxInspect, sshPort = inspect.sshPort?.trim() || "
 }
 
 function isTransientSshFailure(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = coerceErrorMessage(error);
   return /Connection (?:closed|reset)|Operation timed out|Connection timed out/u.test(message);
 }
 
 function isSshConnectionFailure(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = coerceErrorMessage(error);
   const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
   return (
     code === "ETIMEDOUT" ||
@@ -2918,6 +2906,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       funnelBridge,
       gatewayPort: opts.gatewayPort,
       groupId: credential.groupId,
+      humanDelayFixedMs: opts.humanDelayFixedMs,
       linkPreview: opts.linkPreview,
       mockResponseText: opts.mockResponseText,
       mockResponseChunkDelayMs: opts.mockResponseChunkDelayMs,
@@ -3187,7 +3176,7 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
     }
     desktopSessionTerminationAttempted = true;
     await terminateRemoteDesktopSession(root, session.crabbox.inspect).catch((error: unknown) => {
-      summary.desktopSessionTerminateError = error instanceof Error ? error.message : String(error);
+      summary.desktopSessionTerminateError = coerceErrorMessage(error);
     });
   };
   try {
@@ -3264,37 +3253,37 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
       await stopLocalSutDaemon(session.localSut);
       sutQuiesced = true;
     } catch (error) {
-      summary.sutStopError = error instanceof Error ? error.message : String(error);
+      summary.sutStopError = coerceErrorMessage(error);
       summary.status = "fail";
     }
     if (sutQuiesced) {
       try {
         preserveLocalSutRuntimeArtifacts(session.localSut, session.outputDir);
       } catch (error) {
-        summary.runtimeArtifactError = error instanceof Error ? error.message : String(error);
+        summary.runtimeArtifactError = coerceErrorMessage(error);
         summary.status = "fail";
       }
     }
     try {
       destroyLocalSutRuntime(session.localSut);
     } catch (error) {
-      summary.sutDestroyError = error instanceof Error ? error.message : String(error);
+      summary.sutDestroyError = coerceErrorMessage(error);
       summary.status = "fail";
     }
     if (session.localSut.funnelBridge) {
       await stopTailscaleFunnelBridge(root, session.localSut.funnelBridge).catch(
         (error: unknown) => {
-          summary.funnelResetError = error instanceof Error ? error.message : String(error);
+          summary.funnelResetError = coerceErrorMessage(error);
         },
       );
     }
     await terminateDesktopSession();
     await releaseCredential(root, opts, session.credential.leaseFile).catch((error: unknown) => {
-      summary.credentialReleaseError = error instanceof Error ? error.message : String(error);
+      summary.credentialReleaseError = coerceErrorMessage(error);
     });
     if (session.crabbox.createdLease && !opts.keepBox) {
       await stopCrabbox(root, opts, session.crabbox.id).catch((error: unknown) => {
-        summary.crabboxStopError = error instanceof Error ? error.message : String(error);
+        summary.crabboxStopError = coerceErrorMessage(error);
       });
     }
     if (opts.keepBox) {
@@ -3538,6 +3527,7 @@ async function main() {
     const sutRuntime = await startLocalSut({
       gatewayPort: opts.gatewayPort,
       groupId: credential.groupId,
+      humanDelayFixedMs: opts.humanDelayFixedMs,
       linkPreview: opts.linkPreview,
       mockResponseText: opts.mockResponseText,
       mockResponseChunkDelayMs: opts.mockResponseChunkDelayMs,
@@ -3622,12 +3612,12 @@ async function main() {
     killTree(localSut?.mock);
     if (credential) {
       await releaseCredential(root, opts, credential.leaseFile).catch((error: unknown) => {
-        summary.credentialReleaseError = error instanceof Error ? error.message : String(error);
+        summary.credentialReleaseError = coerceErrorMessage(error);
       });
     }
     if (leaseId && createdLease && !opts.keepBox) {
       await stopCrabbox(root, opts, leaseId).catch((error: unknown) => {
-        summary.crabboxStopError = error instanceof Error ? error.message : String(error);
+        summary.crabboxStopError = coerceErrorMessage(error);
       });
     }
     if (opts.keepBox && leaseId) {
@@ -3694,7 +3684,7 @@ function isMainModule(): boolean {
 
 if (isMainModule()) {
   main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(coerceErrorMessage(error));
     process.exit(1);
   });
 }

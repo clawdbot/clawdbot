@@ -1,7 +1,7 @@
 /**
  * @deprecated Compatibility shim only. Keep old plugins working, but do not
  * add new imports here and do not use this subpath from repo code.
- * Prefer focused openclaw/plugin-sdk/<domain> runtime subpaths instead.
+ * Prefer injected runtime APIs or documented typed-public subpaths instead.
  */
 
 export * from "./delivery-queue-runtime.js";
@@ -250,7 +250,22 @@ export * from "../infra/net/undici-global-dispatcher.js";
 export * from "../infra/net/ssrf.js";
 export * from "../infra/outbound/identity.js";
 export * from "../infra/outbound/sanitize-text.js";
-export * from "../infra/parse-finite-number.js";
+export {
+  clampTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  nonNegativeSecondsToSafeMilliseconds,
+  parseFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+  positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationOrEpoch,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "@openclaw/normalization-core/number-coercion";
 export * from "../infra/outbound/send-deps.js";
 export * from "../infra/retry.js";
 export * from "../infra/retry-policy.js";
@@ -267,7 +282,21 @@ export {
   type SecretFileReadResult,
 } from "../infra/secret-file.js";
 export * from "../infra/secure-random.js";
-export * from "../infra/system-events.js";
+export {
+  consumeSelectedSystemEventEntries,
+  consumeSystemEventEntries,
+  drainSystemEventEntries,
+  drainSystemEvents,
+  enqueueSystemEvent,
+  enqueueSystemEventEntry,
+  hasSystemEvents,
+  isSystemEventContextChanged,
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+  resolveSystemEventDeliveryContext,
+  type SystemEvent,
+} from "../infra/system-events.js";
 export * from "../infra/system-message.ts";
 export * from "../infra/tmp-openclaw-dir.js";
 export * from "../infra/transport-ready.js";

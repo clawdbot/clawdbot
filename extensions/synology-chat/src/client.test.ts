@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
 import { PassThrough } from "node:stream";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 
 const ssrfMocks = {
@@ -26,7 +27,7 @@ vi.mock("node:http", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  formatErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
+  formatErrorMessage: coerceErrorMessage,
   resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
 }));
 

@@ -16,9 +16,9 @@ type CuaDriverSdk = Pick<
 
 export type CuaToolResult = import("@trycua/cua-driver").ToolResult;
 
-// These numeric values are part of the pinned 0.14.1 SDK contract and are also
-// frozen in driver-contract-fixtures. Keeping them local avoids loading the
-// native library while OpenClaw is only registering the bundled plugin.
+// These numeric values are part of the pinned 0.19.3 SDK contract. Keeping
+// them local avoids loading the native library while OpenClaw is only
+// registering the bundled plugin.
 export const ClickButton = {
   Left: 0 as DriverClickButton,
   Right: 1 as DriverClickButton,

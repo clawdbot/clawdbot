@@ -8,9 +8,10 @@ import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   normalizePluginsConfigWithResolver,
-  resolveEffectivePluginActivationState,
-  resolveMemorySlotDecision,
+  resolvePolicyPluginActivationState,
 } from "../../plugins/config-policy.js";
+import { resolveMemorySlotDecision } from "../../plugins/config-state.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
@@ -19,6 +20,21 @@ import { CONFIG_DIR } from "../../utils.js";
 const log = createSubsystemLogger("skills");
 
 type PluginSkillLinkType = "dir" | "junction";
+
+// Plugin metadata is process-stable while the gateway runs, but this resolver sits on the
+// per-turn skills-refresh path. ACP availability changes outside that metadata lifecycle, so it
+// stays in the memo identity to prevent stale ACPX skill exposure without repeating directory IO.
+let pluginSkillDirsMemo: {
+  workspaceDir: string;
+  config: OpenClawConfig | undefined;
+  snapshot: unknown;
+  acpRuntimeAvailable: boolean;
+  dirs: string[];
+} | null = null;
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  pluginSkillDirsMemo = null;
+});
 
 export function resolvePluginSkillDirs(params: {
   workspaceDir: string | undefined;
@@ -47,11 +63,22 @@ export function resolvePluginSkillDirs(params: {
     });
     return [];
   }
+  const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config });
+  const canMemoize = params.pluginSkillsDir === undefined;
+  if (
+    canMemoize &&
+    pluginSkillDirsMemo &&
+    pluginSkillDirsMemo.workspaceDir === workspaceDir &&
+    pluginSkillDirsMemo.config === params.config &&
+    pluginSkillDirsMemo.snapshot === metadataSnapshot &&
+    pluginSkillDirsMemo.acpRuntimeAvailable === acpRuntimeAvailable
+  ) {
+    return pluginSkillDirsMemo.dirs;
+  }
   const normalizedPlugins = normalizePluginsConfigWithResolver(
     config.plugins,
     metadataSnapshot.normalizePluginId,
   );
-  const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config });
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
@@ -61,7 +88,7 @@ export function resolvePluginSkillDirs(params: {
     if (!record.skills || record.skills.length === 0) {
       continue;
     }
-    const activationState = resolveEffectivePluginActivationState({
+    const activationState = resolvePolicyPluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
@@ -117,6 +144,15 @@ export function resolvePluginSkillDirs(params: {
     pluginSkillsDir: params.pluginSkillsDir,
   });
 
+  if (canMemoize) {
+    pluginSkillDirsMemo = {
+      workspaceDir,
+      config: params.config,
+      snapshot: metadataSnapshot,
+      acpRuntimeAvailable,
+      dirs: resolved,
+    };
+  }
   return resolved;
 }
 

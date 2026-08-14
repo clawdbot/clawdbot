@@ -6,6 +6,7 @@ import { readDurableJsonFile, writeJsonAtomic } from "../infra/json-files.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import { hashSetupMigrationConfig } from "./setup.migration-canonical.js";
+import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
 export const PROMOTION_JOURNAL_FILE = "onboarding-promotion.json";
 export const PROMOTION_JOURNAL_VERSION = 1;
@@ -358,7 +359,9 @@ export async function recordPromotionTargetState(component: PromotionComponent):
   }
   const stat = await fs.lstat(component.finalPath);
   if (!stat.isDirectory() || (await fs.readdir(component.finalPath)).length > 0) {
-    throw new Error(`Migration target changed before promotion: ${component.finalPath}`);
+    throw new SetupMigrationTargetChangedError(
+      `Migration target changed before promotion: ${component.finalPath}`,
+    );
   }
   component.targetWasEmptyDirectory = true;
   component.emptyTargetBackupPath = await reserveEmptyTargetBackupPath(component.finalPath);
@@ -370,7 +373,9 @@ export async function moveRecordedEmptyTarget(component: PromotionComponent): Pr
   }
   const entries = await fs.readdir(component.finalPath);
   if (entries.length > 0) {
-    throw new Error(`Migration target changed before promotion: ${component.finalPath}`);
+    throw new SetupMigrationTargetChangedError(
+      `Migration target changed before promotion: ${component.finalPath}`,
+    );
   }
   if (component.emptyTargetBackupPath) {
     await fs.rename(component.finalPath, component.emptyTargetBackupPath);

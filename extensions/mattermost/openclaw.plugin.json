@@ -1,8 +1,7 @@
 {
   "id": "mattermost",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true
+    "configRepair": true
   },
   "icon": "https://cdn.simpleicons.org/mattermost",
   "activation": {

@@ -49,7 +49,7 @@ function serializePackageManifest(parsed: Record<string, unknown>): Buffer {
 // at their vendored copies so `npm install` on the box resolves them without a registry.
 function pruneWorkerPackageManifest(
   contents: Buffer,
-  vendoredDirsByName: ReadonlyMap<string, string>,
+  vendoredDirsByName: ReadonlyMap<string, string> = new Map(),
 ): Buffer {
   const parsed = JSON.parse(contents.toString("utf8")) as Record<string, unknown>;
   const dependencies = readManifestDependencies(parsed);
@@ -73,14 +73,6 @@ function pruneWorkerPackageManifest(
   }
   pruned.dependencies = portable;
   return serializePackageManifest(pruned);
-}
-
-// Vendored workspace manifests keep their registry dependencies but never ship
-// lifecycle scripts or dev-only fields.
-function pruneVendoredPackageManifest(contents: Buffer): Buffer {
-  const parsed = JSON.parse(contents.toString("utf8")) as Record<string, unknown>;
-  const { pruned, prunedFieldCount } = withoutLifecycleFields(parsed);
-  return prunedFieldCount === 0 ? contents : serializePackageManifest(pruned);
 }
 
 function normalizePortableMode(mode: number, relativePath: string): number {
@@ -184,6 +176,22 @@ function collectOpenclawImportSpecifiers(
   }
 }
 
+function pruneVendoredPackageManifest(
+  packageName: string,
+  referencedPackages: ReadonlySet<string>,
+  contents: Buffer,
+): Buffer {
+  const parsed = JSON.parse(contents.toString("utf8")) as Record<string, unknown>;
+  for (const [dependencyName, spec] of Object.entries(readManifestDependencies(parsed))) {
+    if (spec.startsWith("workspace:") && referencedPackages.has(dependencyName)) {
+      throw new Error(
+        `Vendored workspace dependency ${dependencyName} remains referenced by ${packageName} dist; bundle it into the package build or add explicit worker bundle support`,
+      );
+    }
+  }
+  return pruneWorkerPackageManifest(contents);
+}
+
 async function readWorkspaceDependencyNames(sourceRoot: string): Promise<Set<string>> {
   const raw = await fs.readFile(path.join(sourceRoot, "package.json"), "utf8");
   const dependencies = readManifestDependencies(JSON.parse(raw) as Record<string, unknown>);
@@ -248,15 +256,25 @@ async function stageVendoredWorkspacePackages(params: {
       );
     }
     const vendorDir = `vendor/${packageName.replace(/^@/u, "").replaceAll("/", "-")}`;
-    for (const relativePath of await collectVendoredPackageFiles(packageName, vendorRealRoot)) {
-      const { entry } = await stageFileEntry(params.stagingRoot, {
+    const files = await collectVendoredPackageFiles(packageName, vendorRealRoot);
+    const referencedPackages = new Set<string>();
+    for (const relativePath of files.filter((candidate) => candidate !== "package.json")) {
+      const { entry, contents } = await stageFileEntry(params.stagingRoot, {
         sourcePath: path.join(vendorRealRoot, ...relativePath.split("/")),
         expectedRealPath: path.resolve(vendorRealRoot, ...relativePath.split("/")),
         stagedPath: `${vendorDir}/${relativePath}`,
-        transform: relativePath === "package.json" ? pruneVendoredPackageManifest : undefined,
       });
+      collectOpenclawImportSpecifiers(relativePath, contents, referencedPackages);
       entries.push(entry);
     }
+    const { entry: packageManifestEntry } = await stageFileEntry(params.stagingRoot, {
+      sourcePath: path.join(vendorRealRoot, "package.json"),
+      expectedRealPath: path.resolve(vendorRealRoot, "package.json"),
+      stagedPath: `${vendorDir}/package.json`,
+      transform: (contents) =>
+        pruneVendoredPackageManifest(packageName, referencedPackages, contents),
+    });
+    entries.push(packageManifestEntry);
     vendoredDirsByName.set(packageName, vendorDir);
   }
   return { entries, vendoredDirsByName };

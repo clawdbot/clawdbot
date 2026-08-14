@@ -11,6 +11,9 @@ OpenClaw routes every inbound message to a **session** based on where it came
 from: DMs, group chats, cron jobs, etc. All session state is owned by the
 **gateway**; UI clients query the gateway for session data.
 
+To continue the same Gateway-owned session in the Control UI, terminal, or a
+coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
+
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
@@ -193,6 +196,13 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
+`maxEntries` counts only eviction-eligible session rows. Protected rows -
+archived or pinned sessions, active or admitted work, model-locked sessions,
+and durable external conversation pointers - stay outside that allowance, so
+the total stored row count can exceed `maxEntries`. Cleanup does not unprotect
+those rows; unarchive, unpin, or explicitly delete sessions you no longer want
+to retain.
+
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
 pressure-gated: it only removes stale probe rows when session-entry
@@ -204,10 +214,10 @@ Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,
 hook, heartbeat, ACP, and sub-agent entries to age out.
 
-Archived sessions are user-shelved and exempt from every automatic maintenance
-path, including age pruning, entry caps, model-run cleanup, and disk-budget
-eviction. They remain archived until you unarchive them or explicitly delete
-them.
+Archived and pinned sessions are user-protected and exempt from every automatic
+maintenance path, including age pruning, entry caps, model-run cleanup, and
+disk-budget eviction. They remain protected until you unarchive, unpin, or
+explicitly delete them.
 
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with

@@ -45,21 +45,25 @@ async function processDiscordQueuedMessage(params: {
       (await loadMessageProcessRuntime()).processDiscordMessage;
     await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
     if (abortSignal?.aborted) {
-      await params.job.ingressSettlement?.abandon(abortSignal.reason);
+      // Cancellation ended ownership before delivery; retain prior retry facts
+      // so the durable claim can replay under a replacement lifecycle.
+      await params.job.ingressSettlement?.cancel();
     } else {
       await params.job.ingressSettlement?.settle();
     }
   } catch (error) {
-    await params.job.ingressSettlement?.abandon(error);
+    if (abortSignal?.aborted) {
+      await params.job.ingressSettlement?.cancel();
+    } else {
+      await params.job.ingressSettlement?.abandon(error);
+    }
     throw error;
   }
 }
 
 async function cleanupSkippedDiscordQueuedMessage(params: { job: DiscordInboundJob }) {
   // A skipped job never reached reply-lane adoption; reopen its durable claim.
-  await params.job.ingressSettlement?.abandon(
-    new Error("discord queued run skipped before processing"),
-  );
+  await params.job.ingressSettlement?.cancel();
 }
 
 export function createDiscordMessageRunQueue(
@@ -129,7 +133,9 @@ export function createDiscordMessageRunQueue(
         return;
       }
       skippedCleanup.add(cleanupSkipped);
-      runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
+      // Core reply admission owns session serialization. A transport event key
+      // lets later Discord messages reach active-run steering while this run continues.
+      runQueue.enqueue(job.payload.message.id, async ({ lifecycleSignal }) => {
         // Once the task starts, normal process/commit handling owns cleanup.
         // Leaving it in skippedCleanup would double-release replay state.
         skippedCleanup.delete(cleanupSkipped);

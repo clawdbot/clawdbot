@@ -544,8 +544,12 @@ describe("chat abort transcript persistence", () => {
     ["scopes bare global stop commands to the default agent", "main", "default"],
   ])("%s", async (_name, selectedAgentId, fixtureId) => {
     const { sessionId } = await createTranscriptFixture(`openclaw-chat-stop-global-${fixtureId}-`);
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" as const },
+    };
     sessionEntryState.canonicalKey = "global";
-    sessionEntryState.cfg = { agents: { list: [{ id: "main", default: true }, { id: "work" }] } };
+    sessionEntryState.cfg = cfg;
     const respond = vi.fn();
     const mainActive = createActiveRun("global", {
       sessionId: selectedAgentId === "main" ? sessionId : "sess-main-global",
@@ -569,6 +573,7 @@ describe("chat abort transcript persistence", () => {
         agentId: selectedAgentId,
         clientRunId: runId,
       }),
+      getRuntimeConfig: () => cfg,
     });
 
     await expectDefined(
@@ -611,6 +616,11 @@ describe("chat abort transcript persistence", () => {
       true,
     ],
   ])("%s", async (_name, sessionKey, agentId, needsGlobalConfig) => {
+    const expectedAgentId = agentId ?? (sessionKey.startsWith("agent:work:") ? "work" : "main");
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" as const },
+    };
     const respond = vi.fn();
     const mainActive = createActiveRun("global", {
       sessionId: "sess-main-global",
@@ -625,14 +635,7 @@ describe("chat abort transcript persistence", () => {
         ["run-main-global", mainActive],
         ["run-work-global", workActive],
       ]),
-      ...(needsGlobalConfig
-        ? {
-            getRuntimeConfig: () => ({
-              agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-              session: { scope: "global" },
-            }),
-          }
-        : {}),
+      getRuntimeConfig: () => cfg,
     });
     const agentEvents: Array<{ runId: string; sessionKey?: string; agentId?: string }> = [];
     const unsubscribe = onAgentEvent((event) => {
@@ -659,7 +662,6 @@ describe("chat abort transcript persistence", () => {
       unsubscribe();
     }
 
-    const expectedAgentId = agentId ?? (sessionKey.startsWith("agent:work:") ? "work" : "main");
     const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     expectAbortPayload(payload, { runIds: [`run-${expectedAgentId}-global`] });
@@ -983,7 +985,12 @@ describe("chat abort transcript persistence", () => {
     ["aborts pending default global agent runs for the default selected agent", "main", true],
   ])("%s", async (_name, agentId, shouldAbort) => {
     const respond = vi.fn();
-    const context = createChatAbortContext();
+    const context = createChatAbortContext({
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global" },
+      }),
+    });
     context.dedupe.set("agent:run-main-global", {
       ts: Date.now(),
       ok: true,
@@ -1145,7 +1152,10 @@ describe("chat.abort session identity matching", () => {
     expect(ok).toBe(true);
     expectAbortPayload(payload, { runIds: [runId] });
     expect(active.controller.signal.aborted).toBe(true);
-    expect(sessionEntryState.loadCalls).toContainEqual({ sessionKey: "main", opts: undefined });
+    expect(sessionEntryState.loadCalls).toContainEqual({
+      sessionKey: "agent:main:main",
+      opts: { agentId: "main" },
+    });
   });
 
   it("does not match a run whose sessionId differs from the stored entry", async () => {

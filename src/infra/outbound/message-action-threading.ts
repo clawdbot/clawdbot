@@ -1,6 +1,6 @@
 // Message-action threading helpers inherit reply/thread metadata only for
 // same-conversation sends and prepare outbound session mirroring.
-import { readStringParam } from "../../agents/tools/common.js";
+import { readToolStringParam } from "../../agents/tools/common.js";
 import type {
   ChannelId,
   ChannelThreadingAdapter,
@@ -34,12 +34,12 @@ export function resolveAndApplyOutboundThreadId(
     replyToIsExplicit?: boolean;
   },
 ): string | undefined {
-  const threadId = readStringParam(actionParams, "threadId");
+  const threadId = readToolStringParam(actionParams, "threadId");
   // `topLevel` and explicit null thread ids are caller opt-outs from inherited threading.
   if (!threadId && suppressesImplicitThreading(actionParams)) {
     return undefined;
   }
-  const replyToId = readStringParam(actionParams, "replyTo");
+  const replyToId = readToolStringParam(actionParams, "replyTo");
   const autoResolvedThreadId = threadId
     ? undefined
     : context.resolveAutoThreadId?.({
@@ -86,9 +86,9 @@ function isSameConversationTarget(
     return false;
   }
   const explicitTarget =
-    readStringParam(actionParams, "target") ??
-    readStringParam(actionParams, "to") ??
-    readStringParam(actionParams, "channelId");
+    readToolStringParam(actionParams, "target") ??
+    readToolStringParam(actionParams, "to") ??
+    readToolStringParam(actionParams, "channelId");
   if (!explicitTarget) {
     return true;
   }
@@ -108,7 +108,7 @@ export function resolveAndApplyOutboundReplyToId(
     matchesToolContextTarget?: MatchesToolContextTarget;
   },
 ): string | undefined {
-  const explicitReplyToId = readStringParam(actionParams, "replyTo");
+  const explicitReplyToId = readToolStringParam(actionParams, "replyTo");
   if (explicitReplyToId) {
     if (context.toolContext?.replyToMode === "first") {
       const hasRepliedRef = context.toolContext.hasRepliedRef;
@@ -199,7 +199,7 @@ export async function prepareOutboundMirrorRoute(params: {
     resolveReplyTransport: params.resolveReplyTransport,
     replyToIsExplicit: params.replyToIsExplicit,
   });
-  const replyToId = readStringParam(params.actionParams, "replyTo");
+  const replyToId = readToolStringParam(params.actionParams, "replyTo");
   const outboundRoute =
     params.agentId && !params.dryRun
       ? await params.resolveOutboundSessionRoute({

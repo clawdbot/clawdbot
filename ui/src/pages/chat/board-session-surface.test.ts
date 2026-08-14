@@ -37,6 +37,7 @@ describe("board session shell", () => {
       addEventListener: vi.fn(() => () => {}),
     } as never;
     const props = {
+      active: true,
       snapshot: provider.snapshot$.value,
       activeTabId: "main",
       dock: "right" as const,
@@ -57,6 +58,7 @@ describe("board session shell", () => {
       renderBoardSessionSurface({
         ...props,
         workboardCardChip: {
+          active: true,
           basePath: "",
           client,
           sessionKey: "agent:main:workboard-link",
@@ -71,6 +73,7 @@ describe("board session shell", () => {
     );
     expect(chip?.sessionKey).toBe("agent:main:workboard-link");
     expect(chip?.client).toBe(client);
+    expect(chip?.active).toBe(true);
     expect(unlinked.querySelector("openclaw-workboard-card-chip")).toBeNull();
   });
 
@@ -217,6 +220,7 @@ describe("board session shell", () => {
     const provider = boardProviderForSession("agent:main:main");
     render(
       renderBoardSessionSurface({
+        active: true,
         snapshot: provider.snapshot$.value,
         activeTabId: "main",
         dock,
@@ -246,6 +250,7 @@ describe("board session shell", () => {
     const provider = boardProviderForSession("agent:main:main");
     render(
       renderBoardSessionSurface({
+        active: true,
         snapshot: provider.snapshot$.value,
         activeTabId: "main",
         dock: "hidden",
@@ -273,6 +278,7 @@ describe("board session shell", () => {
     const container = createContainer();
     const provider = boardProviderForSession("agent:main:main");
     const props = {
+      active: true,
       snapshot: provider.snapshot$.value,
       activeTabId: "main",
       dockSize: { height: 300 },
@@ -303,5 +309,18 @@ describe("board session shell", () => {
     render(renderBoardSessionSurface({ ...props, dock: "hidden" }), container);
     expect(container.querySelector("openclaw-board-view")).toBe(board);
     expect(container.querySelector("[data-test-chat]")).toBeNull();
+
+    render(renderBoardSessionSurface({ ...props, active: false, dock: "bottom" }), container);
+    const hiddenSurface = container.querySelector<HTMLElement>(".board-session-surface");
+    expect(hiddenSurface?.hidden).toBe(true);
+    expect(hiddenSurface?.hasAttribute("inert")).toBe(true);
+    expect(container.querySelector("openclaw-board-view")).toBe(board);
+    expect(board?.active).toBe(false);
+    expect(container.querySelector("[data-test-chat]")).toBeNull();
+
+    render(renderBoardSessionSurface({ ...props, dock: "right" }), container);
+    expect(container.querySelector("openclaw-board-view")).toBe(board);
+    expect(container.querySelector<HTMLElement>(".board-session-surface")?.hidden).toBe(false);
+    expect(board?.active).toBe(true);
   });
 });

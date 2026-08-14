@@ -29,7 +29,7 @@ type AgentCommandResult = {
 };
 
 /** Resolve the channel label for model.usage diagnostics from ingress run options. */
-export function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
+function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
   return opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.channel ?? "http";
 }
 
@@ -37,6 +37,7 @@ export function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string 
 export function emitIngressModelUsageDiagnostic(
   result: AgentCommandResult,
   opts: AgentCommandIngressOpts,
+  agentDir: string,
 ): void {
   const cfg = getRuntimeConfig();
   if (!isDiagnosticsEnabled(cfg)) {
@@ -65,6 +66,7 @@ export function emitIngressModelUsageDiagnostic(
     provider: providerUsed,
     model: modelUsed,
     config: cfg,
+    agentDir,
   });
   const costUsd = hasBillableUsageBuckets
     ? estimateUsageCost({ usage, cost: costConfig })

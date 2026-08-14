@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 
-function createInspectors(readBusy: () => number): GatewayActiveWorkInspectors {
+function createInspectors(
+  readBusy: () => number,
+  overrides: Partial<GatewayActiveWorkInspectors> = {},
+): GatewayActiveWorkInspectors {
   return {
     getQueueSize: readBusy,
     getPendingReplies: () => 0,
@@ -18,6 +21,7 @@ function createInspectors(readBusy: () => number): GatewayActiveWorkInspectors {
     getQueuedTurns: () => 0,
     getTerminalPersistence: () => 0,
     getTerminalSessions: () => 0,
+    ...overrides,
   };
 }
 
@@ -63,7 +67,37 @@ describe("UpdateCampaignController", () => {
     expect(apply).toHaveBeenCalledWith({ forced: false });
   });
 
-  it("resets the countdown when work appears, then forces at the hard deadline", async () => {
+  it("ignores open terminals while persistence and queue work still delay countdown", async () => {
+    const controller = createController();
+    let queueSize = 0;
+    let terminalPersistence = 1;
+    const apply = vi.fn(async () => "applied" as const);
+
+    controller.announce({
+      target: { kind: "package", version: "2.0.0" },
+      inspect: createInspectors(() => queueSize, {
+        getTerminalPersistence: () => terminalPersistence,
+        getTerminalSessions: () => 2,
+      }),
+      apply,
+      onChange: vi.fn(),
+    });
+    expect(controller.getState()?.state).toBe("waiting-for-idle");
+
+    terminalPersistence = 0;
+    queueSize = 1;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(controller.getState()?.state).toBe("waiting-for-idle");
+    queueSize = 0;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(controller.getState()?.state).toBe("countdown");
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(controller.getState()?.state).toBe("applying");
+    expect(apply).toHaveBeenCalledWith({ forced: false });
+  });
+
+  it("keeps an announced countdown stable when active work begins", async () => {
     const controller = createController();
     let busy = 0;
     const apply = vi.fn(async () => "applied" as const);
@@ -74,14 +108,14 @@ describe("UpdateCampaignController", () => {
       apply,
       onChange: vi.fn(),
     });
+    const applyAtMs = controller.getState()?.applyAtMs;
     busy = 1;
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(controller.getState()).toMatchObject({ state: "waiting-for-idle" });
-    expect(controller.getState()?.applyAtMs).toBeUndefined();
+    expect(controller.getState()).toMatchObject({ state: "countdown", applyAtMs });
 
-    await vi.advanceTimersByTimeAsync(895_000);
+    await vi.advanceTimersByTimeAsync(55_000);
     expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({ forced: true });
+    expect(apply).toHaveBeenCalledWith({ forced: false });
   });
 
   it("starts a fresh campaign for a newer target and clears availability", () => {

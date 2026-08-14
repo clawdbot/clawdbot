@@ -80,11 +80,11 @@ describe("package scripts", () => {
   it("finds node script targets after env assignments and valued node options", () => {
     expect(
       extractNodeScriptTargets(
-        "FOO=1 node --import tsx scripts/release-check.ts && node --max-old-space-size=8192 scripts/plugin-sdk-surface-report.mjs && env BAR=1 node -r tsx scripts/check.ts",
+        "FOO=1 node --import tsx scripts/release-check.ts && node --max-old-space-size=8192 --import tsx scripts/plugin-sdk-surface-report.mts && env BAR=1 node -r tsx scripts/check.ts",
       ),
     ).toEqual([
       "scripts/release-check.ts",
-      "scripts/plugin-sdk-surface-report.mjs",
+      "scripts/plugin-sdk-surface-report.mts",
       "scripts/check.ts",
     ]);
   });
@@ -136,13 +136,13 @@ describe("package scripts", () => {
 
   it("enables live cache validation in the package script", () => {
     expect(readPackageJson().scripts["test:live:cache"]).toBe(
-      "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import tsx scripts/check-live-cache.ts",
+      "node --import tsx scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import tsx scripts/check-live-cache.ts",
     );
   });
 
-  it("runs browser copilot E2E against real Chromium", () => {
-    expect(readPackageJson().scripts["test:e2e:browser-copilot"]).toBe(
-      "node scripts/run-with-env.mjs PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node scripts/ensure-playwright-chromium.mjs --require-playwright-chromium && node scripts/run-with-env.mjs PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_COPILOT_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/browser/chrome-extension/page-share.e2e.test.ts extensions/browser/chrome-extension/sidepanel.e2e.test.ts",
+  it("runs browser extension bootstrap E2E against real Chromium", () => {
+    expect(readPackageJson().scripts["test:e2e:browser-extension"]).toBe(
+      "node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import tsx scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     );
   });
 
@@ -152,9 +152,15 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs dead-code reports fail-fast", () => {
+    expect(readPackageJson().scripts["deadcode:report"]).toBe(
+      "pnpm deadcode:full && pnpm deadcode:exports",
+    );
+  });
+
   it("runs runtime postbuild before plugin SDK strict export checks", () => {
     expect(readPackageJson().scripts["build:plugin-sdk:strict-smoke"]).toBe(
-      "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/run-with-env.mjs OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
+      "node --import tsx scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/check-plugin-sdk-exports.mts",
     );
   });
 
@@ -197,12 +203,6 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs Doctor SecretRef ACL coverage in Windows CI", () => {
-    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
-      "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
-    );
-  });
-
   it("runs the Doctor managed-service SecretRef renderer in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/commands/doctor-gateway-auth-token.windows.test.ts",
@@ -221,9 +221,37 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs shared-state ownership coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/state/openclaw-state-ownership.test.ts",
+    );
+  });
+
+  it("runs mixed-case local media file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/media/local-media-path.windows.test.ts",
+    );
+  });
+
+  it("runs sandbox media staging file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts",
+    );
+  });
+
   it("runs the native OpenSSH resolver proof in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/ssh-client.windows.test.ts",
+    );
+  });
+
+  it("runs native port diagnostics coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain("src/infra/ports.test.ts");
+  });
+
+  it("runs native LAN advertisement coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/advertised-lan-host.windows.test.ts",
     );
   });
 
@@ -301,9 +329,77 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs native executable resolution coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/executable-path.test.ts",
+    );
+  });
+
+  it("runs node-host npm shim and PTY launcher coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/plugin-sdk/node-host.test.ts");
+    expect(script).toContain("src/process/terminal-pty.test.ts");
+    expect(script).toContain("src/tui/tui.resolve-codex-bin.test.ts");
+  });
+
   it("runs Windows-only safe removal coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/fs-safe-remove.test.ts",
+    );
+  });
+
+  it("runs web and Teams file URL coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/agents/tools/media-tool-file-url.windows.test.ts");
+    expect(script).toContain("src/media/web-media.file-url.windows.test.ts");
+    expect(script).toContain("extensions/msteams/src/media-helpers.test.ts");
+    expect(script).toContain("extensions/msteams/src/messenger.test.ts");
+  });
+
+  it("runs native usage footer home-path coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/auto-reply/usage-bar/template.windows.test.ts",
+    );
+  });
+
+  it("runs native media-understanding file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/media-understanding/attachments.file-url.windows.test.ts",
+    );
+  });
+
+  it("runs shared home display and visible command coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/utils.test.ts");
+    expect(script).toContain("src/commands/agents.commands.list.test.ts");
+    expect(script).toContain("src/cli/daemon-cli/status.print.test.ts");
+    expect(script).toContain("packages/terminal-core/src/display-string.test.ts");
+    expect(script).toContain("src/agents/sandbox/fs-paths.test.ts");
+    expect(script).toContain("src/agents/sessions/tools/render-utils.test.ts");
+  });
+
+  it("runs native OS-home path tool coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/agents/agent-tools.read.windows.test.ts");
+    expect(script).toContain("src/agents/agent-tools.read.host-operations.test.ts");
+    expect(script).toContain("src/agents/sessions/tools/path-utils.test.ts");
+  });
+
+  it("runs child environment and native doctor coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/agents/provider-local-service.env-case.test.ts");
+    expect(script).toContain("src/infra/process-env.test.ts");
+    expect(script).toContain("src/cli/mcp-cli.path-case.windows.test.ts");
+  });
+
+  it("runs explicit memory extra-file casing coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "extensions/memory-core/src/memory-extra-file-path.windows.test.ts",
     );
   });
 });

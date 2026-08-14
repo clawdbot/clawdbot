@@ -3,9 +3,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   classifySystemAgentApprovalIntent,
-  classifySystemAgentApprovalText,
   type SystemAgentApprovalIntentDeps,
 } from "./approval-intent.js";
+import { classifySystemAgentApprovalText } from "./operator-approval.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentClaudeCliBackendTestFixture,

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
@@ -11,7 +10,6 @@ import {
   type BoardCommandEvent,
   type BoardProvider,
 } from "../../lib/board/provider.ts";
-import type { ObserverDigestHistory } from "../../lib/observer-digest.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
@@ -32,10 +30,11 @@ type TestChatPane = HTMLElement & {
   context: ApplicationContext;
   state: ChatPageHost;
   createSession: () => Promise<boolean>;
+  paneId: string;
+  sessionKey: string;
   resetConfirmationOpen: boolean;
   routeFace: "chat" | "dashboard";
-  onFaceChange?: (face: "chat" | "dashboard") => void;
-  observerDigestHistory: ObserverDigestHistory;
+  onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
   confirmConversationReset: () => Promise<boolean>;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
@@ -53,10 +52,7 @@ type TestChatPane = HTMLElement & {
   ) => void;
   syncChatSidebarForDock: (dock: "bottom" | "hidden" | "left" | "right") => boolean;
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
-  recordObserverDigest: (digest: SessionObserverDigest) => void;
   resolveBoardProvider: () => BoardProvider;
-  resolveObserverDigestHistoryKey: (sessionKey?: string, agentId?: string) => string;
-  refreshBuiltinBoardSnapshot: () => void;
   resolveBoardView: () => ResolvedBoardView;
 };
 
@@ -82,6 +78,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   pane.state = {
     chatError: null,
     chatLoading: false,
+    chatMessages: [],
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
@@ -161,99 +158,6 @@ afterEach(() => {
 });
 
 describe("chat pane board shell", () => {
-  it("adds the observer-only board face without replacing the default chat face", async () => {
-    const pane = createTestPane();
-    pane.boardProvider = nullBoardProvider("agent:main:observer-only");
-    pane.state.sessionKey = "agent:main:observer-only";
-    pane.observerDigestHistory.record({
-      sessionKey: "agent:main:observer-only",
-      runId: "run-1",
-      revision: 1,
-      updatedAt: 1_000,
-      headline: "Reviewing the board tests",
-      health: "on-track",
-    });
-
-    pane.refreshBuiltinBoardSnapshot();
-
-    await vi.waitFor(() =>
-      expect(pane.resolveBoardView()).toMatchObject({
-        activeTabId: "builtin-observer",
-        face: "chat",
-        hasBoard: true,
-      }),
-    );
-    const onFaceChange = vi.fn((face: "chat" | "dashboard") => {
-      pane.routeFace = face;
-    });
-    pane.onFaceChange = onFaceChange;
-    pane.persistBoardSessionView({ face: "dashboard" });
-    expect(onFaceChange).toHaveBeenCalledWith("dashboard");
-    expect(pane.resolveBoardView().face).toBe("dashboard");
-  });
-
-  it("shares observer history between a global session and its explicit agent alias", async () => {
-    const pane = createTestPane();
-    pane.context = {
-      ...pane.context,
-      agents: {
-        state: {
-          agentsList: {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "global",
-            agents: [{ id: "main" }, { id: "work" }],
-          },
-        },
-      },
-      agentSelection: { state: { selectedId: "work", scopeId: "work" } },
-      gateway: {
-        ...pane.context.gateway,
-        snapshot: {
-          ...pane.context.gateway.snapshot,
-          hello: {
-            snapshot: {
-              sessionDefaults: {
-                defaultAgentId: "main",
-                mainKey: "main",
-                mainSessionKey: "global",
-                scope: "global",
-              },
-            },
-          } as never,
-        },
-      },
-    } as unknown as ApplicationContext;
-    pane.state.sessionKey = "agent:work:main";
-    pane.boardProvider = nullBoardProvider("agent:work:main");
-    pane.observerDigestHistory.record({
-      sessionKey: "agent:work:global",
-      agentId: "work",
-      runId: "run-work",
-      revision: 1,
-      updatedAt: 1_000,
-      headline: "Reviewing the work agent",
-      health: "on-track",
-    });
-
-    expect(pane.resolveObserverDigestHistoryKey("global", "work")).toBe("agent:work:global");
-    expect(pane.resolveObserverDigestHistoryKey("agent:work:main")).toBe("agent:work:global");
-    pane.recordObserverDigest({
-      sessionKey: "global",
-      runId: "run-ownerless",
-      revision: 2,
-      updatedAt: 2_000,
-      headline: "Ownerless global status",
-      health: "stuck",
-    });
-    expect(pane.observerDigestHistory.get("agent:work:global").at(-1)?.headline).toBe(
-      "Reviewing the work agent",
-    );
-    pane.refreshBuiltinBoardSnapshot();
-
-    await vi.waitFor(() => expect(pane.resolveBoardView().hasBoard).toBe(true));
-  });
-
   it("gates New Chat when the current session has a board", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),
@@ -510,6 +414,18 @@ describe("chat pane board shell", () => {
       activeTabId: "research",
       face: "dashboard",
     });
+  });
+
+  it("routes face changes through the owning retained presentation", () => {
+    const pane = createTestPane();
+    pane.paneId = "pane-1";
+    pane.sessionKey = "agent:main:retained";
+    const onFaceChange = vi.fn();
+    pane.onFaceChange = onFaceChange;
+
+    pane.persistBoardSessionView({ face: "dashboard" });
+
+    expect(onFaceChange).toHaveBeenCalledWith("pane-1", "agent:main:retained", "dashboard");
   });
 
   it("uses in-memory tab preferences while the route owns the face", () => {

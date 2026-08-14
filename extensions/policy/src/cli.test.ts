@@ -170,7 +170,7 @@ describe("policy commands", () => {
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     await writeFixture(configPath, {
       plugins: { entries: { policy: { enabled: true, config: { enabled: true } } } },
-      agents: { entries: { main: { default: true }, family: {} } },
+      agents: { entries: { main: {} } },
       channels: { imessage: { enabled: false } },
       bindings: [],
     });

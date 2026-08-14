@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDeferred } from "../test-utils/deferred.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   cleanupStartedFixture,
   createChatTerminalObserver,

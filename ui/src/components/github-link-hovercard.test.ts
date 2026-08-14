@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
-import { GitHubLinkHovercardProvider } from "./github-link-hovercard.ts";
+import { GitHubLinkHovercardProvider } from "./github-link-hovercard.runtime.ts";
 
 const GITHUB_LINK_HOVERCARD_ELEMENT_NAME = `test-openclaw-github-link-hovercard-provider-${crypto.randomUUID()}`;
 

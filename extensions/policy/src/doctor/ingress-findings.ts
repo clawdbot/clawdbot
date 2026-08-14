@@ -6,7 +6,7 @@ import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import { normalizePolicyChannelId } from "./policy-runtime.js";
 import { channelScopedPolicyTargets } from "./policy-scope.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
-import { ocPathSegment, readPolicyBoolean, readString, readStringList } from "./utils.js";
+import { ocPathSegment, readPolicyBoolean, readPolicyPathString, readStringList } from "./utils.js";
 
 export function ingressFindings(
   policy: unknown,
@@ -104,7 +104,7 @@ function ingressDmScopeFindings(
   evidence: PolicyEvidence,
   evidenceFilter: (entry: PolicyIngressEvidence) => boolean,
 ): readonly HealthFinding[] {
-  const required = readString(ingressPolicy, ["session", "requireDmScope"]);
+  const required = readPolicyPathString(ingressPolicy, ["session", "requireDmScope"]);
   if (required === undefined) {
     return [];
   }

@@ -42,7 +42,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
 });
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) => messageQueueMock(text, { ...options, sessionKey: route.sessionKey }),
 }));
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
@@ -653,10 +657,15 @@ describe("registerSlackMessageEvents", () => {
         ...makeChangedEvent({ channel: "C1", user: "U1" }),
         channel_type: "channel",
       },
+      body: { event_id: "Ev-message-change-1" },
     });
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
     expect(messageQueueMock).toHaveBeenCalledTimes(1);
+    expect(messageQueueMock).toHaveBeenCalledWith("Slack message edited in #general.", {
+      sessionKey: "agent:main:main",
+      contextKey: "slack:message:changed:C1:123.456:Ev-message-change-1",
+    });
   });
 
   it("keeps bot edit and delete events on a remembered C-prefix mpDM session", async () => {

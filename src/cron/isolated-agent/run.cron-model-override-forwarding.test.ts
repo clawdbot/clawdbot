@@ -1,6 +1,9 @@
 // Cron model override forwarding tests cover passing overrides into agent runs.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { getAgentRunTaskRunId } from "../../infra/agent-run-registry.js";
+import { withCronTaskRunId } from "../service/task-runs.js";
 import {
   clearCliSessionMock,
   clearFastTestEnv,
@@ -100,16 +103,6 @@ function captureModelFallbackRun(provider = "google", model = "gemini-2.0-flash"
     },
   );
   return captured;
-}
-
-function createDeferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
@@ -234,17 +227,25 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
   it("passes the cron payload model to the embedded agent runner", async () => {
     // Use passthrough so runEmbeddedAgentMock actually gets called
     mockRunCronFallbackPassthrough();
-    runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "summary done" }],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    let activeTaskRunId: string | undefined;
+    runEmbeddedAgentMock.mockImplementation(async ({ runId }: { runId: string }) => {
+      activeTaskRunId = getAgentRunTaskRunId(runId);
+      return {
+        payloads: [{ text: "summary done" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      };
     });
 
-    const result = await runCronIsolatedAgentTurn(makeParams());
+    const result = await withCronTaskRunId("task-run-1", () =>
+      runCronIsolatedAgentTurn(makeParams()),
+    );
 
     expect(result.status).toBe("ok");
     const embeddedCall = firstMockArg(runEmbeddedAgentMock);
     expect(embeddedCall.provider).toBe("google");
     expect(embeddedCall.model).toBe("gemini-2.0-flash");
+    expect(embeddedCall).not.toHaveProperty("taskRunId");
+    expect(activeTaskRunId).toBe("task-run-1");
   });
 
   it("forwards isolated cron execution phase updates from embedded runs", async () => {

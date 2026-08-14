@@ -1,6 +1,7 @@
 // Plugin runtime load context helpers resolve agent and workspace facts for runtime activation.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveConfigWidePluginManifestRegistry } from "../../config/io.plugin-metadata.js";
 import {
   fingerprintPluginAutoEnableConfig,
   fingerprintPluginAutoEnableEnv,
@@ -17,6 +18,7 @@ import type { PluginManifestRegistry } from "../manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugin-metadata-lifecycle.js";
 import {
   isPluginMetadataSnapshotCompatible,
+  rebasePluginMetadataSnapshotManifestRegistry,
   resolvePluginMetadataSnapshot,
 } from "../plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
@@ -180,17 +182,35 @@ export function resolvePluginRuntimeLoadContext(
   const env = options?.env ?? process.env;
   const rawConfig = options?.config ?? getRuntimeConfig();
   const rawWorkspaceDir =
-    options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
+    options?.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(rawConfig, env);
+  const resolveMetadataSnapshot = (params: {
+    config: OpenClawConfig;
+    index?: PluginMetadataSnapshot["index"];
+  }): PluginMetadataSnapshot => {
+    const snapshot = resolvePluginMetadataSnapshot({
+      config: params.config,
+      env,
+      workspaceDir: rawWorkspaceDir,
+      allowWorkspaceScopedCurrent: true,
+      ...(params.index ? { index: params.index } : {}),
+      ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
+    });
+    if (options?.workspaceDir !== undefined) {
+      return snapshot;
+    }
+    return rebasePluginMetadataSnapshotManifestRegistry(
+      snapshot,
+      resolveConfigWidePluginManifestRegistry({
+        config: params.config,
+        env,
+        ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
+      }),
+    );
+  };
   const initialMetadataSnapshot =
     options?.metadataSnapshot ??
     (options?.manifestRegistry === undefined
-      ? resolvePluginMetadataSnapshot({
-          config: rawConfig,
-          env,
-          workspaceDir: rawWorkspaceDir,
-          allowWorkspaceScopedCurrent: true,
-          ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
-        })
+      ? resolveMetadataSnapshot({ config: rawConfig })
       : undefined);
   const manifestRegistry = options?.manifestRegistry ?? initialMetadataSnapshot?.manifestRegistry;
   const activationSourceConfig = resolvePluginActivationSourceConfig({
@@ -205,8 +225,7 @@ export function resolvePluginRuntimeLoadContext(
     snapshot: initialMetadataSnapshot,
   });
   const config = autoEnabled.config;
-  const workspaceDir =
-    options?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const workspaceDir = options?.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(config, env);
   const metadataSnapshot =
     options?.manifestRegistry !== undefined
       ? undefined
@@ -218,13 +237,9 @@ export function resolvePluginRuntimeLoadContext(
             workspaceDir,
           })
         ? initialMetadataSnapshot
-        : resolvePluginMetadataSnapshot({
+        : resolveMetadataSnapshot({
             config,
-            env,
-            workspaceDir,
-            allowWorkspaceScopedCurrent: true,
             ...(initialMetadataSnapshot ? { index: initialMetadataSnapshot.index } : {}),
-            ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
           });
   const finalManifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const installRecords = metadataSnapshot

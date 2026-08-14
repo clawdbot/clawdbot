@@ -19,6 +19,7 @@ import {
 } from "../internal/anthropic-inline-images.js";
 import { calculateCost } from "../model-utils.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
+import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { applyAnthropicCacheControlToMessages } from "../transports/anthropic-payload-policy.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
@@ -43,7 +44,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { formatProviderError } from "../utils/provider-error.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundary,
@@ -108,7 +109,6 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
 const EMPTY_ERROR_TOOL_RESULT_TEXT = "[tool error with no output]";
@@ -660,13 +660,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         refusalBuffer.discard();
         output.content = [];
       }
-      output.stopReason = requestOptions?.signal?.aborted ? "aborted" : "error";
-      // A bare JSON.stringify here dies on the circular error objects HTTP/socket
-      // layers raise, and the throw escapes this catch so stream.end() never runs
-      // and the consumer hangs. formatProviderError guards that conversion, matching
-      // the other provider terminal paths.
-      output.errorMessage = formatProviderError(error);
-      stream.push({ type: "error", reason: output.stopReason, error: output });
+      const terminal = projectProviderError(error, requestOptions?.signal);
+      Object.assign(output, terminal);
+      stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     }
   })();

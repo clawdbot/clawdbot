@@ -6,13 +6,17 @@ import { normalizeAccountId, type OpenClawConfig } from "openclaw/plugin-sdk/acc
 // Imessage plugin module implements accounts behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageAccountConfig } from "./account-types.js";
 import {
   expandIMessageUserPath,
   resolveIMessageHomeDir,
   resolveLocalIMessageChatDbPath,
 } from "./cli-path.js";
+import { getCachedIMessageRemoteHost } from "./remote-host.js";
 
 export type ResolvedIMessageAccount = {
   accountId: string;
@@ -44,9 +48,7 @@ function resolveIMessageAccountConfig(
 type IMessageStreamingConfig = NonNullable<IMessageAccountConfig["streaming"]>;
 
 function asStreamingConfigObject(value: unknown): IMessageStreamingConfig | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as IMessageStreamingConfig)
-    : undefined;
+  return asOptionalRecord(value) as IMessageStreamingConfig | undefined;
 }
 
 function mergeIMessageStreamingConfig(
@@ -141,7 +143,10 @@ function normalizeIMessageDbPath(value: string | undefined | null): string {
 function resolveIMessageAccountSourceSignature(account: ResolvedIMessageAccount): string {
   const cliPath = normalizeIMessageCliPath(account.config.cliPath);
   const dbPath = normalizeIMessageDbPath(account.config.dbPath);
-  const remoteHost = account.config.remoteHost?.trim();
+  const remoteHost = getCachedIMessageRemoteHost({
+    cliPath,
+    remoteHost: account.config.remoteHost,
+  });
   // A remote path belongs to the SSH host and must not expand against the local home.
   if (remoteHost) {
     return JSON.stringify([cliPath, dbPath, remoteHost]);
@@ -225,7 +230,11 @@ export function hasExclusiveIMessageLocalDatabase(params: {
   account: ResolvedIMessageAccount;
   cliPath: string;
   dbPath?: string;
+  remoteHost?: string;
 }): boolean {
+  if (params.remoteHost?.trim()) {
+    return false;
+  }
   const otherAccounts = listEnabledIMessageAccounts(params.cfg).filter(
     (candidate) => candidate.accountId !== params.account.accountId,
   );
@@ -236,7 +245,7 @@ export function hasExclusiveIMessageLocalDatabase(params: {
   const selectedDbPath = resolveLocalIMessageChatDbPath({
     cliPath: params.cliPath,
     dbPath: params.dbPath,
-    remoteHost: params.account.config.remoteHost,
+    remoteHost: params.remoteHost ?? params.account.config.remoteHost,
   });
   if (!selectedDbPath) {
     return false;

@@ -21,6 +21,11 @@ import {
   type WizardStep,
 } from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  createAdmittedWizardSession,
+  SETUP_ADMISSION_BUSY_MESSAGE,
+  whenAdmittedWizardSessionSettled,
+} from "./setup-admission.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -79,7 +84,7 @@ function retainGatewayWorkUntilSettled(session: WizardSession): void {
   // active between steps or a config reload can erase the process-local session.
   const release = retainGatewayRootWorkAdmissionContinuation();
   if (release) {
-    void session.whenSettled().then(release);
+    void whenAdmittedWizardSessionSettled(session).then(release, release);
   }
 }
 
@@ -109,14 +114,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
       return;
     }
-    const running = context.findRunningWizard();
-    if (running) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
-      return;
-    }
     const sessionId = randomUUID();
     const flow = params.flow ?? "setup";
-    const session =
+    const createSession = () =>
       flow === "channels"
         ? new WizardSession((prompter, _signal, wizardSession) =>
             runHostedWizard((runtime) =>
@@ -146,12 +146,22 @@ export const wizardHandlers: GatewayRequestHandlers = {
               ),
             ),
           );
+    const session = await createAdmittedWizardSession(createSession, flow === "setup");
+    if (!session) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, SETUP_ADMISSION_BUSY_MESSAGE, { retryable: true }),
+      );
+      return;
+    }
     retainGatewayWorkUntilSettled(session);
     context.wizardSessions.set(sessionId, session);
     const result = await session.next();
     if (result.done) {
-      // Completed sessions cannot accept later answers; purge immediately so
-      // clients get a clean not-found response for stale session ids.
+      // Let the runner release setup admission before the terminal response,
+      // so an immediate replacement wizard is not rejected as still busy.
+      await whenAdmittedWizardSessionSettled(session);
       context.purgeWizardSession(sessionId);
     }
     respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
@@ -191,8 +201,8 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const result = await session.next();
     if (result.done) {
-      // The final step may be reached after an answer, so cleanup mirrors
-      // wizard.start's immediate-completion path.
+      // Keep terminal response ordering identical to wizard.start.
+      await whenAdmittedWizardSessionSettled(session);
       context.purgeWizardSession(sessionId);
     }
     respond(true, sanitizeWizardResultForClient(result), undefined);
@@ -209,13 +219,14 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const cancelled = session.cancel();
     const status = readWizardStatus(session);
     if (cancelled) {
-      void session.whenSettled().then(() => context.purgeWizardSession(sessionId));
+      const purge = () => context.purgeWizardSession(sessionId);
+      void whenAdmittedWizardSessionSettled(session).then(purge, purge);
     } else {
       context.purgeWizardSession(sessionId);
     }
     respond(true, status, undefined);
   },
-  "wizard.status": ({ params, respond, context }) => {
+  "wizard.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWizardStatusParams, "wizard.status", respond)) {
       return;
     }
@@ -225,6 +236,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
       return;
     }
     const status = readWizardStatus(session);
+    if (status.status !== "running") {
+      await whenAdmittedWizardSessionSettled(session);
+    }
     context.purgeWizardSession(sessionId);
     respond(true, status, undefined);
   },

@@ -18,7 +18,7 @@ import {
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
-} from "../../scripts/test-live-shard.mjs";
+} from "../../scripts/test-live-shard.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 
 describe("scripts/test-live-shard", () => {
@@ -391,6 +391,38 @@ describe("scripts/test-live-shard", () => {
       ok: false,
       reason:
         "Vitest report selected live test files had no passing assertions: src/gateway/gateway-acp-spawn-defaults.live.test.ts",
+    });
+  });
+
+  it("allows the OpenAI long-context live file to be skipped until its env is enabled", () => {
+    const profilesFile = "src/gateway/gateway-models.profiles.live.test.ts";
+    const longContextFile = "src/gateway/gateway-openai-long-context.live.test.ts";
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 2,
+      testResults: [
+        {
+          name: path.join(process.cwd(), profilesFile),
+          assertionResults: [{ status: "passed" }],
+        },
+        {
+          name: path.join(process.cwd(), longContextFile),
+          assertionResults: [{ status: "skipped" }],
+        },
+      ],
+    };
+    const expectedFiles = [profilesFile, longContextFile];
+
+    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
+      ok: true,
+    });
+    expect(
+      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
+        OPENCLAW_LIVE_OPENAI_LONG_CONTEXT: "1",
+      }),
+    ).toEqual({
+      ok: false,
+      reason: `Vitest report selected live test files had no passing assertions: ${longContextFile}`,
     });
   });
 

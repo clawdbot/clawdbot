@@ -7,6 +7,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({}) as OpenClawConfig));
@@ -22,7 +23,6 @@ const resolveMemorySearchConfig = vi.hoisted(() =>
 );
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const previewGroundedRemMarkdown = vi.hoisted(() => vi.fn());
-const previewRemHarness = vi.hoisted(() => vi.fn());
 const dedupeDreamDiaryEntries = vi.hoisted(() => vi.fn());
 const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
@@ -55,14 +55,13 @@ vi.mock("../../agents/memory-search.js", () => ({
 }));
 
 vi.mock("../../plugins/memory-runtime.js", () => ({
-  getActiveMemorySearchManager: getMemorySearchManager,
+  getActiveMemorySearchManagerCore: getMemorySearchManager,
 }));
 
 vi.mock("./doctor.memory-core-runtime.js", () => ({
   dedupeDreamDiaryEntries,
   loadShortTermPromotionDreamingStats,
   previewGroundedRemMarkdown,
-  previewRemHarness,
   writeBackfillDiaryEntries,
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
@@ -83,9 +82,7 @@ const DOCTOR_MEMORY_TARGET_METHODS = [
   "doctor.memory.dedupeDreamDiary",
 ] as const;
 
-type DoctorMemoryMethod =
-  | (typeof DOCTOR_MEMORY_TARGET_METHODS)[number]
-  | "doctor.memory.remHarness";
+type DoctorMemoryMethod = (typeof DOCTOR_MEMORY_TARGET_METHODS)[number];
 
 const invokeDoctorMemory = async (
   method: DoctorMemoryMethod,
@@ -244,6 +241,7 @@ const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: 
 describe("doctor.memory agent targeting", () => {
   beforeEach(() => {
     listAgentIds.mockClear();
+    resolveDefaultAgentId.mockReset().mockReturnValue("main");
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
     getMemorySearchManager.mockReset().mockResolvedValue({
       manager: null,
@@ -260,6 +258,31 @@ describe("doctor.memory agent targeting", () => {
     });
     dedupeDreamDiaryEntries.mockReset().mockResolvedValue({ removed: 0, kept: 0 });
   });
+
+  it.each(DOCTOR_MEMORY_TARGET_METHODS)(
+    "%s returns typed selection-required when agentId is omitted",
+    async (method) => {
+      resolveDefaultAgentId.mockImplementationOnce(() => {
+        throw new AgentSelectionRequiredError(["ops", "research"], {
+          surface: "doctor memory",
+          hint: "Pass agentId to select a configured agent.",
+        });
+      });
+      const respond = vi.fn();
+
+      await invokeDoctorMemory(method, respond, { includeCron: true });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.INVALID_REQUEST,
+          message: expect.stringContaining("agent"),
+        }),
+      );
+      expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(DOCTOR_MEMORY_TARGET_METHODS)(
     "%s rejects an unknown agent before resolving agent state",
@@ -1470,277 +1493,4 @@ describe("doctor.memory.dreamDiary", () => {
   });
 });
 
-describe("doctor.memory.remHarness", () => {
-  const makeHarnessPreview = (
-    overrides: Partial<{
-      workspaceDir: string;
-      remSkipped: boolean;
-      rem: Record<string, unknown>;
-      grounded: Record<string, unknown> | null;
-      deep: Record<string, unknown>;
-      remConfig: Record<string, unknown>;
-      deepConfig: Record<string, unknown>;
-    }> = {},
-  ) => ({
-    workspaceDir: overrides.workspaceDir ?? "/tmp/openclaw",
-    nowMs: 0,
-    remConfig: {
-      enabled: true,
-      lookbackDays: 7,
-      limit: 25,
-      minPatternStrength: 0.35,
-      ...overrides.remConfig,
-    },
-    deepConfig: {
-      minScore: 0.75,
-      minRecallCount: 3,
-      minUniqueQueries: 2,
-      recencyHalfLifeDays: 14,
-      ...overrides.deepConfig,
-    },
-    recallEntryCount: 0,
-    remSkipped: overrides.remSkipped ?? false,
-    rem: {
-      sourceEntryCount: 0,
-      reflections: [],
-      candidateTruths: [],
-      candidateKeys: [],
-      bodyLines: [],
-      ...overrides.rem,
-    },
-    grounded: overrides.grounded ?? null,
-    groundedInputPaths: [],
-    deep: {
-      candidateLimit: 25,
-      candidateCount: 0,
-      truncated: false,
-      candidates: [],
-      ...overrides.deep,
-    },
-  });
-
-  beforeEach(() => {
-    getRuntimeConfig.mockClear().mockReturnValue({} as OpenClawConfig);
-    resolveDefaultAgentId.mockClear().mockReturnValue("main");
-    resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
-    previewRemHarness.mockReset().mockResolvedValue(makeHarnessPreview());
-    previewGroundedRemMarkdown.mockReset();
-  });
-
-  it("returns an empty preview payload for an empty workspace", async () => {
-    const respond = vi.fn();
-
-    await invokeDoctorMemory("doctor.memory.remHarness", respond);
-
-    expectRecordFields(mockCallArg(previewRemHarness), {
-      workspaceDir: "/tmp/openclaw",
-      grounded: false,
-      includePromoted: false,
-      candidateLimit: 25,
-      groundedFileLimit: 10,
-      remPreviewLimit: 50,
-    });
-    expect(previewGroundedRemMarkdown).not.toHaveBeenCalled();
-    const payload = respondPayload(respond);
-    expectRecordFields(payload, {
-      ok: true,
-      agentId: "main",
-      workspaceDir: "/tmp/openclaw",
-      grounded: null,
-    });
-    expectRecordFields(payload.rem, {
-      skipped: false,
-      sourceEntryCount: 0,
-      reflections: [],
-      candidateTruths: [],
-    });
-    expectRecordFields(payload.deep, {
-      candidateLimit: 25,
-      truncated: false,
-      candidates: [],
-    });
-  });
-
-  it("maps REM preview and deep candidates into the payload", async () => {
-    previewRemHarness.mockResolvedValue(
-      makeHarnessPreview({
-        rem: {
-          sourceEntryCount: 2,
-          reflections: ["reflection line"],
-          candidateTruths: [{ snippet: "truthy snippet", confidence: 0.72, evidence: "a" }],
-          candidateKeys: ["a"],
-          bodyLines: ["## REM", "- truthy snippet"],
-        },
-        deep: {
-          candidates: [
-            {
-              key: "memory/2026-04-14.md:12:16",
-              path: "memory/2026-04-14.md",
-              startLine: 12,
-              endLine: 16,
-              source: "memory",
-              snippet: "durable fact",
-              recallCount: 4,
-              uniqueQueries: 3,
-              avgScore: 0.81,
-              maxScore: 0.92,
-              ageDays: 1,
-              firstRecalledAt: "2026-04-13T10:00:00.000Z",
-              lastRecalledAt: "2026-04-14T10:00:00.000Z",
-              promotedAt: undefined,
-            },
-          ],
-        },
-      }),
-    );
-    const respond = vi.fn();
-
-    await invokeDoctorMemory("doctor.memory.remHarness", respond);
-
-    const payload = respondPayload(respond);
-    expectRecordFields(payload, { ok: true });
-    expectRecordFields(payload.rem, {
-      reflections: ["reflection line"],
-      candidateTruths: [{ snippet: "truthy snippet", confidence: 0.72 }],
-      bodyLines: ["## REM", "- truthy snippet"],
-    });
-    const deep = expectRecordFields(payload.deep, {
-      candidateLimit: 25,
-      truncated: false,
-    });
-    expectRecordFields((deep.candidates as unknown[])[0], {
-      key: "memory/2026-04-14.md:12:16",
-      path: "memory/2026-04-14.md",
-      snippet: "durable fact",
-      recallCount: 4,
-      uniqueQueries: 3,
-      avgScore: 0.81,
-      promoted: false,
-    });
-  });
-
-  it("invokes grounded preview when grounded=true and daily files exist", async () => {
-    previewRemHarness.mockResolvedValue(
-      makeHarnessPreview({
-        grounded: {
-          scannedFiles: 2,
-          files: [
-            { path: "memory/2026-04-13.md", renderedMarkdown: "## REM\n- a" },
-            { path: "memory/2026-04-14.md", renderedMarkdown: "## REM\n- b" },
-          ],
-        },
-      }),
-    );
-    const respond = vi.fn();
-
-    await invokeDoctorMemory("doctor.memory.remHarness", respond, {
-      params: { grounded: true },
-    });
-
-    expectRecordFields(mockCallArg(previewRemHarness), { grounded: true });
-    const payload = respondPayload(respond);
-    expectRecordFields(payload.grounded, {
-      scannedFiles: 2,
-      files: [
-        { path: "memory/2026-04-13.md", renderedMarkdown: "## REM\n- a" },
-        { path: "memory/2026-04-14.md", renderedMarkdown: "## REM\n- b" },
-      ],
-    });
-  });
-
-  it("passes bounded grounded and REM preview limits to the shared harness", async () => {
-    const respond = vi.fn();
-
-    await invokeDoctorMemory("doctor.memory.remHarness", respond, {
-      params: { grounded: true },
-    });
-
-    expectRecordFields(mockCallArg(previewRemHarness), {
-      grounded: true,
-      groundedFileLimit: 10,
-      remPreviewLimit: 50,
-    });
-  });
-
-  it("maps requested empty grounded preview into an empty payload", async () => {
-    const respond = vi.fn();
-
-    await invokeDoctorMemory("doctor.memory.remHarness", respond, {
-      params: { grounded: true },
-    });
-
-    expectRecordFields(respondPayload(respond), {
-      grounded: { scannedFiles: 0, files: [] },
-    });
-  });
-
-  it("returns an error payload when the recall store read fails", async () => {
-    previewRemHarness.mockRejectedValue(new Error("disk boom"));
-    const respond = vi.fn();
-
-    await invokeDoctorMemory("doctor.memory.remHarness", respond);
-
-    const payload = respondPayload(respond);
-    expectRecordFields(payload, {
-      ok: false,
-      agentId: "main",
-      workspaceDir: "/tmp/openclaw",
-    });
-    expect(String(payload.error)).toContain("disk boom");
-  });
-
-  it("caps deep candidates and reports truncated when the store exceeds the limit", async () => {
-    const overflowCandidate = (index: number) => ({
-      key: `memory/2026-04-14.md:${index}:${index + 1}`,
-      path: "memory/2026-04-14.md",
-      startLine: index,
-      endLine: index + 1,
-      source: "memory",
-      snippet: `snippet-${index}`,
-      recallCount: 3,
-      uniqueQueries: 2,
-      avgScore: 0.6,
-      maxScore: 0.9,
-      ageDays: 1,
-      firstRecalledAt: "2026-04-13T10:00:00.000Z",
-      lastRecalledAt: "2026-04-14T10:00:00.000Z",
-      promotedAt: undefined,
-    });
-    previewRemHarness.mockResolvedValue(
-      makeHarnessPreview({
-        deep: {
-          candidateLimit: 25,
-          candidateCount: 25,
-          truncated: true,
-          candidates: Array.from({ length: 25 }, (_unused, index) => overflowCandidate(index)),
-        },
-      }),
-    );
-    const respond = vi.fn();
-
-    await invokeDoctorMemory("doctor.memory.remHarness", respond);
-
-    expectRecordFields(mockCallArg(previewRemHarness), { candidateLimit: 25 });
-    const payload = respondPayload(respond) as {
-      ok: boolean;
-      deep: { candidateLimit: number; truncated: boolean; candidates: unknown[] };
-    };
-    expect(payload.ok).toBe(true);
-    expect(payload.deep.candidateLimit).toBe(25);
-    expect(payload.deep.truncated).toBe(true);
-    expect(payload.deep.candidates).toHaveLength(25);
-  });
-
-  it("clamps caller-supplied limit within [1, REM_HARNESS_MAX_CANDIDATE_LIMIT]", async () => {
-    const respond = vi.fn();
-
-    await invokeDoctorMemory("doctor.memory.remHarness", respond, { params: { limit: 500 } });
-
-    expectRecordFields(mockCallArg(previewRemHarness), { candidateLimit: 100 });
-    const payload = respondPayload(respond) as {
-      deep: { candidateLimit: number };
-    };
-    expect(payload.deep.candidateLimit).toBe(100);
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

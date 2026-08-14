@@ -29,11 +29,12 @@ import {
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
+import { normalizeNodeHostCompatibilityMetadata } from "../../node-legacy-protocol-filter.js";
 import { shouldAutoApproveNodePairingFromTrustedCidrs } from "../../node-pairing-auto-approve.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { resolveTrustedProxyControlUiScopes } from "./connect-admission.js";
+import { applyConnectionScopeCap } from "./connect-admission.js";
 import {
   isControlUiOwnerBootstrapProfile,
   isControlUiOperatorBootstrapProfile,
@@ -128,6 +129,8 @@ export async function authorizeGatewayConnectDevice(
   let allowControlUiDeviceAuthMigrationForUnpairedInstall = false;
   let pairedClientId: string | undefined;
   let pairedBrowserOrigin: string | undefined;
+  // Canonicalize protocol-v3 desktop aliases before pairing persistence and comparison.
+  connectParams.client = normalizeNodeHostCompatibilityMetadata(connectParams.client);
   const browserCopilotOrigin = isBrowserCopilotClient(connectParams.client)
     ? normalizeChromeExtensionOrigin(requestOrigin)
     : undefined;
@@ -395,8 +398,8 @@ export async function authorizeGatewayConnectDevice(
       const trustedProxyAutoApproveScopes =
         allowTrustedProxyDeviceAutoApproval &&
         (pairing.request.isRepair !== true || isTrustedProxySameKeyUpgrade)
-          ? resolveTrustedProxyControlUiScopes({
-              requestedScopes: resolveTrustedProxyDeviceAutoApproveScopes({
+          ? applyConnectionScopeCap({
+              scopes: resolveTrustedProxyDeviceAutoApproveScopes({
                 requestedScopes: scopes,
                 hasRequestedScopes,
                 configuredScopes: trustedProxyAutoApproveConfig?.scopes,

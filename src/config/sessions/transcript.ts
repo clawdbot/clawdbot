@@ -11,7 +11,7 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import {
-  extractAssistantVisibleText,
+  extractAssistantPhaseText,
   extractFirstTextBlock,
 } from "../../shared/chat-message-content.js";
 import {
@@ -25,7 +25,7 @@ import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "./legacy-sqlite-marker.js";
-import { resolveDefaultSessionStorePath, resolveStorePath } from "./paths.js";
+import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -57,7 +57,7 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionTranscriptAppendTarget = {
   agentId?: string;
@@ -171,7 +171,7 @@ function parseAssistantTranscriptText(
   ) {
     return undefined;
   }
-  const text = extractAssistantVisibleText(message)?.trim();
+  const text = extractAssistantPhaseText(message)?.trim();
   if (!text) {
     return undefined;
   }
@@ -232,7 +232,7 @@ function parseRecentConversationText(
   }
   const text =
     message.role === "assistant"
-      ? extractAssistantVisibleText(message)
+      ? extractAssistantPhaseText(message)
       : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
   if (!text) {
     return undefined;
@@ -491,6 +491,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   text?: string;
@@ -523,6 +524,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     ...(params.expectedLifecycleRevision
       ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
       : {}),
+    ...(params.expectedWriterRunId ? { expectedWriterRunId: params.expectedWriterRunId } : {}),
     ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
     ...(params.sessionLifecyclePatch
       ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
@@ -564,6 +566,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   message: SessionTranscriptAssistantMessage;
@@ -589,7 +592,8 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const storeAgentId =
     transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey, configuredDefaultAgentId);
   const storePath =
-    params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: storeAgentId });
+    params.storePath ??
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: storeAgentId });
   const resolved = resolveSessionEntrySelection({
     ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
     sessionKey,
@@ -606,6 +610,16 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   if (
     params.expectedLifecycleRevision !== undefined &&
     entry?.lifecycleRevision !== params.expectedLifecycleRevision
+  ) {
+    return {
+      ok: false,
+      code: "session-rebound",
+      reason: `session rebound for sessionKey: ${sessionKey}`,
+    };
+  }
+  if (
+    params.expectedWriterRunId !== undefined &&
+    (entry as SessionEntry | undefined)?.activeWriterRunId !== params.expectedWriterRunId
   ) {
     return {
       ok: false,
@@ -666,6 +680,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
         ...(params.expectedLifecycleRevision !== undefined
           ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
+          : {}),
+        ...(params.expectedWriterRunId !== undefined
+          ? { expectedWriterRunId: params.expectedWriterRunId }
           : {}),
         ...(params.expectedSessionState
           ? { expectedSessionState: params.expectedSessionState }

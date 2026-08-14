@@ -34,27 +34,45 @@ export function registerCopilotActiveRun(params: {
     });
   };
   const queueMessage = async (text: string, options?: CopilotQueueMessageOptions) => {
-    if (
-      options?.isInboundUserMessage === true &&
-      (await claimPendingAgentQuestionAnswer({
-        sessionKey: params.input.sessionKey ?? params.input.sessionId,
-        text,
-        persist: options.userTurnTranscriptRecorder
-          ? async () => {
-              await options.userTurnTranscriptRecorder?.persistApproved();
-            }
-          : undefined,
-      }))
-    ) {
-      return undefined;
+    let acceptanceReported = false;
+    // Acceptance transfers fallback ownership irrevocably. A later transcript
+    // receipt failure must remain accepted-unconfirmed instead of reopening it.
+    const reportAcceptance = (accepted: boolean) => {
+      if (acceptanceReported) {
+        return;
+      }
+      acceptanceReported = true;
+      options?.onQueueAccepted?.(accepted);
+    };
+    let messageId: string;
+    try {
+      if (
+        options?.isInboundUserMessage === true &&
+        (await claimPendingAgentQuestionAnswer({
+          sessionKey: params.input.sessionKey ?? params.input.sessionId,
+          text,
+          persist: options.userTurnTranscriptRecorder
+            ? async () => {
+                await options.userTurnTranscriptRecorder?.persistApproved();
+              }
+            : undefined,
+        }))
+      ) {
+        reportAcceptance(true);
+        return undefined;
+      }
+      if (params.isSettled() || params.isAborted()) {
+        throw new Error("Copilot steering is unavailable after the active run ended");
+      }
+      if (!params.canAcceptSteering()) {
+        throw new Error("Copilot steering is unavailable before initial user validation");
+      }
+      messageId = await params.session.send({ prompt: text });
+      reportAcceptance(true);
+    } catch (error) {
+      reportAcceptance(false);
+      throw error;
     }
-    if (params.isSettled() || params.isAborted()) {
-      throw new Error("Copilot steering is unavailable after the active run ended");
-    }
-    if (!params.canAcceptSteering()) {
-      throw new Error("Copilot steering is unavailable before initial user validation");
-    }
-    const messageId = await params.session.send({ prompt: text });
     if (options?.waitForTranscriptCommit === true) {
       try {
         await waitForPersistenceReceipt(

@@ -7,6 +7,7 @@ import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import {
   coercePersistedAuthProfileStore,
   loadPersistedAuthProfileStore,
@@ -30,6 +31,7 @@ import { normalizePluginConfigId } from "../plugins/plugin-config-trust.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
+import { listAuthProfileStoreAgentDirs } from "./auth-store-paths.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import { deletePathStrict, getPath, setPathCreateStrict } from "./path-utils.js";
@@ -44,11 +46,7 @@ import { resolveSecretRefValue } from "./resolve.js";
 import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isNonEmptyString, isRecord, writeTextFileAtomic } from "./shared.js";
-import {
-  listAuthProfileStoreAgentDirs,
-  listSecretsDotEnvPaths,
-  parseEnvAssignmentValue,
-} from "./storage-scan.js";
+import { listSecretsDotEnvPaths, parseEnvAssignmentValue } from "./storage-scan.js";
 
 type FileSnapshot = {
   existed: boolean;
@@ -773,7 +771,9 @@ async function validateProjectedSecretsState(params: {
       // whole-runtime check.
       includeAuthStoreRefs: params.write || params.authStoreByPath.size > 0,
       loadAuthStore: (agentDir?: string) => {
-        const storePath = resolveUserPath(resolveAuthProfileDatabasePath(agentDir));
+        const storePath = resolveUserPath(
+          agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath(),
+        );
         const override = authStoreLookup.get(storePath);
         if (override) {
           return (
@@ -989,5 +989,4 @@ export const testing = {
     return projected.nextConfig;
   },
 };
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

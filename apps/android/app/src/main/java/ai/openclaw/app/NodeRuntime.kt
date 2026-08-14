@@ -151,6 +151,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -1118,6 +1119,8 @@ class NodeRuntime private constructor(
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
   private val _gatewayControlPage = MutableStateFlow<GatewayControlPage?>(null)
   val gatewayControlPage: StateFlow<GatewayControlPage?> = _gatewayControlPage.asStateFlow()
+  private val _desktopObserveAvailable = MutableStateFlow(false)
+  val desktopObserveAvailable: StateFlow<Boolean> = _desktopObserveAvailable.asStateFlow()
   private val _nodeConnected = MutableStateFlow(false)
   val nodeConnected: StateFlow<Boolean> = _nodeConnected.asStateFlow()
   private val _nodeCapabilityApproval = MutableStateFlow<GatewayNodeCapabilityApproval>(GatewayNodeCapabilityApproval.Loading)
@@ -1860,6 +1863,11 @@ class NodeRuntime private constructor(
           recordModelRecent = prefs::recordModelRecent,
           onSessionDeleted = ::publishChatSessionDeletion,
           onOfflineDefaultAgentRestored = ::syncMainSessionKey,
+          onAssistantReplyFinalized = { owner, runId, text ->
+            if (!_isForeground.value) {
+              ConversationReplyNotifier(appContext).show(owner, runId, text)
+            }
+          },
         )
       NodeRuntimeMode.ScreenshotFixture ->
         ChatController(
@@ -2873,6 +2881,7 @@ class NodeRuntime private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
+  val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> = chat.subagentActivities
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
@@ -2907,6 +2916,14 @@ class NodeRuntime private constructor(
     _serverName.value = "OpenClaw Gateway"
     _remoteAddress.value = "Mac Studio on local network"
     _gatewayVersion.value = BuildConfig.VERSION_NAME
+    replaceGatewayMethods(setOf(GatewayMethod.DesktopObserve.rawValue))
+    _gatewayControlPage.value =
+      GatewayControlPage(
+        baseUrl = AndroidScreenshotFixture.controlUiBaseUrl,
+        token = null,
+        password = null,
+        tlsFingerprintSha256 = null,
+      )
     updateGatewayDefaultAgentId("main")
     _gatewayAgents.value = AndroidScreenshotFixture.agents
     _modelCatalog.value = AndroidScreenshotFixture.models
@@ -5048,6 +5065,7 @@ class NodeRuntime private constructor(
   suspend fun patchChatSession(
     key: String,
     ownerAgentId: String? = null,
+    expectedSessionId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
@@ -5059,6 +5077,7 @@ class NodeRuntime private constructor(
     chat.patchSession(
       key = key,
       ownerAgentId = ownerAgentId,
+      expectedSessionId = expectedSessionId,
       label = label,
       clearLabel = clearLabel,
       category = category,
@@ -5201,6 +5220,13 @@ class NodeRuntime private constructor(
 
   internal fun canSendForOwner(owner: ChatComposerOwner): Boolean = chat.canSendForOwner(owner)
 
+  private suspend fun awaitConnectedGateway(stableId: String): Boolean {
+    _isConnected.first { connected ->
+      connected && connectedEndpoint?.stableId == stableId
+    }
+    return true
+  }
+
   internal suspend fun sendChatForOwnerAwaitAcceptance(
     owner: ChatComposerOwner,
     message: String,
@@ -5214,6 +5240,40 @@ class NodeRuntime private constructor(
       attachments = attachments,
       expectedOwner = owner,
       idempotencyKey = idempotencyKey,
+    )
+
+  internal suspend fun openConversationNotificationTarget(
+    target: ConversationNotificationTarget,
+  ): Boolean =
+    routeConversationNotificationTarget(
+      target = target,
+      activeGatewayStableId = { prefs.gatewayRegistry.activeStableId.value },
+      switchGateway = ::switchToGateway,
+      switchSession = { sessionKey, agentId -> switchChatSession(sessionKey, agentId) },
+    )
+
+  internal suspend fun sendConversationNotificationReply(
+    target: ConversationNotificationTarget,
+    reply: String,
+    idempotencyKey: String,
+  ): Boolean =
+    routeConversationNotificationReply(
+      target = target,
+      reply = reply,
+      idempotencyKey = idempotencyKey,
+      activeGatewayStableId = { prefs.gatewayRegistry.activeStableId.value },
+      switchGateway = ::switchToGateway,
+      awaitGatewayReady = ::awaitConnectedGateway,
+      switchSession = { sessionKey, agentId -> switchChatSession(sessionKey, agentId) },
+      send = { owner, message, commandId ->
+        sendChatForOwnerAwaitAcceptance(
+          owner = owner,
+          message = message,
+          thinking = chatThinkingLevel.value,
+          attachments = emptyList(),
+          idempotencyKey = commandId,
+        )
+      },
     )
 
   internal suspend fun wasChatOutboxCommandAdmitted(id: String): Boolean = chat.wasOutboxCommandAdmitted(id)
@@ -6312,7 +6372,7 @@ class NodeRuntime private constructor(
     publishGatewayData(gatewayScope) {
       _clawHubSkillSearchState.value =
         _clawHubSkillSearchState.value.copy(
-          reviewingSlug = skill.slug,
+          reviewingSlug = skill.reference,
           installReview = null,
           acknowledgeSlug = null,
           acknowledgeVersion = null,
@@ -6321,7 +6381,7 @@ class NodeRuntime private constructor(
         )
     }
     try {
-      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill.slug))
+      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill.reference))
       val review = parseClawHubInstallReview(response, skill, json)
       publishGatewayData(gatewayScope) {
         if (clawHubSkillReviewSeq.get() == reviewSeq) {
@@ -6331,7 +6391,7 @@ class NodeRuntime private constructor(
               installReview = review,
               errorText =
                 if (review == null) {
-                  "ClawHub did not return an installable version for ${skill.slug}."
+                  "ClawHub did not return an installable version for ${skill.reference}."
                 } else {
                   null
                 },
@@ -6347,7 +6407,7 @@ class NodeRuntime private constructor(
             _clawHubSkillSearchState.value.copy(
               reviewingSlug = null,
               errorText =
-                nativeString("Could not load ClawHub details for \${skill.slug}.", skill.slug),
+                nativeString("Could not load ClawHub details for \${skill.reference}.", skill.reference),
             )
         }
       }
@@ -7473,6 +7533,7 @@ class NodeRuntime private constructor(
     synchronized(gatewayMethodsLock) {
       gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(methods)
       _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(methods)
+      _desktopObserveAvailable.value = GatewayMethod.DesktopObserve.rawValue in methods
       systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in methods
       gatewayMethodsEpoch += 1
     }
@@ -8480,6 +8541,7 @@ internal fun manualGatewayEndpoint(entry: GatewayRegistryEntry): GatewayEndpoint
     host = normalizedHost,
     port = normalizedPort,
     tlsEnabled = entry.tls,
+    contextPath = entry.contextPath,
   )
 }
 
@@ -8495,6 +8557,7 @@ internal fun gatewayRegistryEntry(
       host = endpoint.host,
       port = endpoint.port,
       tls = endpoint.tlsEnabled,
+      contextPath = endpoint.contextPath,
       lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
     )
   } else {

@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   migrateOrphanedSessionKeys,
   resolveSessionStoreOwnership,
@@ -18,17 +19,6 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
     listPluginDoctorSessionStoreAgentIds: listPluginDoctorSessionStoreAgentIdsMock,
   };
 });
-
-vi.mock(
-  "../channels/plugins/bundled.js",
-  () =>
-    ({
-      listBundledChannelLegacySessionSurfaces: () => [],
-    }) satisfies Pick<
-      typeof import("../channels/plugins/bundled.js"),
-      "listBundledChannelLegacySessionSurfaces"
-    >,
-);
 
 function writeStore(storePath: string, store: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -53,7 +43,7 @@ function requireStoreEntry(
 async function withStateFixture(
   run: (params: { tmpDir: string; stateDir: string }) => Promise<void>,
 ): Promise<void> {
-  await withTempDir({ prefix: "orphan-keys-test-" }, async (tmpDir) => {
+  await withTestDir({ prefix: "orphan-keys-test-" }, async (tmpDir) => {
     const stateDir = path.join(tmpDir, ".openclaw");
     fs.mkdirSync(stateDir, { recursive: true });
     await run({ tmpDir, stateDir });
@@ -85,6 +75,7 @@ async function migrateFixtureState(
     cfg,
     env: { OPENCLAW_STATE_DIR: stateDir },
     additionalAgentIds,
+    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
   });
 }
 
@@ -171,6 +162,7 @@ describe("migrateOrphanedSessionKeys", () => {
         cfg,
         env: { OPENCLAW_STATE_DIR: stateDir },
         additionalAgentIds: ["voice"],
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       });
 
       const store = readStore(voiceStorePath);
@@ -457,6 +449,7 @@ describe("migrateOrphanedSessionKeys", () => {
           cfg,
           env: { OPENCLAW_STATE_DIR: stateDir },
           additionalAgentIds: ["voice"],
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
         });
       } finally {
         statSpy.mockRestore();
@@ -742,8 +735,16 @@ describe("migrateOrphanedSessionKeys", () => {
       });
 
       const env = { OPENCLAW_STATE_DIR: stateDir };
-      await migrateOrphanedSessionKeys({ cfg: OPS_WORK_CONFIG, env });
-      const result2 = await migrateOrphanedSessionKeys({ cfg: OPS_WORK_CONFIG, env });
+      await migrateOrphanedSessionKeys({
+        cfg: OPS_WORK_CONFIG,
+        env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+      const result2 = await migrateOrphanedSessionKeys({
+        cfg: OPS_WORK_CONFIG,
+        env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
 
       expect(result2.changes).toHaveLength(0);
       const store = readStore(storePath);
@@ -1031,6 +1032,7 @@ describe("migrateOrphanedSessionKeys", () => {
       const result = await migrateOrphanedSessionKeys({
         cfg,
         env: { OPENCLAW_STATE_DIR: stateDir },
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       });
 
       expect(result.changes).toHaveLength(0);

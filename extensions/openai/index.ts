@@ -42,7 +42,7 @@ export default definePluginEntry({
       });
       api.lifecycle.registerRuntimeLifecycle({
         id: "openai-quicksilver-realtime-browser-session",
-        description: "Close GPT-Live browser sidebands when the OpenAI plugin stops",
+        description: "Close OpenAI browser sidebands when the plugin stops",
         cleanup: (ctx) => {
           if (ctx.reason !== "disable") {
             return undefined;

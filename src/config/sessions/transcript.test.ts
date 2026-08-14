@@ -33,7 +33,7 @@ import {
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 import {
   bindOwnedSessionTranscriptWrites,
-  runWithOwnedSessionTranscriptWriteLock,
+  runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
 import {
@@ -43,7 +43,7 @@ import {
   readRecentUserAssistantTextForSession,
   readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 type SessionEntryFixture = Partial<SessionEntry> & { channel?: string };
 
@@ -448,7 +448,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("runs matching owned transcript appends through the active session write lock", async () => {
+  it("runs matching owned transcript appends through the active write context", async () => {
     await writeTranscriptStore();
     const sessionFile = `sqlite:main:${sessionId}:${fixture.storePath()}`;
     const events: string[] = [];
@@ -463,8 +463,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           sessionKey,
           storePath: fixture.storePath(),
         },
-        withSessionWriteLock: async (run) => {
-          events.push("lock");
+        withTranscriptWrite: async (run) => {
+          events.push("owned-write");
           return await run();
         },
       },
@@ -477,10 +477,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(events).toEqual(["lock"]);
+    expect(events).toEqual(["owned-write"]);
   });
 
-  it("does not reuse owned write locks for a different concrete transcript file", async () => {
+  it("does not reuse an owned write context for a different concrete transcript file", async () => {
     const oldSessionFile = resolveSessionTranscriptPathInDir("old-session", fixture.sessionsDir());
     const nextSessionFile = resolveSessionTranscriptPathInDir(
       "next-session",
@@ -492,13 +492,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       {
         sessionFile: oldSessionFile,
         sessionKey,
-        withSessionWriteLock: async (run) => {
-          events.push("lock");
+        withTranscriptWrite: async (run) => {
+          events.push("owned-write");
           return await run();
         },
       },
       async () =>
-        await runWithOwnedSessionTranscriptWriteLock(
+        await runWithOwnedSessionTranscriptWrite(
           { sessionFile: nextSessionFile, sessionKey },
           () => {
             events.push("write");
@@ -511,7 +511,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(events).toEqual(["write"]);
   });
 
-  it("does not reuse owned write locks for the same key in another transcript target", async () => {
+  it("does not reuse an owned write context for the same key in another transcript target", async () => {
     const cases = [
       [
         { agentId: "main", sessionKey: "global", storePath: "/tmp/main.sqlite" },
@@ -530,13 +530,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           sessionFile: ownerTarget.sessionKey,
           sessionKey: ownerTarget.sessionKey,
           sessionTarget: ownerTarget,
-          withSessionWriteLock: async (run) => {
-            events.push("lock");
+          withTranscriptWrite: async (run) => {
+            events.push("owned-write");
             return await run();
           },
         },
         async () =>
-          await runWithOwnedSessionTranscriptWriteLock(
+          await runWithOwnedSessionTranscriptWrite(
             {
               sessionFile: otherTarget.sessionKey,
               sessionKey: otherTarget.sessionKey,
@@ -554,20 +554,20 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("keeps matching owned transcript appends locked from bound callbacks", async () => {
+  it("keeps matching owned transcript appends tracked from bound callbacks", async () => {
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     const events: string[] = [];
     const callback = bindOwnedSessionTranscriptWrites(
       {
         sessionFile,
         sessionKey,
-        withSessionWriteLock: async (run) => {
-          events.push("lock");
+        withTranscriptWrite: async (run) => {
+          events.push("owned-write");
           return await run();
         },
       },
       async () =>
-        await runWithOwnedSessionTranscriptWriteLock({ sessionFile, sessionKey }, () => {
+        await runWithOwnedSessionTranscriptWrite({ sessionFile, sessionKey }, () => {
           events.push("write");
           return "ok";
         }),
@@ -576,7 +576,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const result = await callback();
 
     expect(result).toBe("ok");
-    expect(events).toEqual(["lock", "write"]);
+    expect(events).toEqual(["owned-write", "write"]);
   });
 
   it("uses SQLite identity for malformed persisted sessionFile metadata", async () => {
@@ -1955,6 +1955,63 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       ok: false,
       code: "session-rebound",
     });
+  });
+
+  it("rejects a superseded writer claim and accepts the admitted writer", async () => {
+    await writeTranscriptStore({
+      activeWriterRunId: "run-a",
+      lifecycleRevision: "owned-revision",
+    } as InternalSessionEntry);
+    let releaseWriterChange = () => {};
+    const writerChangeGate = new Promise<void>((resolve) => {
+      releaseWriterChange = resolve;
+    });
+    let markWriterChangeStarted = () => {};
+    const writerChangeStarted = new Promise<void>((resolve) => {
+      markWriterChangeStarted = resolve;
+    });
+    const writerChange = updateSessionEntry(
+      {
+        agentId: "main",
+        storePath: fixture.storePath(),
+        sessionKey,
+      },
+      async () => {
+        markWriterChangeStarted();
+        await writerChangeGate;
+        return { activeWriterRunId: "run-b" } as Partial<InternalSessionEntry>;
+      },
+    );
+    await writerChangeStarted;
+
+    const staleAppend = appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      expectedLifecycleRevision: "owned-revision",
+      expectedSessionId: sessionId,
+      expectedWriterRunId: "run-a",
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "late output" }),
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseWriterChange();
+
+    await writerChange;
+    await expect(staleAppend).resolves.toMatchObject({
+      ok: false,
+      code: "session-rebound",
+    });
+    await expect(
+      appendExactAssistantMessageToSessionTranscript({
+        sessionKey,
+        expectedLifecycleRevision: "owned-revision",
+        expectedSessionId: sessionId,
+        expectedWriterRunId: "run-b",
+        storePath: fixture.storePath(),
+        message: createExactAssistantMessage({ text: "current output" }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
   });
 
   it("dedupes concurrent exact assistant appends by idempotency key", async () => {

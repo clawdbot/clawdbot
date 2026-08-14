@@ -47,6 +47,20 @@ openclaw_e2e_resolve_entrypoint() {
   echo "OpenClaw entrypoint not found under dist/" >&2
   return 1
 }
+openclaw_e2e_run_script_entrypoint() {
+  local stem="${1:?missing OpenClaw E2E script stem}"
+  shift
+  if [ -f "$stem.mts" ]; then
+    tsx "$stem.mts" "$@"
+    return
+  fi
+  if [ -f "$stem.mjs" ]; then
+    node "$stem.mjs" "$@"
+    return
+  fi
+  echo "OpenClaw E2E script entrypoint not found: $stem.{mts,mjs}" >&2
+  return 1
+}
 openclaw_e2e_package_root() {
   local prefix="${1:-}"
   if [ -n "$prefix" ]; then

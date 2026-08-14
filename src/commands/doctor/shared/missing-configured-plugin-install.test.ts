@@ -1,9 +1,9 @@
 // Missing configured plugin install tests cover doctor diagnostics for absent plugin installs.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig, PluginsConfig } from "../../../config/types.js";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../../../plugins/clawhub-error-codes.js";
@@ -130,13 +130,7 @@ const mocks = vi.hoisted(() => ({
   writePersistedInstalledPluginIndexInstallRecords: vi.fn(),
 }));
 
-const tempDirs: string[] = [];
-
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-stub-repair-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function writeLegacyNpmDeclarationStub(params: {
   pluginDir: string;
@@ -438,12 +432,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         resolvedAt: "2026-05-01T00:00:00.000Z",
       },
     });
-  });
-
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it("maps a missing configured plugin install to a structured finding and dry-run effect", async () => {
@@ -1142,6 +1130,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   it.each([
     ["enabled-only disabled stub", { channels: { matrix: { enabled: false } } }],
     [
+      "channel metadata",
+      {
+        channels: {
+          modelByChannel: { matrix: { default: "openai/gpt-5.6-luna" } },
+          " ": { homeserver: "https://matrix.example.org" },
+        },
+      },
+    ],
+    [
       "disabled configured channel",
       { channels: { matrix: { enabled: false, homeserver: "https://matrix.example.org" } } },
     ],
@@ -1549,7 +1546,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("updates an existing npm target when stale baseline records miss an installed package", async () => {
-    const npmRoot = makeTempDir();
+    const npmRoot = tempDirs.make("openclaw-plugin-stub-repair-");
     const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "discord");
     fs.mkdirSync(packageDir, { recursive: true });
     mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);
@@ -1618,7 +1615,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       },
     } satisfies OpenClawConfig;
-    const npmRoot = makeTempDir();
+    const npmRoot = tempDirs.make("openclaw-plugin-stub-repair-");
     const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "discord");
     mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
@@ -1677,7 +1674,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("prefers an existing npm payload over ClawHub during post-core repair", async () => {
-    const npmRoot = makeTempDir();
+    const npmRoot = tempDirs.make("openclaw-plugin-stub-repair-");
     const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "matrix");
     fs.mkdirSync(packageDir, { recursive: true });
     fs.writeFileSync(
@@ -1747,7 +1744,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("passes the post-core compatibility host version to ClawHub repair", async () => {
-    const npmRoot = makeTempDir();
+    const npmRoot = tempDirs.make("openclaw-plugin-stub-repair-");
     mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
@@ -2378,7 +2375,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("refreshes a stale managed Codex runtime plugin selected by the OpenAI Codex route", async () => {
-    const installDir = makeTempDir();
+    const installDir = tempDirs.make("openclaw-plugin-stub-repair-");
     fs.writeFileSync(
       path.join(installDir, "package.json"),
       JSON.stringify({ name: "@openclaw/codex", version: "2026.5.6" }),
@@ -2474,7 +2471,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
 
   it("does not refresh a converged beta Codex runtime plugin on the second doctor pass", async () => {
     const codexBetaVersion = `${currentOpenClawReleaseBase()}-beta.4`;
-    const installDir = makeTempDir();
+    const installDir = tempDirs.make("openclaw-plugin-stub-repair-");
     fs.writeFileSync(
       path.join(installDir, "package.json"),
       JSON.stringify({ name: "@openclaw/codex", version: "2026.5.6" }),
@@ -2603,7 +2600,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("does not downgrade a newer managed Codex runtime plugin", async () => {
-    const installDir = makeTempDir();
+    const installDir = tempDirs.make("openclaw-plugin-stub-repair-");
     fs.writeFileSync(
       path.join(installDir, "package.json"),
       JSON.stringify({ name: "@openclaw/codex", version: "9999.1.1" }),
@@ -3601,7 +3598,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       catalogKind: "channel" as const,
     },
   ])("$name", async ({ pluginId, npmSpec, priorSpec, targetDir, cfg, catalogKind }) => {
-    const extensionsDir = path.join(makeTempDir(), "extensions");
+    const extensionsDir = path.join(tempDirs.make("openclaw-plugin-stub-repair-"), "extensions");
     const installDir = path.join(extensionsDir, pluginId);
     mocks.resolveDefaultPluginExtensionsDir.mockReturnValue(extensionsDir);
     fs.mkdirSync(installDir, { recursive: true });
@@ -3671,7 +3668,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("does not delete an arbitrary recorded path when replacing a broken official plugin", async () => {
-    const installDir = makeTempDir();
+    const installDir = tempDirs.make("openclaw-plugin-stub-repair-");
     fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ name: "brave" }));
     mockBrokenBraveInstall(installDir, {
       source: "clawhub",
@@ -3703,7 +3700,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("keeps a broken official install record when replacement install fails", async () => {
-    const extensionsDir = path.join(makeTempDir(), "extensions");
+    const extensionsDir = path.join(tempDirs.make("openclaw-plugin-stub-repair-"), "extensions");
     const installDir = path.join(extensionsDir, "brave");
     mocks.resolveDefaultPluginExtensionsDir.mockReturnValue(extensionsDir);
     fs.mkdirSync(installDir, { recursive: true });
@@ -3743,7 +3740,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("does not replace a non-official install that collides with an official plugin id", async () => {
-    const extensionsDir = path.join(makeTempDir(), "extensions");
+    const extensionsDir = path.join(tempDirs.make("openclaw-plugin-stub-repair-"), "extensions");
     const installDir = path.join(extensionsDir, "brave");
     mocks.resolveDefaultPluginExtensionsDir.mockReturnValue(extensionsDir);
     fs.mkdirSync(installDir, { recursive: true });
@@ -4108,7 +4105,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("repairs a configured plugin from a legacy npm declaration stub", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-plugin-stub-repair-");
     const pluginDir = path.join(root, "extensions", "guardrail-bridge");
     writeLegacyNpmDeclarationStub({
       pluginDir,

@@ -1,3 +1,4 @@
+import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { subscribeStoredChatOutboxChanges } from "../../lib/chat/outbox-store.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
@@ -102,7 +103,7 @@ class ChatOutboxGatewayOwner {
     const durableIds = new Set(durable.map((item) => item.id));
     visible.push(...local.filter((item) => !durableIds.has(item.id) && isActiveLocal(state, item)));
     this.prune(host);
-    return visible.toSorted((left, right) => left.createdAt - right.createdAt);
+    return visible.toSorted(compareChatQueueOrder);
   }
   syncHost(host: Host, options: { requestUpdate?: boolean } = {}): void {
     host.chatQueue = this.snapshot(host, resolveStoredChatOutboxScope(host, host.sessionKey));
@@ -177,7 +178,7 @@ class ChatOutboxGatewayOwner {
     const key = storedChatOutboxScopeKey(scope);
     const queue = (state.byScope.get(key) ?? []).filter((entry) => entry.id !== item.id);
     queue.push(item);
-    queue.sort((left, right) => left.createdAt - right.createdAt);
+    queue.sort(compareChatQueueOrder);
     state.byScope.set(key, queue);
     routePresentation.add(item);
     if (retryable) {
@@ -231,6 +232,16 @@ class ChatOutboxGatewayOwner {
   }
   hasVolatile(host: Host, id: string): boolean {
     return this.hosts.get(host)?.retryable.has(id) ?? false;
+  }
+  // Panes share this outbox and its drain while composer state stays per pane, so
+  // a pane-local fact that blocks delivery has to be answerable from any of them.
+  anyPane(matches: (host: Host) => boolean): boolean {
+    for (const pane of this.panes) {
+      if (matches(pane)) {
+        return true;
+      }
+    }
+    return false;
   }
   mayRemove(host: Host, scope: Scope, id: string): boolean {
     const live = this.live.get(storedChatOutboxScopeKey(scope))?.get(id);

@@ -2,7 +2,7 @@
 import {
   claimPendingAgentQuestionAnswer,
   type AgentHarnessQuestionGatewayCall,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
@@ -75,6 +75,22 @@ function requestParams(overrides: Record<string, unknown> = {}) {
     ],
     ...overrides,
   };
+}
+
+function secretRequestParams(overrides: Record<string, unknown> = {}) {
+  return requestParams({
+    questions: [
+      {
+        id: "token",
+        header: "Secret",
+        question: "Enter token",
+        isOther: true,
+        isSecret: true,
+        options: null,
+      },
+    ],
+    ...overrides,
+  });
 }
 
 describe("Codex app-server user input bridge", () => {
@@ -178,18 +194,7 @@ describe("Codex app-server user input bridge", () => {
     });
     const response = bridge.handleRequest({
       id: "input-secret",
-      params: requestParams({
-        questions: [
-          {
-            id: "token",
-            header: "Secret",
-            question: "Enter token",
-            isOther: true,
-            isSecret: true,
-            options: null,
-          },
-        ],
-      }),
+      params: secretRequestParams(),
     });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
 
@@ -199,6 +204,55 @@ describe("Codex app-server user input bridge", () => {
     expect(gateway.calls).toHaveLength(0);
     expect(bridge.claimPendingRequest()?.answer("private")).toBe(true);
     await expect(response).resolves.toEqual({ answers: { token: { answers: ["private"] } } });
+  });
+
+  it("clears an unanswered secret request when prompt delivery fails", async () => {
+    const params = createParams();
+    params.onBlockReply = vi.fn().mockRejectedValue(new Error("channel unavailable"));
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    await expect(
+      bridge.handleRequest({ id: "input-secret-undelivered", params: secretRequestParams() }),
+    ).resolves.toEqual({ answers: {} });
+    expect(bridge.claimPendingRequest()).toBeUndefined();
+  });
+
+  it("keeps a replacement secret request when an earlier prompt later fails", async () => {
+    let rejectFirstDelivery!: (error: Error) => void;
+    const firstDelivery = new Promise<void>((_resolve, reject) => {
+      rejectFirstDelivery = reject;
+    });
+    const params = createParams();
+    params.onBlockReply = vi.fn().mockReturnValueOnce(firstDelivery).mockResolvedValue(undefined);
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const first = bridge.handleRequest({
+      id: "input-secret-replaced",
+      params: secretRequestParams(),
+    });
+    const replacement = bridge.handleRequest({
+      id: "input-secret-current",
+      params: secretRequestParams(),
+    });
+    await expect(first).resolves.toEqual({ answers: {} });
+
+    rejectFirstDelivery(new Error("previous prompt delivery failed"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(bridge.claimPendingRequest()?.answer("replacement secret")).toBe(true);
+    await expect(replacement).resolves.toEqual({
+      answers: { token: { answers: ["replacement secret"] } },
+    });
   });
 
   it("cancels the matching gateway record on serverRequest/resolved", async () => {
@@ -319,19 +373,9 @@ describe("Codex app-server user input bridge", () => {
     });
     const response = bridge.handleRequest({
       id: "input-secret-nonblocking",
-      params: requestParams({
+      params: secretRequestParams({
         isBlocking: false,
         autoResolutionMs: 60_000,
-        questions: [
-          {
-            id: "token",
-            header: "Secret",
-            question: "Enter token",
-            isOther: true,
-            isSecret: true,
-            options: null,
-          },
-        ],
       }),
     });
 

@@ -61,6 +61,7 @@ export function resolveDockerReleasePolicy(version) {
   return { version: parsed.version, channel: "stable", movingAliases: STABLE_ALIASES };
 }
 
+/** @returns {void} */
 function main() {
   const version = process.argv[2]?.trim();
   if (!version) {

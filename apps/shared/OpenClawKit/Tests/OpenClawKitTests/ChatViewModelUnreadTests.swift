@@ -116,6 +116,7 @@ private final class UnreadTestTransport: @unchecked Sendable, OpenClawChatTransp
 
     func patchSession(
         key: String,
+        expectedSessionID _: String?,
         label _: String??,
         category _: String??,
         pinned _: Bool?,
@@ -202,6 +203,7 @@ extension UnreadTestTransportState {
     }
 }
 
+@Suite(.serialized)
 @MainActor
 struct ChatViewModelUnreadTests {
     @Test func `successful activation clears unread once`() async throws {
@@ -371,12 +373,12 @@ struct ChatViewModelUnreadTests {
     @Test func `failed route lease preserves mutation queue ordering`() async throws {
         let recorder = UnreadMutationRecorder()
         let queue = ChatSessionUnreadMutationQueue()
-        let firstLease = OpenClawChatSessionMutationRouteLease { _, _, _, _, _, _ in
+        let firstLease = OpenClawChatSessionMutationRouteLease { _, _, _, _, _, _, _ in
             await recorder.append("first-start")
             try await Task.sleep(for: .milliseconds(100))
             await recorder.append("first-end")
         }
-        let thirdLease = OpenClawChatSessionMutationRouteLease { _, _, _, _, _, _ in
+        let thirdLease = OpenClawChatSessionMutationRouteLease { _, _, _, _, _, _, _ in
             await recorder.append("third")
         }
 

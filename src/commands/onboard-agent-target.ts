@@ -2,8 +2,9 @@
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  resolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
@@ -26,7 +27,9 @@ export function resolveOnboardingAgentTarget(
   config: OpenClawConfig,
   explicitAgentId?: string,
 ): OnboardingAgentTarget {
-  const agentId = normalizeAgentId(explicitAgentId ?? resolveDefaultAgentId(config));
+  const agentId = normalizeAgentId(
+    explicitAgentId ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveSoleAgentId(config),
+  );
   return {
     agentId,
     agentDir: resolveAgentDir(config, agentId),

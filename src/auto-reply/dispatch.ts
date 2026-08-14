@@ -1,4 +1,5 @@
 /** Auto-reply dispatch orchestration, hook composition, and foreground delivery fencing. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { isChannelPartialDeliveryError } from "../channels/turn/delivery-result.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -76,25 +77,17 @@ function applyRuntimeToolsAllow(
   };
 }
 
-function normalizeForegroundReplyFencePart(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function resolveForegroundReplyFenceKey(finalized: FinalizedMsgContext): string | undefined {
-  const sessionKey = normalizeForegroundReplyFencePart(finalized.SessionKey);
+  const sessionKey = normalizeOptionalString(finalized.SessionKey);
   const channel =
-    normalizeForegroundReplyFencePart(finalized.OriginatingChannel) ??
-    normalizeForegroundReplyFencePart(finalized.Surface) ??
-    normalizeForegroundReplyFencePart(finalized.Provider);
+    normalizeOptionalString(finalized.OriginatingChannel) ??
+    normalizeOptionalString(finalized.Surface) ??
+    normalizeOptionalString(finalized.Provider);
   const target =
-    normalizeForegroundReplyFencePart(finalized.OriginatingTo) ??
-    normalizeForegroundReplyFencePart(finalized.NativeChannelId) ??
-    normalizeForegroundReplyFencePart(finalized.From) ??
-    normalizeForegroundReplyFencePart(finalized.To);
+    normalizeOptionalString(finalized.OriginatingTo) ??
+    normalizeOptionalString(finalized.NativeChannelId) ??
+    normalizeOptionalString(finalized.From) ??
+    normalizeOptionalString(finalized.To);
 
   if (!sessionKey || !channel || !target) {
     return undefined;
@@ -104,7 +97,7 @@ function resolveForegroundReplyFenceKey(finalized: FinalizedMsgContext): string 
   return JSON.stringify([
     "foreground",
     channel,
-    normalizeForegroundReplyFencePart(finalized.AccountId) ?? "default",
+    normalizeOptionalString(finalized.AccountId) ?? "default",
     sessionKey,
     normalizeChatType(finalized.ChatType) ?? "unknown",
     target,

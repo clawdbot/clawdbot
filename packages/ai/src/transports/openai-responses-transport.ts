@@ -6,6 +6,7 @@ import {
   createOpenAIResponsesClient,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-client.js";
+import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
 import {
   buildResponsesFailedNoDetailsObservation,
   normalizeResponsesFailedEvent,
@@ -20,7 +21,6 @@ import {
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
 import {
-  buildOpenAIResponsesReasoningReplayMetadata,
   createResponsesStreamWithEncryptedContentRetry,
   isInvalidEncryptedContentError,
   prepareOpenAIResponsesReasoningItemForReplay,

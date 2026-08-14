@@ -459,23 +459,18 @@ Per-account override: `channels.whatsapp.accounts.<id>.reactionLevel`.
 
 ## Acknowledgment reactions
 
-`channels.whatsapp.ackReaction` sends an immediate reaction on inbound receipt, gated by `reactionLevel` (suppressed when `"off"`):
+`messages.ackReaction` sends an immediate reaction on inbound receipt, gated by the active WhatsApp account's `reactionLevel` (suppressed when `"off"`). `messages.ackReactionScope` selects direct messages, groups, or both:
 
 ```json5
 {
-  channels: {
-    whatsapp: {
-      ackReaction: {
-        emoji: "👀",
-        direct: true,
-        group: "mentions", // always | mentions | never
-      },
-    },
+  messages: {
+    ackReaction: "👀",
+    ackReactionScope: "group-mentions", // all | direct | group-all | group-mentions | off
   },
 }
 ```
 
-Notes: sent immediately after inbound is accepted (pre-reply); if `ackReaction` is present without `emoji`, WhatsApp uses the routed agent's identity emoji falling back to "👀" (omit `ackReaction` or set `emoji: ""` for no ack); failures are logged but do not block reply delivery; group mode `mentions` reacts only on mention-triggered turns, while group activation `always` bypasses that check; WhatsApp uses `channels.whatsapp.ackReaction` only (legacy `messages.ackReaction` does not apply here).
+Notes: the reaction is sent immediately after inbound is accepted (pre-reply); omit `messages.ackReaction` or set it to `""` for no acknowledgment. Failures are logged but do not block reply delivery. The default scope is `"group-mentions"`; use `"all"` for direct messages and all eligible groups.
 
 ## Lifecycle status reactions
 
@@ -491,7 +486,7 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 }
 ```
 
-Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain ack reactions; WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the ack after the final done/error state.
+Notes: `messages.ackReactionScope` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain acknowledgment reactions. WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the acknowledgment after the final done/error state.
 
 ## Active-turn typing
 
@@ -625,7 +620,7 @@ Resolution for direct messages follows the identical pattern against the `direct
 This account-replaces-root behavior for prompt resolution is a plain shallow override: any account `groups`/`direct` key, including an explicit empty object, replaces the root map. It differs from the group-membership allowlist check described above, which has a single-account safety net for an accidentally empty `groups: {}`.
 </Note>
 
-**Difference from Telegram:** Telegram suppresses root `groups` for every account in a multi-account setup (even accounts with no `groups` of their own) to stop a bot receiving group messages for groups it does not belong to. WhatsApp does not apply that guard — root `groups`/`direct` are inherited by any account without its own override, regardless of account count. In a multi-account WhatsApp setup, define the full map under each account explicitly if you want per-account prompts.
+**Difference from Telegram:** Telegram uses the same whole-map account override for `groups` in multi-account configs, but a single account's empty `groups: {}` falls back to root groups as a migration safety net. Telegram's `direct` map also has separate DM-topic semantics. In WhatsApp—or for one account among several Telegram accounts—use an explicit empty `groups: {}` when that account should not inherit root group defaults.
 
 Important behavior:
 
@@ -681,10 +676,11 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 | Area             | Fields                                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
 | Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                             |
-| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`      |
+| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `reactionLevel`                     |
 | Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
 | Operations       | `configWrites`, `enabled`                                                                                      |
 | Inbound batching | `messages.inbound.debounceMs`, `messages.inbound.byChannel.whatsapp`                                           |
+| Acknowledgments  | `messages.ackReaction`, `messages.ackReactionScope`                                                            |
 | Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                   |
 | Prompts          | `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt` |
 

@@ -32,6 +32,31 @@ describe("loadModels", () => {
     expect(first).toBe(second);
   });
 
+  it("keeps model catalogs scoped by agent", async () => {
+    const request = vi.fn(async (_method: string, params: { agentId?: string }) => ({
+      models: [
+        {
+          id: params.agentId ?? "default-model",
+          name: params.agentId ?? "Default Model",
+          provider: "openai",
+        },
+      ],
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const writer = await loadModels(client, { agentId: "writer" });
+    const reviewer = await loadModels(client, { agentId: "reviewer" });
+    await loadModels(client, { agentId: "writer" });
+
+    expect(writer[0]?.id).toBe("writer");
+    expect(reviewer[0]?.id).toBe("reviewer");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      agentId: "writer",
+    });
+  });
+
   it("keeps a late stale response from clobbering a fresher refresh result", async () => {
     const stale = [{ id: "stale", name: "Stale", provider: "openai" }];
     const fresh = [{ id: "fresh", name: "Fresh", provider: "openai" }];

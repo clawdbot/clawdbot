@@ -22,6 +22,7 @@ const cardboardProofDir = path.resolve(
   process.cwd(),
   ".artifacts/control-ui-e2e/workboard-cardboard",
 );
+const workboardPinProofDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/workboard-pin");
 const pluginWidgetsProofDir = path.resolve(
   process.cwd(),
   ".artifacts/control-ui-e2e/workboard-plugin-widgets",
@@ -261,6 +262,10 @@ suite.define(() => {
   });
 
   it("pins Canvas HTML, follows board commands, and persists dock resizing", async () => {
+    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    if (recordProof) {
+      await mkdir(workboardPinProofDir, { recursive: true });
+    }
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
     const resizableBoardSnapshot = {
@@ -321,6 +326,17 @@ suite.define(() => {
 
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     await preview.hover();
+    if (recordProof) {
+      await preview.locator(".chat-tool-card__preview-header").hover();
+      await expect
+        .poll(() =>
+          preview
+            .locator("[data-widget-actions]")
+            .evaluate((element) => getComputedStyle(element).opacity),
+        )
+        .toBe("1");
+      await preview.screenshot({ path: path.join(workboardPinProofDir, "01-pin-hover.png") });
+    }
     await preview.getByRole("button", { name: "Pin to dashboard" }).click();
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
     expect((await gateway.getRequests("board.widget.put"))[0]?.params).toEqual({
@@ -332,6 +348,9 @@ suite.define(() => {
     await expect
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
+    if (recordProof) {
+      await preview.screenshot({ path: path.join(workboardPinProofDir, "02-pinned.png") });
+    }
     await gateway.setMethodResponse("board.get", resizablePinnedBoardSnapshot);
 
     await gateway.emitGatewayEvent("board.command", {
@@ -472,6 +491,7 @@ suite.define(() => {
         "board.get",
         "chat.metadata",
         "chat.startup",
+        "sessions.patch",
         "workboard.cards.list",
         "workboard.cards.move",
       ],
@@ -511,6 +531,55 @@ suite.define(() => {
           path: path.join(pluginWidgetsProofDir, "01-plugin-widgets-ready.png"),
         });
       }
+
+      const cardElement = page.locator("openclaw-workboard-card-widget");
+      await cardElement.evaluate((element) => {
+        Reflect.set(globalThis, "workboardPluginElementIdentity", element);
+      });
+      const listCountBeforeHide = (await gateway.getRequests("workboard.cards.list")).length;
+      const mode = (value: "chat" | "split") =>
+        page.locator(`wa-radio.settings-segmented__btn[value="${value}"]`);
+
+      await mode("chat").click();
+      await expect
+        .poll(() => page.locator(".board-session-surface").getAttribute("hidden"))
+        .not.toBeNull();
+      await expect
+        .poll(() =>
+          cardElement.evaluate(
+            (element) =>
+              element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
+              Reflect.get(element, "active") === false &&
+              element.isConnected,
+          ),
+        )
+        .toBe(true);
+      await gateway.emitGatewayEvent("plugin.workboard.changed", {
+        epoch: "plugin-widget-e2e-hidden",
+        revision: 2,
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      expect(await gateway.getRequests("workboard.cards.list")).toHaveLength(listCountBeforeHide);
+
+      await mode("split").click();
+      await expect
+        .poll(async () => (await gateway.getRequests("workboard.cards.list")).length)
+        .toBe(listCountBeforeHide + 1);
+      await expect
+        .poll(() =>
+          cardElement.evaluate(
+            (element) =>
+              element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
+              Reflect.get(element, "active") === true &&
+              element.isConnected,
+          ),
+        )
+        .toBe(true);
 
       await cardWidget.getByRole("combobox").selectOption("running");
       const moveRequest = await gateway.waitForRequest("workboard.cards.move");

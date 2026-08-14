@@ -313,6 +313,15 @@ export async function startCodexAttemptTurn(
     await releaseSharedClientLeaseAndRetireOneShotClient();
     throw new Error("codex app-server turn/start failed without an error");
   }
+  const authoritySourceRef = context.attemptTools.scheduledAppAuthoritySourceRef;
+  if (resourceState.thread.pluginAppPolicyContext) {
+    authoritySourceRef.current = {
+      client: resourceState.client,
+      threadId: resourceState.thread.threadId,
+      policyContext: resourceState.thread.pluginAppPolicyContext,
+      configCwd: connection.effectiveCwd,
+    };
+  }
   turnIdRef.current = turn.turn.id;
   return { turn };
 }

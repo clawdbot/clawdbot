@@ -21,7 +21,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { escapeRegExp } from "../src/shared/regexp.js";
-import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
+import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mts";
 import {
   collectBundledExtensionManifestErrors,
   type BundledExtension,
@@ -31,8 +31,8 @@ import {
   collectRootPackageExcludedExtensionDirs,
   listBundledPluginPackArtifacts,
 } from "./lib/bundled-plugin-build-entries.mjs";
-import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
-import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
+import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
   isLegacyPluginDependencyInstallStagePath,
@@ -40,23 +40,23 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "./lib/package-dist-inventory.ts";
-import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
+import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
 import {
   listPluginSdkDistArtifacts,
   listPackagedPrivatePluginSdkRuntimeArtifacts,
   listUnpackagedPrivatePluginSdkDistArtifacts,
-} from "./lib/plugin-sdk-entries.mjs";
+} from "./lib/plugin-sdk-entries.mts";
 import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
-} from "./lib/workspace-bootstrap-smoke.mjs";
-import { resolveNpmRunner } from "./npm-runner.mjs";
+} from "./lib/workspace-bootstrap-smoke.mts";
+import { resolveNpmRunner } from "./npm-runner.mts";
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
 } from "./openclaw-npm-postpublish-verify.ts";
-import { resolvePnpmRunner } from "./pnpm-runner.mjs";
-import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mts";
+import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mts";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
@@ -65,7 +65,7 @@ type ReleaseCheckExecOptions = ExecFileSyncOptions & {
 };
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
-export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
+export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mts";
 
 export const RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV =
   "OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR";
@@ -91,7 +91,7 @@ const requiredPathGroups = [
   ...listPluginSdkDistArtifacts(),
   ...listPackagedPrivatePluginSdkRuntimeArtifacts(),
   ...listBundledPluginPackArtifacts(),
-  ...listStaticExtensionAssetOutputs().filter((relativePath) => {
+  ...listStaticExtensionAssetOutputs().filter((relativePath: string) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
     return (
       !match ||
@@ -101,7 +101,6 @@ const requiredPathGroups = [
     );
   }),
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
-  "scripts/npm-runner.mjs",
   "scripts/prepare-git-hooks.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
   "scripts/lib/official-external-channel-catalog.json",
@@ -1042,7 +1041,9 @@ function runPackedBundledChannelEntrySmoke(): void {
       {
         command: process.execPath,
         args: [
-          resolve("scripts/test-built-bundled-channel-entry-smoke.mjs"),
+          "--import",
+          "tsx",
+          resolve("scripts/test-built-bundled-channel-entry-smoke.mts"),
           "--package-root",
           packageRoot,
         ],
@@ -1157,7 +1158,7 @@ export function collectForbiddenPackContentPaths(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
+export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
 
 function extractTag(item: string, tag: string): string | null {
   const escapedTag = escapeRegExp(tag);

@@ -659,7 +659,7 @@ export function createMSTeamsReplyDispatcher(params: {
             return false;
           }
           await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
+            buildChannelProgressDraftLineForEntry(msteamsCfg, {
               event: "command-output",
               ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
               ...(typeof payload?.toolCallId === "string"

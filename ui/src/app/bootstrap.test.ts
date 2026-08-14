@@ -93,75 +93,89 @@ describe("normalizeInitialApplicationLocation", () => {
     );
   });
 
-  it("waits for the configured default agent before normalizing a persisted alias", async () => {
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    let snapshot = {
-      phase: "connecting",
-      client: null,
-      hello: null,
-    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
-    const gateway = {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe: (next: GatewayListener) => {
-        listener = next;
-        return () => undefined;
-      },
-    };
-    const pending = resolveInitialApplicationLocation({
-      location: { pathname: "/", search: "", hash: "" },
-      basePath: "",
-      sessionKey: "main",
-      gateway,
-      agentsList: () => null,
-      signal: new AbortController().signal,
-    });
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    snapshot = {
-      phase: "connected",
-      client: {},
-      hello: {
-        snapshot: {
-          sessionDefaults: { defaultAgentId: "research", mainKey: "workspace" },
+  it.each([
+    { persistedSessionKey: "main", connectedSessionKey: "main" },
+    { persistedSessionKey: "", connectedSessionKey: "agent:research:workspace" },
+  ])(
+    "waits for gateway defaults before normalizing '$persistedSessionKey'",
+    async ({ persistedSessionKey, connectedSessionKey }) => {
+      type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+      let listener: GatewayListener | null = null;
+      let snapshot = {
+        phase: "connecting",
+        client: null,
+        hello: null,
+      } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+      const gateway = {
+        get snapshot() {
+          return snapshot;
         },
-      },
-    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
-    const connectedListener = listener as GatewayListener | null;
-    if (!connectedListener) {
-      throw new Error("expected gateway readiness subscription");
-    }
-    connectedListener(snapshot);
-
-    await expect(pending).resolves.toEqual({ pathname: "/chat/research", search: "", hash: "" });
-  });
-
-  it("does not wait for gateway defaults on an explicit startup route", async () => {
-    const subscribe = vi.fn(() => () => undefined);
-    const location = { pathname: "/settings/appearance", search: "", hash: "" };
-
-    await expect(
-      resolveInitialApplicationLocation({
-        location,
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      };
+      const pending = resolveInitialApplicationLocation({
+        location: { pathname: "/", search: "", hash: "" },
         basePath: "",
-        sessionKey: "main",
-        gateway: {
-          snapshot: { phase: "connecting", client: null, hello: null },
-          subscribe,
-        } as unknown as ApplicationContext<RouteId>["gateway"],
+        sessionKey: persistedSessionKey,
+        gateway,
         agentsList: () => null,
         signal: new AbortController().signal,
-      }),
-    ).resolves.toBe(location);
-    expect(subscribe).not.toHaveBeenCalled();
-  });
+      });
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      snapshot = {
+        phase: "connected",
+        client: {},
+        sessionKey: connectedSessionKey,
+        hello: {
+          snapshot: {
+            sessionDefaults: { defaultAgentId: "research", mainKey: "workspace" },
+          },
+        },
+      } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+      const connectedListener = listener as GatewayListener | null;
+      if (!connectedListener) {
+        throw new Error("expected gateway readiness subscription");
+      }
+      connectedListener(snapshot);
+
+      await expect(pending).resolves.toEqual({
+        pathname: "/chat/research",
+        search: "",
+        hash: "",
+      });
+    },
+  );
+
+  it.each(["main", ""])(
+    "does not wait for gateway defaults on an explicit startup route with '%s'",
+    async (sessionKey) => {
+      const subscribe = vi.fn(() => () => undefined);
+      const location = { pathname: "/settings/appearance", search: "", hash: "" };
+
+      await expect(
+        resolveInitialApplicationLocation({
+          location,
+          basePath: "",
+          sessionKey,
+          gateway: {
+            snapshot: { phase: "connecting", client: null, hello: null },
+            subscribe,
+          } as unknown as ApplicationContext<RouteId>["gateway"],
+          agentsList: () => null,
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toBe(location);
+      expect(subscribe).not.toHaveBeenCalled();
+    },
+  );
 
   it("canonicalizes a scoped persisted main key when defaults are already known", async () => {
     const subscribe = vi.fn(() => () => undefined);
@@ -549,6 +563,25 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
+  it("keeps the terminal document route outside the application router", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    window.history.replaceState({}, "", "/terminal");
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const routerStart = vi.spyOn(runtime.router, "start");
+
+    try {
+      await runtime.start();
+
+      expect(window.location.pathname).toBe("/terminal");
+      expect(routerStart).not.toHaveBeenCalled();
+    } finally {
+      runtime.stop();
+      window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+    }
+  });
+
   it("keeps the latest navigation requested before router start", async () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;
@@ -719,6 +752,58 @@ describe("normalizeInitialApplicationLocation", () => {
       runtime.stop();
       saveSettings(previousSettings);
       window.history.replaceState({}, "", previousUrl);
+    }
+  });
+
+  it("resolves runtime startup when the bare default route is not found", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    saveSettings({
+      ...previousSettings,
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+    });
+    window.history.replaceState({}, "", "/");
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const routerStart = vi
+      .spyOn(runtime.router, "start")
+      .mockRejectedValue({ type: "notFound", data: { routeId: "chat" } });
+
+    try {
+      await expect(runtime.start()).resolves.toBeUndefined();
+      expect(routerStart).toHaveBeenCalledOnce();
+    } finally {
+      runtime.stop();
+      saveSettings(previousSettings);
+      window.history.replaceState({}, "", previousUrl);
+    }
+  });
+
+  it("synchronizes every theme-color meta with the resolved theme background", () => {
+    const previousSettings = loadSettings();
+    const style = document.createElement("style");
+    style.textContent = ':root[data-theme="light"] { --bg: #123456; }';
+    const lightMeta = document.createElement("meta");
+    lightMeta.name = "theme-color";
+    lightMeta.media = "(prefers-color-scheme: light)";
+    const darkMeta = document.createElement("meta");
+    darkMeta.name = "theme-color";
+    darkMeta.media = "(prefers-color-scheme: dark)";
+    document.head.append(style, lightMeta, darkMeta);
+    saveSettings({ ...previousSettings, theme: "claw", themeMode: "light" });
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+
+    try {
+      expect(lightMeta.content).toBe("#123456");
+      expect(darkMeta.content).toBe("#123456");
+      expect(lightMeta.hasAttribute("media")).toBe(false);
+      expect(darkMeta.hasAttribute("media")).toBe(false);
+    } finally {
+      runtime.stop();
+      style.remove();
+      lightMeta.remove();
+      darkMeta.remove();
+      saveSettings(previousSettings);
     }
   });
 });

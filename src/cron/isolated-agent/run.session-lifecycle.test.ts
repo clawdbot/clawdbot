@@ -1,5 +1,6 @@
 // Persistent cron session tests cover lifecycle admission and mutation races.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   interruptSessionWorkAdmissions,
@@ -24,14 +25,6 @@ import {
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const inMemoryStorePath = "/tmp/store.json";
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function makePersistentCronParams(sessionKey: string) {
   return makeIsolatedAgentParamsFixture({
@@ -221,7 +214,9 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         if (abortSignal?.aborted) {
           lifecycleInterrupted.resolve();
         } else {
-          abortSignal?.addEventListener("abort", lifecycleInterrupted.resolve, { once: true });
+          abortSignal?.addEventListener("abort", () => lifecycleInterrupted.resolve(), {
+            once: true,
+          });
         }
         await releaseRunner.promise;
         return {

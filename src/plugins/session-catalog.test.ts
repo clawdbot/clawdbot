@@ -98,6 +98,8 @@ describe("importSessionCatalogHistory", () => {
       const { result } = importHistory(
         [
           { id: "u-1", type: "userMessage", text: "repeat me", timestamp: "not-a-date" },
+          { id: "u-2", type: "userMessage", text: "numeric year", timestamp: "2026" },
+          { id: "u-3", type: "userMessage", text: "numeric zero", timestamp: "0" },
           { id: "r-empty", type: "reasoning" },
           {
             id: "r-1",
@@ -118,6 +120,8 @@ describe("importSessionCatalogHistory", () => {
 
     expect(transcript.messages.map(messageText)).toEqual([
       "repeat me",
+      "numeric year",
+      "numeric zero",
       "Thinking\n\ncareful",
       "answer",
       "Tool call\n\nbash",
@@ -126,10 +130,15 @@ describe("importSessionCatalogHistory", () => {
     expect(transcript.messages[0]?.["__openclaw"]).toEqual({
       mirrorOrigin: "pi-catalog-import",
     });
-    expect(transcript.messages[1]?.timestamp).toBe(-1_000);
-    expect(transcript.messages[2]?.model).toBe("anthropic/claude");
+    expect(transcript.messages[0]?.timestamp).toBe(Date.parse("2026-07-25T12:00:00.000Z"));
+    expect(transcript.messages[1]?.timestamp).toBe(Date.parse("2026"));
+    expect(transcript.messages[2]?.timestamp).toBe(Date.parse("0"));
+    expect(transcript.messages[3]?.timestamp).toBe(-1_000);
+    expect(transcript.messages[4]?.model).toBe("anthropic/claude");
     expect(transcript.messages.map((message) => message.idempotencyKey)).toEqual([
       "pi-catalog:thread-1:u-1",
+      "pi-catalog:thread-1:u-2",
+      "pi-catalog:thread-1:u-3",
       "pi-catalog:thread-1:r-1",
       "pi-catalog:thread-1:a-1",
       "pi-catalog:thread-1:t-1",

@@ -18,7 +18,7 @@ export type SystemAgentOperation =
   | {
       kind: "config-set-ref";
       path: string;
-      source: "env" | "file" | "exec";
+      source: "env" | "file" | "exec" | "store";
       id: string;
       provider?: string;
     }

@@ -7,99 +7,45 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import type { MemoryExtraPath } from "./types.js";
 export { normalizeAgentId };
-export { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 
-// Shared OpenClaw config helpers used by memory host, QMD, and agent context code.
+// Shared OpenClaw config helpers used by memory host and agent context code.
 
-/** Chat shape used by memory send-policy matching. */
-type ChatType = "direct" | "group" | "channel";
 type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
-/** Memory backend selected by user config. */
-export type MemoryBackend = "builtin" | "qmd";
 /** Citation injection behavior for memory search results. */
 export type MemoryCitationsMode = "auto" | "on" | "off";
-/** QMD command mode used for search calls. */
-export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
-/** QMD startup policy for background indexing. */
-export type MemoryQmdStartupMode = "off" | "idle" | "immediate";
-
-/** Action returned by a session send-policy rule. */
-type SessionSendPolicyAction = "allow" | "deny";
-/** Match criteria for one memory send-policy rule. */
-type SessionSendPolicyMatch = {
-  channel?: string;
-  chatType?: ChatType;
-  keyPrefix?: string;
-  rawKeyPrefix?: string;
-};
-/** One ordered rule in session send-policy config. */
-type SessionSendPolicyRule = {
-  action: SessionSendPolicyAction;
-  match?: SessionSendPolicyMatch;
-};
-/** Memory send-policy config with default action and ordered rules. */
-export type SessionSendPolicyConfig = {
-  default?: SessionSendPolicyAction;
-  rules?: SessionSendPolicyRule[];
-};
-
-/** QMD collection path plus optional display name and glob pattern. */
-export type MemoryQmdIndexPath = {
-  path: string;
-  name?: string;
-  pattern?: string;
-};
-
-/** QMD session export config. */
-type MemoryQmdSessionConfig = {
-  enabled?: boolean;
-  exportDir?: string;
-  retentionDays?: number;
-};
-
-/** Search and injection limits for QMD memory results. */
-type MemoryQmdLimitsConfig = {
-  maxResults?: number;
-  maxSnippetChars?: number;
-  maxInjectedChars?: number;
-  timeoutMs?: number;
-};
-
-/** Full QMD-backed memory config. */
-export type MemoryQmdConfig = {
-  command?: string;
-  searchMode?: MemoryQmdSearchMode;
-  rerank?: boolean;
-  searchTool?: string;
-  includeDefaultMemory?: boolean;
-  paths?: MemoryQmdIndexPath[];
-  sessions?: MemoryQmdSessionConfig;
-  limits?: MemoryQmdLimitsConfig;
-  scope?: SessionSendPolicyConfig;
-};
 
 /** Top-level memory config shared by host and runtime callers. */
 type MemoryConfig = {
-  backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   search?: MemorySearchConfig;
-  qmd?: MemoryQmdConfig;
 };
 
 /** Per-agent memory search enablement and extra collection paths. */
 type MemorySearchConfig = {
   enabled?: boolean;
   rememberAcrossConversations?: boolean;
-  extraPaths?: string[];
-  qmd?: {
-    extraCollections?: MemoryQmdIndexPath[];
-  };
+  extraPaths?: MemoryExtraPath[];
 };
+
+/** Trim and deduplicate configured extra-memory roots without losing pattern identity. */
+export function normalizeConfiguredMemoryExtraPaths(
+  extraPaths?: MemoryExtraPath[],
+): MemoryExtraPath[] {
+  const normalized = new Map<string, MemoryExtraPath>();
+  for (const entry of extraPaths ?? []) {
+    const configuredPath = (typeof entry === "string" ? entry : entry.path).trim();
+    const pattern = typeof entry === "string" ? "" : entry.pattern?.trim() || "";
+    if (configuredPath) {
+      normalized.set(
+        `${configuredPath}\0${pattern}`,
+        pattern ? { path: configuredPath, pattern } : configuredPath,
+      );
+    }
+  }
+  return Array.from(normalized.values());
+}
 
 /** Agent context limits that bound memory file reads. */
 type AgentContextLimitsConfig = {
@@ -215,7 +161,7 @@ function resolveRequiredHomeDir(
 }
 
 /** Resolve standalone memory-host paths without importing core home-directory policy. */
-export function resolveMemoryHostUserPath(
+function resolveMemoryHostUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -281,7 +227,7 @@ function resolveDefaultAgentWorkspaceDir(env: NodeJS.ProcessEnv = process.env): 
   const home = resolveRequiredHomeDir(env, os.homedir);
   const profile = env.OPENCLAW_PROFILE?.trim();
   if (profile && normalizeLowercaseStringOrEmpty(profile) !== "default") {
-    return path.join(home, ".openclaw", `workspace-${profile}`);
+    return path.join(resolveStateDir(env), "workspace");
   }
   return path.join(home, ".openclaw", "workspace");
 }
@@ -356,20 +302,24 @@ export function resolveMemoryHostAgentContextLimits(
 export function resolveMemoryHostSearchPathConfig(
   cfg: OpenClawConfig,
   agentId: string,
-): { enabled: boolean; rememberAcrossConversations: boolean; extraPaths: string[] } | null {
+): {
+  enabled: boolean;
+  rememberAcrossConversations: boolean;
+  extraPaths: MemoryExtraPath[];
+} | null {
   const defaults = cfg.memory?.search;
   const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   if (!enabled) {
     return null;
   }
-  const rawPaths = normalizeStringEntries([
+  const extraPaths = normalizeConfiguredMemoryExtraPaths([
     ...(defaults?.extraPaths ?? []),
     ...(overrides?.extraPaths ?? []),
   ]);
   return {
     enabled,
     rememberAcrossConversations: resolveRememberAcrossConversations(cfg, agentId),
-    extraPaths: uniqueStrings(rawPaths),
+    extraPaths,
   };
 }

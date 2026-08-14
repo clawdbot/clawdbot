@@ -454,28 +454,8 @@ merge_run() {
   local repo_nwo
   repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 
-  local landed_sha_url=""
-  if gh api repos/:owner/:repo/commits/"$landed_sha" >/dev/null 2>&1; then
-    landed_sha_url="https://github.com/$repo_nwo/commit/$landed_sha"
-  else
-    echo "Landed commit is not resolvable via repository commit endpoint: $landed_sha"
-    exit 1
-  fi
-
-  local prep_sha_url=""
-  if gh api repos/:owner/:repo/commits/"$PREP_HEAD_SHA" >/dev/null 2>&1; then
-    prep_sha_url="https://github.com/$repo_nwo/commit/$PREP_HEAD_SHA"
-  else
-    local pr_commit_count
-    pr_commit_count=$(gh pr view "$pr" --json commits --jq "[.commits[].oid | select(. == \"$PREP_HEAD_SHA\")] | length")
-    if [ "${pr_commit_count:-0}" -gt 0 ]; then
-      prep_sha_url="https://github.com/$repo_nwo/pull/$pr/commits/$PREP_HEAD_SHA"
-    fi
-  fi
-  if [ -z "$prep_sha_url" ]; then
-    echo "Prepared head SHA is not resolvable in repo commits or PR commit list: $PREP_HEAD_SHA"
-    exit 1
-  fi
+  local landed_sha_url="https://github.com/$repo_nwo/commit/$landed_sha"
+  local prep_sha_url="https://github.com/$repo_nwo/pull/$pr/commits/$PREP_HEAD_SHA"
 
   local ok=0
   local comment_body

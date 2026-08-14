@@ -8,7 +8,6 @@ import {
 } from "./group-policy.js";
 import { whatsappSetupContract } from "./setup-core.js";
 import { createWhatsAppPluginBase, whatsappSetupWizardProxy } from "./shared.js";
-import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 
 export const whatsappSetupPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   ...createWhatsAppPluginBase({
@@ -21,8 +20,4 @@ export const whatsappSetupPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     isConfigured: (account) => Boolean(account.authDir),
     isLinked: async (account) => await readWhatsAppAccountLinkState(account.authDir),
   }),
-  lifecycle: {
-    detectLegacyStateMigrations: ({ oauthDir }) =>
-      detectWhatsAppLegacyStateMigrations({ oauthDir }),
-  },
 };

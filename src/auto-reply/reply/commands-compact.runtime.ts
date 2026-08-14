@@ -7,7 +7,6 @@ export {
 } from "../../agents/embedded-agent.js";
 export {
   resolveFreshSessionTotalTokens,
-  resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions.js";
 export { enqueueSystemEvent } from "../../infra/system-events.js";

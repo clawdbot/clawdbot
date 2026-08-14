@@ -269,16 +269,15 @@ export function resolvePinnedClientMetadata(params: {
     !isNodeHostUsingMacAppPlatformPin &&
     !isNativeAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
-  const pinnedPlatform =
-    claimedPlatform === pairedPlatform
+  const pinnedPlatform = isLegacyNodeHostPlatformPin
+    ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
+    : claimedPlatform === pairedPlatform
       ? params.pairedPlatform
-      : isLegacyNodeHostPlatformPin
-        ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
-        : isNodeHostUsingMacAppPlatformPin
-          ? params.pairedPlatform
-          : isNativeAppPlatformVersionRefresh
-            ? params.claimedPlatform
-            : undefined;
+      : isNodeHostUsingMacAppPlatformPin
+        ? params.pairedPlatform
+        : isNativeAppPlatformVersionRefresh
+          ? params.claimedPlatform
+          : undefined;
   return {
     platformMismatch,
     deviceFamilyMismatch,

@@ -48,7 +48,7 @@ function createActiveRun(
 function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
-    logHealth: { error: vi.fn() },
+    logHealth: { info: vi.fn(), error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
@@ -240,7 +240,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("delays curator startup, skips overlap, and unregisters on cleanup", async () => {
+  it("delays collection review and does not overlap runs", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     let resolveSweep = () => {};
@@ -250,16 +250,12 @@ describe("startGatewayMaintenanceTimers", () => {
           resolveSweep = resolve;
         }),
     );
-    const unregister = vi.fn();
-    const register = vi.fn(() => unregister);
     const timers = startGatewayMaintenanceTimers({
       ...createMaintenanceTimerDeps(),
       enableSkillCurator: true,
-      runSkillCuratorSweep: sweep,
-      registerSkillUsageTracking: register,
+      runSkillCollectionReconcile: sweep,
     });
 
-    expect(register).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(CURATOR_INITIAL_DELAY_MS - 1);
     expect(sweep).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -275,7 +271,6 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     await stopMaintenanceTimers(timers);
-    expect(unregister).toHaveBeenCalledTimes(1);
   });
 
   it("passes owner activity to default managed worktree cleanup", async () => {
@@ -332,7 +327,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = {
       ...createMaintenanceTimerDeps(),
-      logHealth: { error: vi.fn() },
+      logHealth: { info: vi.fn(), error: vi.fn() },
     };
 
     const timers = startGatewayMaintenanceTimers({

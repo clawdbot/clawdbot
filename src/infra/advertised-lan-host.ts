@@ -11,9 +11,8 @@ import {
 const DEFAULT_ROUTE_HINT_TIMEOUT_MS = 3_000;
 const DEFAULT_ROUTE_HINT_OUTPUT_BYTES = 16 * 1024;
 const WINDOWS_DEFAULT_ROUTE_COMMAND =
-  "Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
-  "Select-Object -Property InterfaceAlias,InterfaceIndex,NextHop,RouteMetric,InterfaceMetric,DestinationPrefix | " +
-  "ConvertTo-Json -Compress";
+  "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
+  "Select-Object -Property InterfaceAlias,RouteMetric,InterfaceMetric | ConvertTo-Json -Compress";
 
 type AdvertisedLanHostCandidate = {
   interfaceName: string;
@@ -187,44 +186,33 @@ async function resolveDefaultRouteHints(params: {
   runCommandWithTimeout: AdvertisedLanHostCommandRunner;
   timeoutMs: number;
 }): Promise<AdvertisedLanRouteHint[]> {
+  let argv: string[];
+  let parse: typeof parseWindowsDefaultRouteHints;
   if (params.platform === "win32") {
-    const stdout = await runRouteHintCommand(
-      params.runCommandWithTimeout,
-      [
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        WINDOWS_DEFAULT_ROUTE_COMMAND,
-      ],
-      params.timeoutMs,
-    );
-    return stdout ? parseWindowsDefaultRouteHints(stdout) : [];
+    argv = [
+      "powershell.exe",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      WINDOWS_DEFAULT_ROUTE_COMMAND,
+    ];
+    parse = parseWindowsDefaultRouteHints;
+  } else if (params.platform === "darwin") {
+    argv = ["route", "-n", "get", "default"];
+    parse = parseMacOsDefaultRouteHints;
+  } else if (params.platform === "linux") {
+    argv = ["ip", "-4", "route", "show", "default"];
+    parse = parseLinuxDefaultRouteHints;
+  } else {
+    return [];
   }
 
-  if (params.platform === "darwin") {
-    const stdout = await runRouteHintCommand(
-      params.runCommandWithTimeout,
-      ["route", "-n", "get", "default"],
-      params.timeoutMs,
-    );
-    return stdout ? parseMacOsDefaultRouteHints(stdout) : [];
-  }
-
-  if (params.platform === "linux") {
-    const stdout = await runRouteHintCommand(
-      params.runCommandWithTimeout,
-      ["ip", "-4", "route", "show", "default"],
-      params.timeoutMs,
-    );
-    return stdout ? parseLinuxDefaultRouteHints(stdout) : [];
-  }
-
-  return [];
+  const stdout = await runRouteHintCommand(params.runCommandWithTimeout, argv, params.timeoutMs);
+  return stdout ? parse(stdout) : [];
 }
 
-export async function resolveAdvertisedLanHost(
+export async function resolveAdvertisedLanHostCore(
   options: ResolveAdvertisedLanHostOptions = {},
 ): Promise<string | null> {
   const candidates = listAdvertisedLanHostCandidates(

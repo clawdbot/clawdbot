@@ -93,6 +93,7 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Dashboard
+import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
@@ -1684,6 +1685,7 @@ private fun SettingsShellScreen(
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
   val channelsSummary by viewModel.channelsSummary.collectAsState()
   val dreamingSummary by viewModel.dreamingSummary.collectAsState()
+  val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
   val providerRows = providerRows(providers = providers, models = models)
   val readyProviderCount = providerRows.count { it.ready }
@@ -1748,7 +1750,7 @@ private fun SettingsShellScreen(
       }
 
       val settingsRows =
-        listOf(
+        listOfNotNull(
           SettingsRow(
             nativeText("Gateway"),
             verbatimText(gatewaySummary(gatewayConnectionDisplay)),
@@ -1801,6 +1803,11 @@ private fun SettingsShellScreen(
           ),
           SettingsRow(nativeText("Dreaming"), verbatimText(dreamingSummaryText(dreamingSummary)), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
           SettingsRow(nativeText("Terminal"), nativeText("Shell in the agent workspace"), Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
+          if (desktopObserveAvailable) {
+            SettingsRow(nativeText("Desktop"), nativeText("View a machine screen"), Icons.Outlined.DesktopWindows, status = isConnected, route = SettingsRoute.Desktop)
+          } else {
+            null
+          },
           SettingsRow(nativeText("Voice"), if (speakerEnabled) nativeText("Speaker on") else nativeText("Speaker muted"), Icons.Default.Mic, route = SettingsRoute.Voice),
           SettingsRow(nativeText("Canvas"), nativeText("Screen surface"), Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
           SettingsRow(nativeText("Notifications"), if (notificationForwardingEnabled) nativeText("Smart delivery") else nativeText("Off"), Icons.Default.Notifications, route = SettingsRoute.Notifications),
@@ -2053,6 +2060,7 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): NativeText =
     SettingsRoute.SkillWorkshop,
     SettingsRoute.Dreaming,
     SettingsRoute.Terminal,
+    SettingsRoute.Desktop,
     -> nativeText("Agents & automation")
 
     SettingsRoute.Voice,

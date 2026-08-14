@@ -10,7 +10,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.
 import type { ConfigSnapshot } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
-import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
 import {
   canCallGatewayMethod,
   isGatewayMethodAdvertised,

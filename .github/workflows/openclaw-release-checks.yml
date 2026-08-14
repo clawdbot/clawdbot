@@ -9,6 +9,11 @@ on:
         description: Branch, tag, or full commit SHA to validate
         required: true
         type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA target
+        required: false
+        default: ""
+        type: string
       expected_sha:
         description: Optional full SHA that ref must resolve to
         required: false
@@ -127,7 +132,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
@@ -143,6 +148,7 @@ jobs:
       mode: ${{ steps.inputs.outputs.mode }}
       release_profile: ${{ steps.inputs.outputs.release_profile }}
       run_release_soak: ${{ steps.inputs.outputs.run_release_soak }}
+      qa_live_scheduled: ${{ steps.inputs.outputs.qa_live_scheduled }}
       fail_fast: ${{ steps.inputs.outputs.fail_fast }}
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
@@ -430,10 +436,10 @@ jobs:
             codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"
           fi
 
+          qa_filter_seen=false
           filter="$(printf '%s' "$RELEASE_LIVE_SUITE_FILTER_INPUT" | tr '[:upper:]' '[:lower:]')"
           repo_live_suite_filter="$filter"
           if [[ -n "${filter// }" ]]; then
-            qa_filter_seen=false
             repo_filter_tokens=()
             matrix_selected=false
             buzz_selected=false
@@ -506,7 +512,7 @@ jobs:
             done
 
             if [[ "$qa_filter_seen" == "true" ]]; then
-              repo_live_suite_filter="$(IFS=,; printf '%s' "${repo_filter_tokens[*]}")"
+              repo_live_suite_filter="$(IFS=,; printf '%s' "${repo_filter_tokens[*]-}")"
             fi
 
             if [[ "${#disabled_required_lanes[@]}" -gt 0 ]]; then
@@ -523,6 +529,12 @@ jobs:
               qa_live_whatsapp_enabled="$whatsapp_selected"
               qa_live_slack_enabled="$slack_selected"
             fi
+          fi
+
+          qa_live_scheduled=false
+          if [[ "$RELEASE_RERUN_GROUP_INPUT" == "qa" || "$RELEASE_RERUN_GROUP_INPUT" == "qa-live" ]] ||
+            [[ "$RELEASE_RERUN_GROUP_INPUT" == "all" && ( "$run_release_soak" == "true" || "$qa_filter_seen" == "true" ) ]]; then
+            qa_live_scheduled=true
           fi
 
           cross_os_scheduled=false
@@ -542,6 +554,7 @@ jobs:
             printf 'mode=%s\n' "$RELEASE_MODE_INPUT"
             printf 'release_profile=%s\n' "$release_profile"
             printf 'run_release_soak=%s\n' "$run_release_soak"
+            printf 'qa_live_scheduled=%s\n' "$qa_live_scheduled"
             printf 'fail_fast=%s\n' "$fail_fast"
             printf 'run_maturity_scorecard=%s\n' "$run_maturity_scorecard"
             printf 'allow_unreleased_changelog=%s\n' "$allow_unreleased_changelog"
@@ -572,6 +585,7 @@ jobs:
           RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ steps.inputs.outputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
+          QA_LIVE_SCHEDULED: ${{ steps.inputs.outputs.qa_live_scheduled }}
           FAIL_FAST: ${{ steps.inputs.outputs.fail_fast }}
           RUN_MATURITY_SCORECARD: ${{ steps.inputs.outputs.run_maturity_scorecard }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ steps.inputs.outputs.skip_package_telegram_e2e }}
@@ -593,6 +607,7 @@ jobs:
             echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
+            echo "- QA-live scheduled: \`${QA_LIVE_SCHEDULED}\`"
             echo "- Matrix QA fail fast: \`${FAIL_FAST}\`"
             echo "- Maturity scorecard docs: \`${RUN_MATURITY_SCORECARD}\`"
             echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
@@ -604,7 +619,7 @@ jobs:
             if [[ -n "${RELEASE_CROSS_OS_SUITE_FILTER// }" ]]; then
               echo "- Cross-OS suite filter: \`${RELEASE_CROSS_OS_SUITE_FILTER}\`"
             fi
-            echo "- QA live lanes: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Buzz \`${{ steps.inputs.outputs.qa_live_buzz_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Discord \`${{ steps.inputs.outputs.qa_live_discord_enabled }}\`, WhatsApp \`${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
+            echo "- QA-live lane eligibility: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Buzz \`${{ steps.inputs.outputs.qa_live_buzz_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Discord \`${{ steps.inputs.outputs.qa_live_discord_enabled }}\`, WhatsApp \`${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
             if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
               echo "- Release package spec: \`${RELEASE_PACKAGE_SPEC}\`"
             fi
@@ -728,7 +743,7 @@ jobs:
               --required-plugin-packages-json "$required_packages"
             )
           fi
-          node scripts/resolve-openclaw-package-candidate.mjs \
+          node --import tsx scripts/resolve-openclaw-package-candidate.mts \
             "${source_args[@]}" \
             "${registry_args[@]}" \
             --output-dir .artifacts/docker-e2e-package \
@@ -1253,7 +1268,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Run parity lane
         id: run_lane
@@ -1434,7 +1449,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Generate parity report
         id: generate_report
@@ -1517,7 +1532,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Run runtime-pair lane
         id: candidate_runtime_pair
@@ -1581,7 +1596,7 @@ jobs:
           if [[ "$CANDIDATE_SUITE_OUTCOME" != "success" ]]; then
             validator_args+=(--require-explicit-gap)
           fi
-          node trusted-suite-validator/scripts/validate-qa-runtime-pair-summary.mjs "${validator_args[@]}"
+          node --import tsx trusted-suite-validator/scripts/validate-qa-runtime-pair-summary.mts "${validator_args[@]}"
           if [[ "$CANDIDATE_SUITE_OUTCOME" != "success" ]]; then
             echo "::notice::Trusted workflow validation accepted frozen-candidate runtime-pair evidence after its suite failed."
           fi
@@ -1653,7 +1668,7 @@ jobs:
           if [[ "$CANDIDATE_REPORT_OUTCOME" != "success" ]]; then
             validator_args+=(--require-explicit-gap)
           fi
-          node trusted-report-validator/scripts/validate-qa-runtime-pair-summary.mjs "${validator_args[@]}"
+          node --import tsx trusted-report-validator/scripts/validate-qa-runtime-pair-summary.mts "${validator_args[@]}"
           if [[ "$CANDIDATE_REPORT_OUTCOME" != "success" ]]; then
             echo "::notice::Trusted workflow validation accepted the frozen-candidate runtime-pair report after its reporter failed."
           fi
@@ -1916,7 +1931,7 @@ jobs:
   qa_live_release_checks:
     name: Run QA Live Matrix catalog
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
     permissions:
       contents: read
       pull-requests: read
@@ -1934,7 +1949,7 @@ jobs:
   qa_live_buzz_release_checks:
     name: Run QA Lab live Buzz lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_buzz_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_buzz_enabled == 'true'
     permissions:
       contents: read
       pull-requests: read
@@ -1954,7 +1969,7 @@ jobs:
   qa_live_telegram_release_checks:
     name: Run QA Lab live Telegram lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 210
     permissions:
@@ -1964,7 +1979,7 @@ jobs:
       - name: Dispatch and await trusted Telegram QA
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_REF: ${{ needs.resolve_target.outputs.ref }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
         shell: bash
         run: |
@@ -1973,7 +1988,6 @@ jobs:
           workflow="openclaw-release-telegram-qa.yml"
           run_id=""
           run_name=""
-
           find_child_runs() {
             RUN_NAME="$run_name" gh api -X GET \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
@@ -2025,7 +2039,8 @@ jobs:
               --ref main \
               -f dispatch_id="$dispatch_id" \
               -f expected_trusted_workflow_sha="$expected_trusted_workflow_sha" \
-              -f target_ref="$TARGET_REF" \
+              -f target_context_ref="$TARGET_CONTEXT_REF" \
+              -f target_ref="$TARGET_SHA" \
               -f target_sha="$TARGET_SHA"
 
             for _ in $(seq 1 60); do
@@ -2079,7 +2094,7 @@ jobs:
   qa_live_discord_release_checks:
     name: Run QA Lab live Discord lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -2127,7 +2142,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Run Discord live lane
         id: run_lane
@@ -2194,7 +2209,7 @@ jobs:
   qa_live_whatsapp_release_checks:
     name: Run QA Lab live WhatsApp lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -2226,7 +2241,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Run WhatsApp live lane
         id: run_lane
@@ -2293,7 +2308,7 @@ jobs:
   qa_live_slack_release_checks:
     name: Run QA Lab live Slack lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_slack_enabled == 'true'
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_slack_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -2322,7 +2337,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Run Slack live lane
         id: run_lane
@@ -2528,7 +2543,7 @@ jobs:
           QA_LIVE_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_release_checks.result }}
           QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_buzz_release_checks.result }}
           QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_telegram_release_checks.result }}
-          QA_LIVE_TELEGRAM_SELECTED: ${{ contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true' }}
+          QA_LIVE_TELEGRAM_SELECTED: ${{ needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true' }}
           QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
           QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_whatsapp_release_checks.result }}
           QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_slack_release_checks.result }}

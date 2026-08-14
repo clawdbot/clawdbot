@@ -13,6 +13,7 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { getPluginRegistryRuntime } from "../../plugins/registry-runtime-binding.js";
@@ -32,6 +33,7 @@ import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
+import { catalogStartHandler } from "./session-catalog-terminal-start.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -40,6 +42,21 @@ const SESSION_CATALOG_SHARE_WINDOW_MS = 3_000;
 const SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 128;
 const MAX_CONCURRENT_SESSION_CATALOG_LISTS = 4;
 const MAX_QUEUED_SESSION_CATALOG_LISTS = 32;
+const PROCESS_HOME_CATALOG_SKIP_MESSAGE =
+  "external session catalog HOME fallback skipped: isolated state; configure an explicit root to enable";
+
+let reportedProcessHomeCatalogSkip = false;
+
+function allowProcessHomeFallback(logGateway?: {
+  warn: (message: string, fields?: Record<string, unknown>) => void;
+}): boolean {
+  const allowed = allowsProcessHomeSessionScan();
+  if (!allowed && !reportedProcessHomeCatalogSkip && logGateway) {
+    reportedProcessHomeCatalogSkip = true;
+    logGateway.warn(PROCESS_HOME_CATALOG_SKIP_MESSAGE, { reason: "isolated_state" });
+  }
+  return allowed;
+}
 
 // Catalog adapters may scan local databases or invoke external CLIs. Bound the
 // expensive provider operation itself so adding providers cannot multiply the cap.
@@ -215,7 +232,7 @@ function resolveProviderCreateTarget(
 }
 
 /** Resolves a catalog-owned create target at the start of sessions.create. */
-export function resolveSessionCatalogCreateTarget(
+export function resolveRegisteredCatalogCreateTarget(
   catalogId: string,
   agentId: string,
   config: OpenClawConfig,
@@ -238,6 +255,7 @@ function sessionCatalogListKey(params: {
   agentId: string;
   request: SessionsCatalogListParams;
   search?: string;
+  allowProcessHomeFallback: boolean;
 }): string {
   const cursors = params.request.cursors
     ? Object.entries(params.request.cursors).toSorted(([left], [right]) =>
@@ -251,6 +269,7 @@ function sessionCatalogListKey(params: {
     params.request.limitPerHost ?? null,
     params.request.hostIds ?? null,
     cursors,
+    params.allowProcessHomeFallback,
   ]);
 }
 
@@ -366,12 +385,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const search = normalizeSessionCatalogSearch(request.search);
+    const allowHomeFallback = allowProcessHomeFallback(context.logGateway);
     const progressId = request.progressId;
     const progressConnId = progressId && client?.connId ? client.connId : undefined;
     const listKey = sessionCatalogListKey({
       agentId: resolvedAgent.agentId,
       request,
       search,
+      allowProcessHomeFallback: allowHomeFallback,
     });
     const cache = catalogListCache(config, catalogRegistrations);
     const cached = cache.get(listKey);
@@ -410,7 +431,12 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       const catalogList = await Promise.all(
         selected.map(async (provider): Promise<SessionCatalog> => {
           const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
-          const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
+          const createSession = createTarget.ok
+            ? {
+                model: createTarget.target.model,
+                ...(provider.startTerminalSession ? { startTerminal: true as const } : {}),
+              }
+            : undefined;
           const onHost = (host: SessionCatalog["hosts"][number]) => {
             const catalog = catalogResult(
               provider,
@@ -436,6 +462,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           try {
             const hosts = await sessionCatalogListAdmission.run(() =>
               provider.list({
+                allowProcessHomeFallback: allowHomeFallback,
                 search,
                 limitPerHost: request.limitPerHost,
                 hostIds: request.hostIds,
@@ -480,7 +507,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.read": async ({ params, respond }) => {
+  "sessions.catalog.read": async ({ params, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -498,7 +525,13 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     try {
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(true, await provider.read(providerRequest));
+      respond(
+        true,
+        await provider.read({
+          ...providerRequest,
+          allowProcessHomeFallback: allowProcessHomeFallback(context.logGateway),
+        }),
+      );
     } catch (error) {
       const details = catalogError(error);
       respond(
@@ -509,7 +542,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.continue": async ({ params, respond, client }) => {
+  "sessions.catalog.continue": async ({ params, respond, client, context }) => {
     if (
       !assertValidParams(
         params,
@@ -535,7 +568,11 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       // Fail closed for unscoped callers: providers gate high-authority
       // continues (e.g. node-executing bindings) on these scopes.
       const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-      const result = await provider.continueSession({ ...providerRequest, clientScopes });
+      const result = await provider.continueSession({
+        ...providerRequest,
+        allowProcessHomeFallback: allowProcessHomeFallback(context.logGateway),
+        clientScopes,
+      });
       if (result.conversationBinding) {
         // operator.write on Continue is the approval boundary. Per-turn plugin and
         // node command authorization still applies after this binding is installed.
@@ -588,7 +625,12 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.archive": async ({ params, respond }) => {
+  "sessions.catalog.startTerminal": catalogStartHandler(
+    resolveSessionCatalogProvider,
+    resolveRegisteredCatalogCreateTarget,
+  ),
+
+  "sessions.catalog.archive": async ({ params, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -610,7 +652,13 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     try {
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(true, await provider.archive(providerRequest));
+      respond(
+        true,
+        await provider.archive({
+          ...providerRequest,
+          allowProcessHomeFallback: allowProcessHomeFallback(context.logGateway),
+        }),
+      );
     } catch (error) {
       const details = catalogError(error);
       respond(

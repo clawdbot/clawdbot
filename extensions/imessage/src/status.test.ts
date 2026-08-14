@@ -768,6 +768,7 @@ describe("probeIMessage", () => {
             work: {
               cliPath: "imsg-work",
               dbPath: "/tmp/work-db",
+              remoteHost: "work@messages-mac",
             },
           },
         },
@@ -785,6 +786,7 @@ describe("probeIMessage", () => {
       timeoutMs: 2500,
       cliPath: "imsg-work",
       dbPath: "/tmp/work-db",
+      remoteHost: "work@messages-mac",
     });
   });
 });

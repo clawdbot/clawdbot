@@ -190,9 +190,13 @@ Create a bot with [@BotFather](https://t.me/botfather) (`/newbot`), copy the
 token, then configure OpenClaw from the sandbox SSH session:
 
 ```bash
-openclaw config set channels.telegram.enabled true
-openclaw config set channels.telegram.botToken YOUR_BOT_TOKEN
+export TELEGRAM_BOT_TOKEN="<bot-token>"
+openclaw channels add --channel telegram --use-env
 ```
+
+Also store `TELEGRAM_BOT_TOKEN=<bot-token>` in `~/.openclaw/.env` so the
+background Gateway receives it after a restart. `--use-env` validates the token
+without copying it into `openclaw.json`.
 
 Restart the Gateway (see above), send your bot a DM, then approve the pairing
 code it reports:

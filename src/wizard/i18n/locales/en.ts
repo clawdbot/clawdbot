@@ -293,7 +293,6 @@ export const en = {
         "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
       controlUiPreparing: "Preparing the Control UI…",
       custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
-      failedOptionLine: "{label}: {reason}",
       failedOptionsIntro: "These didn't work just now:",
       findMeLater:
         "You can always find me later — run `openclaw` in a terminal, or open Settings in the dashboard.",
@@ -436,25 +435,25 @@ export const en = {
         "OpenClaw is an open-source assistant that learns and grows with you, by the OpenClaw Foundation (a non-profit).",
       baselineDmSessions:
         "Shared inboxes: isolate DM sessions (session.dmScope: per-channel-peer) and keep tool access minimal.",
-      baselinePairing: "Pairing/allowlists + mention gating.",
-      baselineSandbox: "Sandbox + least-privilege tools.",
-      baselineSecrets: "Keep secrets out of the agent's reachable filesystem.",
+      baselinePairing: "Use pairing or allowlists; require mentions in group chats.",
+      baselineSandbox: "Use a sandbox and give tools only the permissions they need.",
+      baselineSecrets: "Keep secrets outside the agent's reachable filesystem.",
       baselineSharedInbox:
-        "Multi-user/shared inbox: split trust boundaries (separate gateway/credentials, ideally separate OS users/hosts).",
+        "Shared inboxes: use separate gateways and credentials; separate OS users or hosts provide stronger isolation.",
       baselineStrongModel:
-        "Use the strongest available model for any bot with tools or untrusted inboxes.",
+        "Use the strongest available model for bots with tools or shared/public inboxes.",
       confirm:
         "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
       hardeningRequired:
-        "If you're not comfortable with security hardening and access control, don't run OpenClaw.",
-      learnMore: "Learn more",
-      notMultitenant: "OpenClaw is not a hostile multi-tenant boundary by default.",
-      personalAgent: "By default, OpenClaw is a personal agent: one trusted operator boundary.",
+        "If you're not comfortable managing access controls and security hardening, don't run OpenClaw without help.",
+      learnMore: "Learn more at",
+      notMultitenant: "OpenClaw is not designed to safely separate multiple users by default.",
+      personalAgent: "By default, OpenClaw is a personal agent for one operator.",
       promptRisk: "A bad prompt can trick it into doing unsafe things.",
-      recommendedBaseline: "Recommended baseline",
+      recommendedBaseline: "Recommended safer setup",
       runRegularly: "Run regularly",
       sharedAuthority:
-        "If multiple users can message one tool-enabled agent, they share that delegated tool authority.",
+        "If multiple users can message one tool-enabled agent, they can all influence how it uses its tools.",
       title: "Security disclaimer",
       toolAccess: "This bot can read files and run actions if tools are enabled.",
     },

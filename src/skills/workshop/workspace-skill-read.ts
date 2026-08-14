@@ -62,7 +62,7 @@ export async function readWritableWorkspaceSkill(
   workspaceDir: string,
   skillName: string,
   opts?: { config?: OpenClawConfig; agentId?: string },
-): Promise<{ skillKey: string; content: string }> {
+): Promise<{ skillKey: string; skillFile: string; content: string }> {
   const name = normalizeOptionalString(skillName);
   if (!name) {
     throw new Error("Skill name is required.");
@@ -80,5 +80,5 @@ export async function readWritableWorkspaceSkill(
   if (content === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
   }
-  return { skillKey: targetSkill.skillKey, content };
+  return { skillKey: targetSkill.skillKey, skillFile: targetSkill.filePath, content };
 }

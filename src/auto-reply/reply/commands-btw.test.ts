@@ -118,6 +118,25 @@ describe("handleBtwCommand", () => {
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
   });
 
+  it("returns an actionable visible error before running a restricted side question", async () => {
+    const params = buildParams("/btw what changed?");
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = { sessionId: "session-1", updatedAt: Date.now() };
+    params.ctx.ConversationToolPolicy = { deny: ["exec"] };
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ /btw cannot enforce this conversation's tool policy. Ask in the main conversation or switch this session to the embedded runtime.",
+        btw: { question: "what changed?" },
+        isError: true,
+      },
+    });
+    expect(runBtwSideQuestionMock).not.toHaveBeenCalled();
+  });
+
   it("delegates to the side-question runner", async () => {
     const params = buildParams("/btw what changed?");
     params.command.senderId = "sender-1";
@@ -140,14 +159,13 @@ describe("handleBtwCommand", () => {
     };
     let resolvedTurnContext: ReturnType<typeof resolveMessageActionTurnCapability> | undefined;
     runBtwSideQuestionMock.mockImplementation(async (input: Record<string, unknown>) => {
-      const opts = input.opts as { runId?: string } | undefined;
       resolvedTurnContext = resolveMessageActionTurnCapability({
         token:
           typeof input.messageActionTurnCapability === "string"
             ? input.messageActionTurnCapability
             : undefined,
         agentId: "main",
-        runId: opts?.runId,
+        runId: typeof input.authorityRunId === "string" ? input.authorityRunId : undefined,
         sessionKey: "agent:main:runtime-policy",
         sessionId: "session-1",
       });
@@ -180,6 +198,10 @@ describe("handleBtwCommand", () => {
     expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(runnerArgs.messageActionTurnCapability).toEqual(expect.any(String));
     expect(runnerArgs.opts).toMatchObject({ runId: expect.any(String) });
+    expect(runnerArgs.authorityRunId).toEqual(expect.any(String));
+    expect(runnerArgs.authorityRunId).not.toBe(
+      (runnerArgs.opts as { runId?: string } | undefined)?.runId,
+    );
     expect(resolvedTurnContext).toMatchObject({
       requesterAccountId: "account-1",
       requesterSenderId: "sender-1",

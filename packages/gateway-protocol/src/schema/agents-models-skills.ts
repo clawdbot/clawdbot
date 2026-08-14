@@ -29,6 +29,11 @@ const GatewayAgentRuntimeSchema = closedObject({
   ]),
 });
 
+const GatewayThinkingLevelOptionSchema = closedObject({
+  id: NonEmptyString,
+  label: NonEmptyString,
+});
+
 export const ModelChoiceSchema = closedObject({
   id: NonEmptyString,
   name: NonEmptyString,
@@ -37,6 +42,8 @@ export const ModelChoiceSchema = closedObject({
   available: Type.Optional(Type.Boolean()),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
+  thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
+  thinkingDefault: Type.Optional(NonEmptyString),
   supportsTools: Type.Optional(Type.Boolean()),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
@@ -79,14 +86,7 @@ export const AgentSummarySchema = closedObject({
     }),
   ),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
-  thinkingLevels: Type.Optional(
-    Type.Array(
-      closedObject({
-        id: NonEmptyString,
-        label: NonEmptyString,
-      }),
-    ),
-  ),
+  thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
   thinkingDefault: Type.Optional(NonEmptyString),
 });
@@ -94,9 +94,16 @@ export const AgentSummarySchema = closedObject({
 /** Empty request payload for listing configured agents. */
 export const AgentsListParamsSchema = closedObject({});
 
-/** Agent list result including the default agent and session scoping mode. */
+export const AgentOwnershipSchema = Type.Union([
+  Type.Literal("sole"),
+  Type.Literal("legacy"),
+  Type.Literal("explicit"),
+]);
+
 export const AgentsListResultSchema = closedObject({
   defaultId: NonEmptyString,
+  ownership: Type.Optional(AgentOwnershipSchema),
+  selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,
   scope: Type.Union([Type.Literal("per-sender"), Type.Literal("global")]),
   agents: Type.Array(AgentSummarySchema),
@@ -221,6 +228,7 @@ export const AgentsFilesSetResultSchema = closedObject({
 
 /** Model catalog request with optional visibility scope. */
 export const ModelsListParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
   includeProviderCapabilities: Type.Optional(Type.Boolean()),
   view: Type.Optional(
     Type.Union([
@@ -246,8 +254,19 @@ export const ModelsAuthLogoutParamsSchema = closedObject({
 });
 
 /** Model catalog result. */
+export const ModelCatalogProviderOutcomeSchema = closedObject({
+  provider: NonEmptyString,
+  profileId: Type.Optional(NonEmptyString),
+  status: Type.Union([
+    Type.Literal("ready"),
+    Type.Literal("auth-rejected"),
+    Type.Literal("unavailable"),
+  ]),
+});
+
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  providerOutcomes: Type.Optional(Type.Array(ModelCatalogProviderOutcomeSchema)),
 });
 
 /** Runs a bounded live credential probe for one model provider. */
@@ -337,6 +356,14 @@ export const SkillsUploadCommitParamsSchema = closedObject({
   sha256: Type.Optional(Sha256String),
 });
 
+/**
+ * ClawHub resolves a bare slug against every publisher, so requests that carry only the slug
+ * fail with 409 AMBIGUOUS_SKILL_SLUG once two publishers share it. Clients send the reference
+ * `skills.search` returned for the entry the operator picked.
+ */
+const CLAWHUB_SKILL_REF_DESCRIPTION =
+  "ClawHub skill reference: `@owner/slug`, `skills-sh:owner/repo/slug`, or a bare `slug` when no publisher is known.";
+
 /** Installs a skill from legacy install id, ClawHub, or uploaded archive. */
 export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
@@ -355,7 +382,7 @@ export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
     agentId: Type.Optional(NonEmptyString),
     source: Type.Literal("clawhub"),
-    slug: NonEmptyString,
+    slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
     version: Type.Optional(NonEmptyString),
     force: Type.Optional(Type.Boolean()),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
@@ -401,17 +428,25 @@ export const SkillsSearchResultSchema = closedObject({
     closedObject({
       score: Type.Number(),
       slug: NonEmptyString,
+      installRef: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description:
+            "Publisher-qualified reference for this result. Send it as `slug` to skills.detail and skills.install; several publishers can share one slug.",
+        }),
+      ),
       displayName: NonEmptyString,
       summary: Type.Optional(Type.String()),
+      icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       version: Type.Optional(NonEmptyString),
       updatedAt: Type.Optional(Type.Integer()),
     }),
   ),
 });
 
-/** Reads registry detail for one skill slug. */
+/** Reads registry detail for one skill. */
 export const SkillsDetailParamsSchema = closedObject({
-  slug: NonEmptyString,
+  slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
 });
 
 /** Reads current security verdicts for configured skills. */
@@ -1103,6 +1138,7 @@ export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelChoice = Static<typeof ModelChoiceSchema>;
 export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
+export type ModelCatalogProviderOutcome = Static<typeof ModelCatalogProviderOutcomeSchema>;
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
 export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
 export type ModelsAuthLogoutParams = Static<typeof ModelsAuthLogoutParamsSchema>;

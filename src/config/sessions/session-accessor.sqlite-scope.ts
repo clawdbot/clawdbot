@@ -1,3 +1,5 @@
+// Sanctioned low-level scope/Kysely entry point for doctor, migrations, and infrastructure.
+// Runtime feature code imports the session accessor barrel instead of this module.
 import path from "node:path";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";

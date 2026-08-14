@@ -88,7 +88,7 @@ describe("cross-OS release checks workflow", () => {
     );
     expect(baselineMetadata["working-directory"]).toBe("workflow");
     expect(baselineMetadata.run).toContain(
-      'import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";',
+      'import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";',
     );
     expect(baselineMetadata.run).toContain("const entry = resolveNpmJsonEntries(payload).at(-1);");
   });
@@ -363,7 +363,7 @@ describe("cross-OS release checks workflow", () => {
       if: "inputs.candidate_artifact_name != ''",
       run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
     });
-    expect(resolve.run).toContain("resolve-openclaw-package-candidate.mjs");
+    expect(resolve.run).toContain("resolve-openclaw-package-candidate.mts");
     expect(resolve.run).toContain("--source artifact");
     expect(resolve.run).toContain('--package-sha256 "$INPUT_CANDIDATE_SHA256"');
     expect(resolve.run).toContain('"$actual_sha256" == "$INPUT_CANDIDATE_SHA256"');

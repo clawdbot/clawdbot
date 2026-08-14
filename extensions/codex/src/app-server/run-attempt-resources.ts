@@ -1,5 +1,6 @@
 import {
   embeddedAgentLog,
+  runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -158,6 +159,16 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   };
+  const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
+    runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step,
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await operation();
+      },
+    });
   const unregisterNativeSubagentMonitor = () => {
     state.nativeSubagentMonitor?.unregister();
     state.nativeSubagentMonitor = undefined;
@@ -193,6 +204,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
     state.nativeHookRelay?.unregister();
+    if (params.pluginHarnessToolPolicyRestricted === true) {
+      state.nativeHookRelay = undefined;
+      return {
+        configPatch: buildCodexNativeHookRelayDisabledConfig(),
+        nativeHookRelayGeneration: undefined,
+      };
+    }
     state.nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
       generation:
@@ -222,6 +240,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       turnStartTimeoutMs: params.timeoutMs,
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
+      hostCapabilities: params.hostCapabilities,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
         if (projector) {
@@ -260,6 +279,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     releaseSharedClientLeaseOnce,
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
+    runCleanupStep,
     registerNativeSubagentMonitor,
     releaseCurrentRoute,
     startupTimeoutMs,

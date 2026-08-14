@@ -1,8 +1,7 @@
 {
   "id": "msteams",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true,
+    "configRepair": true,
     "stateMigrations": true
   },
   "name": "Microsoft Teams",

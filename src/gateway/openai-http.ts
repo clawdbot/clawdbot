@@ -54,7 +54,9 @@ import {
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
+  isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
+  isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
@@ -640,12 +642,6 @@ async function resolveImagesForRequest(
   return images;
 }
 
-export const testOnlyOpenAiHttp = {
-  resolveImagesForRequest,
-  resolveOpenAiChatCompletionsLimits,
-  resolveChatCompletionUsage,
-};
-
 function buildAgentPrompt(
   messagesUnknown: unknown,
   activeTurnContext: Pick<ActiveTurnContext, "activeUserMessageIndex" | "imageUrls">,
@@ -989,7 +985,12 @@ export async function handleOpenAiHttpRequest(
       useMessageChannelHeader: true,
     }));
   } catch (err) {
-    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isGatewaySessionKeyOverrideError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });

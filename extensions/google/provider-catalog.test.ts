@@ -32,6 +32,7 @@ describe("google provider catalog", () => {
       contextWindow: 1_048_576,
       maxTokens: 65_536,
       reasoning: true,
+      input: ["text", "image"],
     });
   });
 
@@ -39,6 +40,7 @@ describe("google provider catalog", () => {
     expect(buildGoogleVertexStaticCatalogProvider().models.map((model) => model.id)).toEqual(
       buildGoogleStaticCatalogProvider().models.map((model) => model.id),
     );
+    expect(buildGoogleStaticCatalogProvider().models[0]?.input).toEqual(["text", "image", "video"]);
   });
 
   it("builds the authenticated text catalog from Google models.list metadata", async () => {
@@ -121,7 +123,7 @@ describe("google provider catalog", () => {
         reasoning: true,
         contextWindow: 1_048_576,
         maxTokens: 65_536,
-        input: ["text", "image"],
+        input: ["text", "image", "video"],
         compat: { codeMode: "preferred" },
       }),
       expect.objectContaining({
@@ -130,7 +132,7 @@ describe("google provider catalog", () => {
         reasoning: true,
         contextWindow: 1_048_576,
         maxTokens: 65_536,
-        input: ["text", "image"],
+        input: ["text", "image", "video"],
         compat: { codeMode: "preferred" },
       }),
       expect.objectContaining({

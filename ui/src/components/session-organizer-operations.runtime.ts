@@ -1,12 +1,12 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { moveSessionSection, normalizeSessionSectionOrder } from "../lib/sessions/grouping.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { showToast } from "../lib/toast.ts";
 import type {
   SidebarRecentSession,
@@ -14,34 +14,31 @@ import type {
   SidebarSessionMutationScope,
   SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
+import { requestCloudWorkerStop } from "./cloud-worker-stop.ts";
+import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import {
-  archiveSessionRows,
+  patchSessionRows,
   refreshSessionsAfterBatch,
+  requireSessionMutationAccess,
   sessionRowAgentId,
 } from "./session-organizer-batch-mutations.ts";
+import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
+import { rememberSessionGroup } from "./session-organizer-catalog.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 
-function requireSessionMutationAccess(
-  host: SessionOrganizerControllerHost,
-  scope: SidebarSessionMutationScope,
-  request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  },
-): boolean {
-  const access = readSessionMethodAccess(scope.gateway.snapshot, request);
-  if (access.allowed) {
-    return true;
-  }
-  host.sessionData.publishSessionMutationError(scope, access.reason);
-  return false;
-}
+export type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
+// The controller loads this module as a single namespace, so the catalog
+// operations stay reachable under their original names after the split.
+export {
+  deleteSessionGroup,
+  renameSessionGroup,
+  reorderSidebarSection,
+} from "./session-organizer-catalog.ts";
 
 export async function patchSession(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionActionHost,
+  session: SessionActionRow,
   patch: SidebarSessionPatch,
   scope: SidebarSessionMutationScope,
   refresh: { deferListRefresh?: boolean } = {},
@@ -54,7 +51,17 @@ export async function patchSession(
     key: session.key,
     ...patch,
     agentId,
+    ...(typeof patch.archived === "boolean" && session.sessionId
+      ? { expectedSessionId: session.sessionId }
+      : {}),
   };
+  if (typeof patch.archived === "boolean" && !session.sessionId?.trim()) {
+    host.sessionData.publishSessionMutationError(
+      scope,
+      "Session lifecycle action requires a durable session identity.",
+    );
+    return "failed";
+  }
   if (
     !requireSessionMutationAccess(host, scope, { method: "sessions.patch", params: requestParams })
   ) {
@@ -63,6 +70,7 @@ export async function patchSession(
   try {
     const patched = await scope.sessions.patch(session.key, patch, {
       agentId,
+      ...(typeof patch.archived === "boolean" ? { expectedSessionId: session.sessionId } : {}),
       ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
     });
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -109,32 +117,25 @@ export async function patchSessions(
   if (rows.length === 0) {
     return "completed";
   }
-  let result: SidebarSessionMutationResult = "completed";
-  // Sequential like deleteMany: parallel patches would race the shared
-  // session-state publishes inside the capability.
-  for (const row of rows) {
-    const rowResult = await patchSession(host, row, patch, scope, { deferListRefresh: true });
-    if (rowResult === "stale") {
-      return "stale";
-    }
-    if (rowResult === "failed") {
-      result = "failed";
-    }
+  const successful = await patchSessionRows(host, rows, patch, scope, {
+    fallback: () => patchSessionRowsSerial(host, rows, patch, scope),
+  });
+  if (!successful) {
+    return host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
   }
-  const refreshed = await refreshSessionsAfterBatch(host, scope, rows);
-  return refreshed === "completed" ? result : refreshed;
+  return successful.length === rows.length ? "completed" : "failed";
 }
 
-async function archiveSessionRowsSerial(
-  host: SessionOrganizerControllerHost,
-  rows: readonly SidebarRecentSession[],
-  archived: boolean,
+async function patchSessionRowsSerial(
+  host: SessionActionHost,
+  rows: readonly SessionActionRow[],
+  patch: SidebarSessionPatch,
   scope: SidebarSessionMutationScope,
   options: { deferListRefresh?: boolean } = {},
-): Promise<SidebarRecentSession[] | null> {
-  const completed: SidebarRecentSession[] = [];
+): Promise<SessionActionRow[] | null> {
+  const completed: SessionActionRow[] = [];
   for (const row of rows) {
-    const result = await patchSession(host, row, { archived }, scope, { deferListRefresh: true });
+    const result = await patchSession(host, row, patch, scope, { deferListRefresh: true });
     if (result === "stale") {
       return null;
     }
@@ -152,8 +153,8 @@ async function archiveSessionRowsSerial(
 }
 
 export async function archiveSessionWithUndo(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionActionHost,
+  session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
   const result = await patchSession(host, session, { archived: true }, scope);
@@ -163,9 +164,8 @@ export async function archiveSessionWithUndo(
   showToast({
     message: t("sessionsView.sessionArchived"),
     actionLabel: t("common.undo"),
-    onAction: () => {
-      void restoreArchivedSessions(host, [{ session, pinned: session.pinned }], scope);
-    },
+    onAction: () =>
+      void restoreArchivedSessions(host, [{ session, pinned: session.pinned }], scope),
   });
 }
 
@@ -177,8 +177,8 @@ async function archiveSessionsWithUndo(
   if (rows.length === 0) {
     return;
   }
-  const archivedRows = await archiveSessionRows(host, rows, true, scope, {
-    fallback: () => archiveSessionRowsSerial(host, rows, true, scope),
+  const archivedRows = await patchSessionRows(host, rows, { archived: true }, scope, {
+    fallback: () => patchSessionRowsSerial(host, rows, { archived: true }, scope),
   });
   if (!archivedRows || archivedRows.length === 0) {
     return;
@@ -195,26 +195,42 @@ async function archiveSessionsWithUndo(
 }
 
 async function restoreArchivedSessions(
-  host: SessionOrganizerControllerHost,
-  archived: readonly { session: SidebarRecentSession; pinned: boolean }[],
+  host: SessionActionHost,
+  archived: readonly { session: SessionActionRow; pinned: boolean }[],
   scope: SidebarSessionMutationScope,
 ) {
   const rows = archived.map((entry) => entry.session);
-  const restored = await archiveSessionRows(host, rows, false, scope, {
-    deferListRefresh: true,
-    fallback: () => archiveSessionRowsSerial(host, rows, false, scope, { deferListRefresh: true }),
-  });
+  const singleRowUndo = rows.length === 1;
+  const restored = singleRowUndo
+    ? await patchSessionRowsSerial(host, rows, { archived: false }, scope, {
+        deferListRefresh: true,
+      })
+    : await patchSessionRows(host, rows, { archived: false }, scope, {
+        deferListRefresh: true,
+        fallback: () =>
+          patchSessionRowsSerial(host, rows, { archived: false }, scope, {
+            deferListRefresh: true,
+          }),
+      });
   if (!restored) {
     return;
   }
-  for (const { session, pinned } of archived) {
-    if (!pinned || !restored.includes(session)) {
-      continue;
-    }
-    const result = await patchSession(host, session, { pinned: true }, scope, {
-      deferListRefresh: true,
-    });
-    if (result === "stale") {
+  const repinRows = archived.flatMap(({ session, pinned }) =>
+    pinned && restored.includes(session) ? [session] : [],
+  );
+  if (repinRows.length > 0) {
+    const repinned = singleRowUndo
+      ? await patchSessionRowsSerial(host, repinRows, { pinned: true }, scope, {
+          deferListRefresh: true,
+        })
+      : await patchSessionRows(host, repinRows, { pinned: true }, scope, {
+          deferListRefresh: true,
+          fallback: () =>
+            patchSessionRowsSerial(host, repinRows, { pinned: true }, scope, {
+              deferListRefresh: true,
+            }),
+        });
+    if (!repinned && !host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
   }
@@ -222,6 +238,27 @@ async function restoreArchivedSessions(
     return;
   }
   await refreshSessionsAfterBatch(host, scope, rows);
+}
+
+/**
+ * Session deletes are the repeatable, per-row destructive action here, so they
+ * carry an opt-out. Stopping a cloud worker and removing a preserved worktree
+ * deliberately get none: the first is a rare shared-resource action and the
+ * second destroys the only copy of uncommitted work.
+ */
+function sessionDeleteSkipPreference(
+  scope: SidebarSessionMutationScope,
+): ConfirmDialogSkipPreference {
+  return {
+    skipped: loadSettings().sessionDeleteConfirm === false,
+    remember: () => {
+      patchSettings({ sessionDeleteConfirm: false });
+      // A mounted Settings -> Appearance rereads settings only on this
+      // notification; without it its toggle keeps showing the stale value
+      // while deletes already skip the prompt.
+      scope.context.theme.refresh();
+    },
+  };
 }
 
 /** One confirm and one preserved-worktrees alert for the whole selection. */
@@ -233,10 +270,15 @@ export async function deleteSessionsBatch(
   if (rows.length === 0) {
     return;
   }
-  if (!window.confirm(t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }))) {
-    return;
-  }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const confirmed = await showConfirmDialog({
+    message: t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }),
+    confirmLabel: t("common.delete"),
+    danger: true,
+    skipPreference: sessionDeleteSkipPreference(scope),
+  });
+  // A reconnect or a replaced sessions capability can land while the modal is
+  // open, so the captured scope is revalidated before any delete leaves here.
+  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   const requests = rows.map((row) => ({
@@ -313,8 +355,8 @@ export async function runBatchSessionAction(
       break;
     case "toggle-archived":
       if (rows.every((row) => row.archived === true)) {
-        await archiveSessionRows(host, rows, false, scope, {
-          fallback: () => archiveSessionRowsSerial(host, rows, false, scope),
+        await patchSessionRows(host, rows, { archived: false }, scope, {
+          fallback: () => patchSessionRowsSerial(host, rows, { archived: false }, scope),
         });
       } else {
         await archiveSessionsWithUndo(
@@ -332,38 +374,6 @@ export async function runBatchSessionAction(
   }
 }
 
-async function rememberSessionGroup(
-  host: SessionOrganizerControllerHost,
-  name: string,
-  scope: SidebarSessionMutationScope,
-): Promise<SidebarSessionMutationResult> {
-  const groups = host.knownSessionGroups();
-  if (groups.includes(name)) {
-    return "completed";
-  }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return "stale";
-  }
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.put",
-      requiredScope: "operator.write",
-    })
-  ) {
-    return "failed";
-  }
-  try {
-    await scope.sessions.groupsPut([...groups, name]);
-    return host.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
-  } catch (error) {
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return "stale";
-    }
-    host.sessionData.publishSessionMutationError(scope, error);
-    return "failed";
-  }
-}
-
 export async function renameSession(
   host: SessionOrganizerControllerHost,
   session: SidebarRecentSession,
@@ -378,111 +388,46 @@ export async function createSessionGroup(
   name: string,
   sessions: readonly SidebarRecentSession[],
   scope: SidebarSessionMutationScope,
-): Promise<void> {
-  if ((await rememberSessionGroup(host, name, scope)) !== "completed") {
-    return;
+): Promise<SidebarSessionMutationResult> {
+  const remembered = await rememberSessionGroup(host, name, scope);
+  if (remembered !== "completed") {
+    return remembered;
   }
-  if (sessions.length > 0) {
-    await patchSessions(host, sessions, { category: name }, scope);
-  } else if (host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    // Header-created groups start empty; re-render so the section shows up.
-    host.requestUpdate();
-  }
-}
-
-export async function renameSessionGroup(
-  host: SessionOrganizerControllerHost,
-  group: string,
-  next: string,
-  scope: SidebarSessionMutationScope,
-): Promise<boolean> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return false;
-  }
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.rename",
-      requiredScope: "operator.write",
-    })
-  ) {
-    return false;
-  }
-  try {
-    const outcome = await scope.sessions.groupsRename(group, next);
-    return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope);
-  } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
-    return false;
-  }
-}
-
-export async function deleteSessionGroup(
-  host: SessionOrganizerControllerHost,
-  group: string,
-  scope: SidebarSessionMutationScope,
-): Promise<boolean> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return false;
-  }
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.delete",
-      requiredScope: "operator.write",
-    })
-  ) {
-    return false;
-  }
-  try {
-    const outcome = await scope.sessions.groupsDelete(group);
-    return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope);
-  } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
-    return false;
-  }
-}
-
-export async function reorderSidebarSection(
-  host: SessionOrganizerControllerHost,
-  sourceSectionId: string,
-  targetSectionId: string,
-  position: "before" | "after",
-  scope: SidebarSessionMutationScope,
-): Promise<void> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return;
-  }
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.put",
-      requiredScope: "operator.write",
-    })
-  ) {
-    return;
-  }
-  try {
-    // knownSessionGroups() is the full discovered set (gateway catalog plus
-    // row-discovered categories), so normalize only prunes deleted groups.
-    const knownGroups = host.knownSessionGroups();
-    const knownCatalogIds = host.knownSessionCatalogIds();
-    const next = moveSessionSection(
-      normalizeSessionSectionOrder(host.knownSectionOrder(), knownGroups, knownCatalogIds),
-      sourceSectionId,
-      targetSectionId,
-      position,
-    );
-    const nextGroups = next.flatMap((token) =>
-      token.startsWith("category:") ? [token.slice("category:".length)] : [],
-    );
-    // No capability gate: the gateway serves this UI from its own dist, so a
-    // newer UI never talks to an older gateway's closed put schema outside dev.
-    await scope.sessions.groupsPut(nextGroups, next);
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
+  // The dialog no longer blocks, so a captured row can be deleted while the
+  // catalog write is in flight, and sessions.patch would recreate it. Re-resolve
+  // every target against the current list, as the Sessions-page path does.
+  const targets = sessions.flatMap((session) => {
+    const current = host.findSidebarSessionByKey(session.key);
+    return current ? [current] : [];
+  });
+  if (targets.length > 0) {
+    const moved =
+      targets.length === 1
+        ? await patchSession(host, targets[0]!, { category: name }, scope)
+        : await patchSessions(host, targets, { category: name }, scope);
+    // Rows that left the list are absent from `targets`, so patching the
+    // remainder reports success for a selection that was only partly applied.
+    // Closing on that would leave the skipped rows unaccounted for, so the
+    // partial outcome is named here; it is terminal, as the group already exists.
+    if (moved === "completed" && targets.length < sessions.length) {
+      showToast({ message: t("sessionsView.newGroupMovePartial") });
     }
-    host.requestUpdate();
-  } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
+    return moved;
   }
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return "stale";
+  }
+  // A header-created group starts empty and needs no notice. Rows that were
+  // requested but resolved to nothing are a partial outcome: the group landed
+  // and the moves did not. The sidebar list is a bounded projection, so this is
+  // not proof the sessions are gone — say so rather than closing on a silent
+  // non-outcome the operator cannot account for.
+  if (sessions.length > 0) {
+    showToast({ message: t("sessionsView.newGroupMoveSkipped") });
+  }
+  // Re-render so the new section shows up.
+  host.requestUpdate();
+  return "completed";
 }
 
 export async function assignSessionCategory(
@@ -502,8 +447,8 @@ export async function assignSessionCategory(
 }
 
 export async function forkSession(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionActionHost,
+  session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -543,31 +488,38 @@ export async function stopCloudWorker(
   session: SidebarRecentSession,
   scope: SidebarSessionMutationScope,
 ) {
-  if (
-    !session.cloudWorkerActive ||
-    session.hasActiveRun ||
-    !window.confirm(t("sessionsView.stopCloudWorkerConfirm", { session: session.label }))
-  ) {
+  const stopAction = session.cloudWorkerStopAction;
+  // Reclaim during an active run is never offered, so decide that before the
+  // await; a run starting while the modal is open is left to the gateway, whose
+  // rejection is a recorded reason instead of a silently dropped confirmation.
+  if (!stopAction || (stopAction.method === "sessions.reclaim" && session.hasActiveRun)) {
     return;
   }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const confirmed = await showConfirmDialog({
+    message: t("sessionsView.stopCloudWorkerConfirm", { session: session.label }),
+    confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
+    danger: true,
+  });
+  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.reclaim",
-      requiredScope: "operator.admin",
-    })
-  ) {
+  if (!requireSessionMutationAccess(host, scope, stopAction)) {
     return;
   }
   try {
-    await scope.client.request(
-      "sessions.reclaim",
-      { key: session.key, agentId },
-      { timeoutMs: 10 * 60_000 },
-    );
+    const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+    const result = await requestCloudWorkerStop(scope.client, stopAction, {
+      key: session.key,
+      agentId,
+    });
+    if (result && host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      showToast({
+        message: t("sessionsView.cloudWorkerStopResult", {
+          session: session.label,
+          state: result.worker?.state ?? result.status,
+        }),
+      });
+    }
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
@@ -578,14 +530,20 @@ export async function stopCloudWorker(
 }
 
 export async function deleteSession(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionActionHost,
+  session: SessionActionRow,
   scope: SidebarSessionMutationScope,
+  // The chat header shares this operation, so the opt-out is opt-in per caller:
+  // only the sidebar the setting names may offer it, and the default keeps asking.
+  options: { offerSkip?: boolean } = {},
 ) {
-  if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: session.label }))) {
-    return;
-  }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const confirmed = await showConfirmDialog({
+    message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
+    confirmLabel: t("common.delete"),
+    danger: true,
+    ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
+  });
+  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
@@ -630,24 +588,29 @@ export async function deleteSession(
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
-      } else if (
-        window.confirm(
-          t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
-        )
-      ) {
+      } else {
+        const removeWorktree = await showConfirmDialog({
+          message: t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
+          confirmLabel: t("common.remove"),
+          danger: true,
+        });
+        // Cancel needs this guard too: the delete already landed, so a scope
+        // retired while the modal was open must not drive the navigation below.
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
-        try {
-          await scope.client.request("worktrees.remove", {
-            id: preserved.id,
-            force: true,
-          });
-        } catch (error) {
-          host.sessionData.publishSessionMutationError(scope, error);
-        }
-        if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-          return;
+        if (removeWorktree) {
+          try {
+            await scope.client.request("worktrees.remove", {
+              id: preserved.id,
+              force: true,
+            });
+          } catch (error) {
+            host.sessionData.publishSessionMutationError(scope, error);
+          }
+          if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+            return;
+          }
         }
       }
     }

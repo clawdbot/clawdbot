@@ -1,3 +1,4 @@
+import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -71,6 +72,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       promptTokens: 5,
       totalTokens: 12,
     });
+    expect(result.attemptUsage?.reasoningTokens).toBe(3);
     expectUsageFields(result.lastAssistant?.usage, {
       input: 2,
       output: 7,
@@ -83,6 +85,8 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       promptTokens: 5,
       totalTokens: 12,
     });
+    expect(normalizeUsage(result.lastAssistant?.usage)?.reasoningTokens).toBe(3);
+    expect(normalizeUsage(result.currentAttemptAssistant?.usage)?.reasoningTokens).toBe(3);
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
 

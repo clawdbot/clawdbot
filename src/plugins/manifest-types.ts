@@ -2,6 +2,7 @@ import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-ty
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ConfigUiPresentation } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
@@ -226,9 +227,12 @@ export type PluginManifestSetup = {
 };
 
 export type PluginManifestDoctorContract = {
-  legacyConfigRules?: boolean;
-  normalizeCompatibilityConfig?: boolean;
+  configRepair?: boolean;
   resolveSessionStoreAgentIds?: boolean;
+  /**
+   * @deprecated Declare static ownership in top-level sessionRouteStateOwners instead.
+   * Removal plan: remove the module fallback in OpenClaw 2027.1 after external plugins migrate.
+   */
   sessionRouteStateOwners?: boolean;
   stateMigrations?: boolean;
 };
@@ -394,6 +398,8 @@ export type PluginManifest = {
   setup?: PluginManifestSetup;
   /** Doctor contract surfaces available without loading the plugin artifact. */
   doctorContract?: PluginManifestDoctorContract;
+  /** Static ownership metadata for doctor session-route state repairs. */
+  sessionRouteStateOwners?: DoctorSessionRouteStateOwner[];
   /** Cheap QA runner metadata exposed before plugin runtime loads. */
   qaRunners?: PluginManifestQaRunner[];
   /** Widget data and action capabilities validated against runtime registrations. */

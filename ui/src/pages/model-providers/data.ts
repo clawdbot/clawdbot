@@ -13,6 +13,7 @@ import type {
   ModelAuthStatusProfile,
   ModelAuthStatusResult,
   ModelCatalogEntry,
+  ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
 
@@ -53,6 +54,7 @@ export type ModelProviderCard = {
   hasConfigApiKey: boolean;
   modelCount: number;
   availableModelCount: number;
+  catalogStatus?: ModelCatalogProviderOutcome["status"];
   /** Live provider-reported usage (quota windows, billing, cost history). */
   usage?: ProviderUsageSnapshot;
   /** Locally-computed session spend for the requested window. */
@@ -63,6 +65,7 @@ type ModelProviderCardsInput = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
   catalogModels?: ModelCatalogEntry[] | null;
+  providerOutcomes?: ModelCatalogProviderOutcome[];
   configProviderIds?: string[] | null;
   configApiKeyProviderIds?: string[] | null;
   configProviderAuthModes?: Record<string, string> | null;
@@ -221,6 +224,25 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     }
   }
 
+  const outcomeSeverity: ReadonlyArray<ModelCatalogProviderOutcome["status"]> = [
+    "auth-rejected",
+    "unavailable",
+    "ready",
+  ];
+  for (const outcome of input.providerOutcomes ?? []) {
+    const id = canonicalProviderId(outcome.provider);
+    if (!id) {
+      continue;
+    }
+    const card = ensureDraft(drafts, id, providerDisplayLabel(id)).card;
+    if (
+      !card.catalogStatus ||
+      outcomeSeverity.indexOf(outcome.status) < outcomeSeverity.indexOf(card.catalogStatus)
+    ) {
+      card.catalogStatus = outcome.status;
+    }
+  }
+
   for (const entry of input.models ?? []) {
     const id = canonicalProviderId(entry.provider);
     if (!id) {
@@ -325,6 +347,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         draft.hasUsageSnapshot ||
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||
+        Boolean(draft.card.catalogStatus) ||
         (draft.card.localCost?.totalTokens ?? 0) > 0,
     )
     .map((draft) => {

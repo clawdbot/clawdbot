@@ -284,6 +284,7 @@ describe("redactTranscriptMessage", () => {
       providerReplay: {
         v: 1,
         type: "openai-responses-compaction-suppression",
+        id: "unexpected-suppression-id",
         data: "rejected",
         provider: "openai",
         api: "openai-responses",
@@ -314,8 +315,48 @@ describe("redactTranscriptMessage", () => {
   });
 
   it.each([
+    ["oversized", "i".repeat(10_000)],
+    ["non-string", 42],
+  ])("removes an %s optional OpenAI compaction id while preserving state", (_name, id) => {
+    const msg = {
+      role: "assistant",
+      api: "openclaw-openai-responses-transport",
+      model: "gpt-5.6-luna",
+      provider: "openai",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        id,
+        data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+        replayIndex: 0,
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "ozhevd1smnk8s",
+      },
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      providerReplay: Record<string, unknown>;
+    };
+
+    expect(result.providerReplay).toEqual({
+      v: 1,
+      type: "openai-responses-compaction",
+      data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+      replayIndex: 0,
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+    });
+  });
+
+  it.each([
     ["malformed content", { data: "" }],
-    ["oversized id", { id: "i".repeat(10_000) }],
+    ["invalid replay index", { replayIndex: -1 }],
+    ["invalid context hash", { baseUrlHash: "not-a-context-hash" }],
     ["foreign route", { provider: "azure" }],
   ])("omits invalid OpenAI compaction replay state for %s", (_name, override) => {
     const providerReplay = {

@@ -1,9 +1,11 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
+import { t } from "../i18n/index.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
@@ -11,11 +13,12 @@ import "./sidebar-attention.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarAttention,
@@ -23,8 +26,10 @@ import {
   renderAppSidebarFooterBar,
   renderAppSidebarHomeRow,
   renderAppSidebarPagesHead,
+  renderAppSidebarPinnedHead,
   renderAppSidebarPluginTabEntry,
   renderAppSidebarZoneEntry,
+  renderAppSidebarZoneGroup,
 } from "./app-sidebar-render.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
@@ -33,6 +38,7 @@ import type {
   SidebarNarrationSyncInput,
   SidebarSessionNarrationController,
 } from "./app-sidebar-session-narration.ts";
+import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import {
   renderSessionTree,
@@ -43,7 +49,7 @@ import {
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarCatalogGrouping,
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
-  storeHiddenSessionCatalogIds,
+  setStoredSessionCatalogHidden,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
@@ -77,6 +83,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   // dropped because the controller aligns from cumulative snapshots.
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
+  private sessionNavigationState: SidebarSessionNavigationState | undefined;
+  private projectedSessionRows: SidebarRecentSession[] | undefined;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
   private readonly nativeGatewaysChanged = () => this.requestUpdate();
   private readonly hiddenSessionCatalogsChanged = () => {
@@ -162,6 +170,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
+    this.sessionNavigationState = super.getSessionNavigationState();
+    this.projectedSessionRows = super.selectedAgentSessionRows(this.sessionNavigationState);
     const chip = this.activeChipAgent();
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
     // the active card and avoid background RPCs for every configured agent.
@@ -170,16 +180,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         ? [chip.activeId]
         : chip.agents.map((agent) => agent.id);
     this.ensureAgentIdentities(identityIds);
-    // A fresh draft must be visible where it will live: genuinely expand a
-    // collapsed Threads section (persisted) instead of overriding at render
-    // time, so the header toggle keeps matching the visible state.
-    if (
-      changed.has("draftSessionAgentId") &&
-      this.draftSessionAgentId &&
-      this.collapsedSessionSections.has("ungrouped")
-    ) {
-      this.sessionOrganizer.toggleSection("ungrouped");
-    }
   }
 
   ensureAgentIdentities(agentIds: readonly string[]): void {
@@ -188,15 +188,27 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     }
   }
 
+  override getSessionNavigationState(): SidebarSessionNavigationState {
+    return this.sessionNavigationState ?? super.getSessionNavigationState();
+  }
+
+  protected override selectedAgentSessionRows(
+    navigationState: SidebarSessionNavigationState,
+  ): SidebarRecentSession[] {
+    return this.projectedSessionRows ?? super.selectedAgentSessionRows(navigationState);
+  }
+
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
     if (!this.narration) {
       if (this.sidebarLiveActivity) {
         this.ensureNarrationController();
       }
-      return;
+    } else {
+      this.narration.sync(this.narrationSyncInput());
     }
-    this.narration.sync(this.narrationSyncInput());
+    this.sessionNavigationState = undefined;
+    this.projectedSessionRows = undefined;
   }
 
   private visibleNarrationRowsInOrder(): SidebarRecentSession[] {
@@ -279,17 +291,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
   }
 
-  toggleSessionMenu(
-    session: SidebarRecentSession,
-    menuSession: SidebarRecentSession,
-    trigger: HTMLElement,
-  ): void {
+  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void {
     if (this.sidebarMenus.sessionMenu?.session.key === session.key) {
       this.sidebarMenus.closeSessionMenu();
       return;
     }
     const rect = trigger.getBoundingClientRect();
-    this.sidebarMenus.openSessionMenu(menuSession, rect.right, rect.bottom + 4, trigger);
+    this.sidebarMenus.openSessionMenu(session, rect.right, rect.bottom + 4, trigger);
   }
 
   startSidebarSectionDrag(sectionId: string): void {
@@ -354,7 +362,37 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   hideSessionCatalog(catalogId: string): void {
-    storeHiddenSessionCatalogIds(new Set([...this.hiddenSessionCatalogIds, catalogId]));
+    const label =
+      this.sessionData.sessionCatalogs.find((catalog) => catalog.id === catalogId)?.label ??
+      catalogId;
+    setStoredSessionCatalogHidden(catalogId, true);
+    // Reuse the settings-search destination for the Sidebar preferences block so the
+    // toast opens the same place the rest of the app calls "Appearance > Sidebar".
+    const recovery = SETTINGS_SEARCH_TARGETS.appearanceSidebar;
+    const recoveryHref =
+      pathForRoute(recovery.routeId, this.basePath) + recovery.search + recovery.hash;
+    // The section disappears instantly and its only standing recovery lives on another
+    // page, so the outcome is announced where the action happened: undo here, plus a
+    // link that opens the re-enable block for after the toast is gone. Longer than the
+    // 6s default because that text is a recovery instruction, not an acknowledgement.
+    showToast({
+      message: html`${t("chat.sidebar.sectionHidden", { section: label })}
+        <a
+          class="session-link"
+          href=${recoveryHref}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash });
+          }}
+          >${t("chat.sidebar.sectionHiddenRecovery")}</a
+        >`,
+      actionLabel: t("common.undo"),
+      onAction: () => setStoredSessionCatalogHidden(catalogId, false),
+      durationMs: 12_000,
+    });
   }
 
   openCatalogMenu(
@@ -367,7 +405,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {
-    return renderSessionTree({ host: this, session });
+    // Pinned sessions live in the navigation zone, not a session list.
+    return renderSessionTree({ host: this, session, listItem: false });
   }
 
   private renderSessions() {
@@ -378,12 +417,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       ...(this.sessionData.sessionsResult?.sessions ?? []),
       ...Object.values(this.sessionData.sessionRowsByAgent).flat(),
     ];
-    const sidebarRowsByKey = new Map<string, SidebarRecentSession>();
-    for (const row of liveRows) {
-      if (!sidebarRowsByKey.has(row.key)) {
-        sidebarRowsByKey.set(row.key, navigationState.toSidebarSession(row));
-      }
-    }
     const { sections: allSections } = this.zonedVisibleSections(visibleSessions);
     const catalogs = this.sessionData.sessionCatalogs.filter(
       (catalog) => !this.hiddenSessionCatalogIds.has(catalog.id),
@@ -404,9 +437,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       sections,
       nativeSessionsHaveMore: this.sessionData.sessionsResult?.hasMore === true,
       catalogRenderer: this.catalogRenderer,
-      showDraft:
-        Boolean(this.draftSessionAgentId) &&
-        normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
       catalogs: {
         catalogs,
         refreshStatus: this.sessionData.sessionCatalogRefreshStatus,
@@ -417,7 +447,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,
         projectGrouping: this.catalogProjectGrouping,
         liveRows,
-        sidebarRowsByKey,
+        toSidebarSession: navigationState.toSidebarSession,
         creatorId: this.activeSessionCreatorId,
         catalogOpenTarget: this.catalogOpenTarget,
         terminalAvailable: this.terminalAvailable,
@@ -427,6 +457,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
+    // Pinned sessions keep their slot in the canonical entry order but render as
+    // their own group, so navigation entries stay a contiguous Pages list.
+    const pinnedEntries = sidebarZone.entries.filter((entry) => entry.type === "session");
+    const navEntries = sidebarZone.entries.filter((entry) => entry.type !== "session");
     return html`
       <aside
         class="sidebar"
@@ -447,27 +481,37 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           >
             <nav class="sidebar-nav" @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}>
               ${renderAppSidebarPagesHead(this)}
-              <div
-                class="nav-section__items"
-                @dragover=${(event: DragEvent) =>
-                  this.sessionOrganizer.handleSidebarZoneDragOver(event)}
-                @dragleave=${(event: DragEvent) =>
-                  this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
-                @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
-              >
-                ${renderAppSidebarHomeRow(this)}
-                ${sidebarZone.entries.map((entry) =>
-                  renderAppSidebarZoneEntry(
+              ${renderAppSidebarZoneGroup(
+                this,
+                html`
+                  ${renderAppSidebarHomeRow(this)}
+                  ${navEntries.map((entry) =>
+                    renderAppSidebarZoneEntry(
+                      this,
+                      entry,
+                      sidebarZone.sessionRows,
+                      sidebarZone.workboardRows,
+                    ),
+                  )}
+                  ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
+                    (tab) => renderAppSidebarPluginTabEntry(this, tab),
+                  )}
+                `,
+              )}
+              ${pinnedEntries.length > 0
+                ? html`${renderAppSidebarPinnedHead()}
+                  ${renderAppSidebarZoneGroup(
                     this,
-                    entry,
-                    sidebarZone.sessionRows,
-                    sidebarZone.workboardRows,
-                  ),
-                )}
-                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
-                  (tab) => renderAppSidebarPluginTabEntry(this, tab),
-                )}
-              </div>
+                    pinnedEntries.map((entry) =>
+                      renderAppSidebarZoneEntry(
+                        this,
+                        entry,
+                        sidebarZone.sessionRows,
+                        sidebarZone.workboardRows,
+                      ),
+                    ),
+                  )}`
+                : nothing}
             </nav>
             ${this.renderSessions()}
           </div>
@@ -477,7 +521,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .updateAvailable=${this.updateAvailable}
               .updateSchedule=${this.updateSchedule}
               .heldUpdateCampaignId=${this.heldUpdateCampaignId}
-              .updateRunning=${this.updateRunning}
+              .updateBusy=${this.updateBusy}
+              .statusBanner=${this.updateStatusBanner}
+              .watchUpdateProgress=${this.watchUpdateProgress}
               .canUpdate=${this.canUpdate}
               .canHoldUpdate=${this.canHoldUpdate}
               .onUpdate=${this.onUpdate}

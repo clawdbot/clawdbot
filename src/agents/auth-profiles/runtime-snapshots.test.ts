@@ -3,14 +3,22 @@
  * Verifies snapshots are cloned and isolated across agent-specific stores.
  */
 
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
-  clearRuntimeAuthProfileStoreSnapshot,
+  getPreparedRuntimeAuthMaterializations,
+  recordRuntimeAuthMaterialization,
+  registerRuntimeAuthMaterializationMutationListener,
+  revokeRuntimeAuthMaterializations,
+} from "./runtime-materializations.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshotCore,
   clearRuntimeAuthProfileStoreSnapshots,
-  getPreparedRuntimeAuthProfileStoreSnapshot,
-  getRuntimeAuthProfileStoreSnapshot,
+  getPreparedRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreCredentialsRevision,
+  listRuntimeAuthProfileStoreSnapshots,
   noteRuntimeAuthProfileStorePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -60,6 +68,120 @@ function expectOpenAICodexSnapshotCredential(
 }
 
 describe("runtime auth profile snapshots", () => {
+  it("carries the canonical database identity through snapshot enumeration", () => {
+    const databasePath = "/tmp/openclaw-auth-runtime-enumeration/custom.sqlite";
+    const store = createStore("enumerated");
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        databasePath,
+        agentDir: "/tmp/projected-agent-dir-must-not-own-identity",
+        store,
+      },
+    ]);
+    try {
+      expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([
+        {
+          databasePath,
+          agentDir: path.dirname(databasePath),
+          store,
+        },
+      ]);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
+  it("marks default-owner materializations as inherited mutations", () => {
+    const listener = vi.fn();
+    const unregister = registerRuntimeAuthMaterializationMutationListener(listener);
+    try {
+      recordRuntimeAuthMaterialization({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-chatgpt-responses",
+        modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+        requestTransportOverrides: "none",
+        authMode: "oauth",
+        runtimeOwnerId: "codex",
+      });
+
+      expect(listener).toHaveBeenCalledWith({ affectsInheritedStores: true });
+    } finally {
+      unregister();
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
+  it("publishes successful-auth facts without impersonating credential rotation", () => {
+    const agentDir = "/tmp/openclaw-auth-runtime-materialized";
+    const pluginStoreListener = vi.fn();
+    const materializationListener = vi.fn();
+    setRuntimeAuthProfileStoreSnapshot(createStore("materialized"), agentDir);
+    const unregisterStore = registerRuntimeAuthProfileStoreMutationListener(pluginStoreListener);
+    const unregisterMaterialization =
+      registerRuntimeAuthMaterializationMutationListener(materializationListener);
+    try {
+      const materialization = {
+        agentDir,
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-chatgpt-responses",
+        modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+        requestTransportOverrides: "none",
+        authMode: "oauth",
+        runtimeOwnerId: "codex",
+        authProfileId: "openai:default",
+      } as const;
+      expect(recordRuntimeAuthMaterialization(materialization)).toBe(true);
+      expect(recordRuntimeAuthMaterialization(materialization)).toBe(false);
+      expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
+        {
+          provider: "openai",
+          modelId: "gpt-5.4",
+          modelApi: "openai-chatgpt-responses",
+          modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+          requestTransportOverrides: "none",
+          authMode: "oauth",
+          runtimeOwnerId: "codex",
+          authProfileId: "openai:default",
+        },
+      ]);
+      const sibling = { ...materialization, modelId: "gpt-5.5" };
+      const distinctOwner = { ...materialization, runtimeOwnerId: "other-harness" };
+      recordRuntimeAuthMaterialization(sibling);
+      recordRuntimeAuthMaterialization(distinctOwner);
+      expect(
+        revokeRuntimeAuthMaterializations({
+          agentDir,
+          provider: "openai",
+          runtimeOwnerId: "codex",
+        }),
+      ).toBe(true);
+      expect(
+        revokeRuntimeAuthMaterializations({
+          agentDir,
+          provider: "openai",
+          runtimeOwnerId: "codex",
+        }),
+      ).toBe(false);
+      expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
+        expect.objectContaining({ runtimeOwnerId: "other-harness", modelId: "gpt-5.4" }),
+      ]);
+      expect(materializationListener).toHaveBeenCalledTimes(4);
+      expect(pluginStoreListener).not.toHaveBeenCalled();
+
+      recordRuntimeAuthMaterialization(materialization);
+
+      setRuntimeAuthProfileStoreSnapshot(createStore("replaced"), agentDir);
+      expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([]);
+      expect(pluginStoreListener).toHaveBeenCalledOnce();
+    } finally {
+      unregisterMaterialization();
+      unregisterStore();
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
   it("notifies listeners only when credential ownership changes", () => {
     const agentDir = "/tmp/openclaw-auth-runtime-listener";
     const listener = vi.fn();
@@ -74,7 +196,7 @@ describe("runtime auth profile snapshots", () => {
         },
         agentDir,
       );
-      clearRuntimeAuthProfileStoreSnapshot(agentDir);
+      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
 
       expect(listener).toHaveBeenCalledTimes(2);
       expect(listener).toHaveBeenNthCalledWith(1, {
@@ -126,7 +248,7 @@ describe("runtime auth profile snapshots", () => {
     try {
       setRuntimeAuthProfileStoreSnapshot(emptyStore, agentDir);
       setRuntimeAuthProfileStoreSnapshot(emptyStore, agentDir);
-      clearRuntimeAuthProfileStoreSnapshot(agentDir);
+      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
 
       expect(listener).toHaveBeenCalledTimes(2);
       expect(listener).toHaveBeenNthCalledWith(1, {
@@ -171,7 +293,7 @@ describe("runtime auth profile snapshots", () => {
       ).provider = "mutated";
       expectDefined(stored.order?.openai, "stored OpenAI profile order").push("mutated");
 
-      const first = getRuntimeAuthProfileStoreSnapshot(agentDir);
+      const first = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
       expectOpenAICodexSnapshotCredential(first, { access: "access-1" });
       expect(first?.order?.["openai"]).toEqual(["openai:default"]);
 
@@ -183,7 +305,7 @@ describe("runtime auth profile snapshots", () => {
         "first OpenAI usage stats",
       ).lastUsed = 99;
 
-      const second = getRuntimeAuthProfileStoreSnapshot(agentDir);
+      const second = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
       expectOpenAICodexSnapshotCredential(second, { access: "access-1" });
       expect(second?.usageStats?.["openai:default"]?.lastUsed).toBe(1);
 
@@ -195,7 +317,7 @@ describe("runtime auth profile snapshots", () => {
         replacementCredential.access = "mutated-replacement";
       }
 
-      const replaced = getRuntimeAuthProfileStoreSnapshot(agentDir);
+      const replaced = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
       expectOpenAICodexSnapshotCredential(replaced, {
         access: "access-2",
         refresh: "refresh-access-2",
@@ -227,7 +349,7 @@ describe("runtime auth profile snapshots", () => {
       );
       setRuntimeAuthProfileStoreSnapshot(createStore("agent"), agentDir);
 
-      const prepared = getPreparedRuntimeAuthProfileStoreSnapshot(agentDir, inheritedAuthDir);
+      const prepared = getPreparedRuntimeAuthProfileStoreSnapshotCore(agentDir, inheritedAuthDir);
 
       expectOpenAICodexSnapshotCredential(prepared, { access: "agent" });
       expect(prepared?.profiles["anthropic:default"]).toMatchObject({
@@ -236,7 +358,7 @@ describe("runtime auth profile snapshots", () => {
         key: "inherited-key",
       });
       expect(
-        getPreparedRuntimeAuthProfileStoreSnapshot(
+        getPreparedRuntimeAuthProfileStoreSnapshotCore(
           "/tmp/openclaw-auth-runtime-missing",
           "/tmp/openclaw-auth-runtime-also-missing",
         ),
@@ -254,13 +376,15 @@ describe("runtime auth profile snapshots", () => {
       setRuntimeAuthProfileStoreSnapshot(createStore("first"), firstAgentDir);
       setRuntimeAuthProfileStoreSnapshot(createStore("second"), secondAgentDir);
 
-      expect(clearRuntimeAuthProfileStoreSnapshot(firstAgentDir)).toBe(true);
-      expect(getRuntimeAuthProfileStoreSnapshot(firstAgentDir)).toBeUndefined();
-      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshot(), { access: "main" });
-      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshot(secondAgentDir), {
+      expect(clearRuntimeAuthProfileStoreSnapshotCore(firstAgentDir)).toBe(true);
+      expect(getRuntimeAuthProfileStoreSnapshotCore(firstAgentDir)).toBeUndefined();
+      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshotCore(), {
+        access: "main",
+      });
+      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshotCore(secondAgentDir), {
         access: "second",
       });
-      expect(clearRuntimeAuthProfileStoreSnapshot(firstAgentDir)).toBe(false);
+      expect(clearRuntimeAuthProfileStoreSnapshotCore(firstAgentDir)).toBe(false);
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
     }

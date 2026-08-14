@@ -8,7 +8,7 @@ import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.j
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -49,6 +49,7 @@ import {
   resolveRoutedDeliveryThreadId,
 } from "./routed-delivery-thread.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { getReplySystemEventSessionKey } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
   const {
@@ -68,7 +69,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     workspaceDir,
     isMainSession,
     inboundUserContextPromptJoiner,
-    heartbeatRunScope,
     effectiveQueueMode,
     effectiveResetTriggered,
     explicitThinkingLevelOverride,
@@ -131,19 +131,31 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
-  const rebuildPromptBodies = async () => {
-    if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
+  const drainSystemEventBlocks = async () => {
+    if (useFastReplyRuntime) {
+      return;
+    }
+    const routeSystemEventSessionKey = normalizeOptionalString(getReplySystemEventSessionKey(opts));
+    const systemEventSessionKeys =
+      routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+        ? [routeSystemEventSessionKey, sessionKey]
+        : [sessionKey];
+    for (const systemEventSessionKey of systemEventSessionKeys) {
+      const isCurrentSession = systemEventSessionKey === sessionKey;
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
-        sessionKey,
-        isMainSession,
-        isNewSession,
+        agentId,
+        sessionKey: systemEventSessionKey,
+        isMainSession: isCurrentSession && isMainSession,
+        isNewSession: isCurrentSession && isNewSession,
         suppressHeartbeatOwnedEvents: context.isHeartbeat,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
       }
     }
+  };
+  const rebuildPromptBodies = () => {
     const { activeGoalContext, inboundUserContext } = context.getInboundContext();
     return buildReplyPromptEnvelope({
       ctx,
@@ -279,21 +291,20 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resolveCommandTurnTargetSessionKey(ctx) !== undefined
       ? sessionKey
       : undefined;
-  if (
-    commandTurnContinuationTargetKey === undefined &&
-    providedReplyOperation !== undefined &&
-    providedReplyOperation.result === null &&
-    providedReplyOperation.phase === "queued" &&
-    sessionId !== undefined &&
-    sessionId !== providedReplyOperation.sessionId
-  ) {
-    // Dispatch reserves a queued operation before session init. If stale init
-    // rotates the session, move the reservation so later steer/abort paths
-    // target the session that will actually run. Command-turn continuations
-    // rebind after slot adoption below: rebinding first would collide with a
-    // still-active target operation that owns the same session ID.
-    providedReplyOperation.updateSessionId(sessionId);
-  }
+  const rebindProvidedReplyOperation = (nextSessionId: string) => {
+    if (
+      commandTurnContinuationTargetKey === undefined &&
+      providedReplyOperation !== undefined &&
+      providedReplyOperation.result === null &&
+      providedReplyOperation.phase === "queued" &&
+      nextSessionId !== providedReplyOperation.sessionId
+    ) {
+      // Dispatch can reserve a queued operation before session init discovers the
+      // authoritative row. Keep steer/abort and durable admission on that session.
+      // Command continuations rebind only after adopting the target slot below.
+      providedReplyOperation.updateSessionId(nextSessionId);
+    }
+  };
   const isOwnPreDispatchOperationSession = (candidateSessionId: string | undefined): boolean =>
     providedReplyOperation !== undefined &&
     providedReplyOperation.result === null &&
@@ -317,10 +328,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           sessionEntry)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
+    rebindProvidedReplyOperation(latestSessionId);
     opts?.onSessionPrepared?.({ sessionKey, sessionId: latestSessionId, storePath });
     const sessionFile = storePath
       ? formatSqliteSessionFileMarker({ agentId, sessionId: latestSessionId, storePath })
-      : resolveSessionFilePath(latestSessionId, latestSessionEntry, sessionFilePathOptions);
+      : resolveSessionFilePathCore(latestSessionId, latestSessionEntry, sessionFilePathOptions);
     return { sessionEntry: latestSessionEntry, sessionId: latestSessionId, sessionFile };
   };
   let preparedSessionState = resolvePreparedSessionState();
@@ -565,6 +577,17 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       typing.cleanup();
       return { kind: "reply", reply: queueState.reply } as const;
     }
+  }
+  if (activeRunQueueAction !== "drop") {
+    await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
+    ({
+      prefixedCommandBody,
+      queuedBody,
+      transcriptBody,
+      transcriptCommandBody,
+      media: promptMedia,
+      currentInboundContext,
+    } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
   }
 
   return {

@@ -1,6 +1,7 @@
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import type { CodexComputerUseSetupParams } from "./app-server/computer-use.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
@@ -9,11 +10,7 @@ import {
   resolveCodexNativeSandboxBlock,
 } from "./app-server/sandbox-guard.js";
 import { canMutateCodexHost } from "./command-authorization.js";
-import {
-  formatCodexDisplayText,
-  formatComputerUseStatus,
-  readString,
-} from "./command-formatters.js";
+import { formatCodexDisplayText, formatComputerUseStatus } from "./command-formatters.js";
 import {
   formatComputerUsePersistentIdentityMigration,
   parseBindArgs,
@@ -260,8 +257,8 @@ function formatNativeGoal(response: JsonValue | undefined): string {
   if (!goal) {
     return "No Codex goal is active.";
   }
-  const objective = readString(goal, "objective") ?? "unknown";
-  const status = readString(goal, "status") ?? "unknown";
+  const objective = normalizeOptionalString(goal.objective) ?? "unknown";
+  const status = normalizeOptionalString(goal.status) ?? "unknown";
   const tokensUsed = typeof goal.tokensUsed === "number" ? goal.tokensUsed : 0;
   const tokenBudget = typeof goal.tokenBudget === "number" ? goal.tokenBudget : undefined;
   return [

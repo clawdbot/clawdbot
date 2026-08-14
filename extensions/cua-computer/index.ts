@@ -2,11 +2,13 @@ import { buildPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/
 import { z } from "zod";
 import { createCuaComputerCommands } from "./src/commands.js";
 
-const CuaComputerConfigSchema = z.strictObject({});
-
-const configSchema = buildPluginConfigSchema(CuaComputerConfigSchema, {
-  uiHints: {},
+const CuaComputerConfigSchema = z.strictObject({
+  // Keep the shipped daemon setting as a named no-op: strict validation accepts
+  // existing config, but direct SDK commands never receive a binary path.
+  driverPath: z.string().optional(),
 });
+
+const configSchema = buildPluginConfigSchema(CuaComputerConfigSchema);
 
 export default definePluginEntry({
   id: "cua-computer",

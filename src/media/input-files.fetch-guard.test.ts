@@ -14,9 +14,12 @@ vi.mock("./media-services.js", () => ({
   convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
 }));
 
-vi.mock("@openclaw/media-core/mime", () => ({
-  detectMime: (...args: unknown[]) => detectMimeMock(...args),
-}));
+vi.mock("@openclaw/media-core/mime", async () => {
+  const actual = await vi.importActual<typeof import("@openclaw/media-core/mime")>(
+    "@openclaw/media-core/mime",
+  );
+  return { ...actual, detectMime: (...args: unknown[]) => detectMimeMock(...args) };
+});
 
 vi.mock("./pdf-extract.js", () => ({
   extractPdfContent: (...args: unknown[]) => extractPdfContentMock(...args),

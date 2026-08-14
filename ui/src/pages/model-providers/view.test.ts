@@ -321,19 +321,17 @@ describe("renderModelProviders", () => {
     );
 
     const defaults = container.querySelector(".model-providers__defaults");
-    const defaultControls = [
-      ...(defaults?.querySelectorAll<HTMLSelectElement | HTMLButtonElement>(
-        "select, .model-providers__fallback-row button",
-      ) ?? []),
-      button(container, "Save"),
-    ];
-    expect(defaultControls.map((control) => control?.disabled)).toEqual([
-      true,
-      true,
-      true,
-      true,
-      true,
-    ]);
+    const defaultSelects = [...(defaults?.querySelectorAll("wa-select") ?? [])];
+    expect(defaultSelects).toHaveLength(3);
+    expect(defaultSelects.every((select) => select.hasAttribute("disabled"))).toBe(true);
+    expect(
+      [
+        ...(defaults?.querySelectorAll<HTMLButtonElement>(
+          ".model-providers__fallback-row button",
+        ) ?? []),
+      ].every((control) => control.disabled),
+    ).toBe(true);
+    expect(button(container, "Save")?.disabled).toBe(true);
 
     const provider = container.querySelector('[data-provider-id="openai"]');
     expect(
@@ -539,6 +537,28 @@ describe("renderModelProviders", () => {
     expect(onOpenModelSetup).toHaveBeenCalledOnce();
   });
 
+  it("does not present catalog-rejected credentials as signed in", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            auth: { kind: "ok", profileCount: 1 },
+            profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
+            catalogStatus: "auth-rejected",
+            modelCount: 0,
+            availableModelCount: 0,
+          }),
+        ],
+        configuredModels: [],
+        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+      }),
+    );
+
+    const provider = container.querySelector('[data-provider-id="openai"]');
+    expect(text(provider)).toContain("Credentials rejected");
+    expect(text(provider)).not.toContain("Signed in");
+  });
+
   it("does not report an unverified API key as ready", () => {
     const container = mount(
       props({
@@ -642,7 +662,7 @@ describe("renderModelProviders", () => {
     }
   });
 
-  it("shows config key provenance when auth status is unavailable", () => {
+  it("does not invent config key provenance when auth status is unavailable", () => {
     const container = mount(
       props({
         cards: [card({ apiKey: undefined, hasConfigApiKey: true })],
@@ -650,8 +670,42 @@ describe("renderModelProviders", () => {
     );
 
     const provider = container.querySelector('[data-provider-id="openai"]');
-    expect(text(provider)).toContain("API key set in config");
-    expect(text(provider)).not.toContain("Not configured");
+    expect(text(provider)).not.toContain("API key set in config");
+    expect(text(provider)).toContain("Not configured");
+  });
+
+  it("renders mixed credential probes as connected with warnings", () => {
+    const container = mount(
+      props({
+        probeResults: {
+          openai: {
+            provider: "openai",
+            status: "ok",
+            latencyMs: 145,
+            results: [
+              {
+                label: "Configured credential · openai/gpt-5.6-sol",
+                status: "unknown",
+                error:
+                  "The configured credential could not be resolved. Update or remove it, then retry.",
+              },
+              {
+                profileId: "openai:default",
+                label: "Profile Default · openai/gpt-5.6-sol",
+                status: "ok",
+                latencyMs: 145,
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const probe = container.querySelector(".model-providers__probe--warning");
+    expect(text(probe)).toContain("Connected with warnings");
+    expect(text(probe)).toContain("Configured credential · openai/gpt-5.6-sol");
+    expect(text(probe)).toContain("Profile Default · openai/gpt-5.6-sol");
+    expect(text(probe)).toContain("Update or remove it, then retry");
   });
 
   it("renders categorized probe errors", () => {
@@ -731,10 +785,10 @@ describe("renderModelProviders", () => {
         },
       }),
     );
-    const option = container.querySelector<HTMLOptionElement>(
-      'option[value="openrouter/anthropic/claude-sonnet-4"]',
+    const option = container.querySelector(
+      'wa-option[value="openrouter/anthropic/claude-sonnet-4"]',
     );
-    expect(option?.selected).toBe(true);
+    expect(option?.hasAttribute("selected")).toBe(true);
   });
 
   it("renders alias defaults and distinct automatic or disabled utility states", () => {
@@ -751,11 +805,12 @@ describe("renderModelProviders", () => {
         defaultModels: { primary: "opus", fallbacks: [], utilityModel: null },
       }),
     );
-    expect(automatic.querySelector<HTMLOptionElement>('option[value="opus"]')?.selected).toBe(true);
+    expect(automatic.querySelector('wa-option[value="opus"]')?.hasAttribute("selected")).toBe(true);
     expect(
       text(
-        automatic.querySelectorAll<HTMLSelectElement>(".model-providers__defaults select")[1]
-          ?.selectedOptions[0] ?? null,
+        automatic
+          .querySelectorAll(".model-providers__defaults wa-select")[1]
+          ?.querySelector("wa-option[selected]") ?? null,
       ),
     ).toContain("Automatic");
 
@@ -767,8 +822,9 @@ describe("renderModelProviders", () => {
     );
     expect(
       text(
-        disabled.querySelectorAll<HTMLSelectElement>(".model-providers__defaults select")[1]
-          ?.selectedOptions[0] ?? null,
+        disabled
+          .querySelectorAll(".model-providers__defaults wa-select")[1]
+          ?.querySelector("wa-option[selected]") ?? null,
       ),
     ).toBe("Disabled");
   });

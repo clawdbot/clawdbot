@@ -681,10 +681,10 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("returns session history over direct REST", async () => {
+  test.each(["", "?cursor=", "?cursor=%20"])("returns history for query %j", async (query) => {
     await seedSession({ text: "hello from history" });
     await withGatewayHarness(async (harness) => {
-      const body = await readSessionHistoryBody(harness.port, "agent:main:main");
+      const body = await readSessionHistoryBody(harness.port, "agent:main:main", { query });
       expect(body.sessionKey).toBe("agent:main:main");
       expect(body.messages).toHaveLength(1);
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("hello from history");
@@ -1108,6 +1108,22 @@ describe("session history HTTP endpoints", () => {
         const body = await res.json();
         expect(body.error?.type).toBe("invalid_request_error");
         expect(body.error?.message).toBe("limit must be a positive integer");
+      });
+    },
+  );
+
+  test.each(["garbage", "seq:garbage", "seq:0", "seq:99999999999999999999", "0", "-1", "1.5"])(
+    "rejects invalid cursor %j with 400",
+    async (cursor) => {
+      await seedSession({ text: "first message" });
+      await withGatewayHarness(async (harness) => {
+        const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+          query: `?cursor=${encodeURIComponent(cursor)}`,
+        });
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.error?.type).toBe("invalid_request_error");
+        expect(body.error?.message).toBe("cursor must be a positive integer");
       });
     },
   );

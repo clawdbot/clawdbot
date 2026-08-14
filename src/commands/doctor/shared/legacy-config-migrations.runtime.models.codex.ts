@@ -9,7 +9,7 @@ import {
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import {
-  RETIRED_MODEL_REF_MESSAGE,
+  MODEL_REF_CANONICALIZATION_MESSAGE,
   hasOwnDefinedProperty,
   scanKnownModelRefs,
 } from "./legacy-config-migrations.runtime.models.refs.js";
@@ -592,7 +592,7 @@ export function migrateLegacyOpenAICodexProvider(
   }
 }
 
-export const RETIRED_MODEL_REF_RULES: LegacyConfigRule[] = [
+export const MODEL_REF_CANONICALIZATION_RULES: LegacyConfigRule[] = [
   "agents",
   "plugins",
   "messages",
@@ -602,6 +602,6 @@ export const RETIRED_MODEL_REF_RULES: LegacyConfigRule[] = [
   "models",
 ].map((section) => ({
   path: [section],
-  message: RETIRED_MODEL_REF_MESSAGE,
+  message: MODEL_REF_CANONICALIZATION_MESSAGE,
   match: (value) => scanKnownModelRefs(value),
 }));

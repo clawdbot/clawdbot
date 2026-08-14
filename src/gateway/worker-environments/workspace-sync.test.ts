@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import type { PreparedWorkerSsh } from "./ssh.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
+import { runBoundedInboundRsync } from "./workspace-sync-helpers.js";
 import { createWorkerWorkspaceRsyncTransport } from "./workspace-sync-transport.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
@@ -45,6 +46,7 @@ function createWorkspaceActions(
 ) {
   const prepared = createPreparedSsh();
   return createWorkerWorkspaceActions({
+    bundleHash: "a".repeat(64),
     environmentId: "worker:test",
     ownerSignal: new AbortController().signal,
     isConnected: () => true,
@@ -183,6 +185,68 @@ describe("worker workspace rsync transport retry", () => {
       ).resolves.toEqual(result());
       expect(runTask.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([1_000, 875]);
       expect(runTask.mock.calls[0]![1]).not.toBe(runTask.mock.calls[1]![1]);
+    } finally {
+      await fs.rm(destinationRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bounded inbound workspace transfer", () => {
+  it("aborts an in-flight transfer when the destination crosses quota", async () => {
+    const destinationRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rsync-quota-"));
+    let transferSignal: AbortSignal | undefined;
+    try {
+      const runTask = vi.fn(async (_argv: string[], options: CommandOptions) => {
+        transferSignal = options.signal;
+        await fs.writeFile(path.join(destinationRoot, "oversized"), "over quota");
+        return await new Promise<SpawnResult>((_resolve, reject) => {
+          const abort = () => {
+            const reason = options.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("aborted"));
+          };
+          options.signal?.addEventListener("abort", abort, { once: true });
+          if (options.signal?.aborted) {
+            abort();
+          }
+        });
+      });
+
+      await expect(
+        runBoundedInboundRsync({
+          argv: ["rsync"],
+          destinationRoot,
+          entryLimit: 10,
+          totalByteLimit: 1,
+          ownerSignal: new AbortController().signal,
+          runTask,
+          timeoutMs: 10_000,
+        }),
+      ).rejects.toThrow("inbound transfer exceeds");
+      expect(transferSignal?.aborted).toBe(true);
+    } finally {
+      await fs.rm(destinationRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a completed over-quota transfer in the authoritative final scan", async () => {
+    const destinationRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rsync-final-quota-"));
+    try {
+      const runTask = vi.fn(async () => {
+        await fs.writeFile(path.join(destinationRoot, "oversized"), "over quota");
+        return result();
+      });
+
+      await expect(
+        runBoundedInboundRsync({
+          argv: ["rsync"],
+          destinationRoot,
+          entryLimit: 10,
+          totalByteLimit: 1,
+          ownerSignal: new AbortController().signal,
+          runTask,
+          timeoutMs: 10_000,
+        }),
+      ).rejects.toThrow("inbound transfer exceeds");
     } finally {
       await fs.rm(destinationRoot, { recursive: true, force: true });
     }

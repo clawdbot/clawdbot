@@ -1,18 +1,18 @@
 /**
  * Updates persisted session metadata after agent command runs.
  */
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   SESSION_TOTAL_TOKENS_VERSION,
   setSessionRuntimeModel,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import {
   clearCliSession,
   getCliSessionBinding,
@@ -20,7 +20,7 @@ import {
   setCliSessionId,
 } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery-clear.js";
+import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
@@ -47,6 +47,7 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
 /** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
+  agentDir: string;
   contextTokensOverride?: number;
   sessionId: string;
   sessionKey: string;
@@ -66,8 +67,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   /**
    * When true, preserve the pre-existing runtime model fields (model,
    * modelProvider, contextTokens) on the session entry instead of overwriting
-   * them with the model used by this run. Used for heartbeat turns so the
-   * heartbeat model does not "bleed" into the main session's perceived state.
+   * them with the model used by this run. Used for turn-local fallback and
+   * heartbeat runs so their model does not bleed into the session selection.
    */
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
@@ -146,9 +147,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     );
   }
   if (preserveRuntimeModel) {
-    // Keep the pre-existing runtime model and context window so a background
-    // heartbeat turn using a different model does not bleed into the main
-    // session's perceived state.
+    // Keep the pre-existing runtime model and context window so a turn-local
+    // model does not bleed into the session's perceived selection.
     if (entry.model) {
       // Prior runtime model exists: preserve its contextTokens. When missing,
       // leave contextTokens unset rather than falling back to the heartbeat
@@ -212,13 +212,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
       contextTokens,
       promptTokens,
     });
-    const runEstimatedCostUsd = resolveNonNegativeNumber(
+    const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateUsageCost({
         usage,
         cost: resolveModelCostConfig({
           provider: providerUsed,
           model: modelUsed,
           config: cfg,
+          agentDir: params.agentDir,
         }),
       }),
     );
@@ -286,7 +287,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     : next;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     {
       storePath,
       sessionKey,
@@ -337,7 +338,8 @@ export async function clearCliSessionInStore(params: {
     return undefined;
   }
 
-  const persisted = await patchSessionEntry(
+  let didClear = false;
+  const persisted = await patchSessionEntryCore(
     {
       storePath,
       sessionKey,
@@ -358,14 +360,16 @@ export async function clearCliSessionInStore(params: {
       const next = { ...currentEntry };
       clearCliSession(next, provider);
       next.updatedAt = Date.now();
+      didClear = true;
       return next;
     },
     { fallbackEntry: entry },
   );
-  if (persisted) {
+  if (persisted && didClear) {
     sessionStore[sessionKey] = persisted;
+    return persisted;
   }
-  return persisted ?? undefined;
+  return undefined;
 }
 
 /** Clears the one-shot fork marker before the resumed CLI process starts. */
@@ -382,7 +386,7 @@ export async function consumeCliSessionForkInStore(params: {
   if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume !== true) {
     return undefined;
   }
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
@@ -419,7 +423,7 @@ export async function restoreCliSessionForkInStore(params: {
   if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume === true) {
     return undefined;
   }
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
@@ -462,7 +466,7 @@ export async function persistCliSessionForkSuccessorInStore(params: {
   if (!entry || successorCliSessionId === expectedCliSessionId) {
     return undefined;
   }
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
@@ -518,7 +522,7 @@ export async function recordCliCompactionInStore(params: {
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
     );
   }
-  const tokensAfterCompaction = resolveNonNegativeNumber(params.tokensAfter);
+  const tokensAfterCompaction = asNonNegativeFiniteNumber(params.tokensAfter);
   next.contextBudgetStatus = undefined;
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
@@ -537,7 +541,7 @@ export async function recordCliCompactionInStore(params: {
     next.cacheWrite = undefined;
   }
 
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     {
       storePath,
       sessionKey,

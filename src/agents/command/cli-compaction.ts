@@ -1,4 +1,4 @@
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 /**
  * CLI turn compaction lifecycle.
  *

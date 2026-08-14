@@ -1,10 +1,15 @@
 import type { MessageOptions, SessionConfig, Tool as SdkTool } from "@github/copilot-sdk";
 import type { AgentMessage, SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { toStringifiedError as toCopilotError } from "openclaw/plugin-sdk/error-runtime";
+
+export { toCopilotError };
 import {
   detectAndLoadAgentHarnessPromptImages,
   getModelProviderRequestTransport,
   resolveUserPath,
+  TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   COPILOT_ASK_USER_AVAILABLE_TOOLS,
   COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE,
@@ -128,8 +133,8 @@ export function createResult(
     messagingToolSentTargets: [],
     messagingToolSentTexts: [],
     replayMetadata,
-    sessionFileUsed: readString(params.sessionFile),
-    sessionIdUsed: state.sessionIdUsed ?? readString(params.sessionId) ?? "copilot-session",
+    sessionFileUsed: readNonEmptyString(params.sessionFile),
+    sessionIdUsed: state.sessionIdUsed ?? readNonEmptyString(params.sessionId) ?? "copilot-session",
     toolMetas,
     yieldDetected: state.yieldDetected === true,
   };
@@ -314,13 +319,16 @@ export function createSystemMessageContent(
   params: AttemptParamsLike,
   workspaceBootstrapInstructions: string | undefined,
 ): string | undefined {
-  const sections: string[] = [];
+  if (isRawCopilotModelRun(params)) {
+    return undefined;
+  }
+  const sections: string[] = [TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT];
   const bootstrap = workspaceBootstrapInstructions?.trim();
   if (bootstrap) {
     sections.push(bootstrap);
   }
-  const extraSystemPrompt = readString(params.extraSystemPrompt)?.trim();
-  if (extraSystemPrompt && !isRawCopilotModelRun(params)) {
+  const extraSystemPrompt = readNonEmptyString(params.extraSystemPrompt)?.trim();
+  if (extraSystemPrompt) {
     const contextHeader =
       params.promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     sections.push(`${contextHeader}\n${extraSystemPrompt}`);
@@ -330,11 +338,9 @@ export function createSystemMessageContent(
 export function isRawCopilotModelRun(params: AttemptParamsLike): boolean {
   return params.modelRun === true || params.promptMode === "none";
 }
-export function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
+export { readNonEmptyString };
 export function readResolvedAttemptPath(value: unknown): string | undefined {
-  const raw = readString(value)?.trim();
+  const raw = readNonEmptyString(value)?.trim();
   if (!raw) {
     return undefined;
   }
@@ -350,20 +356,20 @@ export function resolveModelRef(params: AttemptParamsLike): ModelRef {
     const requestTransport = getModelProviderRequestTransport(rawModel);
     const rawRequest = model.request;
     return {
-      api: readString(model.api),
+      api: readNonEmptyString(model.api),
       id:
-        readString(model.id) ??
-        readString((params as { modelId?: unknown }).modelId) ??
+        readNonEmptyString(model.id) ??
+        readNonEmptyString((params as { modelId?: unknown }).modelId) ??
         "unknown-model",
       provider:
-        readString(model.provider) ??
-        readString((params as { provider?: unknown }).provider) ??
+        readNonEmptyString(model.provider) ??
+        readNonEmptyString((params as { provider?: unknown }).provider) ??
         "unknown-provider",
-      baseUrl: readString(model.baseUrl),
-      azureApiVersion: readString(model.azureApiVersion ?? model.params?.azureApiVersion),
+      baseUrl: readNonEmptyString(model.baseUrl),
+      azureApiVersion: readNonEmptyString(model.azureApiVersion ?? model.params?.azureApiVersion),
       headers: model.headers,
       authHeader: model.authHeader,
-      requestAuthMode: readString(requestTransport?.auth?.mode ?? rawRequest?.auth?.mode),
+      requestAuthMode: readNonEmptyString(requestTransport?.auth?.mode ?? rawRequest?.auth?.mode),
       requestProxy: requestTransport?.proxy ?? rawRequest?.proxy,
       requestTls: requestTransport?.tls ?? rawRequest?.tls,
       requestAllowPrivateNetwork:
@@ -375,10 +381,10 @@ export function resolveModelRef(params: AttemptParamsLike): ModelRef {
   }
   return {
     id:
-      readString(typeof rawModel === "string" ? rawModel : undefined) ??
-      readString((params as { modelId?: unknown }).modelId) ??
+      readNonEmptyString(typeof rawModel === "string" ? rawModel : undefined) ??
+      readNonEmptyString((params as { modelId?: unknown }).modelId) ??
       "unknown-model",
-    provider: readString((params as { provider?: unknown }).provider) ?? "unknown-provider",
+    provider: readNonEmptyString((params as { provider?: unknown }).provider) ?? "unknown-provider",
   };
 }
 export function resolvePoolAcquire(params: AttemptParamsLike): {
@@ -390,28 +396,28 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
   const model = resolveModelRef(params);
   const provider = resolveCopilotProvider({
     model,
-    resolvedApiKey: readString(params.resolvedApiKey),
-    authProfileId: readString(params.authProfileId),
+    resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
+    authProfileId: readNonEmptyString(params.authProfileId),
   });
   const auth =
     provider.mode === "byok"
       ? createCopilotByokAuth({
-          agentId: readString(params.agentId),
-          agentDir: readString(params.agentDir),
-          workspaceDir: readString(params.workspaceDir),
-          copilotHome: readString(params.copilotHome),
+          agentId: readNonEmptyString(params.agentId),
+          agentDir: readNonEmptyString(params.agentDir),
+          workspaceDir: readNonEmptyString(params.workspaceDir),
+          copilotHome: readNonEmptyString(params.copilotHome),
           authProfileId: provider.authProfileId,
           authProfileVersion: provider.authProfileVersion,
         })
       : resolveCopilotAuth({
-          agentId: readString(params.agentId),
-          agentDir: readString(params.agentDir),
-          workspaceDir: readString(params.workspaceDir),
-          copilotHome: readString(params.copilotHome),
+          agentId: readNonEmptyString(params.agentId),
+          agentDir: readNonEmptyString(params.agentDir),
+          workspaceDir: readNonEmptyString(params.workspaceDir),
+          copilotHome: readNonEmptyString(params.copilotHome),
           auth: params.auth,
-          resolvedApiKey: readString(params.resolvedApiKey),
-          authProfileId: readString(params.authProfileId),
-          profileVersion: readString(params.profileVersion),
+          resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
+          authProfileId: readNonEmptyString(params.authProfileId),
+          profileVersion: readNonEmptyString(params.profileVersion),
         });
   return {
     key: {
@@ -435,9 +441,6 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
     auth,
     provider,
   };
-}
-export function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 export function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
   if (error === null || typeof error !== "object") {

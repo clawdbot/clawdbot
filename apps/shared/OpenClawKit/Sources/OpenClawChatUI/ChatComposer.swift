@@ -941,7 +941,7 @@ struct OpenClawChatComposer: View {
             #elseif os(iOS)
             ChatComposerTextViewIOS(
                 text: self.$viewModel.input,
-                shouldFocus: self.isFocused,
+                focusRequested: self.isFocused,
                 isEnabled: self.isComposerEnabled,
                 minHeight: self.textMinHeight,
                 maxHeight: self.textMaxHeight,

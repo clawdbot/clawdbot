@@ -7,6 +7,7 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
+import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
@@ -275,17 +276,22 @@ export async function executeFollowupTurn(params: {
         if (!progressAllowed()) {
           return false;
         }
-        const verboseToolResult = shouldEmitVerboseToolResult();
-        const toolResultProgressVisible = Boolean(channelToolResultProgress) || verboseToolResult;
+        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
+        const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
+        const transientToolResultProgress = requiresDurableToolResult
+          ? undefined
+          : channelToolResultProgress;
+        const toolResultDeliveryAvailable =
+          Boolean(transientToolResultProgress) || verboseToolResult || requiresDurableToolResult;
         if (
           turn.queued.run.sourceReplyDeliveryMode === "message_tool_only" &&
-          !toolResultProgressVisible
+          !toolResultDeliveryAvailable
         ) {
           return false;
         }
         const visible =
-          channelToolResultProgress && !verboseToolResult
-            ? (await settleProgressVisibilityCallbackResult(channelToolResultProgress(payload)))
+          transientToolResultProgress && !verboseToolResult
+            ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
                 .visible
             : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
         if (visible && payload.isError === true) {

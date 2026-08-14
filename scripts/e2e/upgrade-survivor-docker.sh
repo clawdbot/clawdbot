@@ -157,6 +157,12 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   fi
 
   OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
+  TRUSTED_TSX_NODE_MODULES="$HARNESS_ROOT_DIR/node_modules"
+  TRUSTED_TSX_IMPORT="$TRUSTED_TSX_NODE_MODULES/tsx/dist/loader.mjs"
+  if [ ! -f "$TRUSTED_TSX_IMPORT" ]; then
+    echo "Trusted upgrade-survivor tsx loader not found: $TRUSTED_TSX_IMPORT" >&2
+    exit 1
+  fi
 
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
@@ -173,12 +179,14 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT="$COMMAND_TIMEOUT" \
     -e OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK="${OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS="$ROOT_MANAGED_VPS" \
+    -e OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT=/tmp/openclaw-release-harness/node_modules/tsx/dist/loader.mjs \
     -e OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON=/tmp/openclaw-upgrade-survivor-artifacts/summary.json \
     -e OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS="$START_BUDGET_SECONDS" \
     -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
     -e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=/tmp/openclaw-clawhub-fixture-server.cjs \
     "${PROBE_ENV_ARGS[@]}" \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
+    -v "$TRUSTED_TSX_NODE_MODULES:/tmp/openclaw-release-harness/node_modules:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro" \
     "${PREPUBLISH_PLUGIN_REGISTRY_ARGS[@]}" \
@@ -438,13 +446,13 @@ export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 echo "Checking dirty-state config before update..."
 OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
 OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+configure_clawhub_fixture
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   # shellcheck disable=SC1091
   source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
   prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"
 fi
 
-configure_clawhub_fixture
 configure_plugin_registry
 echo "Running package update against the mounted tarball..."
 update_args=(update --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" --yes --json)
@@ -459,6 +467,9 @@ if [ "$update_status" -ne 0 ]; then
   echo "openclaw update failed" >&2
   openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.err >&2
   openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json >&2
+  openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate --json >/tmp/openclaw-upgrade-survivor-post-update-validate.json 2>/tmp/openclaw-upgrade-survivor-post-update-validate.err || true
+  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.err >&2
+  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.json >&2
   exit "$update_status"
 fi
 if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then

@@ -13,15 +13,21 @@ export const terminalPanelStyles = css`
     bottom: 0;
     --tp-session-menu-max-height: calc(100dvh - var(--shell-topbar-height, 0px) - 44px);
   }
+  .tp--main {
+    /* Main mode owns the content region; later sibling docks may overlay it. */
+    top: var(--shell-topbar-height, 0);
+    left: var(--shell-nav-width, 0);
+    right: 0;
+    bottom: 0;
+    --tp-session-menu-max-height: calc(100dvh - var(--shell-topbar-height, 0px) - 44px);
+  }
   .tp--fullscreen {
     inset: 0;
   }
-  .tp-header {
-    background: var(--bg, #0e1015);
-  }
-  .tp-icon.is-active {
-    color: var(--text, #d7dae0);
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
+  .tp-dock-modes {
+    display: flex;
+    align-items: center;
+    gap: 2px;
   }
   .tp-session-picker {
     position: relative;
@@ -34,11 +40,11 @@ export const terminalPanelStyles = css`
     width: min(360px, calc(100vw - 24px));
     max-height: min(420px, var(--tp-session-menu-max-height));
     overflow-y: auto;
-    border: 1px solid var(--border, #262b34);
-    border-radius: 8px;
-    background: var(--bg, #0e1015);
-    box-shadow: 0 12px 30px rgb(0 0 0 / 35%);
-    padding: 6px;
+    padding: var(--menu-padding);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--menu-radius);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-md);
   }
   .tp-session-menu__header {
     display: flex;
@@ -64,7 +70,8 @@ export const terminalPanelStyles = css`
     gap: 8px;
     width: 100%;
     border: 0;
-    border-radius: 6px;
+    min-height: var(--menu-item-height);
+    border-radius: var(--menu-item-radius);
     background: transparent;
     color: var(--text, #d7dae0);
     padding: 7px 8px;
@@ -72,7 +79,7 @@ export const terminalPanelStyles = css`
   }
   .tp-session:not(:disabled):hover,
   .tp-session:not(:disabled):focus-visible {
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
+    background: var(--bg-hover);
   }
   .tp-session:disabled {
     opacity: 0.55;

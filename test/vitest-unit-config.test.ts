@@ -80,11 +80,11 @@ describe("unit vitest config", () => {
     const unitConfig = createUnitVitestConfigWithOptions(
       {},
       {
-        argv: ["node", "vitest", "run", "src/commitments/store.test.ts"],
+        argv: ["node", "vitest", "run", "src/media-generation/runtime-shared.test.ts"],
       },
     );
     const testConfig = requireTestConfig(unitConfig);
-    expect(testConfig.include).toEqual(["src/commitments/store.test.ts"]);
+    expect(testConfig.include).toEqual(["src/media-generation/runtime-shared.test.ts"]);
     expect(testConfig.passWithNoTests).toBeUndefined();
   });
 
@@ -151,8 +151,6 @@ describe("unit vitest config", () => {
     const testConfig = requireTestConfig(unitConfig);
     const coverageInclude = testConfig.coverage?.include;
     expect(coverageInclude).toContain("packages/memory-host-sdk/src/host/embeddings.ts");
-    expect(coverageInclude).toContain("src/commitments/store.ts");
-    expect(coverageInclude).toContain("src/commitments/runtime.ts");
     expect(coverageInclude).toContain("src/media-generation/runtime-shared.ts");
     expect(coverageInclude).toContain("src/web-search/runtime.ts");
     expect(coverageInclude).not.toContain("packages/markdown-core/src/render.ts");
@@ -163,7 +161,7 @@ describe("unit vitest config", () => {
     const unitConfig = createUnitVitestConfigWithOptions(
       {},
       {
-        includePatterns: ["src/commitments/runtime.test.ts"],
+        includePatterns: ["src/media-generation/runtime-shared.test.ts"],
       },
     );
     const testConfig = requireTestConfig(unitConfig);

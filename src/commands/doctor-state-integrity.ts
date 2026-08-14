@@ -16,7 +16,7 @@ import {
   clearWedgedSubagentRecoveryAbort,
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
-} from "../agents/subagent-recovery-state.js";
+} from "../agents/subagents/registry/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
@@ -26,10 +26,10 @@ import {
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
-  resolveStorePath,
+  resolveSessionStorePathCore,
 } from "../config/sessions/paths.js";
 import {
   applySessionEntryReplacements,
@@ -44,7 +44,6 @@ import {
   loadLegacySessionStore,
   updateLegacySessionStore,
 } from "../infra/state-migrations.legacy-session-store.js";
-import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -769,11 +768,6 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   return false;
 }
 
-function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: string): boolean {
-  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
-  return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
-}
-
 export function detectStateIntegrityHealthIssues(
   cfg: OpenClawConfig,
   params?: {
@@ -791,7 +785,9 @@ export function detectStateIntegrityHealthIssues(
   const sessionsDir = agentId
     ? resolveSessionTranscriptsDirForAgent(agentId, env, homedir)
     : undefined;
-  const storePath = agentId ? resolveStorePath(cfg.session?.store, { agentId }) : undefined;
+  const storePath = agentId
+    ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
+    : undefined;
   const storeDir = storePath ? path.dirname(storePath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
 
@@ -1064,7 +1060,9 @@ export async function noteStateIntegrity(
   const sessionsDir = agentId
     ? resolveSessionTranscriptsDirForAgent(agentId, env, homedir)
     : undefined;
-  const storePath = agentId ? resolveStorePath(cfg.session?.store, { agentId }) : undefined;
+  const storePath = agentId
+    ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
+    : undefined;
   const storeDir = storePath ? path.dirname(storePath) : undefined;
   const absoluteStorePath = storePath ? path.resolve(storePath) : undefined;
   const displayStateDir = shortenHomePath(stateDir);
@@ -1076,9 +1074,6 @@ export async function noteStateIntegrity(
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
   const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
-  const suppressOrphanTranscriptWarning = agentId
-    ? shouldSuppressOrphanTranscriptWarning(cfg, agentId)
-    : false;
 
   if (cloudSyncedStateDir) {
     warnings.push(
@@ -1362,7 +1357,7 @@ export async function noteStateIntegrity(
       if (parseSqliteSessionFileMarker(legacySessionFile)) {
         return false;
       }
-      const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
+      const transcriptPath = resolveSessionFilePathCore(sessionId, entry, sessionPathOpts);
       return !existsFile(transcriptPath);
     });
     if (missing.length > 0) {
@@ -1477,7 +1472,7 @@ export async function noteStateIntegrity(
     // SQLite-owned transcripts live in the agent DB after import.
     // Do not require the archived legacy JSONL for those sessions.
     if (mainEntry?.sessionId && !sqliteSessionKeys.has(mainKey)) {
-      const transcriptPath = resolveSessionFilePath(
+      const transcriptPath = resolveSessionFilePathCore(
         mainEntry.sessionId,
         mainEntry,
         sessionPathOpts,
@@ -1508,7 +1503,7 @@ export async function noteStateIntegrity(
       try {
         referencedTranscriptPaths.add(
           resolveComparableTranscriptPath(
-            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+            resolveSessionFilePathCore(entry.sessionId, entry, sessionPathOpts),
           ),
         );
       } catch {
@@ -1522,7 +1517,7 @@ export async function noteStateIntegrity(
       .filter(
         (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
       );
-    if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
+    if (orphanTranscriptPaths.length > 0) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);
       warnings.push(

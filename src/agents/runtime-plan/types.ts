@@ -14,7 +14,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { AgentTool } from "../runtime/index.js";
 
 /** Runtime transport selected for one model attempt. */
-export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
+export type AgentRuntimeTransport = "sse" | "websocket" | "websocket-cached" | "auto";
 
 /** Thinking levels accepted by runtime-plan extra-param preparation. */
 type AgentRuntimeThinkLevel =
@@ -95,7 +95,6 @@ type AgentRuntimeProviderHandle = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
-  bundledProviderVitestCompat?: boolean;
 };
 
 type PreparedAgentRuntimeProviderHandle = AgentRuntimeProviderHandle & {

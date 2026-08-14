@@ -500,14 +500,9 @@ extension MacNodeRuntime {
             (Self.locationPreciseEnabled() ? .precise : .balanced)
         let services = await mainActorServices()
         let status = await services.locationAuthorizationStatus()
-        let hasPermission = switch mode {
-        case .always:
-            status == .authorizedAlways
-        case .whileUsing:
-            status == .authorizedAlways
-        case .off:
-            false
-        }
+        let hasPermission = PermissionManager.isLocationAuthorized(
+            status: status,
+            requireAlways: mode == .always)
         if !hasPermission {
             return BridgeInvokeResponse(
                 id: req.id,
@@ -980,11 +975,11 @@ extension MacNodeRuntime {
     }
 
     private nonisolated static func canvasEnabled() -> Bool {
-        UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
+        AppDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
     }
 
     private nonisolated static func cameraEnabled() -> Bool {
-        UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
+        AppDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
     }
 
     nonisolated static func computerControlEnabledDefault() -> Bool {
@@ -992,15 +987,15 @@ extension MacNodeRuntime {
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {
-        let raw = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
+        let raw = AppDefaults.standard.string(forKey: locationModeKey) ?? "off"
         return OpenClawLocationMode(rawValue: raw) ?? .off
     }
 
     private nonisolated static func locationPreciseEnabled() -> Bool {
-        if UserDefaults.standard.object(forKey: locationPreciseKey) == nil {
+        if AppDefaults.standard.object(forKey: locationPreciseKey) == nil {
             return true
         }
-        return UserDefaults.standard.bool(forKey: locationPreciseKey)
+        return AppDefaults.standard.bool(forKey: locationPreciseKey)
     }
 
     private static func errorResponse(

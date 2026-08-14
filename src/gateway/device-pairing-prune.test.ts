@@ -1,12 +1,16 @@
 // Covers gateway-side cleanup when silent pairing supersedes stale sibling records.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
+  approveNodePairing,
+  listNodePairing,
+  requestNodePairing,
+} from "../infra/device-pairing-node.js";
+import {
   approveDevicePairing,
   listDevicePairing,
   removePairedDeviceRole,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
-import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../infra/push-apns.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "./device-pairing-prune.js";

@@ -1,9 +1,5 @@
 {
   "id": "cua-computer",
-  "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true
-  },
   "activation": {
     "onStartup": true
   },
@@ -13,6 +9,10 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "driverPath": {
+        "type": "string"
+      }
+    }
   }
 }

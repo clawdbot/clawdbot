@@ -7,17 +7,62 @@ import {
   PICKED,
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
+  captureProjectUiProof,
+  captureUiProof,
+  captureUiProofEnabled,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
   pollLocatorText,
+  prepareProjectUiProof,
+  projectProofArtifactDir,
   replaceGatewayClient,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
+  it("keeps the pre-creation draft on the composer surface", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "sessions.list": createdSessionListResult("agent:main:existing"),
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await page.getByRole("heading", { name: "Main" }).waitFor();
+      await page.locator(".new-session-page__message").waitFor();
+      await expect.poll(() => page.locator(".sidebar-recent-session--draft").count()).toBe(0);
+      await captureUiProof(page, "draft-row-after-light.png");
+      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
+      await captureUiProof(page, "draft-row-after-dark.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("drafts a session with a browsed folder and creates it on first message", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -130,16 +175,17 @@ suite.define(() => {
       expect(composerBox?.width).toBeCloseTo(48 * 16, 0);
       expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
 
-      // The place trigger labels the workspace and opens the unified menu.
-      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
-      const placeTrigger = page.locator("#new-session-place-trigger");
-      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+      const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
+      const projectTrigger = page.locator("#new-session-project-trigger");
+      const detailSelect = page.locator("wa-popover.new-session-page__detail-popover");
+      const detailTrigger = page.locator("#new-session-detail-trigger");
+      await pollLocatorText(projectTrigger.locator(".new-session-page__trigger-label")).toBe(
         "openclaw",
       );
 
       // Browse from the workspace, descend one level, then adopt the folder.
-      await placeTrigger.click();
-      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
+      await projectTrigger.click();
+      await projectSelect.getByRole("button", { name: "Browse folders" }).click();
       await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
       await expect
         .poll(() => page.locator("input.new-session-page__browser-path").inputValue())
@@ -147,31 +193,33 @@ suite.define(() => {
       await page.getByRole("button", { name: "Use this folder" }).click();
 
       // The adopted folder closes the menu and updates the trigger label.
-      await expect.poll(() => placeSelect.getAttribute("open")).toBeNull();
+      await expect.poll(() => projectSelect.getAttribute("open")).toBeNull();
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
-        .toBe("new-session-place-trigger");
-      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+        .toBe("new-session-project-trigger");
+      await pollLocatorText(projectTrigger.locator(".new-session-page__trigger-label")).toBe(
         "packages",
       );
 
       // Git-backed custom folders stay direct until the user explicitly chooses isolation.
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
-      await placeTrigger.click();
-      const worktreeItem = page.getByRole("button", { name: "Worktree" });
+      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("false");
+      await detailTrigger.click();
+      await expect.poll(() => detailTrigger.getAttribute("aria-expanded")).toBe("true");
+      const worktreeItem = detailSelect.getByRole("button", { name: "Worktree" });
       await expect.poll(() => worktreeItem.getAttribute("aria-pressed")).toBe("false");
       expect(await worktreeItem.isEnabled()).toBe(true);
       await worktreeItem.click();
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
+      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
       await page.keyboard.press("Escape");
+      await expect.poll(() => detailTrigger.getAttribute("aria-expanded")).toBe("false");
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
-        .toBe("new-session-place-trigger");
+        .toBe("new-session-detail-trigger");
 
       // Pointer light-dismiss still retires the unified popover after its
       // asynchronous hide animation completes.
-      await placeTrigger.click();
-      const afterPointerHide = placeSelect.evaluate(
+      await detailTrigger.click();
+      const afterPointerHide = detailSelect.evaluate(
         (element) =>
           new Promise<void>((resolve) => {
             element.addEventListener("wa-after-hide", () => resolve(), { once: true });
@@ -179,7 +227,7 @@ suite.define(() => {
       );
       await page.locator(".agent-chat__welcome h2").click();
       await afterPointerHide;
-      await expect.poll(() => placeSelect.getAttribute("open")).toBeNull();
+      await expect.poll(() => detailSelect.getAttribute("open")).toBeNull();
 
       const message = page.locator(".new-session-page__message");
       await message.fill("fix the flaky test");
@@ -250,8 +298,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      const trigger = page.locator("#new-session-place-trigger");
-      const place = page.locator("wa-popover.new-session-page__place-popover");
+      const trigger = page.locator("#new-session-project-trigger");
+      const place = page.locator("wa-popover.new-session-page__project-popover");
       await trigger.click();
       await place.getByRole("button", { name: "Browse folders" }).click();
       await page.locator("input.new-session-page__browser-path").fill("/home");
@@ -259,13 +307,17 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
         .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
-        "home · Gateway · local",
-      );
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
 
-      await trigger.click();
-      expect(await place.getByRole("button", { name: "Worktree" }).count()).toBe(0);
-      const cloud = place.getByRole("button", { name: "Cloud · aws" });
+      const detailTrigger = page.locator("#new-session-detail-trigger");
+      await detailTrigger.click();
+      const detail = page.locator("wa-popover.new-session-page__detail-popover");
+      expect(await detail.getByRole("button", { name: "Worktree" }).count()).toBe(0);
+      await detail.getByText("Runs directly in the selected folder.", { exact: true }).waitFor();
+      await page.keyboard.press("Escape");
+      await page.locator("#new-session-where-trigger").click();
+      const where = page.locator("wa-popover.new-session-page__where-popover");
+      const cloud = where.getByRole("button", { name: "Cloud · aws" });
       expect(await cloud.isDisabled()).toBe(true);
       expect(await cloud.getAttribute("title")).toBe("Cloud workers require a managed worktree");
       await page.keyboard.press("Escape");
@@ -285,27 +337,225 @@ suite.define(() => {
     }
   });
 
-  it("hides the destination axis when the Gateway is the only place", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+  it("selects a registered project and submits its id at write scope", async () => {
+    await prepareProjectUiProof();
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: projectProofArtifactDir,
+              size: { height: 900, width: 1280 },
+            },
+            viewport: { height: 900, width: 1280 },
+          }
+        : {}),
+    });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       workspace: WORKSPACE,
       workspaceGit: true,
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.create",
+        "sessions.dispatch",
+        "projects.list",
+        "environments.list",
+        "node.list",
+        "worktrees.branches",
+      ],
       methodResponses: {
-        "node.list": { nodes: [] },
-        "environments.list": { environments: [], profiles: [] },
+        "projects.list": {
+          projects: [
+            {
+              id: "workspace:main",
+              displayName: "openclaw",
+              repoRoot: WORKSPACE,
+              source: "workspace",
+              agentId: "main",
+            },
+            {
+              id: "recorded-openclaw",
+              displayName: "Recorded OpenClaw",
+              repoRoot: "/recorded/openclaw",
+              source: "registered",
+            },
+          ],
+        },
+        "node.list": {
+          nodes: [
+            {
+              nodeId: "macbook",
+              displayName: "MacBook",
+              connected: true,
+              commands: ["system.run", "fs.listDir"],
+            },
+          ],
+        },
+        "environments.list": {
+          environments: [{ id: "node:macbook", type: "node", status: "available" }],
+          profiles: [],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "sessions.create": { key: "agent:main:project-e2e" },
       },
     });
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("node.list");
-      const trigger = page.locator("#new-session-place-trigger");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
+      await gateway.waitForRequest("projects.list");
+      const whereTrigger = page.locator("#new-session-where-trigger");
+      const where = page.locator("wa-popover.new-session-page__where-popover");
+      await whereTrigger.click();
+      await expect.poll(() => whereTrigger.getAttribute("aria-expanded")).toBe("true");
+      await where.getByRole("button", { name: "MacBook" }).click();
+      await expect.poll(() => whereTrigger.getAttribute("aria-expanded")).toBe("false");
+      await pollLocatorText(
+        page.locator("#new-session-detail-trigger .new-session-page__trigger-label"),
+      ).toBe("Node path");
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.id))
+        .toBe("new-session-where-trigger");
+      await whereTrigger.click();
+      await where.getByRole("button", { name: "Local" }).click();
+
+      const trigger = page.locator("#new-session-project-trigger");
+      const place = page.locator("wa-popover.new-session-page__project-popover");
       await trigger.click();
-      const place = page.locator("wa-popover.new-session-page__place-popover");
-      expect(await place.getByText("Places", { exact: true }).count()).toBe(0);
-      await place.getByText("Runs on Gateway · local", { exact: true }).waitFor();
+      await place.getByRole("button", { name: "Recorded OpenClaw", exact: true }).click();
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+        "Recorded OpenClaw",
+      );
+      expect(await trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
+        .toEqual({ repoRoot: "/recorded/openclaw", includeRepositoryStatus: true });
+
+      await page.locator("#new-session-detail-trigger").click();
+      await page
+        .locator("wa-popover.new-session-page__detail-popover")
+        .getByRole("button", { name: "Worktree" })
+        .click();
+      await captureProjectUiProof(page, "project-selected.png");
+      await page.keyboard.press("Escape");
+      await page.locator(".new-session-page__message").fill("inspect the project");
+      await page.getByRole("button", { name: "Start session" }).click();
+
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        message: "inspect the project",
+        projectId: "recorded-openclaw",
+        worktree: true,
+        worktreeBaseRef: "main",
+      });
+      expect(create.params).not.toHaveProperty("cwd");
+      expect(create.params).not.toHaveProperty("execNode");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("registers a Git checkout from Browse and selects the refreshed project", async () => {
+    await prepareProjectUiProof();
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const repoRoot = "/recorded/openclaw";
+    const registeredProject = {
+      id: "recorded-openclaw",
+      displayName: "openclaw",
+      repoRoot,
+      originUrl: "https://github.com/openclaw/openclaw.git",
+      source: "registered",
+    };
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "fs.listDir",
+        "projects.list",
+        "projects.register",
+        "sessions.create",
+        "worktrees.branches",
+      ],
+      methodResponses: {
+        "projects.list": {
+          sequence: [{ projects: [] }, { projects: [registeredProject] }],
+        },
+        "projects.register": registeredProject,
+        "fs.listDir": {
+          cases: [
+            {
+              match: { path: WORKSPACE },
+              response: { path: WORKSPACE, home: "/home/peter", entries: [] },
+            },
+            {
+              match: { path: repoRoot },
+              response: { path: repoRoot, parent: "/recorded", home: "/home/peter", entries: [] },
+            },
+          ],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("projects.list");
+      const trigger = page.locator("#new-session-project-trigger");
+      const place = page.locator("wa-popover.new-session-page__project-popover");
+      await trigger.click();
+      await place.getByRole("button", { name: "Browse folders" }).click();
+      const pathInput = page.locator("input.new-session-page__browser-path");
+      await pathInput.fill(repoRoot);
+      await pathInput.press("Enter");
+      const register = place.getByRole("button", { name: "Register as project" });
+      await register.waitFor();
+      await captureProjectUiProof(page, "project-register-action.png");
+      await register.click();
+
+      const request = await gateway.waitForRequest("projects.register");
+      expect(request.params).toEqual({ path: repoRoot });
+      await expect.poll(async () => (await gateway.getRequests("projects.list")).length).toBe(2);
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
+      expect(await trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("guides write-only operators when no projects are registered", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      operatorScopes: ["operator.read", "operator.write"],
+      featureMethods: ["chat.metadata", "chat.startup", "projects.list", "sessions.create"],
+      methodResponses: { "projects.list": { projects: [] } },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("projects.list");
+      const place = page.locator("wa-popover.new-session-page__project-popover");
+      await page.locator("#new-session-project-trigger").click();
+      await place
+        .getByText("Admins can register projects from Browse folders", { exact: true })
+        .waitFor();
+      expect(await place.getByRole("button", { name: "Register as project" }).count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -341,14 +591,17 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("system.info");
-      const trigger = page.locator("#new-session-place-trigger");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
-        "openclaw · Gateway · Peters-Mac-Studio",
-      );
+      const trigger = page.locator("#new-session-where-trigger");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
       await trigger.click();
-      const place = page.locator("wa-popover.new-session-page__place-popover");
-      await place.getByRole("button", { name: "Gateway · Peters-Mac-Studio" }).waitFor();
-      await place.getByRole("button", { name: "Browse folders" }).click();
+      const place = page.locator("wa-popover.new-session-page__where-popover");
+      await place.getByRole("button", { name: /Local/u }).waitFor();
+      await page.keyboard.press("Escape");
+      await page.locator("#new-session-project-trigger").click();
+      await page
+        .locator("wa-popover.new-session-page__project-popover")
+        .getByRole("button", { name: "Browse folders" })
+        .click();
       await expect
         .poll(() =>
           page.locator("input.new-session-page__browser-path").getAttribute("placeholder"),
@@ -361,9 +614,9 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("node.list")).length)
         .toBeGreaterThan(nodeRequests);
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
       await trigger.click();
-      await place.getByText("Runs on Gateway · Peters-Mac-Studio", { exact: true }).waitFor();
+      await place.getByRole("button", { name: /Local/u }).waitFor();
     } finally {
       await context.close();
     }
@@ -415,7 +668,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("node.list");
-      const trigger = page.locator("#new-session-place-trigger");
+      const trigger = page.locator("#new-session-where-trigger");
       await trigger.click();
       const first = page.locator('[data-value="node:11111111aaaaaaaa"]');
       const second = page.locator('[data-value="node:22222222bbbbbbbb"]');
@@ -429,9 +682,7 @@ suite.define(() => {
       expect(await first.getAttribute("title")).toBe("macOS · Mac14,12 · 192.168.1.11");
       expect(await second.getAttribute("title")).toContain("192.168.1.12");
       await second.click();
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
-        "Agent workspace · Mac Studio",
-      );
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Mac Studio");
       expect(await trigger.textContent()).not.toContain("Mac15,14");
       expect(await trigger.textContent()).not.toContain("192.168.1.12");
     } finally {
@@ -465,7 +716,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("node.list");
-      const trigger = page.locator("#new-session-place-trigger");
+      const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
       const first = page.locator('[data-value="recent::/a/openclaw"]');
       const second = page.locator('[data-value="recent::/b/openclaw"]');
@@ -529,15 +780,16 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("node.list");
-      const trigger = page.locator("#new-session-place-trigger");
+      const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
       await page
-        .locator("wa-popover.new-session-page__place-popover")
-        .getByRole("button", { name: "Projects · MacBook", exact: true })
+        .locator("wa-popover.new-session-page__project-popover")
+        .getByRole("button", { name: /Projects.*MacBook/u })
         .click();
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
-        "Projects · MacBook",
-      );
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Projects");
+      await pollLocatorText(
+        page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
+      ).toBe("MacBook");
 
       await page.locator(".new-session-page__message").fill("continue on the recent node");
       await page.getByRole("button", { name: "Start session" }).click();
@@ -574,18 +826,18 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      const trigger = page.locator("#new-session-place-trigger");
-      const place = page.locator("wa-popover.new-session-page__place-popover");
+      const trigger = page.locator("#new-session-project-trigger");
+      const place = page.locator("wa-popover.new-session-page__project-popover");
       await trigger.click();
       await place.getByRole("button", { name: "Browse folders" }).click();
       await gateway.waitForRequest("fs.listDir");
       await place.getByRole("button", { name: "Parent folder" }).click();
-      await place.getByRole("button", { name: "Worktree" }).waitFor();
+      await place.getByRole("button", { name: "Browse folders" }).waitFor();
       expect(await place.getAttribute("open")).not.toBeNull();
 
       await place.getByRole("button", { name: "Browse folders" }).click();
       await page.locator("input.new-session-page__browser-path").press("Escape");
-      await place.getByRole("button", { name: "Worktree" }).waitFor();
+      await place.getByRole("button", { name: "Browse folders" }).waitFor();
       expect(await place.getAttribute("open")).not.toBeNull();
     } finally {
       await context.close();
@@ -683,24 +935,32 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor();
-      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
-      const placeTrigger = page.locator("#new-session-place-trigger");
-      const placeLabel = placeTrigger.locator(".new-session-page__trigger-label");
+      const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
+      const whereTrigger = page.locator("#new-session-where-trigger");
+      const whereLabel = whereTrigger.locator(".new-session-page__trigger-label");
+      const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
+      const projectTrigger = page.locator("#new-session-project-trigger");
+      const projectLabel = projectTrigger.locator(".new-session-page__trigger-label");
+      const detailSelect = page.locator("wa-popover.new-session-page__detail-popover");
+      const detailTrigger = page.locator("#new-session-detail-trigger");
       const browserEntries = page.locator(".new-session-page__browser-list");
 
-      // Pick the node from Places.
-      await placeTrigger.click();
-      await placeSelect.getByRole("button", { name: "MacBook" }).click();
-      await pollLocatorText(placeLabel).toBe("Agent workspace · MacBook");
-      // Node sessions cannot use managed worktrees, so the menu drops the item.
-      await placeTrigger.click();
-      expect(await placeSelect.getByRole("button", { name: "Worktree" }).count()).toBe(0);
+      // Pick the node from Your devices.
+      await whereTrigger.click();
+      await whereSelect.getByRole("button", { name: "MacBook" }).click();
+      await pollLocatorText(whereLabel).toBe("MacBook");
+      await pollLocatorText(detailTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "Node path",
+      );
+      await detailTrigger.click();
+      expect(await detailSelect.getByRole("button", { name: "Worktree" }).count()).toBe(0);
+      await detailSelect.getByLabel("Working directory").waitFor();
       await page.keyboard.press("Escape");
 
       // Manual path entry in the browser head preserves UNC paths; these
       // cannot be rediscovered by starting at the node home directory.
-      await placeTrigger.click();
-      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
+      await projectTrigger.click();
+      await projectSelect.getByRole("button", { name: "Browse folders" }).click();
       const pathInput = page.locator("input.new-session-page__browser-path");
       await expect.poll(() => pathInput.inputValue()).toBe(NODE_HOME);
       await pathInput.fill(NODE_UNC);
@@ -710,24 +970,27 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await expect
         .poll(() =>
-          placeSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+          projectSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(true);
-      await placeSelect.getByText("Places", { exact: true }).waitFor();
+      await projectSelect.getByRole("button", { name: "Browse folders" }).waitFor();
 
-      // Destination selection stays in Places; browsing is fixed to the current target.
-      await placeSelect.getByRole("button", { name: "Gateway · local" }).click();
-      await pollLocatorText(placeLabel).toBe("openclaw · Gateway · local");
-      await placeTrigger.click();
-      expect(await placeSelect.getByRole("button", { name: "Offline node" }).count()).toBe(0);
-      await placeSelect.getByRole("button", { name: "MacBook" }).click();
-      await placeTrigger.click();
-      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
+      // Destination selection stays in Where; browsing remains fixed to the selected target.
+      await page.keyboard.press("Escape");
+      await whereTrigger.click();
+      await whereSelect.getByRole("button", { name: "Local" }).click();
+      await pollLocatorText(whereLabel).toBe("Local");
+      await whereTrigger.click();
+      expect(await whereSelect.getByRole("button", { name: "Offline node" }).count()).toBe(0);
+      await whereSelect.getByRole("button", { name: "MacBook" }).click();
+      await projectTrigger.click();
+      await projectSelect.getByRole("button", { name: "Browse folders" }).click();
       await browserEntries.getByRole("button", { name: "Projects" }).click();
       await page.getByRole("button", { name: "Use this folder" }).click();
 
       // Using a node folder retargets the draft to that node.
-      await pollLocatorText(placeLabel).toBe("Projects · MacBook");
+      await pollLocatorText(whereLabel).toBe("MacBook");
+      await pollLocatorText(projectLabel).toBe("Projects");
 
       // A node cwd belongs to the selected agent's draft and must not leak
       // across an agent change, even though the execution node stays selected.
@@ -738,39 +1001,41 @@ suite.define(() => {
         .filter({ hasText: "Research" })
         .click();
       await page.getByRole("heading", { name: "Research" }).waitFor();
-      await pollLocatorText(placeLabel).toBe("Agent workspace · MacBook");
+      await pollLocatorText(whereLabel).toBe("MacBook");
+      await pollLocatorText(projectLabel).toBe("research");
 
       // Clearing the path applies the node's default directory (empty folder),
       // the state the replaced clearable folder textbox could express.
-      await placeTrigger.click();
-      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
+      await projectTrigger.click();
+      await projectSelect.getByRole("button", { name: "Browse folders" }).click();
       await expect.poll(() => pathInput.inputValue()).toBe(NODE_HOME);
       await pathInput.fill("");
       await page.getByRole("button", { name: "Use this folder" }).click();
-      await pollLocatorText(placeLabel).toBe("Agent workspace · MacBook");
+      await pollLocatorText(projectLabel).toBe("research");
 
       // Browse back to the custom folder, then retarget to the exec-only node
       // with a manual absolute path for the final create assertion.
-      await placeTrigger.click();
-      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
+      await projectTrigger.click();
+      await projectSelect.getByRole("button", { name: "Browse folders" }).click();
       await browserEntries.getByRole("button", { name: "Projects" }).click();
       await page.getByRole("button", { name: "Use this folder" }).click();
-      await pollLocatorText(placeLabel).toBe("Projects · MacBook");
+      await pollLocatorText(projectLabel).toBe("Projects");
 
-      await placeTrigger.click();
-      await placeSelect.getByRole("button", { name: "Old node" }).click();
-      await placeTrigger.click();
-      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
-      await expect.poll(() => pathInput.inputValue()).toBe("");
-      await pathInput.fill(EXEC_ONLY_PICKED);
-      await pathInput.press("Enter");
+      await whereTrigger.click();
+      await whereSelect.getByRole("button", { name: "Old node" }).click();
+      await detailTrigger.click();
+      const nodeCwd = detailSelect.getByLabel("Working directory");
+      await expect.poll(() => nodeCwd.inputValue()).toBe("");
+      await nodeCwd.fill(EXEC_ONLY_PICKED);
+      await nodeCwd.press("Enter");
       expect(
         (await gateway.getRequests("fs.listDir")).filter(
           (request) => (request.params as { nodeId?: string } | undefined)?.nodeId === "old-node",
         ),
       ).toHaveLength(0);
-      await page.getByRole("button", { name: "Use this folder" }).click();
-      await pollLocatorText(placeLabel).toBe("repo · Old node");
+      await page.keyboard.press("Escape");
+      await pollLocatorText(whereLabel).toBe("Old node");
+      await pollLocatorText(projectLabel).toBe("repo");
 
       await page.locator(".new-session-page__message").fill("inspect the remote checkout");
       await page.getByRole("button", { name: "Start session" }).click();

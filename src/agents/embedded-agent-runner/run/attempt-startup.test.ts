@@ -18,8 +18,8 @@ vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
   })),
 }));
 
-vi.mock("../../../skills/loading/workspace.js", () => ({
-  resolveSkillsPromptForRun: vi.fn(() => "skills prompt"),
+vi.mock("../../../skills/loading/workspace-skill-prompt.js", () => ({
+  resolveSkillsPrompt: vi.fn(() => "skills prompt"),
 }));
 
 vi.mock("../sandbox-skills.js", () => ({
@@ -34,7 +34,7 @@ vi.mock("../sandbox-skills.js", () => ({
   mapSandboxSkillUsagePaths: vi.fn(() => []),
 }));
 
-import { prepareEmbeddedAttemptSkills } from "./attempt-startup.js";
+import { prepareEmbeddedAttemptSkills } from "./attempt-setup.js";
 
 describe("prepareEmbeddedAttemptSkills", () => {
   beforeEach(() => {

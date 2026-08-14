@@ -1,11 +1,10 @@
 ---
-summary: "Memory search providers, retrieval modes, QMD, and multimodal indexing"
+summary: "Built-in memory search providers, retrieval modes, and multimodal indexing"
 title: "Memory configuration reference"
 sidebarTitle: "Memory config"
 read_when:
   - You want to configure memory search providers or embedding models
-  - You want to set up the QMD backend
-  - You want to enable hybrid search, MMR, or temporal decay
+  - You want to understand hybrid search, MMR, or temporal-decay defaults
   - You want to enable multimodal memory indexing
 ---
 
@@ -17,9 +16,6 @@ This page lists every configuration knob for OpenClaw memory search. For concept
   </Card>
   <Card title="Builtin engine" href="/concepts/memory-builtin">
     Default SQLite backend.
-  </Card>
-  <Card title="QMD engine" href="/concepts/memory-qmd">
-    Local-first sidecar.
   </Card>
   <Card title="Memory search" href="/concepts/memory-search">
     Search pipeline and tuning.
@@ -71,13 +67,10 @@ The value follows normal `memory.search` inheritance with a
 per-agent override. When unset, it defaults on only if global
 `session.dmScope` is unset or `"main"` and no binding has a `session.dmScope`
 override. Any configured DM isolation defaults it off. An explicit `true` or
-`false` always wins. Enabling it implies session transcript indexing and
-adds `sessions` to the agent's resolved memory sources. With QMD, it also
-enables that agent's session export; no separate
-`memory.qmd.sessions.enabled` setting is required for this mode.
+`false` always wins. Enabling it implies session transcript indexing and adds
+`sessions` to the agent's resolved memory sources.
 
-OpenClaw's built-in memory provider supports this protected path with both the
-builtin and QMD backends. Alternate memory providers can keep using their own
+OpenClaw's built-in memory provider supports this protected path. Alternate memory providers can keep using their own
 recall hooks and advanced Active Memory tools, but this setting is skipped
 unless the current provider supports protected private transcript recall.
 `openclaw doctor` reports an unsupported provider or an explicit Active Memory
@@ -323,11 +316,9 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
   </Accordion>
   <Accordion title="Local (GGUF + llama.cpp)">
-    | Key                   | Type               | Default                | Description                                                                                                                                                                                                                                                                                                          |
-    | --------------------- | ------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | `local.modelPath`     | `string`           | auto-downloaded        | Path to GGUF model file                                                                                                                                                                                                                                                                                              |
-    | `local.modelCacheDir` | `string`           | node-llama-cpp default | Cache dir for downloaded models                                                                                                                                                                                                                                                                                      |
-    | `local.contextSize`   | `number \| "auto"` | `4096`                 | Context window size for the embedding context. 4096 covers typical chunks (128-512 tokens) while bounding non-weight VRAM. Lower to 1024-2048 on constrained hosts. `"auto"` uses the model's trained maximum -- not recommended for 8B+ models (Qwen3-Embedding-8B: up to 40 960 tokens can push VRAM to ~32 GB). |
+    | Key               | Type     | Default         | Description             |
+    | ----------------- | -------- | --------------- | ----------------------- |
+    | `local.modelPath` | `string` | auto-downloaded | Path to GGUF model file |
 
     Install the official llama.cpp provider first: `openclaw plugins install @openclaw/llama-cpp-provider`.
     Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded). Source checkouts still require native build approval: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
@@ -339,7 +330,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     openclaw memory index --force --agent main
     ```
 
-    Numeric `local.contextSize` values also inform node-llama-cpp's automatic GPU-layer placement so model weights and the requested embedding context are fitted together. `openclaw memory status --deep` reports last-known llama.cpp backend, device, offload, requested-context, and timestamped memory facts after the runtime has loaded; passive status does not load a model.
+    Cache placement and embedding context sizing are provider-owned. `openclaw memory status --deep` reports last-known llama.cpp backend, device, offload, requested-context, and timestamped memory facts after the runtime has loaded; passive status does not load a model.
 
     Set `provider: "local"` explicitly for local GGUF embeddings. `hf:` and HTTP(S) model references are supported for explicit local configs (via node-llama-cpp's model resolution), but they do not change the default provider.
 
@@ -363,9 +354,10 @@ All under `memory.search.query`:
 
 Hybrid retrieval remains enabled. The builtin engine always applies a fixed
 30-day recency half-life to dated daily notes and a fixed importance
-multiplier after hybrid relevance. `MEMORY.md`, `USER.md`, and other evergreen
-memory files do not decay. Nullable importance is neutral, so no migration or
-new tuning key is required for existing indexes.
+multiplier after hybrid relevance, then applies MMR diversity ordering with a
+fixed lambda of `0.7`. `MEMORY.md`, `USER.md`, and other evergreen memory files
+do not decay. Nullable importance is neutral, so no migration or new tuning
+key is required for existing indexes.
 
 Strong trigger matches on promoted, trusted entries can inject up to three
 compact memories on eligible interactive turns. Today, root `MEMORY.md` and
@@ -391,23 +383,23 @@ auto-injected.
 
 ## Additional memory paths
 
-| Key          | Type       | Description                              |
-| ------------ | ---------- | ---------------------------------------- |
-| `extraPaths` | `string[]` | Additional directories or files to index |
+| Key          | Type                                                  | Description                              |
+| ------------ | ----------------------------------------------------- | ---------------------------------------- |
+| `extraPaths` | `Array<string \| { path: string; pattern?: string }>` | Additional directories or files to index |
 
 ```json5
 {
   memory: {
     search: {
-      extraPaths: ["../team-docs", "/srv/shared-notes"],
+      extraPaths: ["../team-docs", { path: "/srv/shared-notes", pattern: "runbooks/**/*.md" }],
     },
   },
 }
 ```
 
-Paths can be absolute or workspace-relative. Directories are scanned recursively for `.md` files. Symlink handling depends on the active backend: the builtin engine skips symlinks, while QMD follows the underlying QMD scanner behavior.
-
-For agent-scoped cross-agent transcript search, use `agents.entries.*.memory.search.qmd.extraCollections` instead of `memory.qmd.paths`. Those extra collections follow the same `{ path, name, pattern? }` shape, but they are merged per agent and can preserve explicit shared names when the path points outside the current workspace. If the same resolved path appears in both `memory.qmd.paths` and `memory.search.qmd.extraCollections`, QMD keeps the first entry and skips the duplicate.
+Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
+files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
+file entries are indexed exactly. The builtin engine skips symlinks.
 
 ---
 
@@ -441,14 +433,13 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 ## Batch indexing
 
-| Key                          | Type      | Default | Description                |
-| ---------------------------- | --------- | ------- | -------------------------- |
-| `remote.nonBatchConcurrency` | `number`  | `4`     | Parallel inline embeddings |
-| `remote.batch.enabled`       | `boolean` | `false` | Enable batch embedding API |
+| Key                    | Type      | Default | Description                |
+| ---------------------- | --------- | ------- | -------------------------- |
+| `remote.batch.enabled` | `boolean` | `false` | Enable batch embedding API |
 
 Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastest and cheapest for large backfills.
 
-Concurrency, polling, and timeout behavior are provider-owned.
+Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
 
 ---
 
@@ -478,7 +469,7 @@ when you intentionally want both representations.
 </Note>
 
 Ordinary model-invoked session transcript search obeys
-[`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
+[`tools.sessions.visibility`](/gateway/config-tools#tools-sessions). The default
 `tree` visibility exposes the current session, sessions it spawned, and
 same-agent group sessions watched through ambient group awareness. Other
 unrelated sessions require `agent` visibility (or `all` only when cross-agent
@@ -494,53 +485,19 @@ agent should index and search session transcripts.
 
 For same-agent gateway-to-DM recall:
 
-<Tabs>
-  <Tab title="Builtin backend">
-    ```json5
-    {
-      memory: {
-        search: {
-          experimental: { sessionMemory: true },
-          sources: ["memory", "sessions"],
-        },
-      },
-      tools: {
-        sessions: { visibility: "agent" },
-      },
-    }
-    ```
-  </Tab>
-  <Tab title="QMD backend">
-    ```json5
-    {
-      memory: {
-        backend: "qmd",
-        search: {
-          experimental: { sessionMemory: true },
-          sources: ["memory", "sessions"],
-        },
-        qmd: {
-          sessions: { enabled: true },
-        },
-      },
-      tools: {
-        sessions: { visibility: "agent" },
-      },
-    }
-    ```
-  </Tab>
-</Tabs>
-
-When using QMD, `sources: ["sessions"]` does not by itself export transcripts into QMD. Set
-`memory.qmd.sessions.enabled: true` as well. The higher-level
-`rememberAcrossConversations: true` setting is the exception: it implies the
-required QMD session export for that agent. Implied exports stay private:
-they always use the default internal export location (a configured
-`sessions.exportDir` applies only to explicit exports), they are searched only
-during that agent's cross-conversation recall, and ordinary `memory_get`
-cannot read them. Explicit
-`memory.qmd.sessions.enabled: true` keeps its existing behavior and makes
-exported transcripts part of the ordinary memory corpus.
+```json5
+{
+  memory: {
+    search: {
+      experimental: { sessionMemory: true },
+      sources: ["memory", "sessions"],
+    },
+  },
+  tools: {
+    sessions: { visibility: "agent" },
+  },
+}
+```
 
 ---
 
@@ -566,93 +523,15 @@ Built-in memory indexes live in each agent's OpenClaw SQLite database at
 
 ---
 
-## QMD backend config
+## Citations
 
-Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`:
+`memory.citations` controls citation visibility for built-in memory results:
 
-| Key                      | Type      | Default  | Description                                                                           |
-| ------------------------ | --------- | -------- | ------------------------------------------------------------------------------------- |
-| `command`                | `string`  | `qmd`    | QMD executable path; set an absolute path when service `PATH` differs from your shell |
-| `searchMode`             | `string`  | `search` | Search command: `search`, `vsearch`, `query`                                          |
-| `rerank`                 | `boolean` | --       | Set to `false` with `searchMode: "query"` and QMD 2.1+ to skip QMD reranking          |
-| `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`                                             |
-| `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`                                               |
-| `sessions.enabled`       | `boolean` | `false`  | Export session transcripts into QMD                                                   |
-| `sessions.retentionDays` | `number`  | --       | Transcript retention                                                                  |
-| `sessions.exportDir`     | `string`  | --       | Export directory                                                                      |
-
-`searchMode: "search"` is lexical/BM25-only. OpenClaw does not run semantic vector readiness probes or QMD embedding maintenance for that mode, including during `memory status --deep`; `vsearch` and `query` continue to require QMD vector readiness and embeddings.
-
-`rerank: false` only changes QMD `query` mode and requires QMD 2.1 or newer. In direct CLI mode OpenClaw passes `--no-rerank`; in mcporter-backed MCP mode it passes `rerank: false` to QMD's unified query tool. Leave it unset to use QMD's default query reranking behavior.
-
-OpenClaw prefers current QMD collection and MCP query shapes, but keeps older QMD releases working by trying compatible collection pattern flags and older MCP tool names when needed. When QMD advertises support for multiple collection filters, same-source collections are searched with one QMD process; older QMD builds keep the per-collection compatibility path. Same-source means durable memory collections (default memory files plus custom paths) are grouped together, while session transcript collections remain a separate group so source diversification still has both inputs.
-
-<Note>
-QMD model overrides stay on the QMD side, not OpenClaw config. If you need to override QMD's models globally, set environment variables such as `QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, and `QMD_GENERATE_MODEL` in the gateway runtime environment.
-</Note>
-
-<AccordionGroup>
-  <Accordion title="Limits">
-    | Key                       | Type     | Default | Description                |
-    | --------------------------- | -------- | ------- | ------------------------------ |
-    | `limits.maxResults`       | `number` | `4`     | Max search results         |
-    | `limits.maxSnippetChars`  | `number` | `450`   | Clamp snippet length       |
-    | `limits.maxInjectedChars` | `number` | `2200`  | Clamp total injected chars |
-    | `limits.timeoutMs`        | `number` | `4000`  | QMD command timeout during QMD-backed search, including `memory_search`; setup, sync, builtin fallback, and supplemental work keep the default tool deadline |
-  </Accordion>
-  <Accordion title="Scope">
-    Controls which sessions can receive QMD search results. Same schema as [`session.sendPolicy`](/gateway/config-agents#session):
-
-    ```json5
-    {
-      memory: {
-        qmd: {
-          scope: {
-            default: "deny",
-            rules: [{ action: "allow", match: { chatType: "direct" } }],
-          },
-        },
-      },
-    }
-    ```
-
-    The shipped default is DM/direct-only, denying groups and other channel types. `match.keyPrefix` matches the normalized session key; `match.rawKeyPrefix` matches the raw key including `agent:<id>:`.
-
-  </Accordion>
-  <Accordion title="Citations">
-    `memory.citations` applies to all backends:
-
-    | Value            | Behavior                                            |
-    | ------------------ | ------------------------------------------------------ |
-    | `auto` (default) | Include `Source: <path#line>` footer in snippets    |
-    | `on`             | Always include footer                               |
-    | `off`            | Omit footer (path still passed to agent internally) |
-
-  </Accordion>
-</AccordionGroup>
-
-QMD initializes lazily when memory is first used; its adapter owns refresh and embedding schedules.
-
-### Full QMD example
-
-```json5
-{
-  memory: {
-    backend: "qmd",
-    citations: "auto",
-    qmd: {
-      includeDefaultMemory: true,
-      update: { interval: "5m", debounceMs: 15000 },
-      limits: { maxResults: 4, timeoutMs: 4000 },
-      scope: {
-        default: "deny",
-        rules: [{ action: "allow", match: { chatType: "direct" } }],
-      },
-      paths: [{ name: "docs", path: "~/notes", pattern: "**/*.md" }],
-    },
-  },
-}
-```
+| Value            | Behavior                                               |
+| ---------------- | ------------------------------------------------------ |
+| `auto` (default) | Include `Source: <path#line>` when useful              |
+| `on`             | Always include the source footer                       |
+| `off`            | Omit the footer; the path remains available internally |
 
 ---
 

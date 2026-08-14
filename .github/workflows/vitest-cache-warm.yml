@@ -33,7 +33,6 @@ jobs:
           save-actions-cache: "true"
           save-node-compile-cache: "true"
           save-vitest-fs-cache: "true"
-          sticky-disk: "false"
           use-actions-cache: "true"
           vitest-fs-cache: "true"
 
@@ -41,45 +40,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --input-type=module <<'EOF'
+          node --import tsx --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
-          import { createNodeTestShards } from "./scripts/lib/ci-node-test-plan.mjs";
+          import { createVitestCacheWarmGroups } from "./scripts/lib/ci-node-test-plan.mts";
 
           // Warm the selected planner envelopes for the striped unit-fast graph
           // plus import-bound graphs that remained cold in protected-cache readers.
-          const additionalShardNames = new Set([
-            "agentic-agents-embedded",
-            "agentic-gateway-methods",
-            "auto-reply-reply-commands-3",
-          ]);
-          const allShards = createNodeTestShards();
-          const coreShards = allShards.filter((candidate) =>
-            candidate.shardName.startsWith("core-unit-fast"),
-          );
-          if (coreShards.length === 0) {
-            throw new Error("core-unit-fast cache seed shards are missing");
-          }
-          const additionalShards = allShards.filter((candidate) =>
-            additionalShardNames.has(candidate.shardName),
-          );
-          const foundAdditionalShardNames = new Set(
-            additionalShards.map((shard) => shard.shardName),
-          );
-          const missingShardNames = [...additionalShardNames].filter(
-            (name) => !foundAdditionalShardNames.has(name),
-          );
-          if (missingShardNames.length > 0) {
-            throw new Error(`cache seed shards are missing: ${missingShardNames.join(", ")}`);
-          }
-          const shards = [...coreShards, ...additionalShards];
-          const groups = shards.flatMap((shard) =>
-            shard.configs.map((config) => ({
-              configs: [config],
-              ...(shard.env ? { env: shard.env } : {}),
-              ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
-              shard_name: `cache-warm:${shard.shardName}:${config}`,
-            })),
-          );
+          const groups = createVitestCacheWarmGroups();
           appendFileSync(
             process.env.GITHUB_ENV,
             [
@@ -90,4 +57,4 @@ jobs:
           EOF
 
       - name: Warm transform and compile caches
-        run: node scripts/ci-run-node-test-shard.mjs
+        run: node --import tsx scripts/ci-run-node-test-shard.mts

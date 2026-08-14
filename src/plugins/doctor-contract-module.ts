@@ -1,11 +1,10 @@
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
-import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
+import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 
 export type PluginDoctorStateMigrationDetection = {
@@ -53,6 +52,10 @@ export type PluginDoctorContractModule = {
   legacyConfigRules?: unknown;
   normalizeCompatibilityConfig?: unknown;
   resolveSessionStoreAgentIds?: unknown;
+  /**
+   * @deprecated Declare static ownership in openclaw.plugin.json sessionRouteStateOwners.
+   * Removal plan: remove the module fallback in OpenClaw 2027.1 after external plugins migrate.
+   */
   sessionRouteStateOwners?: unknown;
   stateMigrations?: unknown;
 };
@@ -91,48 +94,6 @@ function coerceSessionStoreAgentIdsResolver(
   return typeof value === "function"
     ? (value as PluginDoctorSessionStoreAgentIdsResolver)
     : undefined;
-}
-
-function isDoctorSessionRouteStateOwner(value: unknown): value is DoctorSessionRouteStateOwner {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as {
-    id?: unknown;
-    label?: unknown;
-    providerIds?: unknown;
-    runtimeIds?: unknown;
-    cliSessionKeys?: unknown;
-    authProfilePrefixes?: unknown;
-  };
-  return (
-    typeof candidate.id === "string" &&
-    typeof candidate.label === "string" &&
-    candidate.id.trim().length > 0 &&
-    candidate.label.trim().length > 0 &&
-    (candidate.providerIds === undefined ||
-      normalizeTrimmedStringList(candidate.providerIds).length > 0) &&
-    (candidate.runtimeIds === undefined ||
-      normalizeTrimmedStringList(candidate.runtimeIds).length > 0) &&
-    (candidate.cliSessionKeys === undefined ||
-      normalizeTrimmedStringList(candidate.cliSessionKeys).length > 0) &&
-    (candidate.authProfilePrefixes === undefined ||
-      normalizeTrimmedStringList(candidate.authProfilePrefixes).length > 0)
-  );
-}
-
-function coerceDoctorSessionRouteStateOwners(value: unknown): DoctorSessionRouteStateOwner[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter(isDoctorSessionRouteStateOwner).map((owner) => ({
-    id: owner.id.trim(),
-    label: owner.label.trim(),
-    providerIds: normalizeTrimmedStringList(owner.providerIds),
-    runtimeIds: normalizeTrimmedStringList(owner.runtimeIds),
-    cliSessionKeys: normalizeTrimmedStringList(owner.cliSessionKeys),
-    authProfilePrefixes: normalizeTrimmedStringList(owner.authProfilePrefixes),
-  }));
 }
 
 function isPluginDoctorStateMigration(value: unknown): value is PluginDoctorStateMigration {
@@ -185,8 +146,7 @@ export function coercePluginDoctorContractModule(mod: PluginDoctorContractModule
     mod.stateMigrations ?? defaultExport?.stateMigrations,
   );
   const summary: Record<keyof PluginManifestDoctorContract, boolean> = {
-    legacyConfigRules: rules.length > 0,
-    normalizeCompatibilityConfig: Boolean(normalizeCompatibilityConfig),
+    configRepair: rules.length > 0 || Boolean(normalizeCompatibilityConfig),
     resolveSessionStoreAgentIds: Boolean(resolveSessionStoreAgentIds),
     sessionRouteStateOwners: sessionRouteStateOwners.length > 0,
     stateMigrations: stateMigrations.length > 0,

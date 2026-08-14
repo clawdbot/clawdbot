@@ -12,10 +12,10 @@ overrides:
   '@aws-sdk/core': 3.977.1
   '@aws-sdk/credential-provider-node': 3.972.72
   '@aws-sdk/xml-builder': 3.972.37
-  hono: 4.12.32
   '@hono/node-server': 2.0.12
   axios: 1.18.1
   fast-uri: 4.1.2
+  undici@7: 7.29.0
   follow-redirects: 1.16.0
   defu: 6.1.7
   fast-xml-parser: 5.10.1
@@ -25,7 +25,6 @@ overrides:
   brace-expansion: 5.0.9
   file-type: 22.0.1
   form-data: 4.0.6
-  undici@7: 7.29.0
   werift-ice@0.2.2>ip: npm:neoip@3.1.0
   ip-address: 10.3.1
   minimatch: 10.2.5
@@ -89,8 +88,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.5.2
-        version: 0.5.2
+        specifier: 0.5.5
+        version: 0.5.5
       '@openclaw/proxyline':
         specifier: 0.3.4
         version: 0.3.4(undici@8.9.0)
@@ -98,8 +97,8 @@ importers:
         specifier: 0.3.4
         version: 0.3.4
       '@trycua/cua-driver':
-        specifier: 0.14.1
-        version: 0.14.1
+        specifier: 0.19.3
+        version: 0.19.3
       acorn:
         specifier: 8.17.0
         version: 8.17.0
@@ -188,8 +187,8 @@ importers:
         specifier: 0.1.7
         version: 0.1.7
       playwright-core:
-        specifier: 1.62.0
-        version: 1.62.0
+        specifier: 1.62.1
+        version: 1.62.1
       pretty-ms:
         specifier: 9.3.0
         version: 9.3.0
@@ -257,6 +256,9 @@ importers:
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
+      '@openclaw/session-url-contract':
+        specifier: workspace:*
+        version: link:packages/session-url-contract
       '@opentelemetry/sdk-node':
         specifier: 0.221.0
         version: 0.221.0(@opentelemetry/api@1.9.1)(supports-color@10.2.2)
@@ -278,6 +280,9 @@ importers:
       '@types/markdown-it':
         specifier: 14.1.2
         version: 14.1.2
+      '@types/mdast':
+        specifier: 4.0.4
+        version: 4.0.4
       '@types/ms':
         specifier: 2.1.0
         version: 2.1.0
@@ -302,9 +307,6 @@ importers:
       esbuild:
         specifier: 0.28.1
         version: 0.28.1
-      fast-glob:
-        specifier: 3.3.3
-        version: 3.3.3
       ipaddr.js:
         specifier: 2.4.0
         version: 2.4.0
@@ -336,8 +338,8 @@ importers:
         specifier: 7.0.2001
         version: 7.0.2001
       playwright:
-        specifier: 1.62.0
-        version: 1.62.0
+        specifier: 1.62.1
+        version: 1.62.1
       postcss-lit:
         specifier: 1.4.1
         version: 1.4.1(jiti@2.7.0)(postcss@8.5.23)(supports-color@10.2.2)(tsx@4.23.1)(yaml@2.9.0)
@@ -350,6 +352,9 @@ importers:
       sigstore:
         specifier: 5.0.0
         version: 5.0.0(supports-color@10.2.2)
+      string-width:
+        specifier: 8.2.2
+        version: 8.2.2
       stylelint:
         specifier: 17.14.1
         version: 17.14.1(supports-color@10.2.2)(typescript@6.0.3)
@@ -521,18 +526,12 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
-      '@noble/ed25519':
-        specifier: 3.1.0
-        version: 3.1.0
-      esbuild:
-        specifier: 0.28.1
-        version: 0.28.1
       express:
         specifier: 5.2.1
         version: 5.2.1(supports-color@10.2.2)
       playwright-core:
-        specifier: 1.62.0
-        version: 1.62.0
+        specifier: 1.62.1
+        version: 1.62.1
       typebox:
         specifier: 1.3.6
         version: 1.3.6
@@ -540,9 +539,6 @@ importers:
         specifier: 8.21.1
         version: 8.21.1
     devDependencies:
-      '@openclaw/gateway-client':
-        specifier: workspace:*
-        version: link:../../packages/gateway-client
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -696,8 +692,8 @@ importers:
   extensions/cua-computer:
     dependencies:
       '@trycua/cua-driver':
-        specifier: 0.14.1
-        version: 0.14.1
+        specifier: 0.19.3
+        version: 0.19.3
       rastermill:
         specifier: 0.3.1
         version: 0.3.1
@@ -791,8 +787,8 @@ importers:
         specifier: 4.3.1
         version: 4.3.1
       playwright-core:
-        specifier: 1.62.0
-        version: 1.62.0
+        specifier: 1.62.1
+        version: 1.62.1
       typebox:
         specifier: 1.3.6
         version: 1.3.6
@@ -954,10 +950,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/github-copilot:
-    dependencies:
-      '@clack/prompts':
-        specifier: 1.7.0
-        version: 1.7.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1490,8 +1482,8 @@ importers:
   extensions/onepassword:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.5.2
-        version: 0.5.2
+        specifier: 0.5.5
+        version: 0.5.5
       execa:
         specifier: 10.0.0
         version: 10.0.0
@@ -1624,8 +1616,8 @@ importers:
         specifier: 7.0.6
         version: 7.0.6
       playwright-core:
-        specifier: 1.62.0
-        version: 1.62.0
+        specifier: 1.62.1
+        version: 1.62.1
       pretty-ms:
         specifier: 9.3.0
         version: 9.3.0
@@ -1669,40 +1661,6 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-
-  extensions/qqbot:
-    dependencies:
-      '@tencent-connect/qqbot-connector':
-        specifier: 1.2.0
-        version: 1.2.0
-      mpg123-decoder:
-        specifier: 1.0.3
-        version: 1.0.3
-      p-map:
-        specifier: 7.0.6
-        version: 7.0.6
-      pretty-ms:
-        specifier: 9.3.0
-        version: 9.3.0
-      silk-wasm:
-        specifier: 3.7.1
-        version: 3.7.1
-      ws:
-        specifier: 8.21.1
-        version: 8.21.1
-      zod:
-        specifier: 4.4.3
-        version: 4.4.3
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-      '@types/ws':
-        specifier: 8.18.1
-        version: 8.18.1
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
 
   extensions/qwen:
     devDependencies:
@@ -1995,12 +1953,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/video-generation-core:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/vllm:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -2213,6 +2165,10 @@ importers:
       typebox:
         specifier: 1.3.6
         version: 1.3.6
+    devDependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/gateway-client:
     dependencies:
@@ -2337,7 +2293,11 @@ importers:
         specifier: workspace:*
         version: link:../normalization-core
 
-  packages/session-url-contract: {}
+  packages/session-url-contract:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/terminal-core:
     dependencies:
@@ -2382,9 +2342,6 @@ importers:
       '@codemirror/view':
         specifier: 6.43.6
         version: 6.43.6
-      '@create-markdown/preview':
-        specifier: 2.0.3
-        version: 2.0.3(shiki@4.3.1)
       '@lezer/highlight':
         specifier: 1.2.3
         version: 1.2.3
@@ -2403,15 +2360,27 @@ importers:
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
+      '@novnc/novnc':
+        specifier: 1.7.0
+        version: 1.7.0
       '@openclaw/gateway-client':
         specifier: workspace:*
         version: link:../packages/gateway-client
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../packages/gateway-protocol
       '@openclaw/libterminal':
         specifier: 0.3.2
         version: 0.3.2
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core
+      '@openclaw/model-catalog-core':
+        specifier: workspace:*
+        version: link:../packages/model-catalog-core
+      '@openclaw/net-policy':
+        specifier: workspace:*
+        version: link:../packages/net-policy
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../packages/normalization-core
@@ -2419,20 +2388,20 @@ importers:
         specifier: workspace:*
         version: link:../packages/session-url-contract
       '@openclaw/uirouter':
-        specifier: 0.1.0
-        version: 0.1.0
+        specifier: 0.1.1
+        version: 0.1.1
       '@openclaw/workboard-contract':
         specifier: workspace:*
         version: link:../packages/workboard-contract
       '@tanstack/lit-virtual':
-        specifier: 3.13.35
-        version: 3.13.35(lit@3.3.3)
+        specifier: 3.13.36
+        version: 3.13.36(lit@3.3.3)
       '@tanstack/virtual-core':
-        specifier: 3.17.6
-        version: 3.17.6
+        specifier: 3.17.7
+        version: 3.17.7
       dompurify:
-        specifier: 3.4.12
-        version: 3.4.12
+        specifier: 3.4.13
+        version: 3.4.13
       ghostty-web:
         specifier: 0.4.0
         version: 0.4.0
@@ -2451,9 +2420,6 @@ importers:
       markdown-it-task-lists:
         specifier: 2.1.1
         version: 2.1.1
-      marked:
-        specifier: 18.0.7
-        version: 18.0.7
       remend:
         specifier: 1.3.0
         version: 1.3.0
@@ -2466,7 +2432,7 @@ importers:
         version: 4.1.10(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)
       '@vitest/browser-playwright':
         specifier: 4.1.10
-        version: 4.1.10(playwright@1.62.0)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)
+        version: 4.1.10(playwright@1.62.1)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)
       jsdom:
         specifier: 29.1.1
         version: 29.1.1(@noble/hashes@2.2.0)
@@ -2474,8 +2440,8 @@ importers:
         specifier: workspace:*
         version: link:..
       playwright:
-        specifier: 1.62.0
-        version: 1.62.0
+        specifier: 1.62.1
+        version: 1.62.1
       vite:
         specifier: 8.1.5
         version: 8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)
@@ -2612,6 +2578,9 @@ packages:
   '@aws-sdk/core@3.977.1':
     resolution: {integrity: sha512-KVtQRtc00ES/y+Sc3vYXeP6pCIcNlBJCZOwvqSy8ZpVGmbM5+IG+AfhuTKQ2oXmIVqZJewaGMMpzPkywC6xg0w==}
     engines: {node: '>=20.0.0'}
+    deprecated: |-
+      Deprecated due to Document number parsing bug in JSON, see
+        https://github.com/aws/aws-sdk-js-v3/issues/8246. Newer version available.
 
   '@aws-sdk/credential-provider-cognito-identity@3.972.60':
     resolution: {integrity: sha512-16Fxa3veKIO6nHJr+vN76z3BkSU7725lzruc5S2SQSTUTbK4TXtmi8033WQljZj4k1+383UsMaNOHN6B76fK5A==}
@@ -2958,18 +2927,6 @@ packages:
       jest:
         optional: true
       vitest:
-        optional: true
-
-  '@create-markdown/preview@2.0.3':
-    resolution: {integrity: sha512-Vrp8DyuiouryZ3E4NQ7tBgoYQdoekd0+DzN64mZ48QYCw3V+MCb/H2q10SW8KC8XPr931XOMDvKX4I83qpQh3g==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      '@create-markdown/core': '>=2.0.3'
-      shiki: '>=1.0.0'
-    peerDependenciesMeta:
-      '@create-markdown/core':
-        optional: true
-      shiki:
         optional: true
 
   '@csstools/color-helpers@6.1.0':
@@ -3386,7 +3343,7 @@ packages:
     resolution: {integrity: sha512-eWpQYr67tqJLeaSUl0Q+TquuYfUdTibpOJlUMV2FfUP7+KqCC5TufnwnlXL6mobZBJbGAYRd7ZvEBDCbLInjhg==}
     engines: {node: '>=20'}
     peerDependencies:
-      hono: 4.12.32
+      hono: ^4
 
   '@huggingface/jinja@0.3.4':
     resolution: {integrity: sha512-kFFQWJiWwvxezKQnvH1X7GjsECcMljFx+UZK9hx6P26aVHwwidJVTB0ptLfRVZQvVkOGHoMmTGvo4nT0X9hHOA==}
@@ -4079,6 +4036,9 @@ packages:
     resolution: {integrity: sha512-tlc/FcYIv5i8RYsl2iDil4A0gOihaas1R5jPcIC4Zw3GhjKsVilw90aHcVlhZPTBLGBzd379S+VcnsDjd9ChiA==}
     engines: {node: '>=12.4.0'}
 
+  '@novnc/novnc@1.7.0':
+    resolution: {integrity: sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA==}
+
   '@npmcli/agent@5.0.2':
     resolution: {integrity: sha512-EkzGmEsgbQ1rqWkRJe2P0oQHx/ylZozDUNPMXCklLuSFL3GY+QyEfBUjhjCsgGXzh4OGpnHvkboSQgczjP/jJg==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
@@ -4137,8 +4097,8 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
-  '@openclaw/fs-safe@0.5.2':
-    resolution: {integrity: sha512-klidJFTE5FFAweNFpy/aVgschya3JYMWtXfdoSH3bTFN7+WAqlJtD+UQjOIFdkD42kJcWM7josNUpIIm7dnwXg==}
+  '@openclaw/fs-safe@0.5.5':
+    resolution: {integrity: sha512-x8wYigrOwmnsE8v4LfAh2eTvvkuDMspBrQeBp/GyB9/c7eFf8aL7gK4keewDbhscKX1pACD8Yd+ehZq6o29xHw==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.2':
@@ -4156,8 +4116,8 @@ packages:
     peerDependencies:
       undici: '>=8.5.0 <9'
 
-  '@openclaw/uirouter@0.1.0':
-    resolution: {integrity: sha512-w5tNj2FIukVJqJ1wt5wiDbrI6DI4tOkUbtqnnU5Fl4EgnRKFJtfHI3WrWTWTTJlXbbrwGSMptyrSZmQVdRo83Q==}
+  '@openclaw/uirouter@0.1.1':
+    resolution: {integrity: sha512-aiZFvWmP/ndpS3em5xVtiPlj1k6asA8ueoNxGxekA1024EZlCwnICPZklG6g2sU4Wlntp9AYocLCr5/iuvL7hw==}
     engines: {node: ^22.18.0 || >=24.11.0}
 
   '@opentelemetry/api-logs@0.221.0':
@@ -5218,17 +5178,13 @@ packages:
   '@swc/helpers@0.5.23':
     resolution: {integrity: sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw==}
 
-  '@tanstack/lit-virtual@3.13.35':
-    resolution: {integrity: sha512-ZFUpMwYHsWelrBleD6JekvTwtHYBWzM79/5f3MrrdyDlMUBi0XfuqKB9wNJM0zVwyuu5uOUWQA+Gt3BLwzRHlQ==}
+  '@tanstack/lit-virtual@3.13.36':
+    resolution: {integrity: sha512-dju+ZvpztbcSZjWLllJIgHioXWypAm8hq9ALqFfAt/9hmRtU3gZKNEWgy+pgxtbHMouq2hQFrXWKfF3LRXKwJQ==}
     peerDependencies:
       lit: ^3.1.0
 
-  '@tanstack/virtual-core@3.17.6':
-    resolution: {integrity: sha512-h0/Ebo18CkOrChlQIhNtQkM5ySUnh/GumQ/D1st3hG2HWUPEF+ILUc2k29UtivCi/9G7w7G3/f7Xyd5cCFbKBw==}
-
-  '@tencent-connect/qqbot-connector@1.2.0':
-    resolution: {integrity: sha512-FAOUCvgxP4M9UiYbHrtVgJ7BavSlh1CHJPjeEQuTAkP9MZ91lX4yATqv6I/lB9yp15nVq+G2DaGSSJwQTSoSsA==}
-    engines: {node: '>=18.0.0'}
+  '@tanstack/virtual-core@3.17.7':
+    resolution: {integrity: sha512-bp+v10y65sp2H7WpWfIMyxTNfl8ZVfxFTLRjPIFRryi6FV/J33z4IS53WO4pTk36KlvJ4iLiQz+oaydDC1xbcA==}
 
   '@thi.ng/bitstream@2.4.54':
     resolution: {integrity: sha512-uInkAJge5O0bWWEaYKrQpMccPbFg0z6eIA5NDCJXPm7l3rjlDje6RBHBXll3LiQz9Y051EdzlAEQRaB5hEifdg==}
@@ -5277,40 +5233,40 @@ packages:
   '@tokenizer/token@0.3.0':
     resolution: {integrity: sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A==}
 
-  '@trycua/cua-driver-darwin-arm64@0.14.1':
-    resolution: {integrity: sha512-Ijt252VfIbebSbNsoSLw66UAQKe/OV9wGVf80Qyt6F8DSrVSRQQOb4c+vWUYVF2349SQvKA0kJuY2i3Lj23zXw==}
+  '@trycua/cua-driver-darwin-arm64@0.19.3':
+    resolution: {integrity: sha512-zd37WTn8JP3ixXiMN4BjhYsN5o/+TsF/UTD4YTEtapYqTiw1DcQxuwZhXQDtvrmQYfaPjOgwlDib1vZ584UBIA==}
     cpu: [arm64]
     os: [darwin]
 
-  '@trycua/cua-driver-darwin-x64@0.14.1':
-    resolution: {integrity: sha512-3kfPWxemK/zg/kSMIwk3EWF83OpZq6p19sB3BJzbk0zZqlCSKmZVPNIyFGOG7Bq1AxSdvEgHb4djrsFOEo9adA==}
+  '@trycua/cua-driver-darwin-x64@0.19.3':
+    resolution: {integrity: sha512-Z1jTJ9IImfR6njGu79DHe5JCuvximAUbqlpi+RmcXHVmkW8R6Ht7lhnAvOT58pa3FEiyY6zIDouZyxePxX950A==}
     cpu: [x64]
     os: [darwin]
 
-  '@trycua/cua-driver-linux-arm64-gnu@0.14.1':
-    resolution: {integrity: sha512-MGbJDlmGWm/yp8mojTfBDMI09TzlC/UlIuFmW2UsapqyBAeBp01x5nRVs5c6xFXO5XIHasrYCwU93gzIvtjO4Q==}
+  '@trycua/cua-driver-linux-arm64-gnu@0.19.3':
+    resolution: {integrity: sha512-Q0pDIpg0TNbLQmi8mIdgeBrfcvSq0vJYLQu20E0DBTiAQz+hhx2uvPjNbOadQXJgEnnEs7RUgO5g+mJ5SZpQ3A==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@trycua/cua-driver-linux-x64-gnu@0.14.1':
-    resolution: {integrity: sha512-uzhoOKRiTdzSVXP8MlO73JnuLXkpwvEGmyEVjNhiK1MKy9aIZfteRpBATZHUM/E+PG/IgvIqxuM+JWgB5QagEg==}
+  '@trycua/cua-driver-linux-x64-gnu@0.19.3':
+    resolution: {integrity: sha512-knUIsm9k5DlUOx8cTDOTwN2GQHyDvAsNqETdVpKOpTakut5FO4OHgabjlPw+q37TkZxPaKntaY6OBjCNlezgvA==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@trycua/cua-driver-win32-arm64-msvc@0.14.1':
-    resolution: {integrity: sha512-n3/hDOz2H2JQhH0slANAl9C0rUqPadBNy7t0HdsvHPyDM9vV9WtbvptI6pW4ZQH+3fPqy7gV41/V33/8f3mHnQ==}
+  '@trycua/cua-driver-win32-arm64-msvc@0.19.3':
+    resolution: {integrity: sha512-SEyYNfDXsgbOzH9z0mEqgMrrSkfEveB8C8SRemfujXvhnvtx8CfzGz+BPYKqLGo9tA9JxJwX4jfM8J41XOR8/g==}
     cpu: [arm64]
     os: [win32]
 
-  '@trycua/cua-driver-win32-x64-msvc@0.14.1':
-    resolution: {integrity: sha512-7ALlbufJBfSCR64kO8fwatzp2+aWohNc+A63JHthwS+9c28bWOSzVzOBe+QUrxUVwx7j4SP2wWJIQewP6v5yPQ==}
+  '@trycua/cua-driver-win32-x64-msvc@0.19.3':
+    resolution: {integrity: sha512-an3KaK/6HxB6LnHJ1uYv3ZBpZl3v0jukEOHPXzWifk3Zml14pKtTMbTuEnkr4I07c6BJumzXJ7gOTOZYcuMX7g==}
     cpu: [x64]
     os: [win32]
 
-  '@trycua/cua-driver@0.14.1':
-    resolution: {integrity: sha512-/o16k+vcTbdqwmvQqgFCKzrYksSQHz282qO8RkpD67GQoY4Vp3pyDndQexRJ8AbzNQpUt1bIXSAAaFBaMad6rg==}
+  '@trycua/cua-driver@0.19.3':
+    resolution: {integrity: sha512-Oc/FsGP56kpKn4TcADELcEUkLDCby+Wglt+5dX6r4QJbESWvRPdPJ09wvFPmIQeJ7dAUEnrIjuQt4Kz/LIQN3Q==}
 
   '@tufjs/canonical-json@2.0.0':
     resolution: {integrity: sha512-yVtV8zsdo8qFHe+/3kw81dSLyF7D576A5cCFCi4X7B39tWT7SekaEFUnvnWJHz+9qO7qJTah1JbrDjWKqFtdWA==}
@@ -6281,6 +6237,7 @@ packages:
 
   crypto-js@4.2.0:
     resolution: {integrity: sha512-KALDyEYgpY+Rlob/iriUtjV6d5Eq+Y191A5g4UqLAi8CyGP9N1+FdVbkc1SxKc2r4YAYqG8JzO2KGL+AizD70Q==}
+    deprecated: Active development of CryptoJS has been discontinued. This library is no longer maintained.
 
   css-functions-list@3.3.3:
     resolution: {integrity: sha512-8HFEBPKhOpJPEPu70wJJetjKta86Gw9+CCyCnB3sui2qQfOvRyqBy4IKLKKAwdMpWb2lHXWk9Wb4Z6AmaUT1Pg==}
@@ -6439,8 +6396,8 @@ packages:
     resolution: {integrity: sha512-gYzvtM72ZtxQO0T048kd6HWSbbGCNOUwcnfQ01cqIJ4X2IYKFFHZ5mKvrQETcFXxsRObZulDaKmy//R7TPtsBg==}
     engines: {node: '>=20.19.0'}
 
-  dompurify@3.4.12:
-    resolution: {integrity: sha512-zQvGet8Z2sWbQhCmfFz/T5QWH2oBmjnqK3qvOjaqaNLrLEF912WamU+ohnTp0TCep/MFVHpdJuCZEdFOdTnEFg==}
+  dompurify@3.4.13:
+    resolution: {integrity: sha512-2vmYIoqjze2d+kakP8S/nS5shfsl587kzwEjcGlTdiksUVgFHnFCsLYDVj/JNqJVOQZGSYBTmuycv0PodwmnMQ==}
 
   domutils@3.2.2:
     resolution: {integrity: sha512-6kZKyUajlDuqlHKVX1w7gyslj9MPIXzIFiz/rGu35uC1wMi+kMhQwGhl4lt9unC9Vb9INnY9Z3/ZA3+FhASLaw==}
@@ -6600,8 +6557,8 @@ packages:
     resolution: {integrity: sha512-mQw+2fkQbALzQ7V0MY0IqdnXNOeTtP4r0lN9z7AAawCXgqea7bDii20AYrIBrFd/Hx0M2Ocz6S111CaFkUcb0Q==}
     engines: {node: '>=0.8.x'}
 
-  eventsource-parser@3.1.0:
-    resolution: {integrity: sha512-kJezFj9YFAMLeORyi7aCLxLbD5/qWMQnoMVlVPyHIll7lgRJCc3JVln9Vgl9nwQi0YkMnhdGTMNn7CkRRAptMg==}
+  eventsource-parser@3.1.1:
+    resolution: {integrity: sha512-EKN1vKAMcZ8MlYMpaNuxN6R9yakzH6uajHcHVTqWJzvu5pWw9DyhbP35HH8MVBQ+dZjAfDxk+A8NiR9KWaXiyQ==}
     engines: {node: '>=18.0.0'}
 
   eventsource@3.0.7:
@@ -6616,8 +6573,8 @@ packages:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
 
-  express-rate-limit@8.6.1:
-    resolution: {integrity: sha512-0D493aP61w0TJ2A0wy27riRsO7FMQ7FK+KUHOKCSfPvYo0R55aiC6emCVgFUeShH0fq0ICPVzNcgoS+BsbXQCA==}
+  express-rate-limit@8.6.2:
+    resolution: {integrity: sha512-YH4ru+eOJxQABscKFfRCy9R7x9QFGdezclVMwwgFFndzS2Xnm0uo6B0ABZsLhcpeptGv2qvuJVWlQr9gQZoC3A==}
     engines: {node: '>= 16'}
     peerDependencies:
       express: '>= 4.11'
@@ -6909,8 +6866,8 @@ packages:
     resolution: {integrity: sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w==}
     engines: {node: '>=12.0.0'}
 
-  hono@4.12.32:
-    resolution: {integrity: sha512-XcuyW9qE2kJn07PkecMOBd5Vq/hMy7mmGw+idz1yblbg9N17ijJODrvPkn7/dwL3Kulj8LcRJ69DLOWf91dRUg==}
+  hono@4.13.2:
+    resolution: {integrity: sha512-JydRilDRkYBQMt9qR9U92mXxmbGqsqSn/IKOrh4e7/gEbn+0zSr8igTu0obwJoNGN4sez28DIql7FBHWydoJpA==}
     engines: {node: '>=16.9.0'}
 
   hookable@6.1.1:
@@ -8192,13 +8149,13 @@ packages:
   platform@1.3.6:
     resolution: {integrity: sha512-fnWVljUchTro6RiCFvCXBbNhJc2NijN7oIQxbwsyL0buWJPG85v81ehlHI9fXrJsMNgTofEoWIQeClKpgxFLrg==}
 
-  playwright-core@1.62.0:
-    resolution: {integrity: sha512-nsNRyq0r2zsG8AcRHWknc9QRA5XCueC7gWMrs+Gx2tlZn9hcl8zudfh00lhJPY1DE7NmZ6bDsT9g2yey8mXljA==}
+  playwright-core@1.62.1:
+    resolution: {integrity: sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==}
     engines: {node: '>=20'}
     hasBin: true
 
-  playwright@1.62.0:
-    resolution: {integrity: sha512-Z14dG305dgaLu6foB1TXQagFiW8JfSUIUaUuPaKQ6NtBPKF1P/qXcqfh6c6K/icPqdy37JmjbiBXf6JNg6Sylw==}
+  playwright@1.62.1:
+    resolution: {integrity: sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -8341,10 +8298,6 @@ packages:
 
   qoa-format@1.0.1:
     resolution: {integrity: sha512-dMB0Z6XQjdpz/Cw4Rf6RiBpQvUSPCfYlQMWvmuWlWkAT7nDQD29cVZ1SwDUB6DYJSitHENwbt90lqfI+7bvMcw==}
-
-  qrcode-terminal@0.12.0:
-    resolution: {integrity: sha512-EXtzRZmC+YGmGlDFbXKxQiMZNwCLEO6BANKXG4iCtSIM0yqc/pappSx3RIKr4r0uh5JsBckOXeKrB3Iz7mdQpQ==}
-    hasBin: true
 
   qrcode@1.5.4:
     resolution: {integrity: sha512-1ca71Zgiu6ORjHqFBDpnSMTR2ReToX4l1Au1VFLyVeBTFavzQnv5JxMFr3ukHVKpSrSA2MCk0lNJSykjUfz7Zg==}
@@ -8633,10 +8586,6 @@ packages:
   sigstore@5.0.0:
     resolution: {integrity: sha512-hJqJfoG/e4qFQaauQL00c6J6FrHLBGKtkFvW3JbTSIEFOhLrSjdSM/gWd/yUOfYo/gsERehTXGC1VZWX+9X4Dg==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
-
-  silk-wasm@3.7.1:
-    resolution: {integrity: sha512-mXPwLRtZxrYV3TZx41jMAeKc80wvmyrcXIcs8HctFxK15Ahz2OJQENYhNgEPeCEOdI6Mbx1NxQsqxzwc3DKerw==}
-    engines: {node: '>=16.11.0'}
 
   simple-git@3.36.0:
     resolution: {integrity: sha512-cGQjLjK8bxJw4QuYT7gxHw3/IouVESbhahSsHrX97MzCL1gu2u7oy38W6L2ZIGECEfIBG4BabsWDPjBxJENv9Q==}
@@ -10351,10 +10300,6 @@ snapshots:
     optionalDependencies:
       vitest: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.2)(@vitest/browser-playwright@4.1.10)(@vitest/coverage-v8@4.1.10)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
-  '@create-markdown/preview@2.0.3(shiki@4.3.1)':
-    optionalDependencies:
-      shiki: 4.3.1
-
   '@csstools/color-helpers@6.1.0': {}
 
   '@csstools/css-calc@3.3.0(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)':
@@ -10704,9 +10649,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@hono/node-server@2.0.12(hono@4.12.32)':
+  '@hono/node-server@2.0.12(hono@4.13.2)':
     dependencies:
-      hono: 4.12.32
+      hono: 4.13.2
 
   '@huggingface/jinja@0.3.4':
     optional: true
@@ -11254,17 +11199,17 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3)':
     dependencies:
-      '@hono/node-server': 2.0.12(hono@4.12.32)
+      '@hono/node-server': 2.0.12(hono@4.13.2)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
       cors: 2.8.6
       cross-spawn: 7.0.6
       eventsource: 3.0.7
-      eventsource-parser: 3.1.0
+      eventsource-parser: 3.1.1
       express: 5.2.1(supports-color@10.2.2)
-      express-rate-limit: 8.6.1(express@5.2.1(supports-color@10.2.2))(supports-color@10.2.2)
-      hono: 4.12.32
+      express-rate-limit: 8.6.2(express@5.2.1(supports-color@10.2.2))(supports-color@10.2.2)
+      hono: 4.13.2
       jose: 6.2.4
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -11370,6 +11315,8 @@ snapshots:
 
   '@nolyfill/domexception@1.0.28': {}
 
+  '@novnc/novnc@1.7.0': {}
+
   '@npmcli/agent@5.0.2(supports-color@10.2.2)':
     dependencies:
       agent-base: 9.0.0
@@ -11430,7 +11377,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe@0.5.2':
+  '@openclaw/fs-safe@0.5.5':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.22
@@ -11443,7 +11390,7 @@ snapshots:
     dependencies:
       undici: 8.9.0
 
-  '@openclaw/uirouter@0.1.0': {}
+  '@openclaw/uirouter@0.1.1': {}
 
   '@opentelemetry/api-logs@0.221.0':
     dependencies:
@@ -12376,16 +12323,12 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@tanstack/lit-virtual@3.13.35(lit@3.3.3)':
+  '@tanstack/lit-virtual@3.13.36(lit@3.3.3)':
     dependencies:
-      '@tanstack/virtual-core': 3.17.6
+      '@tanstack/virtual-core': 3.17.7
       lit: 3.3.3
 
-  '@tanstack/virtual-core@3.17.6': {}
-
-  '@tencent-connect/qqbot-connector@1.2.0':
-    dependencies:
-      qrcode-terminal: 0.12.0
+  '@tanstack/virtual-core@3.17.7': {}
 
   '@thi.ng/bitstream@2.4.54':
     dependencies:
@@ -12424,35 +12367,35 @@ snapshots:
 
   '@tokenizer/token@0.3.0': {}
 
-  '@trycua/cua-driver-darwin-arm64@0.14.1':
+  '@trycua/cua-driver-darwin-arm64@0.19.3':
     optional: true
 
-  '@trycua/cua-driver-darwin-x64@0.14.1':
+  '@trycua/cua-driver-darwin-x64@0.19.3':
     optional: true
 
-  '@trycua/cua-driver-linux-arm64-gnu@0.14.1':
+  '@trycua/cua-driver-linux-arm64-gnu@0.19.3':
     optional: true
 
-  '@trycua/cua-driver-linux-x64-gnu@0.14.1':
+  '@trycua/cua-driver-linux-x64-gnu@0.19.3':
     optional: true
 
-  '@trycua/cua-driver-win32-arm64-msvc@0.14.1':
+  '@trycua/cua-driver-win32-arm64-msvc@0.19.3':
     optional: true
 
-  '@trycua/cua-driver-win32-x64-msvc@0.14.1':
+  '@trycua/cua-driver-win32-x64-msvc@0.19.3':
     optional: true
 
-  '@trycua/cua-driver@0.14.1':
+  '@trycua/cua-driver@0.19.3':
     dependencies:
       '@ubjs/core': 0.31.0-3
       '@ubjs/node': 0.31.0-3
     optionalDependencies:
-      '@trycua/cua-driver-darwin-arm64': 0.14.1
-      '@trycua/cua-driver-darwin-x64': 0.14.1
-      '@trycua/cua-driver-linux-arm64-gnu': 0.14.1
-      '@trycua/cua-driver-linux-x64-gnu': 0.14.1
-      '@trycua/cua-driver-win32-arm64-msvc': 0.14.1
-      '@trycua/cua-driver-win32-x64-msvc': 0.14.1
+      '@trycua/cua-driver-darwin-arm64': 0.19.3
+      '@trycua/cua-driver-darwin-x64': 0.19.3
+      '@trycua/cua-driver-linux-arm64-gnu': 0.19.3
+      '@trycua/cua-driver-linux-x64-gnu': 0.19.3
+      '@trycua/cua-driver-win32-arm64-msvc': 0.19.3
+      '@trycua/cua-driver-win32-x64-msvc': 0.19.3
 
   '@tufjs/canonical-json@2.0.0': {}
 
@@ -12796,11 +12739,11 @@ snapshots:
 
   '@urbit/aura@3.0.0': {}
 
-  '@vitest/browser-playwright@4.1.10(playwright@1.62.0)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)':
+  '@vitest/browser-playwright@4.1.10(playwright@1.62.1)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)':
     dependencies:
       '@vitest/browser': 4.1.10(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)
       '@vitest/mocker': 4.1.10(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
-      playwright: 1.62.0
+      playwright: 1.62.1
       tinyrainbow: 3.1.0
       vitest: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(@vitest/browser-playwright@4.1.10)(@vitest/coverage-v8@4.1.10)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
     transitivePeerDependencies:
@@ -12809,11 +12752,11 @@ snapshots:
       - utf-8-validate
       - vite
 
-  '@vitest/browser-playwright@4.1.10(playwright@1.62.0)(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)':
+  '@vitest/browser-playwright@4.1.10(playwright@1.62.1)(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)':
     dependencies:
       '@vitest/browser': 4.1.10(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)
       '@vitest/mocker': 4.1.10(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
-      playwright: 1.62.0
+      playwright: 1.62.1
       tinyrainbow: 3.1.0
       vitest: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.2)(@vitest/browser-playwright@4.1.10)(@vitest/coverage-v8@4.1.10)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
     transitivePeerDependencies:
@@ -13582,7 +13525,7 @@ snapshots:
     dependencies:
       domelementtype: 3.0.0
 
-  dompurify@3.4.12:
+  dompurify@3.4.13:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
@@ -13760,11 +13703,11 @@ snapshots:
 
   events@3.3.0: {}
 
-  eventsource-parser@3.1.0: {}
+  eventsource-parser@3.1.1: {}
 
   eventsource@3.0.7:
     dependencies:
-      eventsource-parser: 3.1.0
+      eventsource-parser: 3.1.1
 
   execa@10.0.0:
     dependencies:
@@ -13784,7 +13727,7 @@ snapshots:
 
   expect-type@1.4.0: {}
 
-  express-rate-limit@8.6.1(express@5.2.1(supports-color@10.2.2))(supports-color@10.2.2):
+  express-rate-limit@8.6.2(express@5.2.1(supports-color@10.2.2))(supports-color@10.2.2):
     dependencies:
       debug: 4.4.3(supports-color@10.2.2)
       express: 5.2.1(supports-color@10.2.2)
@@ -14177,7 +14120,7 @@ snapshots:
 
   highlight.js@11.11.1: {}
 
-  hono@4.12.32: {}
+  hono@4.13.2: {}
 
   hookable@6.1.1: {}
 
@@ -15744,11 +15687,11 @@ snapshots:
   platform@1.3.6:
     optional: true
 
-  playwright-core@1.62.0: {}
+  playwright-core@1.62.1: {}
 
-  playwright@1.62.0:
+  playwright@1.62.1:
     dependencies:
-      playwright-core: 1.62.0
+      playwright-core: 1.62.1
     optionalDependencies:
       fsevents: 2.3.2
 
@@ -15856,8 +15799,6 @@ snapshots:
   qoa-format@1.0.1:
     dependencies:
       '@thi.ng/bitstream': 2.4.54
-
-  qrcode-terminal@0.12.0: {}
 
   qrcode@1.5.4:
     dependencies:
@@ -16254,8 +16195,6 @@ snapshots:
     transitivePeerDependencies:
       - kerberos
       - supports-color
-
-  silk-wasm@3.7.1: {}
 
   simple-git@3.36.0(supports-color@10.2.2):
     dependencies:
@@ -16889,7 +16828,7 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
       '@types/node': 24.13.3
-      '@vitest/browser-playwright': 4.1.10(playwright@1.62.0)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)
+      '@vitest/browser-playwright': 4.1.10(playwright@1.62.1)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)
       '@vitest/coverage-v8': 4.1.10(@vitest/browser@4.1.10)(vitest@4.1.10)
       jsdom: 29.1.1(@noble/hashes@2.2.0)
     transitivePeerDependencies:
@@ -16920,7 +16859,7 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
       '@types/node': 26.1.2
-      '@vitest/browser-playwright': 4.1.10(playwright@1.62.0)(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)
+      '@vitest/browser-playwright': 4.1.10(playwright@1.62.1)(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10)
       '@vitest/coverage-v8': 4.1.10(@vitest/browser@4.1.10)(vitest@4.1.10)
       jsdom: 29.1.1(@noble/hashes@2.2.0)
     transitivePeerDependencies:

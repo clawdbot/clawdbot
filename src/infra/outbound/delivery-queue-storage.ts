@@ -9,7 +9,6 @@ import type {
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
-  claimDeliveryQueueEntryPlatformSend,
   promoteDeliveryQueueEntryPlatformSend,
   transitionOwnedDeliveryQueueEntry,
   type InitialDeliveryProducerClaim,
@@ -44,6 +43,7 @@ import {
   OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
 } from "./delivery-queue-media-staging.js";
+import { markOwnedDeliveryPlatformSendDispatched } from "./delivery-queue-platform-lease.js";
 import {
   StableDeliveryPreparationLostError,
   type StableDeliveryPreparation,
@@ -58,7 +58,6 @@ import {
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
 import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 export type QueuedRenderedMessageBatchPlan = {
   payloadCount: number;
@@ -80,7 +79,7 @@ export type QueuedReplyPayloadSendingHook = {
 };
 
 export type QueuedDeliveryPayload = {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   to: string;
   accountId?: string;
   /** Original queue durability policy when known. */
@@ -482,21 +481,7 @@ export async function failDeliveryAfterPlatformSend(
   );
 }
 
-/** Atomically transfer a stable pending producer intent to one platform sender. */
-export async function claimDeliveryPlatformSendAttempt(
-  id: string,
-  stateDir?: string,
-  reconciledPlatformSendStartedAt?: number,
-  reconciledPlatformSendAttemptId?: string,
-): Promise<string | undefined> {
-  return claimDeliveryQueueEntryPlatformSend({
-    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-    id,
-    stateDir,
-    ...(reconciledPlatformSendStartedAt !== undefined ? { reconciledPlatformSendStartedAt } : {}),
-    ...(reconciledPlatformSendAttemptId !== undefined ? { reconciledPlatformSendAttemptId } : {}),
-  });
-}
+export { claimDeliveryPlatformSendAttempt } from "./delivery-queue-platform-lease.js";
 
 /** Reserve one durable delivery call before invoking the provider path. */
 export async function reserveDeliveryAttempt(
@@ -580,18 +565,23 @@ export async function markDeliveryPlatformSendDispatched(
   route?: { replyToId?: string | null },
   expectedPlatformSendAttemptId?: string | null,
 ): Promise<void> {
+  if (typeof expectedPlatformSendAttemptId === "string") {
+    markOwnedDeliveryPlatformSendDispatched(id, stateDir, route, expectedPlatformSendAttemptId);
+    return;
+  }
   updateQueuedDelivery(
     id,
     stateDir,
     (entry) => ({
       ...entry,
-      // Dispatch still belongs to the promoted producer until provider I/O
-      // settles; clearing its lease lets another process replay an active send.
-      availableAt: expectedPlatformSendAttemptId ? entry.availableAt : undefined,
+      availableAt: undefined,
       producerClaimId: undefined,
       platformSendStartedAt: Date.now(),
       ...(route && "replyToId" in route ? { effectiveReplyToId: route.replyToId ?? null } : {}),
-      recoveryState: "send_attempt_started",
+      // A later batch send must not erase concrete evidence from an earlier result;
+      // recovery could otherwise replay the whole batch and duplicate that delivery.
+      recoveryState:
+        entry.recoveryState === "unknown_after_send" ? entry.recoveryState : "send_attempt_started",
     }),
     expectedPlatformSendAttemptId,
   );

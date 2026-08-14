@@ -1,7 +1,10 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 // Control UI module implements session display behavior.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 
 const CHANNEL_LABELS: Record<string, string> = {
   imessage: "iMessage",
@@ -61,6 +64,11 @@ type SessionWorktreeDisplayRow = {
   execNode?: string;
 };
 
+/** Basename shown for a repository path on every Control UI surface. */
+export function repoName(repoRoot: string): string {
+  return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
+}
+
 /** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
 export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
   const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
@@ -68,11 +76,11 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   // execNode is often a raw node id (long hex); never render it in full.
   const rawNode = normalizeOptionalString(row.execNode);
   const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;
-  const repoName = repoRoot ? (repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot) : undefined;
+  const repo = repoRoot ? repoName(repoRoot) : undefined;
   const shortBranch = branch?.startsWith(WORKTREE_BRANCH_PREFIX)
     ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
     : branch;
-  const checkout = repoName ? (shortBranch ? `${repoName} ⎇ ${shortBranch}` : repoName) : undefined;
+  const checkout = repo ? (shortBranch ? `${repo} ⎇ ${shortBranch}` : repo) : undefined;
   if (checkout && node) {
     // Checkout first: it names the work; the node is routing detail.
     return `${checkout} · ${node}`;
