@@ -175,11 +175,17 @@ function hasDuplicateJsonObjectKeys(text: string): boolean {
         next += 1;
       }
       if (text[next] === ":") {
-        const key = JSON.parse(text.slice(index, end + 1)) as string;
-        if (keys.has(key)) {
-          return true;
+        try {
+          const key = JSON.parse(text.slice(index, end + 1)) as string;
+          if (keys.has(key)) {
+            return true;
+          }
+          keys.add(key);
+        } catch {
+          // Skip keys that are not valid JSON strings (e.g. malformed escape
+          // sequences) so that a single bad key does not abort the entire
+          // duplicate-key scan and silently bypass the safety check.
         }
-        keys.add(key);
       }
     }
 

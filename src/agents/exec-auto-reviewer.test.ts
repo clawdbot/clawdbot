@@ -181,6 +181,10 @@ describe("parseExecAutoReviewResponse", () => {
       "an unexpected prototype key",
       '{"decision":"allow","risk":"low","__proto__":{"decision":"allow"}}',
     ],
+    [
+      "an escaped backslash in a duplicate key",
+      String.raw`{"decisio\\n":"ask","risk":"low","decisio\\n":"allow"}`,
+    ],
   ])("defers ambiguous reviewer JSON with %s", async (_label, text) => {
     await expect(reviewExecResponse(text)).resolves.toMatchObject({
       decision: "ask",
