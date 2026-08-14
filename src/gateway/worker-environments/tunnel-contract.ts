@@ -1,5 +1,6 @@
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
 import type {
   WorkerWorkspaceApplyResult,
   WorkerWorkspaceReconciliationJournalAdapter,
@@ -25,6 +26,7 @@ export type WorkerWorkspaceCommand = {
   input?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  transfer?: NodeWorkerWorkspaceTransferInput;
 };
 
 export type WorkerWorkspaceSyncRequest = {

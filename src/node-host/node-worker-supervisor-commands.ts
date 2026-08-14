@@ -101,6 +101,14 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         payload: await params.workspace!.exec(
           parseNodeWorkerWorkspaceExecInput(params.paramsJSON),
           params.signal,
+          params.gatewayUrl
+            ? {
+                url: params.gatewayUrl,
+                ...(params.gatewayTlsFingerprint
+                  ? { tlsFingerprint: params.gatewayTlsFingerprint }
+                  : {}),
+              }
+            : undefined,
         ),
       };
     }
@@ -120,11 +128,13 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     };
   } catch (error) {
     const invalid = error instanceof Error && error.message.startsWith("INVALID_REQUEST:");
+    const transferFailure =
+      error instanceof Error && error.message.startsWith("workspace-transfer-");
     return {
       handled: true,
       ok: false,
       code: invalid ? "INVALID_REQUEST" : "UNAVAILABLE",
-      message: invalid ? error.message : "node worker supervisor command failed",
+      message: invalid || transferFailure ? error.message : "node worker supervisor command failed",
     };
   }
 }

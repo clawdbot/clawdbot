@@ -44,6 +44,7 @@ export type SidebarAttentionItem = {
 export function buildSidebarAttentionItems(params: {
   cronJobs: readonly CronJob[];
   modelAuthStatus: ModelAuthStatusResult | null;
+  modelAuthAgentId?: string | null;
   approvalQueue: readonly ExecApprovalRequest[];
   now: number;
 }): SidebarAttentionItem[] {
@@ -111,6 +112,7 @@ export function buildSidebarAttentionItems(params: {
     (provider) => provider.status === "expired" || provider.status === "missing",
   );
   if (expired.length > 0) {
+    const providerSignature = signatureOf(expired.map((provider) => provider.provider));
     items.push({
       kind: "modelAuthExpired",
       severity: "error",
@@ -119,7 +121,11 @@ export function buildSidebarAttentionItems(params: {
         providers: expired.map((provider) => provider.displayName).join(", "),
       }),
       action: { kind: "navigate", routeId: "model-providers" },
-      signature: signatureOf(expired.map((provider) => provider.provider)),
+      // Auth status is agent-scoped. Prefix its owner so dismissing one agent's
+      // missing credential cannot hide the same provider warning for another.
+      signature: params.modelAuthAgentId
+        ? `agent:${params.modelAuthAgentId}\n${providerSignature}`
+        : providerSignature,
     });
   }
   return items;

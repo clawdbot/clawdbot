@@ -79,7 +79,9 @@ async function createPublishedWorkspace(root: string) {
   await git(source, "init", "-b", "main");
   await git(source, "config", "user.name", "OpenClaw QA");
   await git(source, "config", "user.email", "openclaw-qa@example.invalid");
+  await fs.mkdir(path.join(source, "nested"));
   await fs.writeFile(path.join(source, "launch-wire.txt"), "local-install launch wire\n");
+  await fs.writeFile(path.join(source, "nested", "tracked.txt"), "nested tracked input\n");
   await git(source, "add", ".");
   await git(source, "commit", "-m", "initialize node worker launch wire workspace");
   await git(source, "remote", "add", "publish", bare);
@@ -343,7 +345,7 @@ function messageText(message: unknown): string {
 
 describe("node worker launch wire", () => {
   it(
-    "hosts a device placement through node invoke after the launch acknowledgement reconnects",
+    "transfers and reconciles a gateway-push workspace through a device runner",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const root = tempDirs.make("openclaw-node-worker-launch-wire-");
@@ -454,6 +456,15 @@ describe("node worker launch wire", () => {
           worktreeBaseRef: "main",
           cwd: published.source,
         });
+        const created = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
+          session?: { execCwd?: string; spawnedCwd?: string };
+        };
+        const localWorkspaceDir = created.session?.execCwd ?? created.session?.spawnedCwd;
+        expect(localWorkspaceDir).toBeTruthy();
+        await fs.writeFile(
+          path.join(localWorkspaceDir!, "gateway-push.txt"),
+          "dirty gateway workspace\n",
+        );
         const dispatched = await gateway.call(
           "sessions.dispatch",
           { key: SESSION_KEY, deviceId: identity.deviceId },
@@ -466,6 +477,13 @@ describe("node worker launch wire", () => {
         });
         const remoteWorkspaceDir = String(placement?.remoteWorkspaceDir ?? "");
         const baseManifestRef = placement?.workspaceBaseManifestRef;
+        await expect(
+          fs.readFile(path.join(remoteWorkspaceDir, "gateway-push.txt"), "utf8"),
+        ).resolves.toBe("dirty gateway workspace\n");
+        await expect(
+          fs.readFile(path.join(remoteWorkspaceDir, "nested", "tracked.txt"), "utf8"),
+        ).resolves.toBe("nested tracked input\n");
+        await fs.writeFile(path.join(remoteWorkspaceDir, "node-result.txt"), "device result\n");
 
         const runId = `node-worker-launch-wire-${Date.now()}`;
         const started = await operator.request<{ runId?: string; status?: string }>("chat.send", {
@@ -506,17 +524,22 @@ describe("node worker launch wire", () => {
           ),
         ).toHaveLength(1);
         const described = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
-          session?: { placement?: Record<string, unknown> };
+          session?: { execCwd?: string; spawnedCwd?: string; placement?: Record<string, unknown> };
         };
         expect(described.session?.placement).toMatchObject({
           state: "active",
-          workspaceBaseManifestRef: baseManifestRef,
           remoteWorkspaceDir,
         });
+        expect(described.session?.placement?.workspaceBaseManifestRef).not.toBe(baseManifestRef);
+        const reconciledLocalDir = described.session?.execCwd ?? described.session?.spawnedCwd;
+        expect(reconciledLocalDir).toBeTruthy();
+        await expect(
+          fs.readFile(path.join(reconciledLocalDir!, "node-result.txt"), "utf8"),
+        ).resolves.toBe("device result\n");
         expect(await git(remoteWorkspaceDir, "rev-parse", "HEAD")).toBe(published.commit);
-        expect(
-          await git(remoteWorkspaceDir, "status", "--porcelain=v1", "--untracked-files=all"),
-        ).toBe("");
+        expect(await fs.readFile(path.join(remoteWorkspaceDir, "node-result.txt"), "utf8")).toBe(
+          "device result\n",
+        );
       } finally {
         closing = true;
         const cleanup = await Promise.allSettled([
