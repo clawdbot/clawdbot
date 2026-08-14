@@ -119,6 +119,8 @@ export function createOpenClawTools(
     currentThreadTs?: string;
     /** Current inbound message id for action fallbacks. */
     currentMessageId?: string | number;
+    /** Trusted inbound text submitted for this active turn. */
+    currentMessageText?: string;
     /** True when the current inbound turn carried audio media. */
     currentInboundAudio?: boolean;
     /** Reply-to mode for auto-threading. */

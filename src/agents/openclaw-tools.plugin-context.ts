@@ -25,6 +25,8 @@ export type OpenClawPluginToolOptions = {
   modelProvider?: string;
   modelId?: string;
   requesterSenderId?: string | null;
+  currentMessageId?: string | number;
+  currentMessageText?: string;
   requesterAgentIdOverride?: string;
   sessionId?: string;
   /**
@@ -95,6 +97,8 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentAccountId: options?.agentAccountId,
       deliveryContext,
       requesterSenderId: options?.requesterSenderId ?? undefined,
+      currentMessageId: options?.currentMessageId,
+      currentMessageText: options?.currentMessageText,
       sandboxed: options?.sandboxed,
       oneShotCliRun: options?.oneShotCliRun,
     },

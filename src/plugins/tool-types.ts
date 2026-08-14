@@ -46,6 +46,10 @@ export type OpenClawPluginToolContext = {
   deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
+  /** Trusted provider-native id of the inbound message for this active turn. */
+  currentMessageId?: string | number;
+  /** Trusted inbound text submitted for this active turn. */
+  currentMessageText?: string;
   sandboxed?: boolean;
   /**
    * True for explicit one-shot local CLI runs that must release plugin-owned

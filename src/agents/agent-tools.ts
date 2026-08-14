@@ -469,6 +469,8 @@ export function createOpenClawCodingTools(options?: {
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
+  /** Trusted inbound text submitted for this active turn. */
+  currentMessageText?: string;
   /** True when the current inbound turn carried audio media. */
   currentInboundAudio?: boolean;
   /** Group id for channel-level tool policy resolution. */
@@ -1039,6 +1041,7 @@ export function createOpenClawCodingTools(options?: {
           currentMessagingTarget: options?.currentMessagingTarget,
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,
+          currentMessageText: options?.currentMessageText,
           currentInboundAudio: options?.currentInboundAudio,
           modelProvider: options?.modelProvider,
           modelId: options?.modelId,

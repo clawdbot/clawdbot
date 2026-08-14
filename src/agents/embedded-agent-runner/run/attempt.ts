@@ -1316,6 +1316,7 @@ export async function runEmbeddedAttempt(
             currentMessagingTarget: params.currentMessagingTarget,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
+            currentMessageText: params.prompt,
             currentInboundAudio: params.currentInboundAudio,
             includeCoreTools: toolConstructionPlan.includeCoreTools,
             includeToolSearchControls: toolSearchControlsEnabledForRun,
