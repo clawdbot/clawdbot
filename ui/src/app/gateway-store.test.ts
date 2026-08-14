@@ -23,10 +23,16 @@ vi.mock("../build-info.ts", () => ({
     release: false,
     buildId: "test",
   },
-  controlUiBuildDiffersFrom: (identity: { version?: string | null; buildId?: string | null }) =>
-    identity.buildId
-      ? identity.buildId !== "test"
-      : Boolean(identity.version && identity.version !== "2026.7.19"),
+  controlUiBuildDiffersFrom: (identity: {
+    version?: string | null;
+    buildId?: string | null;
+    controlUiBuildSource?: "bundled" | "configured";
+  }) =>
+    identity.controlUiBuildSource === "configured"
+      ? false
+      : identity.buildId
+        ? identity.buildId !== "test"
+        : Boolean(identity.version && identity.version !== "2026.7.19"),
 }));
 
 const HELLO: GatewayHelloOk = {
@@ -181,6 +187,22 @@ describe("createApplicationGateway connection phase", () => {
     current().opts.onHello?.({
       ...HELLO,
       server: { version: "2026.7.19", buildId: "remote-build", connId: "conn-1" },
+    });
+
+    expect(gateway.snapshot.phase).toBe("connected");
+  });
+
+  it("does not compare a configured same-origin Control UI with the gateway package", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onHello?.({
+      ...HELLO,
+      server: {
+        version: "2026.7.20",
+        controlUiBuildSource: "configured",
+        connId: "conn-1",
+      },
     });
 
     expect(gateway.snapshot.phase).toBe("connected");

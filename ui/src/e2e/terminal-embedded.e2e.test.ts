@@ -51,6 +51,63 @@ suite.define(() => {
     });
   });
 
+  it("keeps an independently built same-origin Control UI connected", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gatewayUrl = suite.server.baseUrl.replace(/^http/u, "ws");
+      await page.addInitScript((url) => {
+        (
+          window as Window & {
+            ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
+          }
+        )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+          gatewayUrl: url,
+          token: "native-configured-ui-token",
+        };
+      }, gatewayUrl);
+      const gateway = await installMockGateway(page, {
+        assistantAgentId: "main",
+        controlUiBuildSource: "configured",
+        featureMethods: ["terminal.open"],
+        methodResponses: {
+          "terminal.open": {
+            agentId: "main",
+            confined: false,
+            cwd: "/workspace",
+            sessionId: "configured-ui-terminal",
+            shell: "/bin/bash",
+          },
+        },
+        serverBuildId: "independent-build",
+        serverVersion: "2026.7.20",
+        terminalEnabled: true,
+      });
+
+      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.waitForRequest("connect");
+      await page.waitForFunction(() => {
+        const panel = document.querySelector("openclaw-terminal-panel") as
+          | (HTMLElement & { available: boolean })
+          | null;
+        return panel?.available === true;
+      });
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("openclaw:terminal-toggle", {
+            detail: { agentId: "main", open: true },
+          }),
+        );
+      });
+
+      const terminalOpen = await gateway.waitForRequest("terminal.open");
+      expect(terminalOpen.params).toMatchObject({ agentId: "main" });
+      expect(
+        await page.evaluate(() =>
+          sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId"),
+        ),
+      ).toBeNull();
+    });
+  });
+
   it("opens a new dock terminal for a selection changed without navigation", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

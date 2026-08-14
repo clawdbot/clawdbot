@@ -265,6 +265,7 @@ export type ControlUiMockGatewayScenario = {
   devGitBranch?: string;
   /** Exact immutable Control UI artifact served by the mocked Gateway. */
   serverBuildId?: string;
+  controlUiBuildSource?: "bundled" | "configured";
   serverVersion?: string;
   /** Simulate the one-time legacy Control UI device-auth pairing transition. */
   deviceAuthMigrationPending?: boolean;
@@ -798,6 +799,7 @@ function normalizeScenario(
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || "e2e",
+    controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
     serverVersion: scenario.serverVersion?.trim() || "2026.7.10",
     deviceAuthMigrationPending: scenario.deviceAuthMigrationPending ?? false,
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
@@ -1596,6 +1598,7 @@ function installControlUiMockGateway(
           protocol: protocolVersion,
           server: {
             buildId: serverBuildId,
+            controlUiBuildSource: scenario.controlUiBuildSource,
             connId: "control-ui-e2e",
             version: scenario.serverVersion,
           },

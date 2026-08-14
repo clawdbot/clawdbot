@@ -27,6 +27,12 @@ describe("Control UI build info", () => {
       expect(controlUiBuildDiffersFrom({ version: undefined })).toBe(false);
       expect(controlUiBuildDiffersFrom({ version: "2026.7.19", buildId: "test" })).toBe(false);
       expect(controlUiBuildDiffersFrom({ version: "2026.7.19", buildId: "other" })).toBe(true);
+      expect(
+        controlUiBuildDiffersFrom({
+          version: "2026.7.20",
+          controlUiBuildSource: "configured",
+        }),
+      ).toBe(false);
     } finally {
       vi.unstubAllGlobals();
       vi.resetModules();

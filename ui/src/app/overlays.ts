@@ -322,6 +322,7 @@ export function createApplicationOverlays(
     const serverBuildIdentity = {
       version: next.hello?.server?.version,
       buildId: next.hello?.server?.buildId,
+      controlUiBuildSource: next.hello?.server?.controlUiBuildSource,
     };
     const exactBuildIdentityAvailable = Boolean(serverBuildIdentity.buildId?.trim());
     snapshot = {

@@ -188,6 +188,7 @@ describe("sendGatewayHello update detail scope", () => {
       }),
     );
     expect(helloPayload(context)?.server.buildId).toBe("build-a");
+    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("bundled");
   });
 
   it("omits package build identity for independently built configured UI roots", async () => {
@@ -197,6 +198,7 @@ describe("sendGatewayHello update detail scope", () => {
     await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
 
     expect(helloPayload(context)?.server.buildId).toBeUndefined();
+    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("configured");
   });
 
   it("keeps hello projection and telemetry at effective scopes", async () => {

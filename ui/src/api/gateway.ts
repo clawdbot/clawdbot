@@ -269,7 +269,7 @@ async function deriveLegacyV4RecoveryScope(material: string | undefined): Promis
 
 async function buildGatewayConnectDevice(params: {
   deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
-  client: GatewayConnectClientInfo;
+  client: ConnectParams["client"];
   role: string;
   scopes: string[];
   authToken?: string;

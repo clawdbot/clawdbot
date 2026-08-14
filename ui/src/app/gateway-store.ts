@@ -343,6 +343,7 @@ export function createApplicationGateway(
           controlUiBuildDiffersFrom({
             version: hello.server?.version,
             buildId: hello.server?.buildId,
+            controlUiBuildSource: hello.server?.controlUiBuildSource,
           })
         );
         if (!controlUiBuildFresh) {
