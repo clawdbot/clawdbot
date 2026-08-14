@@ -132,11 +132,20 @@ function createFeishuTypingTargetMissingHandler(params: {
     if (messageId !== params.sourceMessageId) {
       return;
     }
-    const result = recallFeishuSourceMessage({
-      channelRuntime: params.channelRuntime,
-      accountId: params.accountId,
-      messageId,
-    });
+    let result: ReturnType<typeof recallFeishuSourceMessage>;
+    try {
+      result = recallFeishuSourceMessage({
+        channelRuntime: params.channelRuntime,
+        accountId: params.accountId,
+        messageId,
+      });
+    } catch (error) {
+      params.log(
+        `feishu[${params.accountId}]: failed to record missing source message ${messageId}; ` +
+          `active work was not cancelled: ${String(error)}`,
+      );
+      return;
+    }
     if (!logged) {
       logged = true;
       params.log(
