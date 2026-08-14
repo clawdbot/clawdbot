@@ -523,14 +523,16 @@ export function resolveGatewayScopedTools(params: {
     }),
   });
 
-  const gatewayDenySet = new Set([
-    ...defaultGatewayDeny,
-    ...ownerOnlyGatewayDeny,
-    ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
-    ...excludedToolNames,
-  ]);
+  const gatewayDenySet = new Set(
+    [
+      ...defaultGatewayDeny,
+      ...ownerOnlyGatewayDeny,
+      ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
+      ...excludedToolNames,
+    ].map(normalizeToolPolicyName),
+  );
   const tools = applyToolAvailabilityDescriptions(
-    policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name)),
+    policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
   );
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
   // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
