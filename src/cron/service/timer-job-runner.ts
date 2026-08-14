@@ -231,6 +231,7 @@ export async function executeJobCoreWithTimeout(
     ? registerActiveCronTaskRun({
         runId: opts?.runId ?? `cron-active:${job.id}`,
         controller: runAbortController,
+        activeJobMarker: opts?.activeJobMarker,
         onCancel: () => resolveOperatorCancellation?.(operatorCancellationMarker),
       })
     : undefined;
