@@ -104,4 +104,51 @@ describe("security audit rosterless configs", () => {
       );
     },
   );
+
+  it("accepts an explicit multi-agent roster without a legacy default marker", async () => {
+    const { stateDir, workspaceDir } = makeAuditPaths("explicit-roster");
+    const report = await runSecurityAuditCore({
+      config: {
+        agents: {
+          ownership: "explicit",
+          entries: { alpha: {}, beta: {} },
+        },
+      } as never,
+      stateDir,
+      configPath: path.join(stateDir, "openclaw.json"),
+      workspaceDir,
+      env: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+    });
+
+    expect(report.findings).not.toContainEqual(
+      expect.objectContaining({ checkId: "config.agent_roster.invalid_default_count" }),
+    );
+  });
+
+  it("still reports a legacy default marker on an explicit roster", async () => {
+    const { stateDir, workspaceDir } = makeAuditPaths("explicit-roster-with-default");
+    const report = await runSecurityAuditCore({
+      config: {
+        agents: {
+          ownership: "explicit",
+          entries: { alpha: { default: true }, beta: {} },
+        },
+      } as never,
+      stateDir,
+      configPath: path.join(stateDir, "openclaw.json"),
+      workspaceDir,
+      env: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+    });
+
+    expect(report.findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "config.agent_roster.invalid_default_count",
+        detail: expect.stringContaining("Expected no"),
+      }),
+    );
+  });
 });
