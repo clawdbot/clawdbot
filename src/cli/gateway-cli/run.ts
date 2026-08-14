@@ -683,13 +683,6 @@ async function maybeWriteGatewayStartupFailureBundle(
 }
 
 async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
-  if (opts.tailscaleResetOnExit) {
-    defaultRuntime.error(
-      `--tailscale-reset-on-exit is retired because route cleanup cannot be ownership-safe. Run ${formatCliCommand("openclaw doctor --fix")} to remove the legacy setting; explicitly turn Tailscale Serve/Funnel off when needed.`,
-    );
-    defaultRuntime.exit(EXIT_CONFIG_ERROR);
-    return;
-  }
   // Reparenting can hide the running service from the ancestor walk.
   // Preserve its inherited PID before config env rebuilding overwrites it.
   const inheritedGatewayServicePid = parseStrictPositiveInteger(

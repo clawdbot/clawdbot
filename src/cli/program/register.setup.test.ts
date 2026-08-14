@@ -327,12 +327,10 @@ describe("registerSetupCommand", () => {
     expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
-  it("rejects retired --tailscale-reset-on-exit before setup", async () => {
+  it("accepts retired --tailscale-reset-on-exit as a no-op", async () => {
     await runCli(["setup", "--tailscale-reset-on-exit"]);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("cannot be ownership-safe"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
   it("runs baseline setup command when --baseline is set", async () => {

@@ -90,13 +90,18 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       if (!gateway || !tailscale || !Object.hasOwn(tailscale, "serviceName")) {
         return;
       }
+      const wasManagedService = tailscale.mode === "serve";
       delete tailscale.serviceName;
-      tailscale.mode = "off";
+      if (wasManagedService) {
+        tailscale.mode = "off";
+      }
       gateway.tailscale = tailscale;
       raw.gateway = gateway;
       changes.push(
-        "Removed gateway.tailscale.serviceName and set gateway.tailscale.mode=off because named Services cannot use lifecycle-owned routes. " +
-          "Inspect the retained Service route, then run `tailscale serve clear <service-name>`; set gateway.tailscale.mode=serve to use device Serve instead.",
+        wasManagedService
+          ? "Removed gateway.tailscale.serviceName and set gateway.tailscale.mode=off because named Services cannot use lifecycle-owned routes. " +
+              "Inspect the retained Service route, then run `tailscale serve clear <service-name>`; set gateway.tailscale.mode=serve to use device Serve instead."
+          : "Removed retired gateway.tailscale.serviceName; the current Tailscale mode is unchanged because named Services applied only to Serve.",
       );
     },
   }),

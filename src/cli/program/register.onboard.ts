@@ -33,20 +33,6 @@ export function resolveInstallDaemonFlag(command: Command): boolean | undefined 
   return undefined;
 }
 
-export function validateTailscaleResetOnExitFlag(command: Command, runtime: RuntimeEnv): boolean {
-  if (
-    command.getOptionValueSource("tailscaleResetOnExit") === "cli" &&
-    command.getOptionValue("tailscaleResetOnExit") === true
-  ) {
-    runtime.error(
-      `--tailscale-reset-on-exit is retired because route cleanup cannot be ownership-safe. Run ${formatCliCommand("openclaw doctor --fix")} to remove the legacy setting; explicitly turn Tailscale Serve/Funnel off when needed.`,
-    );
-    runtime.exit(1);
-    return false;
-  }
-  return true;
-}
-
 const MODERN_ONBOARD_OPTION_KEYS = new Set([
   "modern",
   "workspace",
@@ -356,9 +342,6 @@ export function registerOnboardCommand(program: Command): void {
         return;
       }
       if (!validateOnboardAuthOptionValues(opts as Record<string, unknown>, defaultRuntime)) {
-        return;
-      }
-      if (!validateTailscaleResetOnExitFlag(commandRuntime, defaultRuntime)) {
         return;
       }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime);

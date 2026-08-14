@@ -182,12 +182,10 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().agentName).toBe("robby");
   });
 
-  it("rejects retired --tailscale-reset-on-exit before onboarding", async () => {
+  it("accepts retired --tailscale-reset-on-exit as a no-op", async () => {
     await runCli(["onboard", "--tailscale-reset-on-exit"]);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("cannot be ownership-safe"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
   it("accepts retired --no-tailscale-reset-on-exit as a no-op", async () => {

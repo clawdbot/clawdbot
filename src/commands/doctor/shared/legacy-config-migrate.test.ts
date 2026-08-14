@@ -1850,6 +1850,23 @@ describe("retired gateway Tailscale cleanup config migrate", () => {
     ]);
     expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
   });
+
+  it("removes an ignored Service name without disabling Funnel", () => {
+    const raw = {
+      gateway: {
+        tailscale: {
+          mode: "funnel",
+          serviceName: "svc:ignored",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway?.tailscale).toEqual({ mode: "funnel" });
+    expect(res.changes).toEqual([expect.stringContaining("current Tailscale mode is unchanged")]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
 });
 
 describe("legacy WebChat channel config migrate", () => {

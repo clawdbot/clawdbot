@@ -20,7 +20,6 @@ import {
   pickOnboardAuthOptionValues,
   registerOnboardAuthOptions,
   resolveInstallDaemonFlag,
-  validateTailscaleResetOnExitFlag,
   validateOnboardAuthOptionValues,
 } from "./register.onboard.js";
 
@@ -130,9 +129,6 @@ async function runOnboardingEntry(
     return;
   }
   if (!validateOnboardAuthOptionValues(options, runtime)) {
-    return;
-  }
-  if (!validateTailscaleResetOnExitFlag(commandRuntime, runtime)) {
     return;
   }
   const installDaemon = resolveInstallDaemonFlag(commandRuntime);
