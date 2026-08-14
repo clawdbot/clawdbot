@@ -939,11 +939,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const styles = await readGatewayMenuStyles();
 
       expect(styles).toEqual({
-        menu: { borderRadius: "10px", padding: "4px" },
+        menu: { borderRadius: "12px", padding: "6px" },
         item: {
           borderRadius: "6px",
           fontSize: "13px",
-          minHeight: "28px",
+          minHeight: "36px",
           padding: "0px 8px",
         },
       });
