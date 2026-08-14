@@ -372,9 +372,10 @@ const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
 
 // Rounded medians from standard 4-core GitHub-hosted runs 31737316152,
 // 31742781948, 31749838728, and 31754493208. The last run exercised compact
-// bins; the earlier full-plan runs isolate the named groups. Reject media-ui-3's
-// 444s compact retry sample because its log records a 300s no-output timeout;
-// its three healthy samples are 52-63s. Unmeasured groups use the scale above.
+// bins; the earlier full-plan runs isolate the named groups. Exclude failed
+// samples and reject media-ui-3's 444s compact retry sample because its log
+// records a 300s no-output timeout; its three healthy samples are 52-63s.
+// Unmeasured groups use the scale above.
 const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-auth", 50],
   ["agentic-agents-core-isolated", 23],
@@ -475,7 +476,7 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-runtime-infra-storage-state", 175],
   ["core-runtime-infra-system-runtime", 69],
   ["core-runtime-media-ui-1", 97],
-  ["core-runtime-media-ui-2", 76],
+  ["core-runtime-media-ui-2", 78],
   ["core-runtime-media-ui-3", 54],
   ["core-runtime-media-ui-support", 101],
   ["core-runtime-secrets", 73],
