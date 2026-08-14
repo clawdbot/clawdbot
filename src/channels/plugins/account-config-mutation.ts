@@ -52,6 +52,13 @@ function resolveMissingSetupEnvMessage(plugin: ChannelPlugin, input: unknown): s
     : `Set these environment variables before using --use-env: ${missing.join(", ")}.`;
 }
 
+function canValidateRawInputBeforeMissingEnv(input: unknown): boolean {
+  if (!isRecord(input)) {
+    return true;
+  }
+  return Object.keys(input).every((key) => key === "useEnv");
+}
+
 export async function prepareChannelAccountConfiguration(params: {
   cfg: OpenClawConfig;
   plugin: ChannelPlugin;
@@ -87,13 +94,15 @@ export async function prepareChannelAccountConfiguration(params: {
     }) ?? normalizeAccountId(params.requestedAccountId);
   const missingEnvMessage = resolveMissingSetupEnvMessage(params.plugin, input);
   if (missingEnvMessage) {
-    const validationError = setup.validateInput?.({
-      cfg: params.cfg,
-      accountId,
-      input,
-    });
-    if (validationError) {
-      return resultError({ kind: "invalid-input", message: validationError });
+    if (canValidateRawInputBeforeMissingEnv(input)) {
+      const validationError = setup.validateInput?.({
+        cfg: params.cfg,
+        accountId,
+        input,
+      });
+      if (validationError) {
+        return resultError({ kind: "invalid-input", message: validationError });
+      }
     }
     return resultError({ kind: "invalid-input", message: missingEnvMessage });
   }

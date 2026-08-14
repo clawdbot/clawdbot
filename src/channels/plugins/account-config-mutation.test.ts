@@ -249,6 +249,54 @@ describe("channel account config mutations", () => {
     expect(prepareAccountConfigInput).not.toHaveBeenCalled();
   });
 
+  it("reports missing setup env vars before raw alias validation", async () => {
+    const prepareAccountConfigInput = vi.fn(({ input }: { input: Record<string, unknown> }) => ({
+      ...input,
+      baseUrl: input.url,
+    }));
+    const validateInput = vi.fn(({ input }: { input: Record<string, unknown> }) =>
+      typeof input.baseUrl === "string" ? null : "--base-url is required",
+    );
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "env-alias-chat" }),
+      setupContract: defineChannelSetupContract({
+        fields: {
+          url: {
+            kind: "string",
+            cli: { flags: "--url <url>", description: "Service URL alias" },
+          },
+          useEnv: {
+            kind: "boolean",
+            cli: { flags: "--use-env", description: "Use environment credentials" },
+            envVars: ["ENV_ALIAS_CHAT_TOKEN"],
+          },
+        },
+        adapter: {
+          prepareAccountConfigInput,
+          validateInput,
+          applyAccountConfig: ({ cfg }) => cfg,
+        },
+      }),
+    } as ChannelPlugin;
+
+    const prepared = await prepareChannelAccountConfiguration({
+      cfg: {},
+      plugin,
+      resolveInput: () => ({ url: "https://chat.example.test", useEnv: true }),
+      runtime,
+    });
+
+    expect(prepared).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid-input",
+        message: expect.stringContaining("ENV_ALIAS_CHAT_TOKEN"),
+      },
+    });
+    expect(prepareAccountConfigInput).not.toHaveBeenCalled();
+    expect(validateInput).not.toHaveBeenCalled();
+  });
+
   it("normalizes plugin-resolved account IDs only at the config mutation boundary", async () => {
     const applyAccountConfig = vi.fn(({ cfg }) => cfg);
     const onAccountConfigChanged = vi.fn();

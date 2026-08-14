@@ -681,6 +681,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         if (currentStop?.status === "stopping") {
           return;
         }
+        let settledStopAccountFence = false;
         const stopAccountFence = store.stopAccountFences.get(id);
         if (stopAccountFence) {
           const stopAccountSettled = await waitForChannelStopGracefully(
@@ -720,6 +721,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (store.stopAccountFences.get(id) === stopAccountFence) {
             store.stopAccountFences.delete(id);
           }
+          settledStopAccountFence = true;
           const currentStopAfterFence = store.stops.get(id);
           if (
             currentStopAfterFence?.status === "rejected" &&
@@ -739,10 +741,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const hasSettledDeferredTimeout = currentStopIsDeferredTimeout && hasCallerDeferredStop;
         const hasClearedDeferredStop =
           currentStop === undefined && hasCallerDeferredStop && !store.stopAccountFences.has(id);
+        const shouldRetryAfterSettledManualFenceTask =
+          settledStopAccountFence &&
+          !preserveManualStop &&
+          manuallyStopped.has(rKey) &&
+          abortedTask;
         const shouldRetryAfterCallerDeferredTask =
           (hasPairedKnownAccountDeferredStop ||
             hasSettledDeferredTimeout ||
-            hasClearedDeferredStop) &&
+            hasClearedDeferredStop ||
+            shouldRetryAfterSettledManualFenceTask) &&
           abortedTask;
         if (
           currentStop?.status === "rejected" &&
@@ -777,6 +785,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             if (currentStop?.status === "rejected") {
               store.stops.delete(id);
+            }
+            if (shouldRetryAfterSettledManualFenceTask) {
+              manuallyStopped.delete(rKey);
             }
             if (store.tasks.has(id) || store.starting.has(id) || manuallyStopped.has(rKey)) {
               return;
