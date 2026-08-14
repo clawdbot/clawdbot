@@ -4911,7 +4911,7 @@ button.chat-reply-preview--message:disabled {
 .chat-controls__effort-scale {
   display: flex;
   justify-content: space-between;
-  margin: 3px 6px -2px;
+  margin: 3px 6px 0;
   color: var(--muted);
   font-size: 10px;
   font-weight: 550;
@@ -4923,7 +4923,7 @@ button.chat-reply-preview--message:disabled {
   position: relative;
   display: flex;
   align-items: center;
-  height: 22px;
+  height: 26px;
   margin: 0 6px;
 }
 
@@ -4933,7 +4933,7 @@ button.chat-reply-preview--message:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 5px;
+  padding: 0 12px;
   pointer-events: none;
 }
 
@@ -4950,7 +4950,7 @@ button.chat-reply-preview--message:disabled {
   position: relative;
   z-index: 1;
   width: 100%;
-  height: 22px;
+  height: 26px;
   margin: 0;
   padding: 0;
   background: transparent;
@@ -4966,20 +4966,21 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-controls__reasoning-range::-webkit-slider-runnable-track {
-  height: 3px;
+  height: 26px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-full);
   background: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--text) 45%, transparent) var(--reasoning-fill, 0%),
-    color-mix(in srgb, var(--text) 14%, transparent) var(--reasoning-fill, 0%)
+    color-mix(in srgb, var(--text) 18%, transparent) var(--reasoning-fill, 0%),
+    color-mix(in srgb, var(--text) 7%, transparent) var(--reasoning-fill, 0%)
   );
 }
 
 .chat-controls__reasoning-range::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  margin-top: -5.5px;
+  width: 28px;
+  height: 20px;
+  margin-top: 3px;
   border: none;
   border-radius: var(--radius-full);
   background: var(--text-strong);
@@ -4999,20 +5000,21 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-controls__reasoning-range::-moz-range-track {
-  height: 3px;
+  height: 26px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 14%, transparent);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
 .chat-controls__reasoning-range::-moz-range-progress {
-  height: 3px;
+  height: 24px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 45%, transparent);
+  background: color-mix(in srgb, var(--text) 18%, transparent);
 }
 
 .chat-controls__reasoning-range::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
+  width: 28px;
+  height: 20px;
   border: none;
   border-radius: var(--radius-full);
   background: var(--text-strong);
