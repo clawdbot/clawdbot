@@ -122,11 +122,12 @@ export async function executeSystemAgentOperation(
         runtime.log(`Config missing: ${shortenHomePath(snapshot.path)}`);
         return { applied: false };
       }
-      const cfg = snapshot.valid
-        ? (snapshot.sourceConfig ?? snapshot.config)
-        : snapshot.sourceConfig;
+      const cfg = snapshot.sourceConfig;
       // Redact before selecting a subtree so wildcard channel/plugin hints retain full paths.
-      const lookup = readConfigValueAtPath(redactSystemAgentConfig(cfg ?? {}), operation.path);
+      const lookup = readConfigValueAtPath(
+        redactSystemAgentConfig(cfg, { config: cfg, valid: snapshot.valid }),
+        operation.path,
+      );
       if (!lookup.found) {
         runtime.log(
           `${operation.path}: not set. Use \`config schema ${operation.path}\` to see what is allowed.`,

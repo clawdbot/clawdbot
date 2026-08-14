@@ -95,33 +95,6 @@ function internalCapabilityUrl(publicUrl: string, pathName = "/internal/synology
   return `${pathName}${new URL(publicUrl).search}`;
 }
 
-function utf16Buffer(value: string, endian: "le" | "be", includeBom = true): Buffer {
-  const buffer = Buffer.from(`${includeBom ? "\ufeff" : ""}${value}`, "utf16le");
-  return endian === "le" ? buffer : buffer.swap16();
-}
-
-function utf32Buffer(value: string, endian: "le" | "be", includeBom = true): Buffer {
-  const codePoints = Array.from(value, (character) => character.codePointAt(0) ?? 0xfffd);
-  const bomBytes = includeBom ? 4 : 0;
-  const buffer = Buffer.alloc(bomBytes + codePoints.length * 4);
-  if (includeBom) {
-    if (endian === "le") {
-      buffer.writeUInt32LE(0xfeff, 0);
-    } else {
-      buffer.writeUInt32BE(0xfeff, 0);
-    }
-  }
-  codePoints.forEach((codePoint, index) => {
-    const offset = bomBytes + index * 4;
-    if (endian === "le") {
-      buffer.writeUInt32LE(codePoint, offset);
-    } else {
-      buffer.writeUInt32BE(codePoint, offset);
-    }
-  });
-  return buffer;
-}
-
 describe("Synology Chat hosted outbound media", () => {
   afterAll(() => {
     resetPluginStateStoreForTests();
@@ -605,214 +578,43 @@ describe("Synology Chat hosted outbound media", () => {
     expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects active content and leaves no live capability", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("<svg onload=alert(1)></svg>"),
-      kind: "image",
-      contentType: "image/svg+xml",
-      fileName: "active.svg",
-    });
-    await expect(
-      prepareSynologyHostedMedia({
-        account: createAccount(),
-        mediaUrl: "https://files.example.com/active.svg",
-      }),
-    ).rejects.toThrow("do not support active content type");
-  });
-
   it.each([
     {
-      name: "HTML bytes with a passive MIME and filename",
-      buffer: Buffer.from("<script>alert('active')</script>"),
-      contentType: "image/png",
-      fileName: "photo.png",
+      name: "SVG",
+      contentType: "image/svg+xml",
+      fileName: "diagram.svg",
+      body: '<svg xmlns="http://www.w3.org/2000/svg"><text>report</text></svg>',
     },
     {
-      name: "XML-prefixed SVG bytes with generic metadata",
-      buffer: Buffer.from('<?xml version="1.0"?><!--fixture--><svg onload="alert(1)"/>'),
-      contentType: "application/octet-stream",
-      fileName: "diagram.bin",
-    },
-    {
-      name: "SVG doctype bytes with generic metadata",
-      buffer: Buffer.from(
-        '<!DOCTYPE svg><svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>',
-      ),
-      contentType: "application/octet-stream",
-      fileName: "diagram.bin",
-    },
-    {
-      name: "SVG bytes beyond long whitespace and repeated wrappers",
-      buffer: Buffer.from(
-        `${" ".repeat(5_000)}${"<!--fixture-->".repeat(6)}<svg onload="alert(1)"/>`,
-      ),
-      contentType: "application/octet-stream",
-      fileName: "diagram.bin",
-    },
-    {
-      name: "UTF-16LE HTML bytes with passive metadata",
-      buffer: utf16Buffer("<script>alert('active')</script>", "le"),
-      contentType: "image/png",
-      fileName: "photo.png",
-    },
-    {
-      name: "UTF-16BE SVG bytes with passive metadata",
-      buffer: utf16Buffer('  <!--fixture--><svg onload="alert(1)"/>', "be"),
-      contentType: "image/png",
-      fileName: "photo.png",
-    },
-    {
-      name: "UTF-16LE XML bytes with passive metadata",
-      buffer: utf16Buffer('<?xml version="1.0"?><document/>', "le"),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "UTF-16BE HTML doctype bytes with passive metadata",
-      buffer: utf16Buffer("<!DOCTYPE html><html><body>active</body></html>", "be"),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "BOM-less UTF-16LE HTML bytes with generic metadata",
-      buffer: utf16Buffer('<img src="x" onerror="alert(1)">', "le", false),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "BOM-less UTF-16BE HTML bytes with generic metadata",
-      buffer: utf16Buffer("  <div><script>alert('active')</script></div>", "be", false),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "BOM-less UTF-32LE HTML bytes with generic metadata",
-      buffer: utf32Buffer('<embed src="data:text/html,active">', "le", false),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "UTF-32BE SVG bytes with passive metadata",
-      buffer: utf32Buffer('<svg onload="alert(1)"/>', "be"),
-      contentType: "image/png",
-      fileName: "photo.png",
-    },
-    {
-      name: "an unlisted active HTML root with generic metadata",
-      buffer: Buffer.from('<object data="data:text/html,active"></object>'),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "an active root whose tag name exceeds the old sniff prefix",
-      buffer: Buffer.from(`<${"custom-element-".repeat(8)}>active</custom-element>`),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "a bogus declaration before an active element",
-      buffer: Buffer.from("<!fixture><script>alert('active')</script>"),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "an unmatched closing tag before an active element",
-      buffer: Buffer.from("</fixture><script>alert('active')</script>"),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "an abruptly closed comment before an active element",
-      buffer: Buffer.from("<!--><script>alert('active')</script>"),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "an abruptly closed comment-start-dash before an active element",
-      buffer: Buffer.from("<!---><script>alert('active')</script>"),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "an incorrectly closed comment before an active element",
-      buffer: Buffer.from("<!--fixture--!><script>alert('active')</script>"),
-      contentType: "application/octet-stream",
-      fileName: "document.bin",
-    },
-    {
-      name: "an active filename with generic content",
-      buffer: Buffer.from("not markup"),
-      contentType: "application/octet-stream",
+      name: "HTML",
+      contentType: "text/html",
       fileName: "report.html",
+      body: "<!doctype html><html><body>report</body></html>",
     },
-  ])("rejects $name", async ({ buffer, contentType, fileName }) => {
+    {
+      name: "XHTML",
+      contentType: "application/xhtml+xml",
+      fileName: "report.xhtml",
+      body: '<html xmlns="http://www.w3.org/1999/xhtml"><body>report</body></html>',
+    },
+    {
+      name: "XML",
+      contentType: "application/xml",
+      fileName: "report.xml",
+      body: '<?xml version="1.0"?><report>ready</report>',
+    },
+  ])("preserves supported $name attachments", async ({ body, contentType, fileName }) => {
+    const buffer = Buffer.from(body);
     loadWebMediaMock.mockResolvedValueOnce({
       buffer,
       kind: undefined,
       contentType,
       fileName,
     });
-    await expect(
-      prepareSynologyHostedMedia({
-        account: createAccount(),
-        mediaUrl: "https://files.example.com/disguised-content",
-      }),
-    ).rejects.toThrow("do not support active content type");
-  });
-
-  it.each([
-    { endian: "le" as const, includeBom: true },
-    { endian: "be" as const, includeBom: true },
-    { endian: "le" as const, includeBom: false },
-    { endian: "be" as const, includeBom: false },
-  ])(
-    "keeps passive UTF-16$endian attachments available (BOM: $includeBom)",
-    async ({ endian, includeBom }) => {
-      const buffer = utf16Buffer("Passive attachment text", endian, includeBom);
-      loadWebMediaMock.mockResolvedValueOnce({
-        buffer,
-        kind: undefined,
-        contentType: "text/plain",
-        fileName: `notes-${endian}.txt`,
-      });
-      const account = createAccount();
-      const prepared = await prepareSynologyHostedMedia({
-        account,
-        mediaUrl: `https://files.example.com/notes-${endian}.txt`,
-      });
-      const response = makeRes();
-
-      await tryHandleSynologyHostedMediaRequest(
-        makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
-        response,
-        account,
-      );
-
-      expect(response.statusCode).toBe(200);
-      expect(Buffer.from(response.body)).toEqual(buffer);
-    },
-  );
-
-  it.each([
-    {
-      name: "UTF-8 source text",
-      buffer: Buffer.from("Example source: <div> is a literal tag."),
-    },
-    {
-      name: "BOM-less UTF-32 source text",
-      buffer: utf32Buffer("Example source: <div> is a literal tag.", "le", false),
-    },
-  ])("keeps passive $name containing embedded markup available", async ({ buffer }) => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer,
-      kind: undefined,
-      contentType: "text/plain",
-      fileName: "example.txt",
-    });
     const account = createAccount();
     const prepared = await prepareSynologyHostedMedia({
       account,
-      mediaUrl: "https://files.example.com/example.txt",
+      mediaUrl: `https://files.example.com/${fileName}`,
     });
     const response = makeRes();
 
@@ -824,6 +626,9 @@ describe("Synology Chat hosted outbound media", () => {
 
     expect(response.statusCode).toBe(200);
     expect(Buffer.from(response.body)).toEqual(buffer);
+    expect(response.headers["content-type"]).toBe(contentType);
+    expect(response.headers["content-disposition"]).toContain("attachment");
+    expect(response.headers["content-disposition"]).toContain(fileName);
   });
 
   it("sanitizes response filenames before constructing headers", async () => {

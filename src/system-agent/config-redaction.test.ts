@@ -1,26 +1,29 @@
-import { describe, expect, it, vi } from "vitest";
-
-const runtimeSchema = vi.hoisted(() => ({
-  load: vi.fn(() => {
-    throw new Error("invalid runtime config");
-  }),
-}));
-
-vi.mock("../config/runtime-schema.js", () => ({
-  loadGatewayRuntimeConfigSchema: runtimeSchema.load,
-}));
-
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { isSystemAgentSensitiveConfigValue, redactSystemAgentConfig } from "./config-redaction.js";
+import {
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
+
+let pluginMetadata: SystemAgentPluginMetadataTestSnapshot | undefined;
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({}, {});
+  pluginMetadata = installSystemAgentPluginMetadataTestSnapshot();
+});
+
+afterEach(() => {
+  pluginMetadata?.restore();
+  pluginMetadata = undefined;
+  clearRuntimeConfigSnapshot();
+});
 
 describe("isSystemAgentSensitiveConfigValue", () => {
   it("detects sensitive descendants in structured parent writes", () => {
-    runtimeSchema.load.mockReturnValueOnce({
-      uiHints: {
-        "channels.synology-chat.webhookUrl": { sensitive: true },
-        "channels.synology-chat.accounts.*.webhookUrl": { sensitive: true },
-      },
-    } as never);
-
     expect(
       isSystemAgentSensitiveConfigValue(
         "channels.synology-chat",
@@ -30,12 +33,6 @@ describe("isSystemAgentSensitiveConfigValue", () => {
   });
 
   it("keeps structured parent writes visible when no descendant is sensitive", () => {
-    runtimeSchema.load.mockReturnValueOnce({
-      uiHints: {
-        "channels.synology-chat.webhookUrl": { sensitive: true },
-      },
-    } as never);
-
     expect(
       isSystemAgentSensitiveConfigValue(
         "channels.synology-chat",
@@ -45,27 +42,46 @@ describe("isSystemAgentSensitiveConfigValue", () => {
   });
 
   it("preserves escaped path segments while matching wildcard descendant hints", () => {
-    runtimeSchema.load.mockReturnValueOnce({
-      uiHints: {
-        "channels.synology-chat.accounts.*.customSecret": { sensitive: true },
-      },
-    } as never);
-
     expect(
       isSystemAgentSensitiveConfigValue(
         'channels.synology-chat.accounts["prod.guild"]',
-        '{ customSecret: "synthetic-secret" }',
+        '{ webhookUrl: "https://gateway.invalid/webhook?token=synthetic" }',
       ),
     ).toBe(true);
+  });
+
+  it("fails closed when a dynamic config owner has no current metadata", () => {
+    expect(
+      isSystemAgentSensitiveConfigValue("plugins.entries.missing.config.opaque", "plugin-secret"),
+    ).toBe(true);
+    expect(isSystemAgentSensitiveConfigValue("channels.missing.opaque", "channel-secret")).toBe(
+      true,
+    );
   });
 });
 
 describe("redactSystemAgentConfig", () => {
-  it("fails closed for dynamic plugin secrets when runtime config is invalid", () => {
+  it("fails closed for dynamic owner secrets when the exact config is invalid", () => {
     expect(
-      redactSystemAgentConfig({
-        plugins: { entries: { custom: { config: { opaque: "plugin-secret" } } } },
-      }),
-    ).toEqual({ plugins: { entries: { custom: { config: "<redacted>" } } } });
+      redactSystemAgentConfig(
+        {
+          plugins: { entries: { "custom.plugin": { config: { opaque: "plugin-secret" } } } },
+          channels: { "custom.channel": { opaque: "channel-secret" } },
+        },
+        { valid: false },
+      ),
+    ).toEqual({
+      plugins: { entries: { "custom.plugin": { config: "<redacted>" } } },
+      channels: { "custom.channel": "<redacted>" },
+    });
+  });
+
+  it("does not trust known owner metadata for an invalid config snapshot", () => {
+    expect(
+      redactSystemAgentConfig(
+        { channels: { "synology-chat": { opaque: "invalid-channel-secret" } } },
+        { valid: false },
+      ),
+    ).toEqual({ channels: { "synology-chat": "<redacted>" } });
   });
 });

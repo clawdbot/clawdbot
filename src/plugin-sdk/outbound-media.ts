@@ -296,8 +296,10 @@ export function createHostedOutboundMediaStore(
   }
 
   async function deleteEntry(id: string): Promise<boolean> {
+    // Deletion revokes the bearer capability immediately, even when an admitted
+    // reader keeps the physical rows alive until its stream closes.
+    deferredDeletes.add(id);
     if ((activeReaders.get(id) ?? 0) > 0) {
-      deferredDeletes.add(id);
       return false;
     }
     deletingEntries.add(id);
@@ -381,11 +383,11 @@ export function createHostedOutboundMediaStore(
         return;
       }
       activeReaders.delete(id);
-      if (deferredDeletes.delete(id)) {
+      if (deferredDeletes.has(id)) {
         await withCapacityMutation(async () => await deleteEntry(id));
       }
     };
-    if (deletingEntries.has(id)) {
+    if (deferredDeletes.has(id) || deletingEntries.has(id)) {
       await close();
       return null;
     }
@@ -519,6 +521,11 @@ export function createHostedOutboundMediaStore(
       if (!id) {
         continue;
       }
+      // Capacity eviction is speculative until a candidate has no admitted
+      // readers. Skip active capabilities instead of revoking them on failure.
+      if ((activeReaders.get(id) ?? 0) > 0) {
+        continue;
+      }
       if (await deleteEntry(id)) {
         entryCount -= 1;
         chunkCount -= row.value.chunkCount;
@@ -594,7 +601,15 @@ export function createHostedOutboundMediaStore(
       });
     },
     async readMetadata(id, nowMs = Date.now()) {
+      if (deferredDeletes.has(id) || deletingEntries.has(id)) {
+        return null;
+      }
       const meta = await readMetadataRecord(id, nowMs);
+      // Deletion may linearize while the SQLite lookup is awaited; do not
+      // project metadata captured before that capability revocation.
+      if (deferredDeletes.has(id) || deletingEntries.has(id)) {
+        return null;
+      }
       return meta ? createHostedOutboundMediaMetadata(meta) : null;
     },
     readChunks,
@@ -625,6 +640,9 @@ export function createHostedOutboundMediaStore(
       }
     },
     async delete(id) {
+      // Mark the capability before entering the async mutation queue so readers
+      // cannot slip in after revocation starts but before SQLite deletion runs.
+      deferredDeletes.add(id);
       await withCapacityMutation(async () => await deleteEntry(id));
     },
     cleanupExpired,

@@ -4,6 +4,10 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -15,6 +19,7 @@ import {
   isPersistentSystemAgentOperation,
 } from "./operations.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
+import { installSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
 
@@ -60,6 +65,7 @@ const mockConfig = vi.hoisted(() => {
     exists: true,
     valid: true,
     config: initial as TestConfig,
+    pinnedConfig: undefined as TestConfig | undefined,
     sourceConfigBeforeMigrations: undefined as TestConfig | undefined,
     hash: "mock-hash-0" as string | undefined,
   };
@@ -89,6 +95,7 @@ const mockConfig = vi.hoisted(() => {
       state.exists = true;
       state.valid = true;
       state.config = {};
+      state.pinnedConfig = undefined;
       state.sourceConfigBeforeMigrations = undefined;
       state.hash = "mock-hash-0";
     },
@@ -97,18 +104,21 @@ const mockConfig = vi.hoisted(() => {
       state.exists = false;
       state.valid = false;
       state.config = {};
+      state.pinnedConfig = undefined;
       state.sourceConfigBeforeMigrations = undefined;
       state.hash = undefined;
     },
     setConfig(config: TestConfig) {
       state.config = structuredClone(config);
       state.valid = true;
+      state.pinnedConfig = undefined;
       state.sourceConfigBeforeMigrations = undefined;
     },
-    setInvalidConfig(config: TestConfig) {
+    setInvalidConfig(config: TestConfig, pinnedConfig?: TestConfig) {
       state.exists = true;
       state.valid = false;
       state.config = structuredClone(config);
+      state.pinnedConfig = pinnedConfig ? structuredClone(pinnedConfig) : undefined;
       state.sourceConfigBeforeMigrations = undefined;
     },
     setResolvedConfig(config: TestConfig, sourceConfigBeforeMigrations: TestConfig) {
@@ -117,6 +127,9 @@ const mockConfig = vi.hoisted(() => {
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
     getRuntimeConfig() {
+      if (state.pinnedConfig) {
+        return structuredClone(state.pinnedConfig);
+      }
       if (!state.valid) {
         throw new Error("invalid runtime config");
       }
@@ -266,30 +279,75 @@ describe("system agent operations", () => {
   });
 
   it("keeps invalid config reads available without exposing recovery secrets", async () => {
-    mockConfig.setInvalidConfig({ gateway: { port: 19_001, auth: { token: "recovery-secret" } } });
+    mockConfig.setInvalidConfig(
+      {
+        gateway: { port: 19_001, auth: { token: "recovery-secret" } },
+        plugins: {
+          entries: { missing: { config: { opaque: "invalid-plugin-secret" } } },
+        },
+      },
+      {},
+    );
     const { runtime, lines } = createSystemAgentTestRuntime();
     await executeSystemAgentOperation({ kind: "config-get", path: "gateway" }, runtime);
+    await executeSystemAgentOperation(
+      { kind: "config-get", path: "plugins.entries.missing" },
+      runtime,
+    );
     const output = lines.join("\n");
     expect(output).toContain('"port": 19001');
     expect(output).toContain('"token": "<redacted>"');
+    expect(output).toContain('"config": "<redacted>"');
     expect(output).not.toContain("recovery-secret");
+    expect(output).not.toContain("invalid-plugin-secret");
+  });
+
+  it("fails closed for model-visible config owned by missing plugins and channels", async () => {
+    mockConfig.setConfig({
+      plugins: {
+        entries: {
+          missing: { enabled: true, config: { opaque: "missing-plugin-secret" } },
+        },
+      },
+      channels: { missing: { enabled: true, opaque: "missing-channel-secret" } },
+    });
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    await executeSystemAgentOperation(
+      { kind: "config-get", path: "plugins.entries.missing" },
+      runtime,
+    );
+    await executeSystemAgentOperation({ kind: "config-get", path: "channels.missing" }, runtime);
+
+    const output = lines.join("\n");
+    expect(output).toContain('"enabled": true');
+    expect(output).toContain('"config": "<redacted>"');
+    expect(output).toContain('channels.missing = "<redacted>"');
+    expect(output).not.toContain("missing-plugin-secret");
+    expect(output).not.toContain("missing-channel-secret");
   });
 
   it("redacts config values marked sensitive only by active plugin metadata", async () => {
     const authorization = "Bearer plugin-only-secret";
-    mockConfig.setConfig({
+    const config = {
       plugins: {
         entries: {
           codex: { config: { appServer: { headers: { Authorization: authorization } } } },
         },
       },
-    });
+    };
+    mockConfig.setConfig(config);
+    const pluginMetadata = installSystemAgentPluginMetadataTestSnapshot(config);
     const { runtime, lines } = createSystemAgentTestRuntime();
 
-    await executeSystemAgentOperation(
-      { kind: "config-get", path: "plugins.entries.codex.config.appServer" },
-      runtime,
-    );
+    try {
+      await executeSystemAgentOperation(
+        { kind: "config-get", path: "plugins.entries.codex.config.appServer" },
+        runtime,
+      );
+    } finally {
+      pluginMetadata.restore();
+    }
 
     expect(lines.join("\n")).toContain('"headers": "<redacted>"');
     expect(lines.join("\n")).not.toContain(authorization);
@@ -298,7 +356,7 @@ describe("system agent operations", () => {
   it("keeps sensitive channel callback URLs out of model-visible config reads", async () => {
     const callbackUrl = "https://gateway.example/webhook/synology?access_token=callback-secret";
     const incomingUrl = "https://nas.example/webapi/entry.cgi?token=incoming-secret";
-    mockConfig.setConfig({
+    const config = {
       channels: {
         "synology-chat": {
           incomingUrl,
@@ -308,32 +366,40 @@ describe("system agent operations", () => {
           },
         },
       },
-    });
+    };
+    mockConfig.setConfig(config);
+    setRuntimeConfigSnapshot(config, config);
+    const pluginMetadata = installSystemAgentPluginMetadataTestSnapshot(config);
     const { runtime, lines } = createSystemAgentTestRuntime();
 
-    await executeSystemAgentOperation(
-      { kind: "config-get", path: "channels.synology-chat" },
-      runtime,
-    );
+    try {
+      await executeSystemAgentOperation(
+        { kind: "config-get", path: "channels.synology-chat" },
+        runtime,
+      );
 
-    expect(lines.join("\n")).toContain('"webhookUrl": "<redacted>"');
-    expect(lines.join("\n")).toContain('"incomingUrl": "<redacted>"');
-    expect(lines.join("\n")).not.toContain("callback-secret");
-    expect(lines.join("\n")).not.toContain("incoming-secret");
-    expect(
-      describeSystemAgentPersistentOperation({
-        kind: "config-set",
-        path: "channels.synology-chat.accounts.work.webhookUrl",
-        value: callbackUrl,
-      }),
-    ).toBe("set config channels.synology-chat.accounts.work.webhookUrl to <redacted>");
-    expect(
-      describeSystemAgentPersistentOperation({
-        kind: "config-set",
-        path: "channels.synology-chat",
-        value: `{ webhookUrl: "${callbackUrl}" }`,
-      }),
-    ).toBe("set config channels.synology-chat to <redacted>");
+      expect(lines.join("\n")).toContain('"webhookUrl": "<redacted>"');
+      expect(lines.join("\n")).toContain('"incomingUrl": "<redacted>"');
+      expect(lines.join("\n")).not.toContain("callback-secret");
+      expect(lines.join("\n")).not.toContain("incoming-secret");
+      expect(
+        describeSystemAgentPersistentOperation({
+          kind: "config-set",
+          path: "channels.synology-chat.accounts.work.webhookUrl",
+          value: callbackUrl,
+        }),
+      ).toBe("set config channels.synology-chat.accounts.work.webhookUrl to <redacted>");
+      expect(
+        describeSystemAgentPersistentOperation({
+          kind: "config-set",
+          path: "channels.synology-chat",
+          value: `{ webhookUrl: "${callbackUrl}" }`,
+        }),
+      ).toBe("set config channels.synology-chat to <redacted>");
+    } finally {
+      pluginMetadata.restore();
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("rejects an explicit new-agent model before any config write or audit", async () => {

@@ -12,10 +12,14 @@ import * as webMedia from "./web-media.js";
 
 const MEDIA_ID = "abc123abc123abc123abc123";
 
-function createStoreFixture(namespace: string) {
+function createStoreFixture(
+  namespace: string,
+  options: { createId?: () => string; maxEntries?: number } = {},
+) {
+  const maxEntries = options.maxEntries ?? 10;
   const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
     "fixture-plugin",
-    { namespace, maxEntries: 10 },
+    { namespace, maxEntries },
   );
   const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
     "fixture-plugin",
@@ -29,10 +33,10 @@ function createStoreFixture(namespace: string) {
       chunkStore,
       ttlMs: 120_000,
       resolveExpiresAtMs: () => Date.now() + 120_000,
-      createId: () => MEDIA_ID,
+      createId: options.createId ?? (() => MEDIA_ID),
       createToken: () => "token123",
       rawChunkBytes: 4,
-      maxEntries: 10,
+      maxEntries,
       maxChunkRows: 100,
     }),
   };
@@ -76,12 +80,14 @@ describe("hosted outbound media chunk streaming", () => {
     expect(Buffer.concat(chunks).toString("utf8")).toBe("image-bytes");
   });
 
-  it("defers deletion until an active chunk reader closes", async () => {
+  it("revokes new access while an admitted chunk reader finishes", async () => {
     const { chunkStore, metadataStore, store } = createStoreFixture("active-reader-media");
     await prepareFixture(store);
     const stream = await store.readChunks(MEDIA_ID);
 
     await store.delete(MEDIA_ID);
+    await expect(store.readMetadata(MEDIA_ID)).resolves.toBeNull();
+    await expect(store.readChunks(MEDIA_ID)).resolves.toBeNull();
     expect(await metadataStore.entries()).toHaveLength(1);
     expect(await chunkStore.entries()).toHaveLength(3);
 
@@ -92,6 +98,69 @@ describe("hosted outbound media chunk streaming", () => {
     expect(Buffer.concat(chunks).toString("utf8")).toBe("image-bytes");
     expect(await metadataStore.entries()).toEqual([]);
     expect(await chunkStore.entries()).toEqual([]);
+  });
+
+  it("does not return metadata when deletion starts during its lookup", async () => {
+    const { metadataStore, store } = createStoreFixture("pending-metadata-media");
+    await prepareFixture(store);
+    const stream = await store.readChunks(MEDIA_ID);
+    const originalLookup = metadataStore.lookup.bind(metadataStore);
+    let markLookupStarted: (() => void) | undefined;
+    let releaseLookup: (() => void) | undefined;
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    const lookupReleased = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    vi.spyOn(metadataStore, "lookup").mockImplementationOnce(async (key) => {
+      const result = await originalLookup(key);
+      markLookupStarted?.();
+      await lookupReleased;
+      return result;
+    });
+
+    const pendingMetadata = store.readMetadata(MEDIA_ID);
+    await lookupStarted;
+    await store.delete(MEDIA_ID);
+    releaseLookup?.();
+
+    await expect(pendingMetadata).resolves.toBeNull();
+    await stream?.close();
+  });
+
+  it("preserves an active capability when capacity cannot evict it", async () => {
+    const ids = [MEDIA_ID, "def456def456def456def456"];
+    let idIndex = 0;
+    const { metadataStore, store } = createStoreFixture("active-capacity-media", {
+      createId: () => ids[idIndex++] ?? "ffffffffffffffffffffffff",
+      maxEntries: 1,
+    });
+    await prepareFixture(store);
+    const stream = await store.readChunks(ids[0] ?? "");
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValueOnce({
+      buffer: Buffer.from("replacement"),
+      kind: "image",
+      contentType: "image/png",
+    });
+
+    await expect(
+      store.prepareUrl({
+        mediaUrl: "https://example.com/replacement.png",
+        routePath: "/hook/media/",
+        publicBaseUrl: "https://gateway.example.com",
+        maxBytes: 1024,
+      }),
+    ).rejects.toThrow("capacity is full while active readers retain entries");
+    await expect(store.readMetadata(ids[0] ?? "")).resolves.not.toBeNull();
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream?.chunks ?? []) {
+      chunks.push(chunk);
+    }
+    expect(Buffer.concat(chunks).toString("utf8")).toBe("image-bytes");
+    await expect(store.readMetadata(ids[0] ?? "")).resolves.not.toBeNull();
+    expect(await metadataStore.entries()).toHaveLength(1);
   });
 
   it("acquires the reader lease atomically with metadata lookup", async () => {
