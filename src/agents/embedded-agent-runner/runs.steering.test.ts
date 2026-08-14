@@ -69,7 +69,7 @@ describe("embedded-agent active-run steering", () => {
     await expect(heartbeatPreemption).resolves.toBe("drained");
     await expect(finalizingPreemption).resolves.toBe("drained");
     expect(heartbeatPreempt).toHaveBeenCalledOnce();
-    expect(finalizingHeartbeatPreempt).not.toHaveBeenCalled();
+    expect(finalizingHeartbeatPreempt).toHaveBeenCalledOnce();
     expect(visibleAbort).not.toHaveBeenCalled();
   });
 

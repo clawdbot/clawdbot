@@ -892,7 +892,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         });
         await candidateSettled;
         if (superseded) {
-          replyOperation.abortForSupersession();
+          replyOperation.supersede();
         } else {
           upstreamAbort.abort(new Error("caller cancelled"));
         }

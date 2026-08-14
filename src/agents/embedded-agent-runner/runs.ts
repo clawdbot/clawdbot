@@ -741,12 +741,10 @@ export async function preemptAndDrainEmbeddedHeartbeatRun(
     return "not-heartbeat";
   }
   const drainPromise = waitForCurrentEmbeddedAgentRunEnd(sessionId, timeoutMs, handle);
-  if (isEmbeddedRunHandleAbortable(sessionId, handle)) {
-    try {
-      handle.preemptByVisibleTurn();
-    } catch (err) {
-      diag.warn(`heartbeat preemption failed: sessionId=${sessionId} err=${String(err)}`);
-    }
+  try {
+    handle.preemptByVisibleTurn();
+  } catch (err) {
+    diag.warn(`heartbeat preemption failed: sessionId=${sessionId} err=${String(err)}`);
   }
   return (await drainPromise) ? "drained" : "timed-out";
 }

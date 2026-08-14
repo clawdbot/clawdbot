@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   createAgentRunRestartAbortError,
-  createAgentRunSupersededAbortError,
+  createAgentRunSupersededAbortError as createSupersededError,
   isAgentRunRestartAbortReason,
   isAgentRunSupersededAbortReason,
 } from "../../agents/run-termination.js";
@@ -49,12 +49,8 @@ import {
 } from "./reply-run-registry.state.js";
 
 type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
-type ReplyOperationAbortCode =
-  | "aborted_by_user"
-  | "aborted_for_restart"
-  | "aborted_for_supersession";
 type ReplyOperationResult = NonNullable<ReplyOperation["result"]>;
-type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
+type ReplyOperationAbortCode = Extract<ReplyOperationResult, { kind: "aborted" }>["code"];
 
 export function createReplyOperation(params: {
   sessionKey: string;
@@ -94,7 +90,7 @@ export function createReplyOperation(params: {
   let currentSessionId = sessionId;
   let phase: ReplyOperationPhase = "queued";
   let phaseBeforeGlobalLaneWait: "queued" | "running" | undefined;
-  let staleExpiryReason: ReplyOperationStaleReason | undefined;
+  let staleExpiryReason: replyRunSettle.ReplyOperationStaleReason | undefined;
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
   let clearBarrierSettlement: Promise<void> | undefined;
@@ -547,15 +543,20 @@ export function createReplyOperation(params: {
       abortOperation("restart", createAgentRunRestartAbortError(), "aborted_for_restart");
       return true;
     },
-    abortForSupersession() {
+    supersede() {
+      if (result || stateCleared) {
+        return false;
+      }
+      if (abortFrozenOperations.has(operation)) {
+        setResult({ kind: "aborted", code: "aborted_for_supersession" });
+        phase = "aborted";
+        scheduleTerminalSettle();
+        return true;
+      }
       if (!isReplyOperationAbortable(operation)) {
         return false;
       }
-      abortOperation(
-        "superseded",
-        createAgentRunSupersededAbortError(),
-        "aborted_for_supersession",
-      );
+      abortOperation("superseded", createSupersededError(), "aborted_for_supersession");
       return true;
     },
   };
@@ -725,7 +726,7 @@ export function createReplyOperation(params: {
 
 export function expireStaleReplyOperation(
   operation: ReplyOperation,
-  reason: ReplyOperationStaleReason,
+  reason: replyRunSettle.ReplyOperationStaleReason,
   options?: ReplyOperationStaleExpiryOptions,
 ): boolean {
   return expireReplyOperationByOperation.get(operation)?.(reason, options) ?? false;

@@ -1461,7 +1461,7 @@ describe("reply run registry", () => {
     operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
     operation.setPhase("running");
 
-    expect(operation.abortForSupersession()).toBe(true);
+    expect(operation.supersede()).toBe(true);
     expect(cancel).toHaveBeenCalledWith("superseded");
     expect(operation.result).toEqual({
       kind: "aborted",

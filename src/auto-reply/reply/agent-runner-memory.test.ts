@@ -112,7 +112,7 @@ function createReplyOperation(): TestReplyOperation {
     fail: vi.fn(),
     abortByUser: vi.fn(() => true),
     abortForRestart: vi.fn(() => true),
-    abortForSupersession: vi.fn(() => true),
+    supersede: vi.fn(() => true),
     markTerminalRecovery: vi.fn(),
     markAcceptedSteeredInboundAudio: vi.fn(),
     markWaitingForDeferredMaintenance: vi.fn(),

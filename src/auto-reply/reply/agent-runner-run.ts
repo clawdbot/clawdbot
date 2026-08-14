@@ -613,6 +613,7 @@ export async function runReplyAgent(
     recordReplyOperationAgentTurn(
       replyOperationRunState,
       isReplyOperationSuperseded(replyOperation) ? "superseded" : "failed",
+      replyOperation,
     );
     return await handleReplyAgentRunError(error, {
       blockReplyPipeline,

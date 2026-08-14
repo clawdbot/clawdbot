@@ -402,6 +402,7 @@ export async function executePreparedReplyAgentRun(
       : runOutcome.outcome.kind === "settled"
         ? runOutcome.outcome.status
         : "failed",
+    replyOperation,
   );
   activeSessionEntry = getActiveSessionEntry();
   activeIsNewSession = getActiveIsNewSession();

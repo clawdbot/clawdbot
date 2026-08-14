@@ -440,7 +440,7 @@ export function prepareEmbeddedAttemptStream(input: {
     cancelPendingUserInput: (resolvedBy) =>
       cancelPendingAgentQuestionForSession({ sessionKey: attempt.sessionKey, resolvedBy }),
     preemptByVisibleTurn: heartbeatReplyOperation
-      ? () => heartbeatReplyOperation.abortForSupersession()
+      ? () => heartbeatReplyOperation.supersede()
       : undefined,
     queueMessage,
     messageInjection: {
