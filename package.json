@@ -1733,6 +1733,7 @@
     "proxy:run": "node scripts/run-node.mjs proxy run",
     "proxy:start": "node scripts/run-node.mjs proxy start",
     "qa:e2e": "node --import tsx scripts/qa-e2e.ts",
+    "qa:telegram-desktop-recorder": "node --import tsx scripts/e2e/telegram-desktop-recorder.ts",
     "qa:lab:build": "vite build --config extensions/qa-lab/web/vite.config.ts",
     "qa:lab:ui": "pnpm openclaw qa ui",
     "qa:lab:up": "node --import tsx scripts/qa-lab-up.ts",

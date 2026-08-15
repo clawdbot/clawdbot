@@ -15,18 +15,40 @@ import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseStrictBooleanArg } from "../lib/arg-utils.mts";
-import { coerceErrorMessage, toStringifiedError } from "../lib/error-format.mts";
+import { coerceErrorMessage } from "../lib/error-format.mts";
 import { terminateManagedChild } from "../lib/managed-child-process.mts";
 import { sleep } from "../lib/sleep.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 import { readTextFileTail } from "./lib/text-file-utils.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
+import {
+  COMMAND_TIMEOUT_MS,
+  crabboxSshArgs,
+  createCroppedMotionPreview as createSharedCroppedMotionPreview,
+  createDesktopCrabboxWarmupArgs,
+  createMotionPreview as createSharedMotionPreview,
+  extractCrabboxLeaseId,
+  inspectCrabbox as inspectSharedCrabbox,
+  type CrabboxInspect,
+  type CommandResult,
+  type TelegramCrop,
+  renderTelegramViewCommand,
+  runCommand,
+  scpFromRemote as sharedScpFromRemote,
+  scpToRemote as sharedScpToRemote,
+  selectedCrabboxSshArgs,
+  selectCrabboxSshPort,
+  shellQuote,
+  sshRun as sharedSshRun,
+  startRemoteRecording as startSharedRemoteRecording,
+  stopRemoteRecording as stopSharedRemoteRecording,
+  TELEGRAM_DESKTOP_CROP,
+  TELEGRAM_DESKTOP_WINDOW,
+  telegramPrivatePostLink,
+} from "./telegram-desktop-crabbox.ts";
 
-type CommandResult = {
-  stderr: string;
-  stdout: string;
-};
+export { COMMAND_TIMEOUT_MS, runCommand, selectCrabboxSshPort };
 
 type GatewaySpawnSpec = {
   args: string[];
@@ -37,19 +59,6 @@ type GatewaySpawnSpec = {
 type JsonObject = Record<string, unknown>;
 
 type PreviewCrop = "telegram-window";
-
-type CrabboxInspect = {
-  host?: string;
-  id?: string;
-  slug?: string;
-  sshHost?: string;
-  sshFallbackPorts?: string[];
-  sshKey?: string;
-  sshPort?: string;
-  sshUser?: string;
-  state?: string;
-  tailscale?: unknown;
-};
 
 type Options = {
   crabboxClass: string;
@@ -186,12 +195,6 @@ const DEFAULT_SKILL_DIR = "~/.codex/skills/custom/telegram-e2e-bot-to-bot";
 const DEFAULT_CONVEX_ENV_FILE = `${DEFAULT_SKILL_DIR}/convex.local.env`;
 const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
-const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
-const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
-const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
-export const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
-const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
-const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 25;
 export const REMOTE_SETUP_COMMAND_TIMEOUT_MS = 90 * 60 * 1000;
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
@@ -200,19 +203,8 @@ export function readTelegramUserProofLogTailBytes(env: NodeJS.ProcessEnv = proce
 }
 
 const LOG_READY_TAIL_BYTES = readTelegramUserProofLogTailBytes();
-const TELEGRAM_PROOF_WINDOW = {
-  height: 1000,
-  width: 650,
-  x: 635,
-  y: 40,
-};
-const TELEGRAM_PROOF_CROP = {
-  cropWidth: 430,
-  height: TELEGRAM_PROOF_WINDOW.height,
-  width: 430,
-  x: TELEGRAM_PROOF_WINDOW.x + 220,
-  y: TELEGRAM_PROOF_WINDOW.y,
-};
+const TELEGRAM_PROOF_WINDOW = TELEGRAM_DESKTOP_WINDOW;
+const TELEGRAM_PROOF_CROP = TELEGRAM_DESKTOP_CROP;
 
 function usageText() {
   return [
@@ -765,276 +757,6 @@ export function createOpenClawCliSpawnSpec(params: {
       windowsVerbatimArguments: spec.options.windowsVerbatimArguments,
     },
   };
-}
-
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-type AppendCommandStdoutResult = { ok: true; value: string } | { ok: false; message: string };
-
-function appendCommandTextTail(current: string, chunk: string, maxChars: number): string {
-  const next = current + chunk;
-  return next.length > maxChars ? sliceUtf16Safe(next, -maxChars) : next;
-}
-
-function appendCommandStdout(
-  current: string,
-  chunk: string,
-  maxChars = COMMAND_STDOUT_MAX_CHARS,
-): AppendCommandStdoutResult {
-  const next = current + chunk;
-  if (next.length > maxChars) {
-    return { ok: false, message: `command stdout exceeded ${maxChars} characters` };
-  }
-  return { ok: true, value: next };
-}
-
-function appendCommandStderrTail(
-  current: string,
-  chunk: string,
-  maxChars = COMMAND_STDERR_TAIL_CHARS,
-): string {
-  return appendCommandTextTail(current, chunk, maxChars);
-}
-
-function commandFailureOutput(stdout: string, stderr: string): string {
-  const stdoutTail =
-    stdout.length > COMMAND_FAILURE_STDOUT_TAIL_CHARS
-      ? `\n[stdout truncated to last ${COMMAND_FAILURE_STDOUT_TAIL_CHARS} characters]\n${sliceUtf16Safe(stdout, -COMMAND_FAILURE_STDOUT_TAIL_CHARS)}`
-      : stdout;
-  return `${stdoutTail}${stderr}`;
-}
-
-function timedOutError(message: string) {
-  return Object.assign(new Error(message), { code: "ETIMEDOUT" });
-}
-
-const activeCommandChildren = new Set<ChildProcess>();
-let commandCleanupHandlersInstalled = false;
-
-function commandProcessTreeAlive(child: ChildProcess) {
-  if (!child.pid || process.platform === "win32") {
-    return child.exitCode === null && child.signalCode === null;
-  }
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    return error && typeof error === "object" && "code" in error && error.code === "EPERM";
-  }
-}
-
-async function waitForCommandProcessTreeExit(child: ChildProcess, timeoutMs: number) {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!commandProcessTreeAlive(child)) {
-      return true;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, COMMAND_PROCESS_TREE_EXIT_POLL_MS);
-    });
-  }
-  return !commandProcessTreeAlive(child);
-}
-
-async function finishTimedOutCommandProcessTree(
-  child: ChildProcess,
-  options: {
-    forceKillAt: number | undefined;
-    timeoutKillGraceMs: number;
-  },
-) {
-  if (!commandProcessTreeAlive(child)) {
-    activeCommandChildren.delete(child);
-    return;
-  }
-  const graceRemainingMs =
-    options.forceKillAt === undefined
-      ? options.timeoutKillGraceMs
-      : Math.max(0, options.forceKillAt - Date.now());
-  if (graceRemainingMs > 0) {
-    await waitForCommandProcessTreeExit(child, graceRemainingMs);
-  }
-  if (commandProcessTreeAlive(child)) {
-    terminateManagedChild(child, "SIGKILL");
-    await waitForCommandProcessTreeExit(child, options.timeoutKillGraceMs);
-  }
-  activeCommandChildren.delete(child);
-}
-
-function untrackCommandChild(child: ChildProcess) {
-  if (!commandProcessTreeAlive(child)) {
-    activeCommandChildren.delete(child);
-  }
-}
-
-function signalActiveCommandChildren(signal: NodeJS.Signals) {
-  for (const child of activeCommandChildren) {
-    terminateManagedChild(child, signal);
-  }
-}
-
-function installCommandCleanupHandlers() {
-  if (commandCleanupHandlersInstalled) {
-    return;
-  }
-  commandCleanupHandlersInstalled = true;
-  process.once("exit", () => {
-    signalActiveCommandChildren("SIGTERM");
-  });
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => {
-      signalActiveCommandChildren(signal);
-      process.kill(process.pid, signal);
-    });
-  }
-}
-
-export function runCommand(params: {
-  args: string[];
-  command: string;
-  cwd: string;
-  env?: NodeJS.ProcessEnv;
-  outputFile?: string;
-  shell?: boolean | string;
-  stdio?: "inherit" | "pipe";
-  stdin?: string;
-  timeoutKillGraceMs?: number;
-  timeoutMs?: number;
-  windowsVerbatimArguments?: boolean;
-}) {
-  return new Promise<CommandResult>((resolve, reject) => {
-    if (params.outputFile) {
-      fs.writeFileSync(params.outputFile, "");
-    }
-    const child = spawn(params.command, params.args, {
-      cwd: params.cwd,
-      detached: process.platform !== "win32",
-      env: params.env ?? process.env,
-      shell: params.shell,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsVerbatimArguments: params.windowsVerbatimArguments,
-    });
-    activeCommandChildren.add(child);
-    installCommandCleanupHandlers();
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let stdoutLimitError: string | null = null;
-    let timeoutError: Error | null = null;
-    let forceKillAt: number | undefined;
-    let killTimer: NodeJS.Timeout | undefined;
-    const timeoutMs = resolveTelegramProofTimerTimeoutMs(params.timeoutMs ?? COMMAND_TIMEOUT_MS);
-    const timeoutKillGraceMs = resolveTelegramProofTimerTimeoutMs(
-      params.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS,
-    );
-    const clearTimers = () => {
-      clearTimeout(timeout);
-      if (killTimer) {
-        clearTimeout(killTimer);
-      }
-    };
-    const timeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      timeoutError = timedOutError(
-        `${params.command} ${params.args.join(" ")} timed out after ${timeoutMs}ms\n${commandFailureOutput(
-          stdout,
-          stderr,
-        )}`,
-      );
-      terminateManagedChild(child, "SIGTERM");
-      forceKillAt = Date.now() + timeoutKillGraceMs;
-      killTimer = setTimeout(() => {
-        terminateManagedChild(child, "SIGKILL");
-      }, timeoutKillGraceMs);
-      killTimer.unref?.();
-    }, timeoutMs);
-    timeout.unref?.();
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      if (params.outputFile) {
-        fs.appendFileSync(params.outputFile, chunk);
-        stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
-      } else if (params.stdio === "inherit") {
-        stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
-      } else {
-        const appended = appendCommandStdout(stdout, chunk);
-        if (!appended.ok) {
-          stdoutLimitError = appended.message;
-          terminateManagedChild(child, "SIGKILL");
-        } else {
-          stdout = appended.value;
-        }
-      }
-      if (params.stdio === "inherit") {
-        process.stdout.write(chunk);
-      }
-    });
-    child.stderr.on("data", (chunk: string) => {
-      if (params.outputFile) {
-        fs.appendFileSync(params.outputFile, chunk);
-      }
-      stderr = appendCommandStderrTail(stderr, chunk);
-      if (params.stdio === "inherit") {
-        process.stderr.write(chunk);
-      }
-    });
-    child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      untrackCommandChild(child);
-      clearTimers();
-      reject(error);
-    });
-    child.on("close", (code, signal) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      untrackCommandChild(child);
-      if (timeoutError) {
-        const error = timeoutError;
-        clearTimers();
-        void finishTimedOutCommandProcessTree(child, {
-          forceKillAt,
-          timeoutKillGraceMs,
-        }).then(
-          () => reject(error),
-          (cleanupError: unknown) => reject(toStringifiedError(cleanupError)),
-        );
-        return;
-      }
-      clearTimers();
-      if (stdoutLimitError) {
-        reject(new Error(`${params.command} ${params.args.join(" ")} failed: ${stdoutLimitError}`));
-        return;
-      }
-      if (code === 0) {
-        resolve({ stdout, stderr });
-        return;
-      }
-      const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
-      reject(
-        new Error(
-          `${params.command} ${params.args.join(" ")} failed with ${detail}\n${commandFailureOutput(
-            stdout,
-            stderr,
-          )}`,
-        ),
-      );
-    });
-    if (params.stdin) {
-      child.stdin.end(params.stdin);
-    } else {
-      child.stdin.end();
-    }
-  });
 }
 
 function spawnLogged(command: string, args: string[], options: SpawnOptionsWithoutStdio) {
@@ -1952,32 +1674,21 @@ async function startLocalSutDaemon(params: {
   }
 }
 
-function extractLeaseId(output: string) {
-  return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
-}
-
 export function createCrabboxWarmupArgs(
   opts: Pick<
     Options,
     "crabboxClass" | "idleTimeout" | "mcpAppFixture" | "provider" | "target" | "ttl"
   >,
 ) {
-  return [
-    "warmup",
-    "--provider",
-    opts.provider,
-    "--target",
-    opts.target,
-    "--desktop",
-    "--browser",
-    "--class",
-    opts.crabboxClass,
-    "--idle-timeout",
-    opts.idleTimeout,
-    "--ttl",
-    opts.ttl,
-    ...(opts.mcpAppFixture ? ["--tailscale"] : []),
-  ];
+  return createDesktopCrabboxWarmupArgs({
+    browser: true,
+    crabboxClass: opts.crabboxClass,
+    idleTimeout: opts.idleTimeout,
+    provider: opts.provider,
+    tailscale: opts.mcpAppFixture,
+    target: opts.target,
+    ttl: opts.ttl,
+  });
 }
 
 async function warmupCrabbox(opts: Options, root: string) {
@@ -1987,7 +1698,7 @@ async function warmupCrabbox(opts: Options, root: string) {
     cwd: root,
     stdio: "inherit",
   });
-  const leaseId = extractLeaseId(`${result.stdout}\n${result.stderr}`);
+  const leaseId = extractCrabboxLeaseId(`${result.stdout}\n${result.stderr}`);
   if (!leaseId) {
     throw new Error("Crabbox warmup did not print a lease id.");
   }
@@ -2001,27 +1712,15 @@ async function createMotionPreview(params: {
   root: string;
   videoPath: string;
 }) {
-  const preview = await runCommand({
-    command: params.opts.crabboxBin,
-    args: [
-      "media",
-      "preview",
-      "--input",
-      params.videoPath,
-      "--output",
-      params.motionGifPath,
-      "--fps",
-      String(params.opts.previewFps),
-      "--width",
-      String(params.opts.previewWidth),
-      "--trimmed-video-output",
-      params.motionVideoPath,
-      "--json",
-    ],
+  return await createSharedMotionPreview({
+    crabboxBin: params.opts.crabboxBin,
     cwd: params.root,
-    stdio: "inherit",
+    fps: params.opts.previewFps,
+    gifPath: params.motionGifPath,
+    trimmedVideoPath: params.motionVideoPath,
+    videoPath: params.videoPath,
+    width: params.opts.previewWidth,
   });
-  return JSON.parse(preview.stdout) as JsonObject;
 }
 
 function previewCrop(opts: Options) {
@@ -2031,216 +1730,48 @@ function previewCrop(opts: Options) {
 }
 
 async function createCroppedMotionPreview(params: {
-  crop: typeof TELEGRAM_PROOF_CROP;
+  crop: TelegramCrop;
   croppedGifPath: string;
   croppedVideoPath: string;
   opts: Options;
   root: string;
   videoPath: string;
 }) {
-  const crop = `crop=${params.crop.width}:${params.crop.height}:${params.crop.x}:${params.crop.y}`;
-  const scale = `scale=${params.crop.cropWidth}:-2:flags=lanczos`;
-  await runCommand({
-    command: "ffmpeg",
-    args: [
-      "-y",
-      "-hide_banner",
-      "-loglevel",
-      "warning",
-      "-i",
-      params.videoPath,
-      "-vf",
-      `${crop},${scale}`,
-      "-pix_fmt",
-      "yuv420p",
-      params.croppedVideoPath,
-    ],
+  return await createSharedCroppedMotionPreview({
+    crop: params.crop,
+    croppedGifPath: params.croppedGifPath,
+    croppedVideoPath: params.croppedVideoPath,
     cwd: params.root,
-    stdio: "inherit",
-  });
-  await runCommand({
-    command: "ffmpeg",
-    args: [
-      "-y",
-      "-hide_banner",
-      "-loglevel",
-      "warning",
-      "-i",
-      params.videoPath,
-      "-filter_complex",
-      `${crop},fps=${params.opts.previewFps},${scale},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`,
-      params.croppedGifPath,
-    ],
-    cwd: params.root,
-    stdio: "inherit",
-  });
-  return {
-    crop,
     fps: params.opts.previewFps,
-    outputWidth: params.crop.cropWidth,
-  };
+    videoPath: params.videoPath,
+  });
 }
 
 async function inspectCrabbox(opts: Options, root: string, leaseId: string) {
-  const result = await runCommand({
-    command: opts.crabboxBin,
-    args: [
-      "inspect",
-      "--provider",
-      opts.provider,
-      "--target",
-      opts.target,
-      "--id",
-      leaseId,
-      "--json",
-    ],
+  return await inspectSharedCrabbox({
+    crabboxBin: opts.crabboxBin,
     cwd: root,
+    leaseId,
+    provider: opts.provider,
+    target: opts.target,
   });
-  return JSON.parse(result.stdout) as CrabboxInspect;
-}
-
-function crabboxSshPortCandidates(inspect: Pick<CrabboxInspect, "sshFallbackPorts" | "sshPort">) {
-  const ports = [inspect.sshPort?.trim() || "22", ...(inspect.sshFallbackPorts ?? [])];
-  return [...new Set(ports.map((port) => port.trim()).filter(Boolean))];
-}
-
-function sshArgs(inspect: CrabboxInspect, sshPort = inspect.sshPort?.trim() || "22") {
-  const sshHost = inspect.sshHost || inspect.host;
-  if (!sshHost || !inspect.sshKey || !inspect.sshUser) {
-    throw new Error("Crabbox inspect output is missing SSH details.");
-  }
-  return {
-    base: [
-      "-i",
-      inspect.sshKey,
-      "-p",
-      sshPort,
-      "-o",
-      "IdentitiesOnly=yes",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "StrictHostKeyChecking=accept-new",
-      "-o",
-      "ConnectTimeout=15",
-    ],
-    scpBase: [
-      "-i",
-      inspect.sshKey,
-      "-P",
-      sshPort,
-      "-o",
-      "IdentitiesOnly=yes",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "StrictHostKeyChecking=accept-new",
-      "-o",
-      "ConnectTimeout=15",
-    ],
-    sshPort,
-    target: `${inspect.sshUser}@${sshHost}`,
-  };
-}
-
-function isTransientSshFailure(error: unknown) {
-  const message = coerceErrorMessage(error);
-  return /Connection (?:closed|reset)|Operation timed out|Connection timed out/u.test(message);
-}
-
-function isSshConnectionFailure(error: unknown) {
-  const message = coerceErrorMessage(error);
-  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-  return (
-    code === "ETIMEDOUT" ||
-    isTransientSshFailure(error) ||
-    /Connection refused|Network is unreachable|No route to host/u.test(message)
-  );
-}
-
-export async function selectCrabboxSshPort(params: {
-  inspect: Pick<CrabboxInspect, "sshFallbackPorts" | "sshPort">;
-  probe: (port: string) => Promise<void>;
-}) {
-  let lastError: unknown;
-  for (const port of crabboxSshPortCandidates(params.inspect)) {
-    try {
-      await params.probe(port);
-      return port;
-    } catch (error) {
-      if (!isSshConnectionFailure(error)) {
-        throw error;
-      }
-      lastError = error;
-    }
-  }
-  throw lastError;
-}
-
-async function runRemoteCommand(params: {
-  args: string[];
-  command: string;
-  cwd: string;
-  outputFile?: string;
-  stdio?: "inherit" | "pipe";
-  timeoutMs?: number;
-}) {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
-    try {
-      return await runCommand(params);
-    } catch (error) {
-      lastError = error;
-      if (attempt === 4 || !isTransientSshFailure(error)) {
-        throw error;
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, attempt * 3000);
-      });
-    }
-  }
-  throw lastError;
-}
-
-const selectedSshPorts = new WeakMap<CrabboxInspect, string>();
-
-async function selectedSshArgs(root: string, inspect: CrabboxInspect) {
-  let sshPort = selectedSshPorts.get(inspect);
-  if (!sshPort) {
-    // Probe with a no-op so fallback selection cannot replay a remote command or file transfer.
-    sshPort = await selectCrabboxSshPort({
-      inspect,
-      probe: async (port) => {
-        const ssh = sshArgs(inspect, port);
-        await runCommand({
-          args: [...ssh.base, ssh.target, "exit 0"],
-          command: "ssh",
-          cwd: root,
-        });
-      },
-    });
-    selectedSshPorts.set(inspect, sshPort);
-  }
-  return sshArgs(inspect, sshPort);
 }
 
 async function scpToRemote(root: string, inspect: CrabboxInspect, local: string, remote: string) {
-  const ssh = await selectedSshArgs(root, inspect);
-  await runRemoteCommand({
-    command: "scp",
-    args: [...ssh.scpBase, local, `${ssh.target}:${remote}`],
+  await sharedScpToRemote({
     cwd: root,
-    stdio: "inherit",
+    inspect,
+    local,
+    remote,
   });
 }
 
 async function scpFromRemote(root: string, inspect: CrabboxInspect, remote: string, local: string) {
-  const ssh = await selectedSshArgs(root, inspect);
-  await runRemoteCommand({
-    command: "scp",
-    args: [...ssh.scpBase, `${ssh.target}:${remote}`, local],
+  await sharedScpFromRemote({
     cwd: root,
-    stdio: "inherit",
+    inspect,
+    local,
+    remote,
   });
 }
 
@@ -2250,19 +1781,17 @@ async function sshRun(
   remoteCommand: string,
   options: { outputFile?: string; timeoutMs?: number } = {},
 ) {
-  const ssh = await selectedSshArgs(root, inspect);
-  return await runRemoteCommand({
-    command: "ssh",
-    args: [...ssh.base, ssh.target, remoteCommand],
+  return await sharedSshRun({
+    command: remoteCommand,
     cwd: root,
+    inspect,
     outputFile: options.outputFile,
-    stdio: "inherit",
     timeoutMs: options.timeoutMs,
   });
 }
 
 export function renderTailscaleSshProxy(params: { gatewayPort: number; inspect: CrabboxInspect }) {
-  const ssh = sshArgs(params.inspect);
+  const ssh = crabboxSshArgs(params.inspect);
   return `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 
@@ -2297,7 +1826,7 @@ async function startTailscaleFunnelBridge(params: {
   // Keep the SUT local while letting its real Gateway lifecycle own Funnel on
   // the Tailscale-enabled desktop lease; no Tailscale credential leaves Crabbox.
   const proxyPath = path.join(params.localRoot, "tailscale");
-  const ssh = await selectedSshArgs(params.localRoot, params.inspect);
+  const ssh = await selectedCrabboxSshArgs(params.localRoot, params.inspect, runCommand);
   await writeExecutable(
     proxyPath,
     renderTailscaleSshProxy({
@@ -2865,40 +2394,25 @@ EOF
 }
 
 async function startRemoteRecording(root: string, inspect: CrabboxInspect, opts: Options) {
-  const command = `set -euo pipefail
-export DISPLAY="\${DISPLAY:-:99}"
-root=${REMOTE_ROOT}
-video="$root/session.mp4"
-log="$root/ffmpeg.log"
-pid_file="$root/ffmpeg.pid"
-rm -f "$video" "$log" "$pid_file"
-size="$(xdpyinfo | awk '/dimensions:/ {size=$2} END {if (!size) exit 1; print size}')"
-nohup ffmpeg -y -hide_banner -loglevel warning -f x11grab -framerate ${opts.recordFps} -video_size "$size" -i "$DISPLAY" -pix_fmt yuv420p "$video" >"$log" 2>&1 &
-echo $! >"$pid_file"`;
-  await sshRun(root, inspect, command);
-  return {
-    log: `${REMOTE_ROOT}/ffmpeg.log`,
-    pidFile: `${REMOTE_ROOT}/ffmpeg.pid`,
-    remoteVideo: `${REMOTE_ROOT}/session.mp4`,
-  };
+  const paths = await startSharedRemoteRecording({
+    cwd: root,
+    inspect,
+    paths: {
+      ffmpegLog: `${REMOTE_ROOT}/ffmpeg.log`,
+      ffmpegPid: `${REMOTE_ROOT}/ffmpeg.pid`,
+      video: `${REMOTE_ROOT}/session.mp4`,
+    },
+    recordFps: opts.recordFps,
+  });
+  return { log: paths.ffmpegLog, pidFile: paths.ffmpegPid, remoteVideo: paths.video };
 }
 
 async function stopRemoteRecording(root: string, inspect: CrabboxInspect, session: SessionFile) {
-  await sshRun(
-    root,
+  await stopSharedRemoteRecording({
+    cwd: root,
     inspect,
-    `set -euo pipefail
-pid_file=${shellQuote(session.recorder.pidFile)}
-if [ -s "$pid_file" ]; then
-  pid="$(cat "$pid_file")"
-  kill -INT "$pid" >/dev/null 2>&1 || true
-  for _ in $(seq 1 20); do
-    kill -0 "$pid" >/dev/null 2>&1 || exit 0
-    sleep 0.5
-  done
-  kill -TERM "$pid" >/dev/null 2>&1 || true
-fi`,
-  );
+    pidFile: session.recorder.pidFile,
+  });
 }
 
 async function terminateRemoteDesktopSession(root: string, inspect: CrabboxInspect) {
@@ -3435,35 +2949,12 @@ export async function restartSessionGateway(root: string, opts: Options, outputD
   return { gatewayPort, logOffset: offset, status: "pass" };
 }
 
-function telegramPrivatePostLink(groupId: string, messageId: string) {
-  if (!/^-100\d+$/u.test(groupId)) {
-    throw new Error(`Telegram privatepost links require a -100 group id, got ${groupId}.`);
-  }
-  return `tg://privatepost?channel=${groupId.slice(4)}&post=${messageId}`;
-}
-
 function renderProofViewCommand(link: string) {
-  return `set -euo pipefail
-export DISPLAY="\${DISPLAY:-:99}"
-root=${REMOTE_ROOT}
-win="$(wmctrl -lxG | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"
-if [ -z "$win" ]; then
-  echo "Telegram Desktop window not found." >&2
-  exit 1
-fi
-wmctrl -ir "$win" -b remove,maximized_vert,maximized_horz,fullscreen
-wmctrl -ir "$win" -e 0,${TELEGRAM_PROOF_WINDOW.x},${TELEGRAM_PROOF_WINDOW.y},${TELEGRAM_PROOF_WINDOW.width},${TELEGRAM_PROOF_WINDOW.height}
-telegram="$root/Telegram/Telegram"
-test -x "$telegram"
-set +e
-timeout 5 "$telegram" -workdir "$root/desktop" ${shellQuote(link)}
-status="$?"
-set -e
-if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-  exit "$status"
-fi
-sleep 1
-wmctrl -lxG | awk 'tolower($0) ~ /telegramdesktop/'`;
+  return renderTelegramViewCommand({
+    binary: `${REMOTE_ROOT}/Telegram/Telegram`,
+    link,
+    workdir: `${REMOTE_ROOT}/desktop`,
+  });
 }
 
 async function viewSession(root: string, opts: Options, outputDir: string) {

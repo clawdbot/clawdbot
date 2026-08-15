@@ -199,6 +199,35 @@ scenario observed, not the live Slack UI; `slack-desktop-smoke.png` is only
 proof of Slack Web itself when the lease's browser profile was already logged
 in.
 
+### Telegram Desktop recorder
+
+The Telegram Desktop recorder gives Mantis native visual evidence without
+driving OpenClaw or Telegram messages. The caller supplies `--user-driver`,
+starts and drives the SUT, then tells the recorder which message to show.
+
+Start a fresh authorized desktop and begin recording:
+
+```bash
+pnpm qa:telegram-desktop-recorder start \
+  --output-dir .artifacts/qa-e2e/telegram-desktop \
+  --chat -1001234567890 \
+  --user-driver "python3 /path/to/telegram-user-driver.py" \
+  --json
+```
+
+Use `view --session <recorder.json> --message-id <id>` to open a recorded
+group post. Use `screenshot --session <recorder.json>` for a still image. Run
+`stop --session <recorder.json> --crop telegram-window` to copy the recording
+and logs, build motion GIFs, terminate the Telegram Desktop authorization, and
+release the Crabbox lease. Add `--keep-box` only when the lease must remain
+available for WebVNC inspection.
+
+The Crabbox golden image must provide an executable Telegram Desktop at
+`/opt/Telegram/Telegram`, a readable desktop version marker, `wmctrl`,
+`xdotool`, `scrot`, `ffmpeg`, `zbarimg`, and `xdpyinfo`, plus a reachable
+`DISPLAY=:99`. Recorder startup fails when this contract is incomplete. It
+does not install packages or download replacements.
+
 ### `telegram-desktop-builder`
 
 ```bash
