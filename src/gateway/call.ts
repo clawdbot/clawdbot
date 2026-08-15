@@ -756,7 +756,9 @@ function ensureGatewaySupportsRequiredCapabilities(params: {
   attemptedMethod: string;
 }): void {
   const required = (params.requiredCapabilities ?? []).map((entry) => entry.trim()).filter(Boolean);
-  if (required.length === 0) return;
+  if (required.length === 0) {
+    return;
+  }
   const supported = new Set(
     (params.capabilities ?? []).map((entry) => entry.trim()).filter(Boolean),
   );

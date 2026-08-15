@@ -306,15 +306,14 @@ async function signalGatewayRestart(
       `gateway lock identity does not match the verified listener on port ${port}; refusing an ambiguous restart`,
     );
   }
-  const usesTargetedRestartRpc = Boolean(previousLockIdentity?.ownerId);
-  const intentWritten = usesTargetedRestartRpc
+  const intentWritten = previousLockIdentity?.ownerId
     ? false
     : writeGatewayRestartIntentSync({
         targetPid: pid,
         reason: "gateway.restart",
         ...(params.restartIntent ? { intent: params.restartIntent } : {}),
       });
-  if (requiresTargetedDelivery && !usesTargetedRestartRpc && !intentWritten) {
+  if (requiresTargetedDelivery && !previousLockIdentity?.ownerId && !intentWritten) {
     throw new Error("failed to persist the gateway restart intent");
   }
   try {
@@ -329,7 +328,7 @@ async function signalGatewayRestart(
         );
       }
     }
-    if (usesTargetedRestartRpc && previousLockIdentity?.ownerId) {
+    if (previousLockIdentity?.ownerId) {
       const result = await callGatewayCli<{ pid: number }>({
         method: "gateway.restart.request",
         params: {
@@ -345,7 +344,7 @@ async function signalGatewayRestart(
         ignoreEnvUrlOverride: true,
         timeoutMs: 10_000,
       });
-      if (result.pid !== pid) throw new Error("invalid restart acknowledgement");
+      expectDefined(result.pid === pid ? result : undefined, "invalid restart acknowledgement");
     } else if (isWindows) {
       // Gateways started before lock owner IDs were introduced do not understand the
       // targeted payload. The exact loopback port plus the revalidated legacy lock is
@@ -372,7 +371,7 @@ async function signalGatewayRestart(
   appendGatewayLifecycleAudit({
     action: "restart",
     source: params.auditSource,
-    mode: usesTargetedRestartRpc || isWindows ? "rpc" : "sigusr1",
+    mode: previousLockIdentity?.ownerId || isWindows ? "rpc" : "sigusr1",
     pid,
   });
   return {
@@ -405,8 +404,7 @@ function isGatewaySignalRestartResult(
 }
 
 async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promise<boolean> {
-  const json = Boolean(opts.json);
-  const { emit, fail } = createDaemonActionContext({ action: "restart", json });
+  const { emit, fail } = createDaemonActionContext({ action: "restart", json: Boolean(opts.json) });
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
   const lockIdentity = await readActiveGatewayLockIdentity().catch(() => undefined);
   if (!lockIdentity?.ownerId) {
@@ -417,12 +415,13 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
     );
     return false;
   }
-  const port = lockIdentity.port;
-  if (opts.safe) return await runSafeGatewayRestart(opts, lockIdentity);
+  if (opts.safe) {
+    return await runSafeGatewayRestart(opts, { ...lockIdentity, ownerId: lockIdentity.ownerId });
+  }
 
   let signaled: Awaited<ReturnType<typeof signalGatewayRestart>>;
   try {
-    signaled = await signalGatewayRestart(port, {
+    signaled = await signalGatewayRestart(lockIdentity.port, {
       restartIntent,
       enforceRestartConfig: false,
       processLabel: "externally supervised",
@@ -435,14 +434,14 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
   }
   if (!signaled) {
     fail(
-      `No verified gateway process is listening on port ${port}. ${formatExternalSupervisorActionRequired("start the gateway")}`,
+      `No verified gateway process is listening on port ${lockIdentity.port}. ${formatExternalSupervisorActionRequired("start the gateway")}`,
     );
     return false;
   }
 
   const healthWait = await resolveRestartListenerHealthWait(restartIntent);
   const health = await waitForGatewayHealthyListener({
-    port,
+    port: lockIdentity.port,
     attempts: healthWait.attempts,
     delayMs: POST_RESTART_HEALTH_DELAY_MS,
     previousLockIdentity: signaled.previousLockIdentity,
@@ -459,7 +458,7 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
     result: signaled.result,
     message: signaled.message,
   });
-  if (!json) {
+  if (!opts.json) {
     defaultRuntime.log(signaled.message);
   }
   return true;
