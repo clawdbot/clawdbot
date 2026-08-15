@@ -24,6 +24,20 @@ it.skipIf(process.platform !== "darwin")(
     const runtimeRoot = path.join(archiveRoot, "tools", runtimeDirectory);
     const nodePath = path.join(runtimeRoot, "bin", "node");
     const entryPath = path.join(runtimeRoot, "lib", "node_modules", "openclaw", "dist", "entry.js");
+    const codexEntryPath = path.join(
+      runtimeRoot,
+      "lib",
+      "node_modules",
+      "openclaw",
+      "dist",
+      "extensions",
+      "codex",
+      "node_modules",
+      "@openai",
+      "codex",
+      "bin",
+      "codex.js",
+    );
     const commit = "a".repeat(40);
     const archivePath = path.join(root, "prewarmed-runtime-arm64.tar.gz");
     const manifestPath = path.join(root, "prewarmed-runtime.json");
@@ -39,6 +53,9 @@ it.skipIf(process.platform !== "darwin")(
     );
     chmodSync(nodePath, 0o755);
     writeFileSync(entryPath, "// fixture\n");
+    mkdirSync(path.dirname(codexEntryPath), { recursive: true });
+    writeFileSync(codexEntryPath, '#!/usr/bin/env bash\necho "codex-cli 0.147.0"\n');
+    chmodSync(codexEntryPath, 0o755);
     const packed = spawnSync(
       "/usr/bin/tar",
       ["-czf", archivePath, "-C", archiveRoot, `tools/${runtimeDirectory}`],
@@ -101,5 +118,17 @@ it.skipIf(process.platform !== "darwin")(
     });
     expect(version.status, version.stderr).toBe(0);
     expect(version.stdout.trim()).toBe(`OpenClaw 2026.8.1 (${commit})`);
+    const codexVersion = spawnSync(
+      path.join(prefix, "tools", "node", "bin", "codex"),
+      ["--version"],
+      {
+        encoding: "utf8",
+      },
+    );
+    expect(codexVersion.status, codexVersion.stderr).toBe(0);
+    expect(codexVersion.stdout.trim()).toBe("codex-cli 0.147.0");
+    expect(readFileSync(path.join(prefix, "bin", "openclaw"), "utf8")).toContain(
+      `export PATH="${path.join(prefix, "tools", "node", "bin")}:${path.join(prefix, "bin")}:\${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"`,
+    );
   },
 );
