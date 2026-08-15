@@ -145,30 +145,21 @@ class DirectCuaDriverSession implements CuaDriverSession {
     const session = isWindow ? this.windowSession : this.desktopSession;
     const publicSession = isWindow ? this.windowPublicSession : this.desktopPublicSession;
     const captureScope = isWindow ? this.sdk.CaptureScope.Window : this.sdk.CaptureScope.Desktop;
-    const current = isWindow ? this.windowStartPromise : this.desktopStartPromise;
+    const startedKey = isWindow ? "windowStarted" : "desktopStarted";
+    const startPromiseKey = isWindow ? "windowStartPromise" : "desktopStartPromise";
+    const current = this[startPromiseKey];
     if (!current) {
       const start = session
         .startSession({ session: publicSession, captureScope }, asyncOptions(signal))
         .then(() => {
-          if (isWindow) {
-            this.windowStarted = true;
-          } else {
-            this.desktopStarted = true;
-          }
+          this[startedKey] = true;
         });
-      if (isWindow) {
-        this.windowStartPromise = start;
-      } else {
-        this.desktopStartPromise = start;
-      }
+      this[startPromiseKey] = start;
       try {
         await start;
       } catch (error) {
-        if (isWindow && this.windowStartPromise === start) {
-          this.windowStartPromise = undefined;
-        }
-        if (!isWindow && this.desktopStartPromise === start) {
-          this.desktopStartPromise = undefined;
+        if (this[startPromiseKey] === start) {
+          this[startPromiseKey] = undefined;
         }
         throw error;
       }
