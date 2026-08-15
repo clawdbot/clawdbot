@@ -8906,6 +8906,10 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const releasingDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
 
     expect(nightly).toContain('-f expected_sha="$SHA"');
+    expectTextToIncludeAll(liveUpdater, [
+      '--sha "$MAIN_SHA"',
+      '--workflow-sha "$MAIN_SHA"',
+    ]);
     for (const text of [releaseCi, fullReleaseDocs, releasingDocs]) {
       expectTextToIncludeAll(text, [
         'RELEASE_SHA="$(git rev-parse HEAD)"',

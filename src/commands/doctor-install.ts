@@ -36,7 +36,50 @@ export function noteSourceInstallIssues(root: string | null) {
     warnings.push("- tsx binary is missing for source runs. Run: pnpm install.");
   }
 
+  warnings.push(...detectSelfLinkWarnings(root));
+
   if (warnings.length > 0) {
     note(warnings.join("\n"), "Install");
   }
+}
+
+const SELF_LINK_RECOVERY =
+  "Inspect the diff: git diff package.json pnpm-workspace.yaml. Manually revert only the self-referential link: lines, then reinstall: pnpm install. Never run pnpm link/npm link inside a deployment checkout.";
+
+/** Detects self-referential `openclaw: link:` damage left by link commands run inside a source checkout. */
+function detectSelfLinkWarnings(root: string): string[] {
+  const warnings: string[] = [];
+
+  const packageJsonPath = path.join(root, "package.json");
+  if (fs.existsSync(packageJsonPath)) {
+    try {
+      // SAFETY: JSON.parse of a package.json file yields an object with optional dependency maps.
+      const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const selfLink = [manifest.dependencies, manifest.devDependencies].some(
+        (deps) => typeof deps?.openclaw === "string" && deps.openclaw.startsWith("link:"),
+      );
+      if (selfLink) {
+        warnings.push(
+          `- package.json has a self-referential "openclaw": "link:" dependency, which breaks frozen pnpm installs (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH). ${SELF_LINK_RECOVERY}`,
+        );
+      }
+    } catch {
+      // Unparseable package.json is reported by other checks; skip link detection.
+    }
+  }
+
+  const workspacePath = path.join(root, "pnpm-workspace.yaml");
+  if (fs.existsSync(workspacePath)) {
+    const workspaceYaml = fs.readFileSync(workspacePath, "utf8");
+    if (/^\s*openclaw:\s*['"]?link:/m.test(workspaceYaml)) {
+      warnings.push(
+        `- pnpm-workspace.yaml contains a self-referential "openclaw: link:" entry, which breaks frozen pnpm installs (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH). ${SELF_LINK_RECOVERY}`,
+      );
+    }
+  }
+
+  return warnings;
 }
