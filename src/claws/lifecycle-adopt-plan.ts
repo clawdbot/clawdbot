@@ -15,6 +15,24 @@ type AdoptableTargetState =
   | { state: "unsafe" }
   | { state: "adoptable"; digest: string };
 
+type WorkspaceDiskState =
+  | { state: "absent" }
+  | { state: "uninspectable" }
+  | { state: "present"; isDirectory: boolean };
+
+// Only ENOENT proves absence. Permission, symlink-loop, and IO failures leave the path unknown, and
+// planning must not read unknown as free space: apply already refuses an uninspectable workspace
+// (`workspace_parent_failed` in add.ts), so a plan that approves one strands the operator mid-install.
+async function readWorkspaceDiskState(workspace: string): Promise<WorkspaceDiskState> {
+  try {
+    return { state: "present", isDirectory: (await lstat(workspace)).isDirectory() };
+  } catch (error) {
+    const absent =
+      typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+    return absent ? { state: "absent" } : { state: "uninspectable" };
+  }
+}
+
 function adoptionBlocker(path: string, message: string): ClawDiagnostic {
   return { level: "error", code: "workspace_file_conflict", phase: "plan", path, message };
 }
@@ -47,12 +65,36 @@ export async function planWorkspaceAdoption(params: {
   action: ClawAddPlanAction;
   blockers: ClawDiagnostic[];
 }> {
-  const workspaceDiskState = await lstat(params.workspace).catch(() => undefined);
-  const workspaceExistsOnDisk = workspaceDiskState !== undefined;
+  const disk = await readWorkspaceDiskState(params.workspace);
+  if (disk.state === "uninspectable") {
+    const message = `Workspace ${JSON.stringify(params.workspace)} cannot be inspected; adoption requires a workspace path this account can read.`;
+    return {
+      adopted: false,
+      blockers: [
+        {
+          level: "error",
+          code: "workspace_parent_failed",
+          phase: "plan",
+          path: "$.workspace",
+          message,
+        },
+      ],
+      action: {
+        kind: "workspace",
+        id: params.agentId,
+        action: "create",
+        target: params.workspace,
+        details: { expectedState: "uninspectable" },
+        blocked: true,
+        reason: message,
+      },
+    };
+  }
+  const workspaceExistsOnDisk = disk.state === "present";
   const adopted =
     params.requested &&
-    workspaceExistsOnDisk &&
-    workspaceDiskState.isDirectory() &&
+    disk.state === "present" &&
+    disk.isDirectory &&
     !params.configuredWorkspaceConflict;
   const blocked =
     !adopted &&
