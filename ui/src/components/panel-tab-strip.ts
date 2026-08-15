@@ -179,12 +179,9 @@ export function renderPanelTabStrip(params: {
         (tab) => tab.id,
         (tab, index) => {
           const selected = tab.id === params.activeId;
-          const nextTab = params.tabs[index + 1];
-          const showSeparator =
-            params.separateTabs &&
-            nextTab !== undefined &&
-            tab.id !== params.activeId &&
-            nextTab.id !== params.activeId;
+          // Every gap keeps its separator so activating a tab cannot reflow the
+          // row; the pair touching the active tab is faded out in CSS instead.
+          const showSeparator = params.separateTabs === true && index < params.tabs.length - 1;
           const tabContent = html`
             ${tab.icon == null || tab.icon === nothing
               ? nothing

@@ -342,6 +342,14 @@ openclaw-chat-sidebar-region,
   height: 12px;
   margin: 0 5px;
   background: color-mix(in srgb, var(--muted) 20%, transparent);
+  transition: opacity 120ms ease;
+}
+
+/* Hide, never unmount: the separators bracketing the active pill keep their
+   width, otherwise switching tabs shifts every neighbour horizontally. */
+.side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close + .tabstrip-separator,
+.side-panel__header .tabstrip-separator:has(+ .tabstrip-tab[active]) {
+  opacity: 0;
 }
 
 .side-panel__header .tabstrip-tab:is(.is-drop-before, .is-drop-after)::after {
@@ -514,7 +522,8 @@ openclaw-chat-sidebar-region,
 
 @media (prefers-reduced-motion: reduce) {
   .side-panel__header .tabstrip-tab::part(base),
-  .side-panel__header .tabstrip-tab__close {
+  .side-panel__header .tabstrip-tab__close,
+  .side-panel__header .tabstrip-separator {
     transition: none;
   }
 }
