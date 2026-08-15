@@ -307,25 +307,19 @@ struct MacNodeModeCoordinatorTests {
     @Test @MainActor func `queued failure from replaced worker does not penalize replacement`() async throws {
         let worker = CoordinatorNodeHostWorkerProbe()
         let session = GatewayNodeSession()
-        let notificationCenter = NotificationCenter()
         let coordinator = MacNodeModeCoordinator(
             session: session,
             runtime: MacNodeRuntime(nodeHostWorker: worker),
-            nodeHostWorker: worker,
-            notificationCenter: notificationCenter,
-            observeNotifications: true)
+            nodeHostWorker: worker)
         let command = ["/usr/local/bin/openclaw", "node", "worker"]
 
         try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
         await coordinator.handleNodeHostConfigurationChangeForTesting()
         try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
 
-        // This models the old process's notification reaching MainActor after
-        // configuration replacement has installed the successor input.
-        notificationCenter.post(
-            name: .openclawNodeHostWorkerFailed,
-            object: NSNumber(value: UInt64.zero))
-        try await Task.sleep(for: .milliseconds(10))
+        // Generation zero belongs to the replaced process. Handle it only after
+        // the successor input is installed so the ordering is deterministic.
+        coordinator.handleNodeHostWorkerFailureForTesting(configurationGeneration: .zero)
 
         try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
         await coordinator.stopAndWait()

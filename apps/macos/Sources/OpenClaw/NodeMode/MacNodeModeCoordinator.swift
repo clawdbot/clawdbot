@@ -849,8 +849,9 @@ final class MacNodeModeCoordinator: NSObject {
         self.activeNodeHostWorkerInput = input
     }
 
-    func handleNodeHostWorkerFailureForTesting() {
-        self.handleNodeHostWorkerFailure(configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
+    func handleNodeHostWorkerFailureForTesting(configurationGeneration: UInt64? = nil) {
+        self.handleNodeHostWorkerFailure(
+            configurationGeneration: configurationGeneration ?? self.nodeHostWorkerConfigurationGeneration)
     }
 
     func waitForNodeHostWorkerRetryForTesting() async {

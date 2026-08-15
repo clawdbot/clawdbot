@@ -429,7 +429,9 @@ struct MacNodeHostWorkerTests {
     @Test func `ready worker exit notifies its route owner`() async throws {
         try await confirmation("unexpected worker exit") { confirmed in
             let exitGate = AsyncTestGate()
-            let worker = MacNodeHostWorker(session: GatewayNodeSession()) { _ in
+            let expectedGeneration: UInt64 = 42
+            let worker = MacNodeHostWorker(session: GatewayNodeSession()) { generation in
+                #expect(generation == expectedGeneration)
                 confirmed()
                 exitGate.open()
             }
@@ -440,7 +442,8 @@ struct MacNodeHostWorkerTests {
             """
 
             _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-                command: ["/bin/sh", "-c", script]))
+                command: ["/bin/sh", "-c", script],
+                configurationGeneration: expectedGeneration))
             await exitGate.wait()
         }
     }
