@@ -867,6 +867,7 @@ test("write-scoped operators manage chat organization but not admin session sett
     expect(reordered.payload?.groups.map((group) => group.name)).toEqual(["Someday", "Travel"]);
     expect(reordered.payload?.sectionOrder).toEqual(["work", "category:Travel", "ungrouped"]);
 
+    const canonicalDefaultAgentWorkspace = await fs.realpath(defaultAgentWorkspace);
     const defaultsUpdated = await rpcReq<{
       ok: true;
       defaults: Array<{ name: string; cwd?: string; worktree?: boolean }>;
@@ -878,7 +879,7 @@ test("write-scoped operators manage chat organization but not admin session sett
     expect(defaultsUpdated.ok).toBe(true);
     expect(defaultsUpdated.payload?.defaults).toContainEqual({
       name: "Travel",
-      cwd: defaultAgentWorkspace,
+      cwd: canonicalDefaultAgentWorkspace,
       worktree: true,
     });
     const renamedGroup = await rpcReq<{
