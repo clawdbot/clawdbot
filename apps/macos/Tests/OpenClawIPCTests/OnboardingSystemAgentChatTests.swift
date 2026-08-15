@@ -216,6 +216,62 @@ struct OnboardingSystemAgentChatTests {
         #expect(dashboardOpenCount == 1)
     }
 
+    @Test func `first run effective model is live verified before handoff`() async throws {
+        let suiteName = "OnboardingFirstRunEffectiveModelTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let methods = SystemAgentMethodRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message),
+                      let method = systemAgentRequestMethod(from: message)
+                else { return }
+                await methods.record(method)
+                if respondToSystemAgentHealth(task: task, id: id, method: method) { return }
+                switch method {
+                case "agents.list":
+                    task.emitReceiveSuccess(.data(configuredAgentsResponse(id: id)))
+                case "openclaw.setup.verify":
+                    task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id)))
+                default:
+                    break
+                }
+            })
+        })
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        var handoffCount = 0
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            systemAgentDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "local" },
+            dashboardOnboardingOpener: { handoffCount += 1 })
+
+        let initialProbe = try #require(view.onboardingDidAppear())
+        await initialProbe.value
+        for _ in 0..<200 {
+            if view.aiSetup.connected {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        #expect(view.aiSetup.connected)
+        #expect(view.finishState.didFinish)
+        #expect(handoffCount == 1)
+        #expect(await methods.snapshot() == [
+            "agents.list",
+            "health",
+            "openclaw.setup.verify",
+        ])
+    }
+
     @Test func `relaunch with pending inference resumes OpenClaw`() async throws {
         let suiteName = "OnboardingPendingInferenceResumeTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

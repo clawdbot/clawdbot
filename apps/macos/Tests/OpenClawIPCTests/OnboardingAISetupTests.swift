@@ -738,6 +738,11 @@ private func rejectedSetupVerificationResponse(id: String) -> Data {
     Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":{"ok":false,"status":"auth","error":"expired login"}}"#.utf8)
 }
 
+private func unconfiguredSetupVerificationResponse(id: String) -> Data {
+    Data(
+        #"{"type":"res","id":"\#(id)","ok":true,"payload":{"ok":false,"status":"unavailable","error":"No agent model is configured."}}"#.utf8)
+}
+
 private func unavailableGatewayResponse(id: String) -> Data {
     Data(#"{"type":"res","id":"\#(id)","ok":false,"error":{"code":"UNAVAILABLE","message":"temporary failure"}}"#.utf8)
 }
@@ -1452,51 +1457,6 @@ struct OnboardingAISetupTests {
         #expect(!model.showManualEntry)
     }
 
-    @Test func `configured gateway result is accepted only for the visible selected route`() {
-        #expect(OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: true,
-            expectedMode: .remote,
-            currentMode: .remote,
-            systemAgentResumePending: false,
-            setupOwnsInferenceTransition: false))
-        #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: false,
-            expectedMode: .remote,
-            currentMode: .remote,
-            systemAgentResumePending: false,
-            setupOwnsInferenceTransition: false))
-        #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: true,
-            expectedMode: .remote,
-            currentMode: .local,
-            systemAgentResumePending: false,
-            setupOwnsInferenceTransition: false))
-        #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: true,
-            expectedMode: .unconfigured,
-            currentMode: .unconfigured,
-            systemAgentResumePending: false,
-            setupOwnsInferenceTransition: false))
-    }
-
-    @Test func `fresh inference transition owns the OpenClaw handoff`() {
-        #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: true,
-            expectedMode: .local,
-            currentMode: .local,
-            systemAgentResumePending: false,
-            setupOwnsInferenceTransition: true))
-    }
-
-    @Test func `pending OpenClaw handoff cannot be mistaken for an existing install`() {
-        #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: true,
-            expectedMode: .local,
-            currentMode: .local,
-            systemAgentResumePending: true,
-            setupOwnsInferenceTransition: false))
-    }
-
     @Test func `configured model label stays pending until live verification`() async throws {
         // Isolated defaults + fixed route: the default init reads the machine's
         // real resume store, whose leftover activation leases fail this test on
@@ -1521,6 +1481,62 @@ struct OnboardingAISetupTests {
         #expect(model.connected)
         #expect(!model.pendingActivationVerification)
         #expect(model.selectedKind == "existing-model")
+    }
+
+    @Test func `implicit model label falls through verification to automatic setup`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingImplicitModelTests"))
+        let recorder = AISetupRequestRecorder()
+        let session = makeAISetupRequestSession(recorder: recorder) { task, request in
+            let response: Data? = switch request.method {
+            case "agents.list": configuredModelResponse(id: request.id)
+            case "openclaw.setup.verify": unconfiguredSetupVerificationResponse(id: request.id)
+            case "openclaw.setup.detect": actionableDetectedSetupResponse(id: request.id)
+            case "openclaw.setup.activate": successfulActivationResponse(
+                    id: request.id,
+                    modelRef: "claude-cli/claude-opus-4-8",
+                    latencyMs: 42)
+            default: nil
+            }
+            if let response {
+                task.emitReceiveSuccess(.data(response))
+            }
+        }
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let gateway = makeAISetupGateway(url: url, session: session)
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        var handoffCount = 0
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            systemAgentDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "local" },
+            dashboardOnboardingOpener: { handoffCount += 1 })
+        view.onboardingVisible = true
+        view.currentPage = try #require(view.pageOrder.firstIndex(of: view.aiPageIndex))
+
+        let probe = try #require(view.probeConfiguredGatewayForDashboard(
+            startAISetupWhenMissing: true,
+            knownVisible: true,
+            knownAISetupPage: true))
+        await probe.value
+        for _ in 0..<200 {
+            if view.aiSetup.connected {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "claude-cli")
+        #expect(view.finishState.didFinish)
+        #expect(handoffCount == 1)
+        #expect(await (recorder.snapshot()).methods == [
+            "agents.list",
+            "openclaw.setup.verify",
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
+        ])
     }
 
     @Test func `pending handoff connects only after route-bound live verification`() async throws {

@@ -123,8 +123,7 @@ extension OnboardingView {
         OnboardingController.markComplete()
         OnboardingController.shared.close()
         guard state.connectionMode != .unconfigured else { return true }
-        // Inference works; the dashboard's custodian onboarding owns the rest
-        // (memory import, channels, permissions guidance, hatch).
+        // Inference works; hand the user directly to their first conversation.
         dashboardOnboardingOpener()
         return true
     }
