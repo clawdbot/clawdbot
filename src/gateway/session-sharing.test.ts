@@ -135,7 +135,7 @@ describe("session sharing policy", () => {
       const authorization = resolveSessionMutationAuthorization({
         client: viewer,
         method: "sessions.groups.update",
-        requestParams: { name: "Race", cwd: null, worktree: false },
+        requestParams: { name: " Race ", cwd: null, worktree: false },
         context,
       });
       expect(authorization.error).toBeNull();
@@ -153,7 +153,7 @@ describe("session sharing policy", () => {
 
       await expect(
         sessionGroupHandlers["sessions.groups.update"]?.({
-          params: { name: "Race", cwd: null, worktree: false },
+          params: { name: " Race ", cwd: null, worktree: false },
           client: viewer,
           context,
           sessionMutationAuthorization: authorization.authorization,

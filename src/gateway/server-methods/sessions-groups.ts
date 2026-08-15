@@ -1,5 +1,6 @@
 // Session group catalog mutations.
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -133,6 +134,15 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const name = normalizeOptionalString(params.name);
+    if (!name) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session group name must not be empty"),
+      );
+      return;
+    }
     let cwd = params.cwd;
     const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     if (cwd && !clientScopes.includes(ADMIN_SCOPE)) {
@@ -153,12 +163,12 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     sessionMutationAuthorization?.assertCurrent();
     if (sessionMutationAuthorization) {
       const currentTargets =
-        resolveSessionGroupMutationTargetsByName(context.getRuntimeConfig()).get(params.name) ?? [];
+        resolveSessionGroupMutationTargetsByName(context.getRuntimeConfig()).get(name) ?? [];
       for (const target of currentTargets) {
         sessionMutationAuthorization.assertTargetCurrent(target);
       }
     }
-    const defaults = updateSessionGroupDefaults(params.name, {
+    const defaults = updateSessionGroupDefaults(name, {
       cwd,
       worktree: params.worktree,
     });
@@ -166,7 +176,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown session group: ${params.name}`),
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown session group: ${name}`),
       );
       return;
     }
