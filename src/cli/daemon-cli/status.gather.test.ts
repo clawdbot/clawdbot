@@ -511,6 +511,34 @@ describe("gatherDaemonStatus", () => {
     }
   });
 
+  it("keeps deep JSON compatible when the Gateway omits build identity", async () => {
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: true,
+      url: "ws://127.0.0.1:19001",
+      error: null,
+      server: { version: "2026.5.6", connId: "conn-1" },
+    });
+
+    const status = await gatherStatus({ deep: true });
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    try {
+      printDaemonStatus(status, { json: true, deep: true });
+      expect(writeJson).toHaveBeenCalledOnce();
+      const serialized = JSON.stringify(writeJson.mock.calls[0]?.[0]);
+      if (!serialized) {
+        throw new Error("expected terminal JSON output");
+      }
+      const parsed = JSON.parse(serialized) as {
+        rpc?: { server?: Record<string, unknown> };
+      };
+      const server = parsed.rpc?.server;
+      expect(server).toEqual({ version: "2026.5.6", connId: "conn-1" });
+      expect(server).not.toHaveProperty("buildId");
+    } finally {
+      writeJson.mockRestore();
+    }
+  });
+
   it("batches daemon and CLI port status inspection when ports differ", async () => {
     await gatherStatus();
 
