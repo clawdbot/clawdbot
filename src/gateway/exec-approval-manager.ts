@@ -128,10 +128,8 @@ type ExecApprovalManagerOptions<TPayload> = {
     context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },
   ) => void;
   onLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
-  /** Timer-driven timeout expiry. The gateway owns the approval clock, so this
-   * is the only place reviewer surfaces can learn an approval expired without
-   * trusting their own (skewed) clocks; resolve/authority-close paths publish
-   * through their own callers. */
+  /** Durable timeout expiry can be first observed by a timer, lookup, or replay.
+   * Publish from the local settlement owner so every ordering reaches reviewers. */
   onExpired?: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
   validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
 };
@@ -628,6 +626,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     localResolutionSource: ExecApprovalResolutionSource = "operator",
   ): boolean {
     const persistence = this.options.persistence;
+    const liveRecord = this.pending.get(record.id)?.record;
     if (
       record.kind !== this.approvalKind ||
       (persistence && record.runtimeEpoch !== persistence.runtimeEpoch) ||
@@ -656,6 +655,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     });
     if (settled) {
       this.emitLifecycle({ phase: "terminal", record });
+      if (record.status === "expired" && liveRecord) {
+        try {
+          this.options.onExpired?.(record, liveRecord);
+        } catch (error) {
+          this.reportError(error, { approvalId: record.id, operation: "expire" });
+        }
+      }
     }
     return settled;
   }
@@ -903,15 +909,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       this.scheduleExpiryTimer(entry);
       return false;
     }
-    const expired = result.outcome === "denied" || result.outcome === "expired";
-    if (expired && "record" in result && result.liveRecord) {
-      try {
-        this.options.onExpired?.(result.record, result.liveRecord);
-      } catch (error) {
-        this.reportError(error, { approvalId: recordId, operation: "expire" });
-      }
-    }
-    return expired;
+    return result.outcome === "denied" || result.outcome === "expired";
   }
 
   private resolveLocal(
