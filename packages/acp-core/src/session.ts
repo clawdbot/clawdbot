@@ -10,6 +10,7 @@ export type AcpSessionStore = {
     cwd: string;
     sessionId?: string;
     ledgerSessionId?: string;
+    runtimeCwd?: boolean;
   }) => AcpSession;
   hasSession: (sessionId: string) => boolean;
   getSession: (sessionId: string) => AcpSession | undefined;
@@ -104,6 +105,7 @@ export function createInMemorySessionStore(
         existingSession.ledgerSessionId = params.ledgerSessionId;
       }
       existingSession.cwd = params.cwd;
+      existingSession.runtimeCwd = params.runtimeCwd !== false;
       touchSession(existingSession, nowMs);
       return existingSession;
     }
@@ -120,6 +122,7 @@ export function createInMemorySessionStore(
       sessionKey: params.sessionKey,
       ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
       cwd: params.cwd,
+      runtimeCwd: params.runtimeCwd !== false,
       createdAt: nowMs,
       lastTouchedAt: nowMs,
       abortController: null,

@@ -112,7 +112,23 @@ export function createChatFinalEvent(sessionKey: string): EventFrame {
 }
 
 export async function expectOversizedPromptRejected(params: { sessionId: string; text: string }) {
-  const requestMock = vi.fn(async (_method: string) => ({ ok: true }));
+  // The loaded session must have a known runtime directory, or the bridge suppresses the
+  // working-directory prefix this case relies on to push the message over the limit.
+  const requestMock = vi.fn(async (method: string) => {
+    if (method === "sessions.list") {
+      return {
+        sessions: [
+          {
+            key: params.sessionId,
+            kind: "direct",
+            updatedAt: 1_710_000_000_000,
+            spawnedCwd: "/tmp",
+          },
+        ],
+      };
+    }
+    return { ok: true };
+  });
   const request = requestMock as GatewayClient["request"];
   const sessionStore = createInMemorySessionStore();
   const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {

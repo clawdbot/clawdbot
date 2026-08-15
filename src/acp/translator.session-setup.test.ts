@@ -453,6 +453,35 @@ describe("acp bridge session cwd persistence", () => {
     sessionStore.clearAllSessionsForTest();
   });
 
+  it("keeps the runtime directory unknown when an adopted session records none", async () => {
+    const sessionStore = createInMemorySessionStore();
+    // A normal Gateway session records no directory, so the turn uses the agent workspace.
+    const { gateway } = createRecordingGateway();
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    await agent.loadSession(createLoadSessionRequest("agent:main:work", "/tmp/my-project"));
+
+    // Adoption still succeeds - refusing here would break loading ordinary sessions - but the
+    // client path is not presented as the directory the agent runs in.
+    const session = sessionStore.getSession("agent:main:work");
+    expect(session?.cwd).toBe("/tmp/my-project");
+    expect(session?.runtimeCwd).toBe(false);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("treats a bridge-provisioned session's directory as the runtime one", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { gateway } = createRecordingGateway();
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    const result = await agent.newSession(createNewSessionRequest("/tmp/my-project"));
+
+    expect(sessionStore.getSession(result.sessionId)?.runtimeCwd).not.toBe(false);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
   it("rejects a relative cwd instead of silently running elsewhere", async () => {
     const sessionStore = createInMemorySessionStore();
     const { calls, gateway } = createRecordingGateway();

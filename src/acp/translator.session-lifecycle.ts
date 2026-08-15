@@ -170,6 +170,7 @@ export class AcpTranslatorSessionLifecycle {
       sessionKey,
       ...(ledgerReplay.sessionId ? { ledgerSessionId: ledgerReplay.sessionId } : {}),
       cwd: adoptedCwd ?? params.cwd,
+      runtimeCwd: adoptedCwd !== undefined,
     });
     await this.sessionUpdates.startLedgerSession(session, { complete: ledgerReplay.complete });
     this.log(`loadSession: ${session.sessionId} -> ${session.sessionKey}`);
@@ -282,6 +283,7 @@ export class AcpTranslatorSessionLifecycle {
       sessionId: params.sessionId,
       sessionKey,
       cwd: resumedCwd ?? params.cwd,
+      runtimeCwd: resumedCwd !== undefined,
     });
     await this.sessionUpdates.startLedgerSession(session, { complete: false });
     this.log(`resumeSession: ${session.sessionId} -> ${session.sessionKey}`);
