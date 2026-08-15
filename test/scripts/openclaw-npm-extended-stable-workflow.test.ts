@@ -57,7 +57,7 @@ describe("minimal npm extended-stable workflow", () => {
     const gitFetchLines = source
       .split("\n")
       .filter((line) => /\bgit(?: -C "[^"]+")? fetch\b/u.test(line));
-    expect(gitFetchLines).toHaveLength(9);
+    expect(gitFetchLines).toHaveLength(8);
     expect(
       gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
     ).toBe(true);
@@ -144,6 +144,10 @@ describe("minimal npm extended-stable workflow", () => {
     expect(publishProvenance.run).toContain("plugin-sdk-api-release-evidence.mjs");
     expect(publishProvenance.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
     expect(publishProvenance.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
+    expect(publishProvenance.run).toContain(
+      'git -C trusted-workflow rev-parse --verify "refs/tags/${current_selector_ref}^{commit}"',
+    );
+    expect(publishProvenance.run).not.toContain("git fetch");
     expect(publishProvenance.run).toContain('--current-selector-ref "$current_selector_ref"');
     expect(publishProvenance.run).toContain('--current-selector-sha "$current_selector_sha"');
     expect(publishProvenance.run).toContain('--workflow-sha "$PREFLIGHT_WORKFLOW_SHA"');
@@ -152,6 +156,13 @@ describe("minimal npm extended-stable workflow", () => {
     );
     expect(publishProvenance.run).toContain(
       "Prepared Plugin SDK API evidence does not match its immutable artifact",
+    );
+    expect(
+      publishProvenance.run.indexOf(
+        "Prepared Plugin SDK API evidence does not match its immutable artifact",
+      ),
+    ).toBeLessThan(
+      publishProvenance.run.indexOf('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version'),
     );
     expect(verifyPreflightRun.run).toContain(
       '"$preflight_head_branch" == "$EXPECTED_EXTENDED_STABLE_BRANCH"',
