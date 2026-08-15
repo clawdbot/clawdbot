@@ -156,6 +156,7 @@ openclaw models auth login --provider <id>
 openclaw models auth login --provider openai --profile-id openai:work
 openclaw models auth login-github-copilot
 openclaw models auth logout <profileId> [--yes]
+openclaw models auth clear-cooldown <profileId>
 openclaw models auth paste-api-key --provider <id>
 openclaw models auth setup-token --provider <id>
 openclaw models auth paste-token --provider <id>
@@ -172,9 +173,11 @@ openclaw models auth order clear --provider <id>
 
 `models auth logout <profileId>` removes one saved auth profile from the selected agent auth store. Use the profile id shown by `models auth list`. It also drops that profile from `auth.profiles` and from every `auth.order` list in your config, so no stale reference is left behind, and it deletes an `auth.order.<provider>` entry that would otherwise be emptied (an authored empty order means "select no profiles" and would disable the provider). It prompts for confirmation on a TTY; pass `--yes` for scripts and agents. Logout refuses when the profile is not in the store, or when a `models.providers.<id>.apiKey` entry names it — change that config value first.
 
+`models auth clear-cooldown <profileId>` clears OpenClaw's locally stored cooldown and disable state for one profile without changing its credentials or contacting the provider. Use it only after confirming that the provider account has recovered, such as after a subscription limit reset. Find the profile id with `models auth list`.
+
 `models auth login-github-copilot` is a shortcut for `models auth login --provider github-copilot --method device` (GitHub device flow); it accepts `--yes` to overwrite an existing profile without prompting.
 
-Use `openclaw models auth --agent <id> <subcommand>` to write auth results to a specific configured agent store. The parent `--agent` flag is honored by `add`, `list`, `login`, `logout`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.
+Use `openclaw models auth --agent <id> <subcommand>` to write auth results to a specific configured agent store. The parent `--agent` flag is honored by `add`, `list`, `login`, `logout`, `clear-cooldown`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 
@@ -185,6 +188,7 @@ openclaw models auth login --provider openai --set-default
 openclaw models auth login --provider openai --method api-key
 openclaw models auth paste-api-key --provider openai
 openclaw models auth list --provider openai
+openclaw models auth clear-cooldown openai:default
 openclaw models auth logout openai:manual --yes
 ```
 
