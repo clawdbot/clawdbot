@@ -579,7 +579,10 @@ export async function resolveProviderAuths(params: {
         auths.push(fallbackAuth);
       }
     } catch (error) {
-      params.onError?.(provider, error);
+      if (!params.onError) {
+        throw error;
+      }
+      params.onError(provider, error);
     }
   }
 
