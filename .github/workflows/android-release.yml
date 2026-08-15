@@ -65,43 +65,38 @@ jobs:
 
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain
+
       - name: 物化 signing keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           umask 077
-      
+
           signing_dir="$GITHUB_WORKSPACE/apps/android/build/release-signing"
-          keystore_path="$signing_dir/release.keystore"
-      
-          mkdir -p "$signing_dir" "$HOME/.gradle"
-      
+          mkdir -p "$signing_dir"
+
           printf '%s' "$KEYSTORE_BASE64" |
-            base64 --decode > "$keystore_path"
-      
-          printf '%s\n' \
-            "OPENCLAW_ANDROID_STORE_FILE=$keystore_path" \
-            "OPENCLAW_ANDROID_STORE_PASSWORD=$STORE_PASSWORD" \
-            "OPENCLAW_ANDROID_KEY_ALIAS=$KEY_ALIAS" \
-            "OPENCLAW_ANDROID_KEY_PASSWORD=$KEY_PASSWORD" \
-            > "$HOME/.gradle/gradle.properties"
-      
-          chmod 600 \
-            "$keystore_path" \
-            "$HOME/.gradle/gradle.properties"
+            base64 --decode > "$signing_dir/release.keystore"
+
+          chmod 600 "$signing_dir/release.keystore"
+          test -s "$signing_dir/release.keystore"
+
+          
       - name: Build Android APK
+        env:
+          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_FILE: ${{ github.workspace }}/apps/android/build/release-signing/release.keystore
+          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p dist
           cd apps/android
-      
+
           build_commit="$(git rev-parse HEAD)"
           build_timestamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-      
+
           ./gradlew --no-daemon \
             -PopenclawBuildCommit="$build_commit" \
             -PopenclawBuildTimestamp="$build_timestamp" \
@@ -110,9 +105,7 @@ jobs:
       
       - name: 清理物化 signing files
         if: ${{ always() }}
-        run: |
-          rm -rf apps/android/build/release-signing
-          rm -f "$HOME/.gradle/gradle.properties"
+        run: rm -rf apps/android/build/release-signing
 
       - name: 收集 Android APK
         run: |
@@ -162,7 +155,7 @@ jobs:
           
           echo "Using apksigner: $apksigner_path"
 
-          # 注意这里只看有没有签名，没有固定签名
+          # 注意这里只看有没有签名，没有固定证书指纹
           "$apksigner_path" verify \
             --verbose \
             --print-certs \
