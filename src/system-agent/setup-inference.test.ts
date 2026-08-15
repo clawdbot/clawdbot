@@ -3961,6 +3961,13 @@ describe("activateSetupInference", () => {
         provider: "openai",
         key: "codex-api-key",
       });
+      expect(params.config).toMatchObject({
+        plugins: {
+          entries: {
+            codex: { config: { appServer: { transport: "stdio", homeScope: "agent" } } },
+          },
+        },
+      });
       return successfulRun("openai", "gpt-5.6-sol", params);
     });
 
@@ -4017,6 +4024,13 @@ describe("activateSetupInference", () => {
     expect(result.ok).toBe(true);
     expect(readCodexCliActiveApiKey).toHaveBeenCalledWith({ allowKeychainPrompt: true });
     expect(runEmbeddedAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
+    expect(runEmbeddedAgent.mock.calls[0]?.[0].config).toMatchObject({
+      plugins: {
+        entries: {
+          codex: { config: { appServer: { transport: "stdio", homeScope: "user" } } },
+        },
+      },
+    });
     expect(configHarness.current().auth).toBeUndefined();
   });
 
@@ -4328,7 +4342,7 @@ describe("activateSetupInference", () => {
                   command: "codex",
                   mode: "yolo",
                   transport: "stdio",
-                  homeScope: "agent",
+                  homeScope: "user",
                 },
               },
             },
@@ -4374,7 +4388,7 @@ describe("activateSetupInference", () => {
                 command: "codex",
                 mode: "yolo",
                 transport: "stdio",
-                homeScope: "agent",
+                homeScope: "user",
               },
             },
           },
@@ -4472,7 +4486,7 @@ describe("activateSetupInference", () => {
                 config: expect.objectContaining({
                   appServer: expect.objectContaining({
                     transport: "stdio",
-                    homeScope: "agent",
+                    homeScope: "user",
                   }),
                 }),
               }),
@@ -4494,7 +4508,7 @@ describe("activateSetupInference", () => {
         entries: {
           codex: {
             enabled: true,
-            config: { appServer: { transport: "stdio", homeScope: "agent" } },
+            config: { appServer: { transport: "stdio", homeScope: "user" } },
           },
         },
       },
@@ -5324,7 +5338,7 @@ describe("activateSetupInference Codex configuration", () => {
     expect(result.ok).toBe(true);
     expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
       enabled: true,
-      config: { appServer: { transport: "stdio", homeScope: "agent" } },
+      config: { appServer: { transport: "stdio", homeScope: "user" } },
     });
     expect(persistedConfig.plugins?.entries?.codex?.config?.supervision).toEqual(
       testCase.expectedSupervision,
@@ -5357,7 +5371,7 @@ describe("activateSetupInference Codex configuration", () => {
     expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
       enabled: true,
       config: {
-        appServer: { transport: "stdio", homeScope: "agent" },
+        appServer: { transport: "stdio", homeScope: "user" },
         discovery: { enabled: true },
         supervision: { enabled: false, allowRawTranscripts: true },
       },
@@ -5390,7 +5404,7 @@ describe("activateSetupInference Codex configuration", () => {
       codex: {
         enabled: true,
         config: {
-          appServer: { transport: "stdio", url: "ws://127.0.0.1:4500", homeScope: "agent" },
+          appServer: { transport: "stdio", url: "ws://127.0.0.1:4500", homeScope: "user" },
           supervision: { enabled: false },
         },
       },
@@ -5416,7 +5430,7 @@ describe("activateSetupInference Codex configuration", () => {
     expect(result.ok).toBe(true);
     expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
       enabled: true,
-      config: { appServer: { transport: "stdio", homeScope: "agent" } },
+      config: { appServer: { transport: "stdio", homeScope: "user" } },
     });
   });
 

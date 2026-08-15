@@ -255,7 +255,7 @@ async function activateSetupInferenceUnredacted(
       }
       const normalizedCodexConfig = normalizePluginTargetConfig(ensured.cfg, "codex");
       const enabledCodex = enablePluginInConfig(
-        configureCodexCliPreparedAuth(normalizedCodexConfig),
+        configureCodexCliPreparedAuth(normalizedCodexConfig, codexCliApiKey ? "agent" : "user"),
         "codex",
       );
       if (!enabledCodex.enabled) {

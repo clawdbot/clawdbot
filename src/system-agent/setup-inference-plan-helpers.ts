@@ -53,7 +53,10 @@ export type SetupInferenceTestPlan = {
   };
 };
 
-export function configureCodexCliPreparedAuth(cfg: OpenClawConfig): OpenClawConfig {
+export function configureCodexCliPreparedAuth(
+  cfg: OpenClawConfig,
+  homeScope: "agent" | "user",
+): OpenClawConfig {
   const entry = cfg.plugins?.entries?.codex;
   const pluginConfig = entry?.config ?? {};
   const appServer =
@@ -70,7 +73,7 @@ export function configureCodexCliPreparedAuth(cfg: OpenClawConfig): OpenClawConf
           ...entry,
           config: {
             ...pluginConfig,
-            appServer: { ...appServer, transport: "stdio", homeScope: "agent" },
+            appServer: { ...appServer, transport: "stdio", homeScope },
           },
         },
       },
