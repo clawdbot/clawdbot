@@ -1590,6 +1590,18 @@ describe("launchd uninstall", () => {
     await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).resolves.toBeUndefined();
   });
 
+  it("uninstalls an already stopped LaunchAgent without booting it out again", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "RunAtLoad=true");
+    state.serviceLoaded = false;
+    state.bootoutError = "Boot-out failed: 5: Input/output error";
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).resolves.toBeUndefined();
+    expect(state.files.has(plistPath)).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
+  });
+
   it("removes dangling LaunchAgent symlinks instead of treating their targets as missing", async () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);
