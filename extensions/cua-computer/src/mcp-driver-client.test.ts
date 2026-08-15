@@ -177,18 +177,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
             }),
           );
           break;
-        case "browser_navigate":
-          fake.respond(
-            request,
-            toolResult({
-              status: "ok",
-              target_id: "target-1",
-              tab_id: "tab-1",
-              url: "https://example.com/",
-              refs_invalidated: true,
-            }),
-          );
-          break;
         case "end_session":
           fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
           break;
@@ -221,12 +209,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         delivery: { mode: 0, deliveredCount: 1 },
         evidence: [{ kind: 0 }],
       });
-      await driver.callTool("browser_navigate", {
-        target_id: "target-1",
-        tab_id: "tab-1",
-        url: "https://example.com/",
-      });
-
       await driver.dispose();
       await vi.waitFor(() => {
         closed = endpoint.requests.some(
@@ -242,17 +224,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
           (request) => request.method === "tools/call" && request.params?.name === "click",
         )?.params?.arguments,
       ).toMatchObject({ x: 20, y: 30, button: "left", count: 1, scope: "desktop" });
-      expect(
-        endpoint.requests.find(
-          (request) =>
-            request.method === "tools/call" && request.params?.name === "browser_navigate",
-        )?.params?.arguments,
-      ).toMatchObject({
-        target_id: "target-1",
-        tab_id: "tab-1",
-        url: "https://example.com/",
-        session: expect.stringMatching(/^openclaw-/),
-      });
     } finally {
       await endpoint.close();
     }
@@ -297,6 +268,9 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       const calls = Array.from({ length: 65 }, () => driver.callTool("list_windows", {}));
       await expect(calls[64]).rejects.toThrow("too many pending requests");
       await vi.waitFor(() => expect(held).toHaveLength(64));
+      expect(held[0]?.params?.arguments).toMatchObject({
+        session: expect.stringMatching(/^openclaw-/),
+      });
       for (const request of held) {
         endpoint.respond(request, toolResult({ windows: [] }));
       }

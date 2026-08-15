@@ -146,33 +146,6 @@ describe("CUA Driver direct session", () => {
     await driver.dispose();
   });
 
-  it("passes browser tools through the same window-scoped direct SDK session", async () => {
-    const driver = createCuaDriver({ loadSdk: () => sdk as never });
-
-    await driver.callTool("browser_navigate", {
-      target_id: "target-1",
-      tab_id: "tab-1",
-      url: "https://example.com/",
-    });
-    const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
-
-    expect(mocks.startSession).toHaveBeenCalledWith(
-      { session: sessionOptions.publicSession, captureScope: "window" },
-      undefined,
-    );
-    expect(mocks.callTool).toHaveBeenCalledWith(
-      "browser_navigate",
-      JSON.stringify({
-        target_id: "target-1",
-        tab_id: "tab-1",
-        url: "https://example.com/",
-        session: sessionOptions.publicSession,
-      }),
-      undefined,
-    );
-    await driver.dispose();
-  });
-
   it("keeps a missing native desktop library behind command availability", async () => {
     const loadSdk = vi.fn(() => {
       throw new Error("libX11.so.6: cannot open shared object file");
