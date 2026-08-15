@@ -87,7 +87,7 @@ jobs:
         env:
           ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_FILE: ${{ github.workspace }}/apps/android/build/release-signing/release.keystore
           ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_ALIAS: openclaw
           ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
