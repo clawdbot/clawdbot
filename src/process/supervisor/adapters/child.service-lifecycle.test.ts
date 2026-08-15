@@ -193,6 +193,110 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
   });
 
+  it("self-cleans when lineage closes but a descendant retains output", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const tempDir = tempDirs.make("openclaw-service-child-natural-lineage-");
+    const descendantPath = path.join(tempDir, "descendant.cjs");
+    const rootPath = path.join(tempDir, "root.cjs");
+    await writeFile(
+      descendantPath,
+      `
+        const fs = require("node:fs");
+        fs.closeSync(3);
+        process.send("ready");
+        setInterval(() => {}, 1000);
+      `,
+      "utf8",
+    );
+    await writeFile(
+      rootPath,
+      `
+        const { spawn } = require("node:child_process");
+        const child = spawn(process.execPath, [${JSON.stringify(descendantPath)}], {
+          stdio: ["ignore", 1, 2, 3, "ipc"],
+        });
+        child.once("message", () => {
+          process.stdout.write(process.pid + " " + child.pid + "\\n", () => {
+            child.disconnect();
+            process.exit(0);
+          });
+        });
+      `,
+      "utf8",
+    );
+    const adapter = await createChildAdapter({
+      argv: [process.execPath, rootPath],
+      stdinMode: "pipe-closed",
+    });
+    let output = "";
+    adapter.onStdout((chunk) => {
+      output += chunk;
+    });
+    await waitFor(() => /^\d+ \d+/u.test(output));
+    const [rootPid, descendantPid] = parsePidPair(output);
+    activePids.add(rootPid);
+    activePids.add(descendantPid);
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
+  });
+
+  it("preserves the TERM grace for a delayed authentic root result", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const tempDir = tempDirs.make("openclaw-service-child-term-grace-");
+    const descendantPath = path.join(tempDir, "descendant.cjs");
+    const rootPath = path.join(tempDir, "root.cjs");
+    await writeFile(
+      descendantPath,
+      `
+        const fs = require("node:fs");
+        process.on("SIGTERM", () => {
+          fs.closeSync(3);
+          process.exit(0);
+        });
+        process.send("ready");
+        setInterval(() => {}, 1000);
+      `,
+      "utf8",
+    );
+    await writeFile(
+      rootPath,
+      `
+        const fs = require("node:fs");
+        const { spawn } = require("node:child_process");
+        const child = spawn(process.execPath, [${JSON.stringify(descendantPath)}], {
+          stdio: ["ignore", 1, 2, 3, "ipc"],
+        });
+        process.on("SIGTERM", () => {
+          fs.closeSync(3);
+          setTimeout(() => process.exit(0), 300);
+        });
+        child.once("message", () => {
+          process.stdout.write(process.pid + " " + child.pid + "\\n");
+          child.disconnect();
+        });
+        setInterval(() => {}, 1000);
+      `,
+      "utf8",
+    );
+    const adapter = await createChildAdapter({
+      argv: [process.execPath, rootPath],
+      stdinMode: "pipe-closed",
+    });
+    let output = "";
+    adapter.onStdout((chunk) => {
+      output += chunk;
+    });
+    await waitFor(() => /^\d+ \d+/u.test(output));
+    const [rootPid, descendantPid] = parsePidPair(output);
+    activePids.add(rootPid);
+    activePids.add(descendantPid);
+
+    adapter.kill("SIGTERM");
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
+  });
+
   it.each([
     { label: "after TERM grace", repeatKill: false },
     { label: "when repeated KILL arrives", repeatKill: true },

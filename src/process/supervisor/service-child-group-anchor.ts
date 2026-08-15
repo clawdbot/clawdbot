@@ -151,10 +151,9 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     if (lineageClosed && !rootExit && !forceCleanup) {
-      // A normal root exit may close the lineage fd before libuv reports the
-      // child exit. Give that exact child event a bounded observation window;
-      // a still-running root that closed lineage remains a lease violation.
-      await Promise.race([rootExited, delay(LINEAGE_EXIT_OBSERVATION_MS), forceCleanupRequested]);
+      // Cleanup already owns the group. A normal root exit may race lineage EOF,
+      // but the short observation window must not replace the configured TERM grace.
+      await Promise.race([rootExited, termGraceDone, forceCleanupRequested]);
     }
     if (state !== "closing" || !start) {
       return;
@@ -256,17 +255,15 @@ export function runServiceChildGroupAnchor(): void {
           if (state !== "active") {
             return;
           }
-          if (rootExit) {
+          if (rootExit && rootSettlementStarted) {
             await rootSettledDone;
           }
           if (state !== "active") {
             return;
           }
-          if (rootExit) {
-            void closeAuthority("lineage-closed", false);
-          } else {
-            void requestCleanup("lineage-lost");
-          }
+          // Root settlement can only complete after output EOF. If lineage is gone
+          // while output remains owned by a descendant, cleanup must reclaim the group.
+          void requestCleanup("lineage-lost");
         })();
       }
     };
