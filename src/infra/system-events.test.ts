@@ -93,6 +93,36 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents("discord:group:123")).toStrictEqual([]);
   });
 
+  it("bounds a full queue while retaining one complete maximum-size presence prompt", async () => {
+    const key = "agent:main:slack:channel:C123";
+    const prompt = "x".repeat(20_000);
+    for (let index = 0; index < 20; index += 1) {
+      enqueueSystemEvent(
+        [
+          "Slack presence event:",
+          `A human participant became active on Slack after being observed away: user_id="U${index}" channel_id="C123".`,
+          `observed_away_at_ms=${index} observed_active_at_ms=${index + 1} observed_away_duration_ms=1`,
+          prompt,
+        ].join("\n"),
+        {
+          sessionKey: key,
+          contextKey: `slack:presence-active:default:workspace:U${index}`,
+        },
+      );
+    }
+
+    const formatted = expectDefined(await drainFormattedEvents(key), "formatted system events");
+
+    expect(formatted.length).toBeLessThanOrEqual(24_000);
+    expect(formatted).toContain(
+      "System: [older or oversized queued system events omitted to keep this wake within 24,000 characters]",
+    );
+    expect(formatted).toContain('user_id="U19"');
+    expect(formatted).toContain(prompt);
+    expect(formatted).not.toContain('user_id="U0"');
+    expect(peekSystemEvents(key)).toStrictEqual([]);
+  });
+
   it("requires an explicit session key", () => {
     expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
   });
