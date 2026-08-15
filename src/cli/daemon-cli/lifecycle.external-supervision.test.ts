@@ -121,6 +121,8 @@ describe("external gateway supervision lifecycle", () => {
   let runDaemonRestart: (opts?: {
     json?: boolean;
     force?: boolean;
+    safe?: boolean;
+    skipDeferral?: boolean;
     wait?: string;
   }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
@@ -302,6 +304,38 @@ describe("external gateway supervision lifecycle", () => {
       previousLockIdentity: gatewayLockIdentity,
       waitIndefinitelyForPreviousOwner: false,
     });
+  });
+
+  it("keeps safe restarts on the exact local lock owner", async () => {
+    callGatewayCli.mockResolvedValue({
+      ok: true,
+      status: "scheduled",
+      preflight: { safe: false, summary: "restart deferred", blockers: [] },
+      restart: { pid: 4200 },
+    });
+
+    await runDaemonRestart({ json: true, safe: true, skipDeferral: true });
+
+    expect(callGatewayCli).toHaveBeenCalledWith({
+      method: "gateway.restart.request",
+      params: {
+        reason: "gateway.restart.safe",
+        safe: true,
+        skipDeferral: true,
+        target: {
+          pid: 4200,
+          ownerId: "gateway-owner-old",
+          port: 18_789,
+        },
+      },
+      ignoreEnvUrlOverride: true,
+      localPortOverride: 18_789,
+      requiredCapabilities: ["gateway-restart-target-safe-v1"],
+      timeoutMs: 10_000,
+    });
+    expect(loadConfig).not.toHaveBeenCalled();
+    expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
 
   it("refuses a restart when the lock owner does not match the listener", async () => {

@@ -75,7 +75,6 @@ import type { DaemonLifecycleOptions } from "./types.js";
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 const WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS = 180_000;
-type TargetedRestartAck = { ok: true; status: "emitted" | "coalesced"; pid: number };
 
 function postRestartHealthAttempts(): number {
   return process.platform === "win32"
@@ -331,7 +330,7 @@ async function signalGatewayRestart(
       }
     }
     if (usesTargetedRestartRpc && previousLockIdentity?.ownerId) {
-      const result = await callGatewayCli<TargetedRestartAck>({
+      const result = await callGatewayCli<{ pid: number }>({
         method: "gateway.restart.request",
         params: {
           reason: "gateway.restart",
@@ -419,6 +418,7 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
     return false;
   }
   const port = lockIdentity.port;
+  if (opts.safe) return await runSafeGatewayRestart(opts, lockIdentity);
 
   let signaled: Awaited<ReturnType<typeof signalGatewayRestart>>;
   try {
@@ -559,11 +559,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   if (opts.skipDeferral && !opts.safe) {
     throw new Error("--skip-deferral requires --safe");
   }
-  if (opts.safe) {
-    return await runSafeGatewayRestart(opts);
-  }
   if (isGatewayExternallySupervised()) {
     return await runExternalSupervisorRestart(opts);
+  }
+  if (opts.safe) {
+    return await runSafeGatewayRestart(opts);
   }
   const jsonOutput = Boolean(opts.json);
   const service = resolveGatewayService();
