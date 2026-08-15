@@ -40,7 +40,7 @@ import {
 } from "./placement-state.js";
 import {
   createPlacementTeardownFenceOps,
-  findWorkerTerminalRecovery,
+  findWorkerTerminalRecoveries,
 } from "./placement-teardown-fence.js";
 import {
   createPlacementTurnClaimOps,
@@ -138,14 +138,13 @@ export function createWorkerSessionPlacementStore(
   const { read, write } = runtime;
   const workspaceResultConflicts = new Map<string, WorkerWorkspaceResultConflict>();
   const withPlacementProjectionFacts = (
-    db: DatabaseSync,
     record: WorkerSessionPlacementRecord | undefined,
+    terminalRecovery?: WorkerSessionPlacementRecord["terminalRecovery"],
   ): WorkerSessionPlacementRecord | undefined => {
     if (!record) {
       return undefined;
     }
     const conflict = workspaceResultConflicts.get(record.sessionId);
-    const terminalRecovery = findWorkerTerminalRecovery(db, record);
     return conflict || terminalRecovery
       ? {
           ...record,
@@ -187,7 +186,11 @@ export function createWorkerSessionPlacementStore(
 
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
       const db = read();
-      return withPlacementProjectionFacts(db, find(db, required(sessionId, "session id")));
+      const record = find(db, required(sessionId, "session id"));
+      const terminalRecovery = record
+        ? findWorkerTerminalRecoveries(db, [record]).get(record.sessionId)
+        : undefined;
+      return withPlacementProjectionFacts(record, terminalRecovery);
     },
 
     getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord> {
@@ -206,8 +209,15 @@ export function createWorkerSessionPlacementStore(
             .where("session_id", "in", chunk),
         ).rows) {
           const record = fromRow(row);
-          records.set(record.sessionId, withPlacementProjectionFacts(db, record)!);
+          records.set(record.sessionId, record);
         }
+      }
+      const terminalRecoveries = findWorkerTerminalRecoveries(db, [...records.values()]);
+      for (const [sessionId, record] of records) {
+        records.set(
+          sessionId,
+          withPlacementProjectionFacts(record, terminalRecoveries.get(sessionId))!,
+        );
       }
       return records;
     },
@@ -625,7 +635,7 @@ export function createWorkerSessionPlacementStore(
 
     listForReconcile(): WorkerSessionPlacementRecord[] {
       const db = read();
-      return executeSqliteQuerySync(
+      const records = executeSqliteQuerySync(
         db,
         query(db)
           .selectFrom("worker_session_placements")
@@ -633,15 +643,23 @@ export function createWorkerSessionPlacementStore(
           .where("state", "not in", ["local", "reclaimed"])
           .orderBy("updated_at_ms")
           .orderBy("session_id"),
-      ).rows.map((row) => withPlacementProjectionFacts(db, fromRow(row))!);
+      ).rows.map(fromRow);
+      const terminalRecoveries = findWorkerTerminalRecoveries(db, records);
+      return records.map((record) =>
+        withPlacementProjectionFacts(record, terminalRecoveries.get(record.sessionId))!,
+      );
     },
 
     list(): WorkerSessionPlacementRecord[] {
       const db = read();
-      return executeSqliteQuerySync(
+      const records = executeSqliteQuerySync(
         db,
         query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
-      ).rows.map((row) => withPlacementProjectionFacts(db, fromRow(row))!);
+      ).rows.map(fromRow);
+      const terminalRecoveries = findWorkerTerminalRecoveries(db, records);
+      return records.map((record) =>
+        withPlacementProjectionFacts(record, terminalRecoveries.get(record.sessionId))!,
+      );
     },
   };
 }

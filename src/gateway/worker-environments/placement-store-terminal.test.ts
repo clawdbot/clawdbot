@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -33,6 +34,7 @@ describe("worker placement terminal persistence", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -244,6 +246,49 @@ describe("worker placement terminal persistence", () => {
       terminalReason: null,
       terminalAtMs: null,
     });
+  });
+
+  it("batches terminal recovery facts for bulk placement reads", () => {
+    const sessionIds = Array.from({ length: 20 }, (_, index) => {
+      const identity = {
+        sessionId: `session-placement-bulk-${index}`,
+        agentId: "main",
+        sessionKey: `agent:main:placement-bulk-${index}`,
+      };
+      const active = advanceToActive(identity);
+      const draining = store.startDrain({
+        sessionId: identity.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: active.generation,
+      });
+      const reconciling = store.startReconcile({
+        sessionId: identity.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: draining.generation,
+      });
+      store.fail({
+        sessionId: identity.sessionId,
+        expectedGeneration: reconciling.generation,
+        recoveryError: "cloud worker disappeared",
+      });
+      return identity.sessionId;
+    });
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+
+    const records = store.getMany(sessionIds);
+    const statements = prepare.mock.calls.map(([sql]) => sql);
+    prepare.mockRestore();
+
+    expect(records).toHaveLength(sessionIds.length);
+    expect([...records.values()].every((record) => !record.terminalRecovery)).toBe(true);
+    const placementSelects = statements.filter((sql) =>
+      /from "(?:worker_session_placements|worker_workspace_pending_results|worker_workspace_reconciliations)"/iu.test(
+        sql,
+      ),
+    );
+    expect(placementSelects).toHaveLength(4);
   });
 
   it("rolls back placement failure when pending-result removal aborts", () => {

@@ -6,7 +6,7 @@ import type {
   WorkerSessionTurnClaim,
   WorkerTerminalRecovery,
 } from "./placement-record.js";
-import { find as findPlacement } from "./placement-row-codec.js";
+import { find as findPlacement, fromRow } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 
 type TeardownFenceDatabase = Pick<
@@ -34,6 +34,26 @@ type WorkerEnvironmentTeardownFence = WorkerWorkspaceOwnerIdentity & {
   kind: "pending-workspace-result" | "workspace-reconciliation";
   ownerState: "current" | "retained-failed";
 };
+
+type WorkerWorkspaceJournalOwner = WorkerWorkspaceOwnerIdentity & {
+  retained: boolean;
+};
+
+type EnvironmentTeardownFacts = {
+  fencesByEnvironment: ReadonlyMap<string, readonly WorkerEnvironmentTeardownFence[]>;
+  pendingEnvironmentIds: ReadonlySet<string>;
+  pendingOwnersBySession: ReadonlyMap<string, WorkerPendingResultOwnerIdentity>;
+  relatedPlacementsByEnvironment: ReadonlyMap<string, readonly WorkerSessionPlacementRecord[]>;
+};
+
+function appendGrouped<K, V>(groups: Map<K, V[]>, key: K, value: V): void {
+  const group = groups.get(key);
+  if (group) {
+    group.push(value);
+    return;
+  }
+  groups.set(key, [value]);
+}
 
 export function classifyPendingWorkspaceResultOwner(
   placement: WorkerSessionPlacementRecord | undefined,
@@ -102,41 +122,96 @@ export function classifyWorkspaceJournalOwner(
     : undefined;
 }
 
-function listEnvironmentTeardownFences(
+function loadEnvironmentTeardownFacts(
   db: DatabaseSync,
-  environmentId: string,
-): WorkerEnvironmentTeardownFence[] {
-  const fences: WorkerEnvironmentTeardownFence[] = [];
-  const pendingRows = executeSqliteQuerySync(
-    db,
-    query(db)
-      .selectFrom("worker_workspace_pending_results")
-      .select([
-        "session_id",
-        "environment_id",
-        "owner_epoch",
-        "placement_generation",
-        "claim_id",
-        "run_id",
-      ])
-      .where("environment_id", "=", environmentId)
-      .orderBy("session_id"),
-  ).rows;
-  for (const row of pendingRows) {
-    const owner = {
-      sessionId: row.session_id,
-      environmentId: row.environment_id,
-      ownerEpoch: row.owner_epoch,
-      placementGeneration: row.placement_generation,
-      claimId: row.claim_id,
-      runId: row.run_id,
-    };
+  environmentIds: readonly string[],
+): EnvironmentTeardownFacts {
+  // Keep bulk placement projection on one bounded fact load. Per-row discovery here
+  // synchronously amplifies sessions.list latency for every failed placement.
+  const uniqueEnvironmentIds = [...new Set(environmentIds)];
+  const pendingOwners: WorkerPendingResultOwnerIdentity[] = [];
+  const journalOwners: WorkerWorkspaceJournalOwner[] = [];
+  const relatedPlacementsByEnvironment = new Map<string, WorkerSessionPlacementRecord[]>();
+  const placementsBySession = new Map<string, WorkerSessionPlacementRecord>();
+  for (let offset = 0; offset < uniqueEnvironmentIds.length; offset += 250) {
+    const chunk = uniqueEnvironmentIds.slice(offset, offset + 250);
+    for (const row of executeSqliteQuerySync(
+      db,
+      query(db)
+        .selectFrom("worker_workspace_pending_results")
+        .select([
+          "session_id",
+          "environment_id",
+          "owner_epoch",
+          "placement_generation",
+          "claim_id",
+          "run_id",
+        ])
+        .where("environment_id", "in", chunk)
+        .orderBy("environment_id")
+        .orderBy("session_id"),
+    ).rows) {
+      pendingOwners.push({
+        sessionId: row.session_id,
+        environmentId: row.environment_id,
+        ownerEpoch: row.owner_epoch,
+        placementGeneration: row.placement_generation,
+        claimId: row.claim_id,
+        runId: row.run_id,
+      });
+    }
+    for (const row of executeSqliteQuerySync(
+      db,
+      query(db)
+        .selectFrom("worker_workspace_reconciliations")
+        .select([
+          "session_id",
+          "environment_id",
+          "owner_epoch",
+          "placement_generation",
+          "forced_abandonment_retained",
+        ])
+        .where("environment_id", "in", chunk)
+        .orderBy("environment_id")
+        .orderBy("session_id"),
+    ).rows) {
+      journalOwners.push({
+        sessionId: row.session_id,
+        environmentId: row.environment_id,
+        ownerEpoch: row.owner_epoch,
+        placementGeneration: row.placement_generation,
+        retained: row.forced_abandonment_retained === 1,
+      });
+    }
+    for (const row of executeSqliteQuerySync(
+      db,
+      query(db)
+        .selectFrom("worker_session_placements")
+        .selectAll()
+        .where("environment_id", "in", chunk)
+        .where("state", "not in", ["local", "reclaimed"]),
+    ).rows) {
+      const placement = fromRow(row);
+      if (!placement.environmentId) {
+        throw new Error(`Worker placement ${placement.sessionId} lost its environment ownership`);
+      }
+      placementsBySession.set(placement.sessionId, placement);
+      appendGrouped(relatedPlacementsByEnvironment, placement.environmentId, placement);
+    }
+  }
+
+  const pendingOwnersBySession = new Map<string, WorkerPendingResultOwnerIdentity>();
+  const pendingEnvironmentIds = new Set<string>();
+  const fencesByEnvironment = new Map<string, WorkerEnvironmentTeardownFence[]>();
+  for (const owner of pendingOwners) {
+    pendingOwnersBySession.set(owner.sessionId, owner);
+    pendingEnvironmentIds.add(owner.environmentId);
     const ownerState = classifyPendingWorkspaceResultOwner(
-      findPlacement(db, owner.sessionId),
+      placementsBySession.get(owner.sessionId),
       owner,
     );
     if (ownerState) {
-      fences.push({
+      appendGrouped(fencesByEnvironment, owner.environmentId, {
         kind: "pending-workspace-result",
         ownerState,
         sessionId: owner.sessionId,
@@ -146,37 +221,36 @@ function listEnvironmentTeardownFences(
       });
     }
   }
-  const journalRows = executeSqliteQuerySync(
-    db,
-    query(db)
-      .selectFrom("worker_workspace_reconciliations")
-      .select([
-        "session_id",
-        "environment_id",
-        "owner_epoch",
-        "placement_generation",
-        "forced_abandonment_retained",
-      ])
-      .where("environment_id", "=", environmentId)
-      .orderBy("session_id"),
-  ).rows;
-  for (const row of journalRows) {
-    const owner = {
-      sessionId: row.session_id,
-      environmentId: row.environment_id,
-      ownerEpoch: row.owner_epoch,
-      placementGeneration: row.placement_generation,
-    };
+  for (const { retained, ...owner } of journalOwners) {
     const ownerState = classifyWorkspaceJournalOwner(
-      findPlacement(db, owner.sessionId),
+      placementsBySession.get(owner.sessionId),
       owner,
-      row.forced_abandonment_retained === 1,
+      retained,
     );
     if (ownerState) {
-      fences.push({ kind: "workspace-reconciliation", ownerState, ...owner });
+      appendGrouped(fencesByEnvironment, owner.environmentId, {
+        kind: "workspace-reconciliation",
+        ownerState,
+        ...owner,
+      });
     }
   }
-  return fences;
+  return {
+    fencesByEnvironment,
+    pendingEnvironmentIds,
+    pendingOwnersBySession,
+    relatedPlacementsByEnvironment,
+  };
+}
+
+function listEnvironmentTeardownFences(
+  db: DatabaseSync,
+  environmentId: string,
+): WorkerEnvironmentTeardownFence[] {
+  return [
+    ...(loadEnvironmentTeardownFacts(db, [environmentId]).fencesByEnvironment.get(environmentId) ??
+      []),
+  ];
 }
 
 function isExactFenceOwner(
@@ -238,85 +312,68 @@ function canDestroyAcceptedWorkspaceResult(
   return fences.length > 0 && fences.every((fence) => isExactFenceOwner(fence, owner));
 }
 
-function canDestroyForceAbandonedEnvironment(db: DatabaseSync, environmentId: string): boolean {
-  const pending = executeSqliteQuerySync(
-    db,
-    query(db)
-      .selectFrom("worker_workspace_pending_results")
-      .select("session_id")
-      .where("environment_id", "=", environmentId)
-      .limit(1),
-  ).rows[0];
-  if (pending) {
-    return false;
-  }
-  const relatedPlacements = executeSqliteQuerySync(
-    db,
-    query(db)
-      .selectFrom("worker_session_placements")
-      .select(["session_id", "state", "turn_claim_owner"])
-      .where("environment_id", "=", environmentId)
-      .where("state", "not in", ["local", "reclaimed"]),
-  ).rows;
+function canDestroyForceAbandonedEnvironmentFromFacts(
+  facts: EnvironmentTeardownFacts,
+  environmentId: string,
+): boolean {
   if (
-    relatedPlacements.some(
-      (placement) => placement.state !== "failed" || placement.turn_claim_owner !== null,
+    facts.pendingEnvironmentIds.has(environmentId) ||
+    (facts.relatedPlacementsByEnvironment.get(environmentId) ?? []).some(
+      (placement) => placement.state !== "failed" || placement.turnClaim !== null,
     )
   ) {
     return false;
   }
-  return listEnvironmentTeardownFences(db, environmentId).every(
+  return (facts.fencesByEnvironment.get(environmentId) ?? []).every(
     (fence) => fence.kind === "workspace-reconciliation" && fence.ownerState === "retained-failed",
   );
 }
 
-export function findWorkerTerminalRecovery(
+function canDestroyForceAbandonedEnvironment(db: DatabaseSync, environmentId: string): boolean {
+  return canDestroyForceAbandonedEnvironmentFromFacts(
+    loadEnvironmentTeardownFacts(db, [environmentId]),
+    environmentId,
+  );
+}
+
+export function findWorkerTerminalRecoveries(
   db: DatabaseSync,
-  placement: WorkerSessionPlacementRecord,
-): WorkerTerminalRecovery | undefined {
-  if (placement.state !== "failed" || !placement.environmentId) {
-    return undefined;
+  placements: readonly WorkerSessionPlacementRecord[],
+): ReadonlyMap<string, WorkerTerminalRecovery> {
+  const failedPlacements = placements.filter(
+    (placement) => placement.state === "failed" && placement.environmentId,
+  );
+  const recoveries = new Map<string, WorkerTerminalRecovery>();
+  if (failedPlacements.length === 0) {
+    return recoveries;
   }
-  const pending = executeSqliteQuerySync(
+  const facts = loadEnvironmentTeardownFacts(
     db,
-    query(db)
-      .selectFrom("worker_workspace_pending_results")
-      .select([
-        "session_id",
-        "environment_id",
-        "owner_epoch",
-        "placement_generation",
-        "claim_id",
-        "run_id",
-      ])
-      .where("session_id", "=", placement.sessionId),
-  ).rows[0];
-  const retainedPendingOwner =
-    pending &&
-    classifyPendingWorkspaceResultOwner(placement, {
-      sessionId: pending.session_id,
-      environmentId: pending.environment_id,
-      ownerEpoch: pending.owner_epoch,
-      placementGeneration: pending.placement_generation,
-      claimId: pending.claim_id,
-      runId: pending.run_id,
-    }) === "retained-failed";
-  const retainedJournalOwner =
-    !retainedPendingOwner &&
-    canDestroyForceAbandonedEnvironment(db, placement.environmentId) &&
-    listEnvironmentTeardownFences(db, placement.environmentId).some(
-      (fence) =>
-        fence.kind === "workspace-reconciliation" &&
-        fence.ownerState === "retained-failed" &&
-        fence.sessionId === placement.sessionId,
-    );
-  if (!retainedPendingOwner && !retainedJournalOwner) {
-    return undefined;
+    failedPlacements.map((placement) => placement.environmentId!),
+  );
+  for (const placement of failedPlacements) {
+    const environmentId = placement.environmentId!;
+    const pendingOwner = facts.pendingOwnersBySession.get(placement.sessionId);
+    const retainedPendingOwner =
+      pendingOwner &&
+      classifyPendingWorkspaceResultOwner(placement, pendingOwner) === "retained-failed";
+    const retainedJournalOwner =
+      !retainedPendingOwner &&
+      canDestroyForceAbandonedEnvironmentFromFacts(facts, environmentId) &&
+      (facts.fencesByEnvironment.get(environmentId) ?? []).some(
+        (fence) =>
+          fence.kind === "workspace-reconciliation" &&
+          fence.ownerState === "retained-failed" &&
+          fence.sessionId === placement.sessionId,
+      );
+    if (retainedPendingOwner || retainedJournalOwner) {
+      recoveries.set(placement.sessionId, {
+        action: "force-destroy-environment",
+        dataLoss: "unreconciled-workspace-result",
+      });
+    }
   }
-  return {
-    action: "force-destroy-environment",
-    dataLoss: "unreconciled-workspace-result",
-  };
+  return recoveries;
 }
 
 export function createPlacementTeardownFenceOps(runtime: PlacementStoreRuntime) {
