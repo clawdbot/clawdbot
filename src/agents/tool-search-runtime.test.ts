@@ -374,23 +374,23 @@ describe("Tool Search dispatcher argument preparation", () => {
     function createSingleToolCallStreamFn(toolCall: {
       id: string;
       name: string;
-      arguments: unknown;
+      arguments: Record<string, unknown>;
     }): StreamFn {
       // The agent loop calls streamFn again for the turn after the tool
       // result is appended. Return the tool call once, then a plain stop
       // turn so the run terminates instead of replaying the same tool call.
-      const turns: AssistantMessage["content"][] = [
-        [{ type: "toolCall", ...toolCall }],
-        [{ type: "text", text: "done" }],
+      const turns: { content: AssistantMessage["content"]; reason: "toolUse" | "stop" }[] = [
+        { content: [{ type: "toolCall", ...toolCall }], reason: "toolUse" },
+        { content: [{ type: "text", text: "done" }], reason: "stop" },
       ];
       let turnIndex = 0;
       return () => {
         const stream = createAssistantMessageEventStream();
         queueMicrotask(() => {
-          const content = turns[turnIndex] ?? turns.at(-1) ?? [];
+          const turn = turns[turnIndex] ?? turns.at(-1) ?? turns[0]!;
           turnIndex += 1;
-          const message = makeAssistantMessage(content);
-          stream.push({ type: "done", reason: message.stopReason, message });
+          const message = makeAssistantMessage(turn.content);
+          stream.push({ type: "done", reason: turn.reason, message });
           stream.end();
         });
         return stream;
