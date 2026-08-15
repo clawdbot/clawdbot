@@ -581,6 +581,7 @@ const bootstrapSizeCheck: HealthCheck = {
       workspaceDir,
       config: ctx.cfg,
       agentId: defaultAgentId,
+      readOnlyState: true,
     });
     const analysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({

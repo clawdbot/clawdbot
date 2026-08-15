@@ -14,6 +14,7 @@ import {
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
+import { loadDevicePairingStoreStateReadOnly } from "./device-pairing-store-readonly.js";
 import {
   loadDevicePairingStoreState,
   loadPairedDevicePairingStoreRecord,
@@ -215,6 +216,18 @@ async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
   pruneExpiredPending(state.pendingById, now, PAIRING_PENDING_TTL_MS);
   // Pending node-surface requests share the pairing TTL; requests refresh
   // their ts on reconnect so an actively retrying node keeps one alive.
+  for (const device of Object.values(state.pairedByDeviceId)) {
+    if (device.pendingNodeSurface && now - device.pendingNodeSurface.ts > PAIRING_PENDING_TTL_MS) {
+      delete device.pendingNodeSurface;
+    }
+  }
+  return state;
+}
+
+async function loadStateReadOnly(baseDir?: string): Promise<DevicePairingStateFile> {
+  const state: DevicePairingStateFile = loadDevicePairingStoreStateReadOnly(baseDir);
+  const now = Date.now();
+  pruneExpiredPending(state.pendingById, now, PAIRING_PENDING_TTL_MS);
   for (const device of Object.values(state.pairedByDeviceId)) {
     if (device.pendingNodeSurface && now - device.pendingNodeSurface.ts > PAIRING_PENDING_TTL_MS) {
       delete device.pendingNodeSurface;
@@ -796,6 +809,18 @@ function scopesWithinApprovedDeviceBaseline(params: {
 
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
   const state = await loadState(baseDir);
+  const pending = Object.values(state.pendingById)
+    .map(toPublicPendingDevicePairingRequest)
+    .toSorted((a, b) => b.ts - a.ts);
+  const paired = Object.values(state.pairedByDeviceId).toSorted(
+    (a, b) => b.approvedAtMs - a.approvedAtMs,
+  );
+  return { pending, paired };
+}
+
+/** List pairing state without creating or migrating shared state. */
+export async function listDevicePairingReadOnly(baseDir?: string): Promise<DevicePairingList> {
+  const state = await loadStateReadOnly(baseDir);
   const pending = Object.values(state.pendingById)
     .map(toPublicPendingDevicePairingRequest)
     .toSorted((a, b) => b.ts - a.ts);
