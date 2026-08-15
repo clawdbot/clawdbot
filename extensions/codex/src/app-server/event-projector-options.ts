@@ -13,7 +13,7 @@ export type CodexAppServerEventProjectorOptions = {
   readRemoteWorkspaceFile?: CodexRemoteWorkspaceFileReader;
   remoteWorkspaceRequestTimeoutMs?: number;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
-  onContextCompacted?: () => void;
+  onContextCompacted?: () => void | Promise<void>;
   resolveDynamicToolResultContentSource?: (toolName: string) => "network" | undefined;
   upstreamUserText?: string;
 };

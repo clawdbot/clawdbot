@@ -2,7 +2,7 @@
 
 // Run bounded test graphs in fresh processes so one shard's checker heap cannot
 // accumulate while the next shard loads. Hold one lock across the full sequence.
-import { spawnSync } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
@@ -35,6 +35,19 @@ if (stripeFlagIndex >= 0) {
     process.exit(1);
   }
 }
+// Each graph is a serial single-project build, so tsgo gains little past four
+// cores; CI stripe jobs opt into overlapping fresh child processes to use the
+// idle cores. Local runs stay serial to keep the heap-bounded default.
+const concurrencyFlagIndex = process.argv.indexOf("--concurrency");
+let concurrency = 1;
+if (concurrencyFlagIndex >= 0) {
+  const rawConcurrency = process.argv[concurrencyFlagIndex + 1] ?? "";
+  concurrency = Number(rawConcurrency);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 4) {
+    console.error(`Invalid shard concurrency (expected 1-4): ${rawConcurrency}`);
+    process.exit(1);
+  }
+}
 const env = resolveLocalHeavyCheckEnv(process.env);
 const releaseLock =
   env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1"
@@ -45,28 +58,43 @@ const releaseLock =
         toolName: "tsgo:core:test",
       });
 
-try {
-  for (const shard of shards) {
-    const result = spawnSync(
+function runShard(config: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child: ChildProcess = spawn(
       process.execPath,
-      [path.join(repoRoot, "scripts/run-tsgo.mjs"), "-b", shard.config, "--builders", "1"],
+      [path.join(repoRoot, "scripts/run-tsgo.mjs"), "-b", config, "--builders", "1"],
       {
         cwd: repoRoot,
         env: { ...env, OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
         stdio: "inherit",
       },
     );
-    if (result.error) {
-      throw result.error;
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      resolve(signal ? signalExitCode(signal) : (code ?? 1));
+    });
+  });
+}
+
+try {
+  const queue = [...shards];
+  let failureCode = 0;
+  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    for (;;) {
+      const shard = queue.shift();
+      // Stop draining after the first failure so the exit stays prompt.
+      if (!shard || failureCode !== 0) {
+        return;
+      }
+      const code = await runShard(shard.config);
+      if (code !== 0 && failureCode === 0) {
+        failureCode = code;
+      }
     }
-    if (result.signal) {
-      process.exitCode = signalExitCode(result.signal);
-      break;
-    }
-    if (result.status !== 0) {
-      process.exitCode = result.status ?? 1;
-      break;
-    }
+  });
+  await Promise.all(workers);
+  if (failureCode !== 0) {
+    process.exitCode = failureCode;
   }
 } finally {
   releaseLock();

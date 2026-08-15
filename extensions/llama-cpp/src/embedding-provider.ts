@@ -5,23 +5,18 @@ import {
   type EmbeddingProviderAdapter,
   type EmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
+  DEFAULT_LLAMA_CPP_MODEL_ID,
   LLAMA_CPP_PROVIDER_ID,
   resolveLegacyLlamaCppModelCacheDir,
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
-import {
-  inspectLlamaCppEmbeddingStartupPrerequisites,
-  resolveConfiguredLlamaCppProvider,
-  resolveLlamaCppChatModel,
-  resolveLlamaCppEmbeddingSource,
-  resolveLlamaCppProviderPort,
-} from "./embedding-provider-preflight.js";
 import { selectLlamaServerAsset } from "./llama-server-install.js";
 import {
   ensureLlamaCppModel,
@@ -102,12 +97,42 @@ function resolveModelIdentity(
   };
 }
 
+function resolveConfiguredProvider(options: EmbeddingProviderCreateOptions): ModelProviderConfig {
+  const provider = options.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (!provider?.localService || !provider.baseUrl) {
+    throw new Error(
+      "Local embeddings need the managed llama.cpp server config. Run `openclaw configure`, choose llama.cpp once, then retry `openclaw memory status --deep`.",
+    );
+  }
+  return provider;
+}
+
+function resolveProviderPort(provider: ModelProviderConfig): number {
+  const port = Number(new URL(provider.baseUrl ?? "").port);
+  if (!Number.isInteger(port) || port <= 0) {
+    throw new Error("Managed llama.cpp provider baseUrl must include a loopback port.");
+  }
+  return port;
+}
+
 async function prepareEmbeddingServer(
   options: EmbeddingProviderCreateOptions,
   embeddingSource: string,
 ): Promise<void> {
-  const provider = resolveConfiguredLlamaCppProvider(options);
-  const chatModel = resolveLlamaCppChatModel(options, provider);
+  const provider = resolveConfiguredProvider(options);
+  const configuredPrimary = options.config.agents?.defaults?.model;
+  const primaryRef =
+    typeof configuredPrimary === "string" ? configuredPrimary : configuredPrimary?.primary;
+  const primaryId = primaryRef?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`)
+    ? primaryRef.slice(LLAMA_CPP_PROVIDER_ID.length + 1)
+    : undefined;
+  const chatModel =
+    provider.models.find((model) => model.id === primaryId) ??
+    provider.models.find((model) => model.id !== DEFAULT_LLAMA_CPP_MODEL_ID) ??
+    provider.models[0];
+  if (!chatModel) {
+    throw new Error("Managed llama.cpp provider has no chat model preset.");
+  }
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
   const key = JSON.stringify([provider.baseUrl, chatModel.id, embeddingSource, cacheDir]);
   const pending =
@@ -135,7 +160,7 @@ async function prepareEmbeddingServer(
             : chatModel.contextTokens,
         maxTokens: chatModel.maxTokens,
         embeddingModelPath,
-        port: resolveLlamaCppProviderPort(provider),
+        port: resolveProviderPort(provider),
       });
     })();
   preparedEmbeddingServers.set(key, pending);
@@ -202,10 +227,9 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
     const modelPath = normalizeOptionalString(local.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
     return resolveModelIdentity(local, modelPath, options.dimensions);
   },
-  inspectStartupPrerequisites: inspectLlamaCppEmbeddingStartupPrerequisites,
   create: async (options) => {
     const local = readLocalOptions(options);
-    const modelPath = resolveLlamaCppEmbeddingSource(options);
+    const modelPath = normalizeOptionalString(local.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
     await prepareEmbeddingServer(options, modelPath);
     const genericAdapter = getEmbeddingProvider("openai-compatible", options.config);
     if (!genericAdapter) {
@@ -225,7 +249,7 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
       provider: wrapProvider({
         provider: result.provider,
         canonicalModel: identity.model,
-        baseUrl: resolveConfiguredLlamaCppProvider(options).baseUrl ?? "",
+        baseUrl: resolveConfiguredProvider(options).baseUrl ?? "",
       }),
       runtime: {
         id: "local",

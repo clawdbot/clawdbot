@@ -236,6 +236,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       file: sessionPromptState.sessionFile,
       target: sessionPromptState.sessionTarget,
     }),
+    prepareCompactedTranscriptRetry: sessionPromptState.prepareCompactedTranscriptRetry,
     armPostCompactionGuard: input.armPostCompactionGuard,
   };
   if (
@@ -260,7 +261,6 @@ export async function recoverEmbeddedRunAttempt(input: {
     assistantOverflowCandidate,
     attemptCompactionCount,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
-    prepareCompactedTranscriptRetry: sessionPromptState.prepareCompactedTranscriptRetry,
   });
   if (overflowRecovery.action === "retry") {
     return retry();

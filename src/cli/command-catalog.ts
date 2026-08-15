@@ -10,12 +10,7 @@ type CliConfigGuardMode = "run" | "skip" | "when-suppressed";
 type CliConfigGuardPolicy =
   | CliConfigGuardMode
   | ((ctx: { argv: string[]; commandPath: string[] }) => CliConfigGuardMode);
-export type CliPluginRegistryScope =
-  | "all"
-  | "channels"
-  | "configured-channels"
-  | "memory"
-  | "memory-embedding-providers";
+export type CliPluginRegistryScope = "all" | "channels" | "configured-channels" | "memory";
 export type CliPluginRegistryPolicy = {
   scope: CliPluginRegistryScope;
 };
@@ -251,16 +246,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "gateway-health" },
   },
   { commandPath: ["gateway", "install"], exact: true, policy: { networkProxy: "bypass" } },
-  {
-    commandPath: ["gateway", "preflight"],
-    exact: true,
-    policy: {
-      configGuard: "skip",
-      loadPlugins: "never",
-      ensureCliPath: false,
-      networkProxy: "bypass",
-    },
-  },
   { commandPath: ["gateway", "probe"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "restart"], exact: true, policy: { networkProxy: "bypass" } },
   {

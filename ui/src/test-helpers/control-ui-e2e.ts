@@ -221,9 +221,11 @@ const defaultControlUiFeatureMethods = [
   "sessions.dispatch",
   "sessions.fork",
   "sessions.groups.delete",
+  "sessions.groups.defaults",
   "sessions.groups.list",
   "sessions.groups.put",
   "sessions.groups.rename",
+  "sessions.groups.update",
   "sessions.patch",
   "sessions.reclaim",
   "sessions.reset",
@@ -231,6 +233,7 @@ const defaultControlUiFeatureMethods = [
   "update.hold",
   "update.run",
   "update.status",
+  "worktrees.branches",
 ] as const;
 
 export type MockGatewayRequest = {
@@ -312,6 +315,8 @@ export type ControlUiMockGatewayScenario = {
   sessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
+  /** Optional New Session defaults keyed by custom group name. */
+  sessionGroupDefaults?: Record<string, { cwd?: string; worktree?: boolean }>;
   terminalEnabled?: boolean;
   cliAgentsEnabled?: boolean;
   workspace?: string;
@@ -825,6 +830,7 @@ function normalizeScenario(
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
+    sessionGroupDefaults: scenario.sessionGroupDefaults ?? {},
     terminalEnabled: scenario.terminalEnabled ?? false,
     cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
     workspace: scenario.workspace ?? "",
@@ -973,10 +979,12 @@ function installControlUiMockGateway(
   const groupsStateKey = "openclaw.control-ui-e2e.sessionGroups";
   let groupsState: {
     names: string[];
+    defaults: Record<string, { cwd?: string; worktree?: boolean }>;
     sectionOrder: string[];
     renames: Array<{ from: string; to: string | null }>;
   } = {
     names: [...input.scenario.sessionGroups],
+    defaults: { ...input.scenario.sessionGroupDefaults },
     sectionOrder: [],
     renames: [],
   };
@@ -991,6 +999,7 @@ function installControlUiMockGateway(
     if (rawGroups) {
       groupsState = JSON.parse(rawGroups) as typeof groupsState;
       groupsState.sectionOrder ??= [];
+      groupsState.defaults ??= {};
     }
   } catch {
     // Storage-disabled browser contexts still get the scenario catalog.
@@ -1078,6 +1087,12 @@ function installControlUiMockGateway(
     return {
       groups: groupsState.names.map((name, position) => ({ name, position })),
       sectionOrder: [...groupsState.sectionOrder],
+    };
+  }
+
+  function groupDefaultsPayload() {
+    return {
+      defaults: groupsState.names.map((name) => ({ name, ...groupsState.defaults[name] })),
     };
   }
 
@@ -1775,6 +1790,8 @@ function installControlUiMockGateway(
       }
       case "sessions.groups.list":
         return groupsPayload();
+      case "sessions.groups.defaults":
+        return groupDefaultsPayload();
       case "sessions.groups.put": {
         groupsState.names = normalizedGroupNames(isRecord(params) ? params.names : undefined);
         if (isRecord(params) && Array.isArray(params.sectionOrder)) {
@@ -1794,6 +1811,10 @@ function installControlUiMockGateway(
             names.splice(sourceIndex < 0 ? names.length : sourceIndex, 0, to);
           }
           groupsState.names = names;
+          if (!groupsState.defaults[to] && groupsState.defaults[from]) {
+            groupsState.defaults[to] = groupsState.defaults[from];
+          }
+          delete groupsState.defaults[from];
           const sourceSectionId = `category:${from}`;
           const targetSectionId = `category:${to}`;
           groupsState.sectionOrder = groupsState.sectionOrder.flatMap((sectionId) => {
@@ -1807,10 +1828,23 @@ function installControlUiMockGateway(
         }
         return { ok: true, updatedSessions: 0, ...groupsPayload() };
       }
+      case "sessions.groups.update": {
+        const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
+        if (name) {
+          const cwd = isRecord(params) && typeof params.cwd === "string" ? params.cwd.trim() : "";
+          groupsState.defaults[name] = {
+            ...(cwd ? { cwd } : {}),
+            worktree: isRecord(params) && params.worktree === true,
+          };
+          persistGroupsState();
+        }
+        return { ok: true, ...groupDefaultsPayload() };
+      }
       case "sessions.groups.delete": {
         const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
         if (name) {
           groupsState.names = groupsState.names.filter((existing) => existing !== name);
+          delete groupsState.defaults[name];
           groupsState.sectionOrder = groupsState.sectionOrder.filter(
             (sectionId) => sectionId !== `category:${name}`,
           );
@@ -2444,42 +2478,52 @@ function createMockGatewayControls(
       }, policy);
     },
     async waitForRequest(method) {
-      try {
-        await page.waitForFunction(
-          (targetMethod) => {
-            const gateway = (
-              window as Window & {
-                openclawControlUiE2eGateway?: {
-                  requests: MockGatewayRequest[];
-                };
-              }
-            ).openclawControlUiE2eGateway;
-            return Boolean(gateway?.requests.some((request) => request.method === targetMethod));
-          },
-          method,
-          // Request capture is non-rendering state. Interval polling avoids background-page
-          // requestAnimationFrame throttling when CI runs several headless pages concurrently.
-          { polling: 25, timeout: controlUiE2eWaitTimeoutMs },
-        );
-      } catch (error) {
-        if (error instanceof Error && error.name === "TimeoutError") {
-          try {
-            await captureControlUiE2eRequestTimeout(page, method, error, diagnosticEvents);
-          } catch (captureError) {
-            console.error("[control-ui-e2e] failed to capture request-timeout diagnostics", {
-              captureError,
-              method,
-            });
+      const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await page.waitForFunction(
+            (targetMethod) => {
+              const gateway = (
+                window as Window & {
+                  openclawControlUiE2eGateway?: {
+                    requests: MockGatewayRequest[];
+                  };
+                }
+              ).openclawControlUiE2eGateway;
+              return Boolean(gateway?.requests.some((request) => request.method === targetMethod));
+            },
+            method,
+            // Request capture is non-rendering state. Interval polling avoids background-page
+            // requestAnimationFrame throttling when CI runs several headless pages concurrently.
+            { polling: 25, timeout: Math.max(1, deadline - Date.now()) },
+          );
+          const request = (await getRequests(method)).at(-1);
+          if (request) {
+            return request;
           }
+        } catch (error) {
+          const contextReset =
+            error instanceof Error &&
+            (error.message.includes("Execution context was destroyed") ||
+              error.message.includes("Cannot find context with specified id"));
+          // Intentional stale-build reloads replace the page context once while connecting.
+          if (contextReset && attempt === 0 && !page.isClosed()) {
+            continue;
+          }
+          if (error instanceof Error && error.name === "TimeoutError") {
+            try {
+              await captureControlUiE2eRequestTimeout(page, method, error, diagnosticEvents);
+            } catch (captureError) {
+              console.error("[control-ui-e2e] failed to capture request-timeout diagnostics", {
+                captureError,
+                method,
+              });
+            }
+          }
+          throw error;
         }
-        throw error;
       }
-      const requests = await getRequests(method);
-      const request = requests.at(-1);
-      if (!request) {
-        throw new Error(`No mock Gateway request found for ${method}`);
-      }
-      return request;
+      throw new Error(`No mock Gateway request found for ${method}`);
     },
   };
 }

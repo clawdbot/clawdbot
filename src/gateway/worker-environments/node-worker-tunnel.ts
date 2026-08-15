@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
@@ -19,6 +18,7 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { nodeWorkerGatewayNamespace } from "./node-worker-gateway-namespace.js";
 import {
   createNodeWorkerWorkspaceFallback,
   recordNodeSyncPath,
@@ -183,10 +183,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   const entries = new Map<string, NodeTunnelEntry>();
   const pendingStarts = new Map<string, { ownerEpoch: number; cancelled: boolean }>();
   let resolveWorkspaceBinding: NodeWorkerWorkspaceBindingResolver | undefined;
-  const gatewayNamespace = `gateway-${createHash("sha256")
-    .update(options.gatewayDeviceId)
-    .digest("hex")
-    .slice(0, 32)}`;
+  const gatewayNamespace = nodeWorkerGatewayNamespace(options.gatewayDeviceId);
 
   const hasDurableBinding = (entry: NodeTunnelEntry): boolean => {
     const current = options.getEnvironment(entry.environmentId);

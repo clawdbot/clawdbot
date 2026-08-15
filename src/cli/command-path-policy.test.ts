@@ -74,15 +74,6 @@ describe("command-path-policy", () => {
     });
   });
 
-  it("keeps gateway preflight off mutating startup paths", () => {
-    expectResolvedPolicy(["gateway", "preflight"], {
-      configGuard: "skip",
-      loadPlugins: "never",
-      ensureCliPath: false,
-      networkProxy: "bypass",
-    });
-  });
-
   it("keeps RPC-only nodes reads off the config guard", () => {
     expectResolvedPolicy(["nodes", "status"], {
       configGuard: "skip",

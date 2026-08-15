@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   DevicePairSetupCodeResultSchema,
   DevicePairSetupCompletedEventSchema,
-  DevicePairSetupDeliveryUncertainEventSchema,
   DevicePairSetupStatusParamsSchema,
   DevicePairSetupStatusResultSchema,
 } from "./devices.js";
@@ -43,7 +42,6 @@ describe("device pairing setup schemas", () => {
         ts: 1_800_000_000_001,
       };
       expect(Value.Check(DevicePairSetupCompletedEventSchema, event)).toBe(true);
-      expect(Value.Check(DevicePairSetupDeliveryUncertainEventSchema, event)).toBe(true);
       expect(
         Value.Check(DevicePairSetupCompletedEventSchema, { ...event, bootstrapToken: "secret" }),
       ).toBe(false);

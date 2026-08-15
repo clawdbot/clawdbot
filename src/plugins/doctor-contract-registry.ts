@@ -17,7 +17,6 @@ import { normalizePluginsConfig } from "./config-state.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import {
   coercePluginDoctorContractModule,
-  type BundledPluginDoctorStateMigration,
   type PluginDoctorContractModule,
   type PluginDoctorStateMigration,
 } from "./doctor-contract-module.js";
@@ -50,19 +49,12 @@ type PluginDoctorContractEntry = {
     typeof coercePluginDoctorContractModule
   >["resolveSessionStoreAgentIds"];
   sessionRouteStateOwners: DoctorSessionRouteStateOwner[];
-  stateMigrations: BundledPluginDoctorStateMigration[];
+  stateMigrations: PluginDoctorStateMigration[];
 };
 
 type PluginDoctorStateMigrationEntry = {
   pluginId: string;
   migration: PluginDoctorStateMigration;
-};
-
-type PluginStartupPreflightEntry = {
-  pluginId: string;
-  migration: BundledPluginDoctorStateMigration & {
-    preflightStartup: NonNullable<BundledPluginDoctorStateMigration["preflightStartup"]>;
-  };
 };
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
@@ -428,35 +420,6 @@ function loadLegacyChannelStateMigrationDetector(
   }
 }
 
-function shouldIncludePluginStateMigrationRecord(params: {
-  record: PluginManifestRegistryRecord;
-  config?: OpenClawConfig;
-  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
-}): boolean {
-  const channelOwner = params.record.channels.length > 0;
-  // Config repair intentionally includes disabled plugins; channel state must never be moved
-  // after its operator has disabled the owning plugin or every configured channel.
-  if (
-    channelOwner &&
-    !shouldIncludeChannelSetupFeatureForConfig({
-      plugin: params.record,
-      config: params.config,
-    })
-  ) {
-    return false;
-  }
-  // Trusted bundled non-channel migrations remain available while plugins are globally disabled.
-  // Every non-bundled owner must pass normal activation before either artifact can execute.
-  return (
-    params.record.origin === "bundled" ||
-    isActivatedManifestOwner({
-      plugin: params.record,
-      normalizedConfig: params.normalizedConfig,
-      rootConfig: params.config,
-    })
-  );
-}
-
 export function listPluginDoctorStateMigrationEntries(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -466,17 +429,24 @@ export function listPluginDoctorStateMigrationEntries(params?: {
   const entries: PluginDoctorStateMigrationEntry[] = [];
   const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
   for (const record of resolvePluginDoctorManifestRecords(params ?? {})) {
+    const channelOwner = record.channels.length > 0;
+    // Config repair intentionally includes disabled plugins; channel state must never be moved
+    // after its operator has disabled the owning plugin or every configured channel.
     if (
-      !shouldIncludePluginStateMigrationRecord({
-        record,
-        config: params?.config,
-        normalizedConfig,
-      })
+      channelOwner &&
+      !shouldIncludeChannelSetupFeatureForConfig({ plugin: record, config: params?.config })
+    ) {
+      continue;
+    }
+    // Trusted bundled non-channel migrations remain available while plugins are globally disabled.
+    // Every non-bundled owner must pass normal activation before either artifact can execute.
+    if (
+      record.origin !== "bundled" &&
+      !isActivatedManifestOwner({ plugin: record, normalizedConfig, rootConfig: params?.config })
     ) {
       continue;
     }
 
-    const channelOwner = record.channels.length > 0;
     const modernEntries = loadPluginDoctorContractEntries({
       records: [record],
       surface: "stateMigrations",
@@ -510,71 +480,6 @@ export function listPluginDoctorStateMigrationEntries(params?: {
     });
   }
   return entries;
-}
-
-/**
- * Enumerate host-audited startup callbacks without loading operator-installed code.
- * Active external owners that explicitly declare state migrations are surfaced as
- * unsupported so callers fail closed instead of treating an uninspected target as ready.
- */
-export function listPluginStartupPreflightEntries(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-}): {
-  entries: PluginStartupPreflightEntry[];
-  unsupportedPluginIds: string[];
-} {
-  const entries: PluginStartupPreflightEntry[] = [];
-  const unsupportedPluginIds = new Set<string>();
-  const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
-
-  for (const record of resolvePluginDoctorManifestRecords(params ?? {})) {
-    if (
-      !shouldIncludePluginStateMigrationRecord({
-        record,
-        config: params?.config,
-        normalizedConfig,
-      })
-    ) {
-      continue;
-    }
-    if (record.origin !== "bundled") {
-      if (record.doctorContract?.stateMigrations === true) {
-        unsupportedPluginIds.add(record.id);
-      }
-      continue;
-    }
-    const entry = loadPluginDoctorContractEntries({
-      records: [record],
-      surface: "stateMigrations",
-    })[0];
-    if (!entry) {
-      continue;
-    }
-    for (const migration of entry.stateMigrations) {
-      if (migration.doctorOnly === true || !migration.preflightStartup) {
-        continue;
-      }
-      entries.push({
-        pluginId: entry.pluginId,
-        migration: {
-          ...migration,
-          preflightStartup: migration.preflightStartup,
-        },
-      });
-    }
-  }
-
-  return {
-    entries: entries.toSorted((left, right) =>
-      `${left.pluginId}/${left.migration.id}`.localeCompare(
-        `${right.pluginId}/${right.migration.id}`,
-      ),
-    ),
-    unsupportedPluginIds: [...unsupportedPluginIds].toSorted(),
-  };
 }
 
 export function applyPluginDoctorCompatibilityMigrations(

@@ -127,6 +127,8 @@ Start product performance evidence as early as the Code SHA exists, in
 parallel with other release work:
 
 ```bash
+# Full Release Validation profile gate: true for stable, false for beta.
+fail_on_regression=true
 gh workflow run openclaw-performance.yml \
   --repo openclaw/openclaw \
   --ref main \
@@ -135,7 +137,7 @@ gh workflow run openclaw-performance.yml \
   -f repeat=3 \
   -f deep_profile=false \
   -f live_openai_candidate=false \
-  -f fail_on_regression=true
+  -f fail_on_regression="$fail_on_regression"
 ```
 
 - Do not wait for full release validation to start this early perf signal.

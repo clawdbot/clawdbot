@@ -435,7 +435,27 @@ describe("gateway broadcaster", () => {
 
     expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
     expect(slowSocket.send).not.toHaveBeenCalled();
-    expect(healthySocket.sent).toEqual([{ type: "event", event: "session.message", payload }]);
+    expect(healthySocket.sent).toEqual([
+      { type: "event", event: "session.message", payload, seq: 1 },
+    ]);
+  });
+
+  it("stamps targeted frames on the per-client sequence so drops surface as gaps", () => {
+    const socket = makeRecordingSocket();
+    const client = makeOperatorWsClient("c-seq", socket, ["operator.read"]);
+    const clients = new Set<GatewayWsClient>([client]);
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+
+    broadcastToConnIds("tick", { ts: 1 }, new Set(["c-seq"]));
+    broadcast("heartbeat", { ts: 2 });
+    // A slow-consumer drop between targeted sends must consume a sequence
+    // number: the next delivered frame exposes the loss to gap detection.
+    socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    broadcastToConnIds("tick", { ts: 3 }, new Set(["c-seq"]), { dropIfSlow: true });
+    socket.bufferedAmount = 0;
+    broadcastToConnIds("tick", { ts: 4 }, new Set(["c-seq"]));
+
+    expect(socket.sent.map((frame) => frame.seq)).toEqual([1, 2, 4]);
   });
 
   it("keeps workers outside all generic and targeted gateway broadcasts", () => {

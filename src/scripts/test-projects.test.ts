@@ -568,6 +568,7 @@ describe("test-projects args", () => {
           "extensions/memory-core/src/memory/manager-provider-lifecycle.test.ts",
           "extensions/memory-core/src/memory/manager-registry.test.ts",
           "extensions/memory-core/src/memory/manager-search-orchestration.test.ts",
+          "extensions/memory-core/src/memory/manager-session-update-race.test.ts",
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
           "extensions/memory-core/src/memory/manager.legacy-migration-cleanup.test.ts",
           "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",

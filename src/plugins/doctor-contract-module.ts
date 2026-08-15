@@ -5,7 +5,6 @@ import type {
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
-import type { EmbeddingProviderStartupInspector } from "./embedding-provider-types.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 
 export type PluginDoctorStateMigrationDetection = {
@@ -21,43 +20,6 @@ export type PluginDoctorStateMigrationContext = {
   ) => void;
   /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
   getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
-};
-
-export type PluginStartupPreflightFinding = {
-  id: string;
-  code: string;
-  message: string;
-  remediation?: readonly string[];
-  agentId?: string;
-  provider?: string;
-  model?: string;
-  configPath?: string;
-};
-
-export type PluginStartupPreflightResult =
-  | { status: "ready" }
-  | { status: "blocked"; findings: readonly PluginStartupPreflightFinding[] }
-  | {
-      status: "indeterminate";
-      reason: string;
-      findings?: readonly PluginStartupPreflightFinding[];
-    };
-
-export type PluginStartupPreflightParams = {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-  oauthDir: string;
-  /**
-   * Resolve a SQLite source to a private WAL-consistent snapshot for the duration
-   * of this callback. Plugins must not retain the returned path.
-   */
-  resolveSqliteReadOnlyLocation: (pathname: string) => string;
-  /** Resolve a trusted bundled provider's non-mutating startup inspector. */
-  resolveEmbeddingProviderStartupInspector: (
-    providerId: string,
-    config: OpenClawConfig,
-  ) => EmbeddingProviderStartupInspector | undefined;
 };
 
 export type PluginDoctorStateMigration = {
@@ -84,16 +46,6 @@ export type PluginDoctorStateMigration = {
   }) =>
     | Promise<{ changes: string[]; warnings: string[]; notices?: string[] }>
     | { changes: string[]; warnings: string[]; notices?: string[] };
-};
-
-/**
- * Host-audited startup inspection for bundled OpenClaw plugins only.
- * Gateway preflight never loads this callback from operator-installed plugins.
- */
-export type BundledPluginDoctorStateMigration = PluginDoctorStateMigration & {
-  preflightStartup?: (
-    params: PluginStartupPreflightParams,
-  ) => Promise<PluginStartupPreflightResult> | PluginStartupPreflightResult;
 };
 
 export type PluginDoctorContractModule = {
@@ -144,14 +96,13 @@ function coerceSessionStoreAgentIdsResolver(
     : undefined;
 }
 
-function isPluginDoctorStateMigration(value: unknown): value is BundledPluginDoctorStateMigration {
+function isPluginDoctorStateMigration(value: unknown): value is PluginDoctorStateMigration {
   if (!value || typeof value !== "object") {
     return false;
   }
   const candidate = value as {
     id?: unknown;
     label?: unknown;
-    preflightStartup?: unknown;
     detectLegacyState?: unknown;
     migrateLegacyState?: unknown;
   };
@@ -165,7 +116,7 @@ function isPluginDoctorStateMigration(value: unknown): value is BundledPluginDoc
   );
 }
 
-function coercePluginDoctorStateMigrations(value: unknown): BundledPluginDoctorStateMigration[] {
+function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMigration[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -173,8 +124,6 @@ function coercePluginDoctorStateMigrations(value: unknown): BundledPluginDoctorS
     id: migration.id.trim(),
     label: migration.label.trim(),
     doctorOnly: migration.doctorOnly === true ? true : undefined,
-    preflightStartup:
-      typeof migration.preflightStartup === "function" ? migration.preflightStartup : undefined,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));

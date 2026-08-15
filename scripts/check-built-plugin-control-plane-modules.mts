@@ -30,11 +30,7 @@ type ProbeParams = {
 };
 
 const ROOT = resolveRepoRoot(import.meta.url);
-const DIRECT_CONTRACT_FILES = [
-  "contract-api.js",
-  "doctor-contract-api.js",
-  "embedding-provider-preflight-api.js",
-];
+const DIRECT_CONTRACT_FILES = ["contract-api.js", "doctor-contract-api.js"];
 const LEGACY_SETUP_PROPERTIES = new Map<string, string>([
   ["legacyStateMigrations", "channel-legacy-state-migrations"],
   ["legacySessionSurface", "channel-legacy-session-surface"],
@@ -121,12 +117,7 @@ export function listBuiltPluginControlPlaneModules(params: { rootDir?: string } 
         const relativePath = path.relative(rootDir, modulePath).split(path.sep).join("/");
         modules.set(relativePath, {
           pluginId,
-          kind:
-            fileName === "doctor-contract-api.js"
-              ? "doctor-contract"
-              : fileName === "embedding-provider-preflight-api.js"
-                ? "embedding-provider-preflight"
-                : "contract",
+          kind: fileName === "doctor-contract-api.js" ? "doctor-contract" : "contract",
           relativePath,
         });
       }

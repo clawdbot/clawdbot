@@ -48,7 +48,6 @@ describe("command-startup-policy", () => {
       ["memory", "search"],
       ["memory", "status"],
       ["gateway", "stability"],
-      ["gateway", "preflight"],
       ["gateway", "usage-cost"],
     ]) {
       expect(resolvePolicy({ commandPath }).skipConfigGuard, commandPath.join(" ")).toBe(true);

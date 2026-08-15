@@ -25,6 +25,7 @@ import {
 } from "./auth-bridge.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import {
+  isCodexRemoteExecPlacementSandbox,
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   readCodexPluginConfig,
   resolveCodexAppServerHomeScope,
@@ -242,6 +243,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         authProfileStore: params.authProfileStore,
         agentDir,
         homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
+        requirePreparedAuth: isCodexRemoteExecPlacementSandbox(sandbox),
         config: params.config,
         subscriptionProfileRequiredError:
           "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",

@@ -84,10 +84,6 @@ describe("built-in machine-output resolvers", () => {
     ).toBe(true);
   });
 
-  it("keeps gateway preflight human-readable unless --json is explicit", () => {
-    expect(isGatewayMachineOutput(["node", "openclaw", "gateway", "preflight"])).toBe(false);
-  });
-
   it("reserves raw cron scratch output", () => {
     expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job"])).toBe(true);
   });

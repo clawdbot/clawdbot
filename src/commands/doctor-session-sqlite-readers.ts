@@ -17,7 +17,6 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { resolveSqliteReadOnlyInspectionLocation } from "../infra/sqlite-readonly-inspection.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 
 type ReadOnlySqliteSessionSummary = {
@@ -314,9 +313,7 @@ export function readOnlySqliteSessionEntries(
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(resolveSqliteReadOnlyInspectionLocation(sqlitePath), {
-      readOnly: true,
-    });
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const nodeTable = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
       .get("session_nodes");
@@ -363,9 +360,7 @@ export function readOnlySqliteTranscriptEventCount(
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(resolveSqliteReadOnlyInspectionLocation(sqlitePath), {
-      readOnly: true,
-    });
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const table = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
       .get("transcript_events");
@@ -410,9 +405,7 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(resolveSqliteReadOnlyInspectionLocation(sqlitePath), {
-      readOnly: true,
-    });
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const hasTranscriptEvents = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
       .get("transcript_events");
@@ -563,9 +556,7 @@ export function readOnlySqliteTranscriptSessionIds(sqlitePath: string): string[]
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(resolveSqliteReadOnlyInspectionLocation(sqlitePath), {
-      readOnly: true,
-    });
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const table = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
       .get("transcript_events");
@@ -602,9 +593,7 @@ export function readOnlySqliteTranscriptSnapshot(
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(resolveSqliteReadOnlyInspectionLocation(sqlitePath), {
-      readOnly: true,
-    });
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const rows = database
       .prepare(
         "SELECT event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
@@ -637,9 +626,7 @@ export function readOnlySqliteTranscriptStorageSnapshot(
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(resolveSqliteReadOnlyInspectionLocation(sqlitePath), {
-      readOnly: true,
-    });
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const rows = database
       .prepare(
         "SELECT created_at, event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildProductionControlUiE2e,
   canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
@@ -300,26 +301,28 @@ describe("Control UI service-worker production update E2E", () => {
       await ensureControlledPage(page, pageErrors, buildA);
       await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildA);
       await expect
-        .poll(async () =>
-          page.evaluate(() => {
-            const panel = document.querySelector("openclaw-terminal-panel") as
-              | (HTMLElement & { available: boolean })
-              | null;
-            const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
-              runtime?: {
-                context?: {
-                  config: { current: { terminalEnabled: boolean } };
-                  gateway: { snapshot: { phase: string; hello: unknown } };
+        .poll(
+          async () =>
+            page.evaluate(() => {
+              const panel = document.querySelector("openclaw-terminal-panel") as
+                | (HTMLElement & { available: boolean })
+                | null;
+              const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
+                runtime?: {
+                  context?: {
+                    config: { current: { terminalEnabled: boolean } };
+                    gateway: { snapshot: { phase: string; hello: unknown } };
+                  };
                 };
               };
-            };
-            return {
-              available: panel?.available ?? null,
-              phase: shell?.runtime?.context?.gateway.snapshot.phase ?? null,
-              terminalEnabled: shell?.runtime?.context?.config.current.terminalEnabled ?? null,
-              hasHello: shell?.runtime?.context?.gateway.snapshot.hello != null,
-            };
-          }),
+              return {
+                available: panel?.available ?? null,
+                phase: shell?.runtime?.context?.gateway.snapshot.phase ?? null,
+                terminalEnabled: shell?.runtime?.context?.config.current.terminalEnabled ?? null,
+                hasHello: shell?.runtime?.context?.gateway.snapshot.hello != null,
+              };
+            }),
+          { timeout: controlUiE2eWaitTimeoutMs },
         )
         .toMatchObject({
           available: true,

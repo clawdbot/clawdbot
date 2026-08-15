@@ -39,6 +39,8 @@ import {
 } from "./client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
+  isCodexRemoteExecPlacementSandbox,
+  isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
   resolveCodexAppServerHomeScope,
   resolveOpenClawExecPolicyForCodexAppServer,
@@ -47,8 +49,11 @@ import {
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import {
+  resolveCodexExternalSandboxPolicyForOpenClawSandbox,
   resolveCodexMessageToolProvider,
+  resolveCodexSandboxEnvironmentSelection,
   shouldEnableCodexAppServerNativeToolSurface,
+  shouldRequireCodexSandboxExecServerEnvironment,
 } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolErrorDiagnostic,
@@ -97,6 +102,11 @@ import { resolveCodexProviderWebSearchSupportForClient } from "./provider-capabi
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
+import {
+  ensureCodexSandboxExecServerEnvironment,
+  releaseCodexSandboxExecServerEnvironment,
+  type CodexSandboxExecEnvironment,
+} from "./sandbox-exec-server.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import {
@@ -208,6 +218,7 @@ export async function runCodexAppServerSideQuestion(
         authProfileStore: preparedRuntimeAuth.authProfileStore,
         agentDir: params.agentDir,
         homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
+        requirePreparedAuth: isCodexRemoteExecPlacementSandbox(params.sandbox),
         config: params.cfg,
         subscriptionProfileRequiredError:
           "Prepared Codex subscription route requires a scoped native OAuth or token profile.",
@@ -284,16 +295,28 @@ export async function runCodexAppServerSideQuestion(
     runId,
     timeoutMs: appServer.requestTimeoutMs,
   });
+  const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig, params.sandbox);
+  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+    sideRunParams,
+    params.sandbox ?? undefined,
+    { sandboxExecServerEnabled },
+  );
+  const sandboxEnvironmentRequired = shouldRequireCodexSandboxExecServerEnvironment({
+    sandbox: params.sandbox ?? undefined,
+    nativeToolSurfaceEnabled,
+    sandboxExecServerEnabled,
+  });
   const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
     config: sideRunParams.config,
     sessionKey: sideRunParams.sandboxSessionKey?.trim() || sideRunParams.sessionKey,
     sessionId: sideRunParams.sessionId,
+    sandbox: params.sandbox,
+    sandboxEnvironmentSelected: sandboxEnvironmentRequired,
     surface: "/btw side-question mode",
   });
   if (nativeExecutionBlock) {
     throw new Error(nativeExecutionBlock);
   }
-  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(sideRunParams);
   if (!nativeToolSurfaceEnabled) {
     throw new Error(
       "Codex-native /btw side-question mode is unavailable because the effective tool policy restricts Codex native tools for this session.",
@@ -377,9 +400,39 @@ export async function runCodexAppServerSideQuestion(
   }
   let childThreadId: string | undefined;
   let turnId: string | undefined;
+  let sandboxEnvironment: CodexSandboxExecEnvironment | undefined;
+  let sandboxEnvironmentClient: CodexAppServerClient | undefined;
   let removeRequestHandler: (() => void) | undefined;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
   const activeDynamicToolCalls = new Set<Promise<unknown>>();
+  const releaseSandboxEnvironment = async () => {
+    if (!sandboxEnvironment) {
+      return;
+    }
+    sandboxEnvironment = undefined;
+    sandboxEnvironmentClient = undefined;
+    await releaseCodexSandboxExecServerEnvironment(params.sandbox);
+  };
+  const ensureSandboxEnvironment = async (targetClient: CodexAppServerClient) => {
+    if (!sandboxEnvironmentRequired || sandboxEnvironmentClient === targetClient) {
+      return;
+    }
+    await releaseSandboxEnvironment();
+    const environment = await ensureCodexSandboxExecServerEnvironment({
+      client: targetClient,
+      sandbox: params.sandbox ?? null,
+      appServerStartOptions: appServer.start,
+      timeoutMs: appServer.requestTimeoutMs,
+      signal: runAbortController.signal,
+    });
+    if (!environment) {
+      throw new Error(
+        "Codex app-server did not register an OpenClaw sandbox exec-server environment.",
+      );
+    }
+    sandboxEnvironment = environment;
+    sandboxEnvironmentClient = targetClient;
+  };
 
   try {
     const modelScopedAppServer = resolveCodexAppServerForModelProvider({
@@ -620,8 +673,10 @@ export async function runCodexAppServerSideQuestion(
         lease: clientLease,
         options: clientOptions,
         signal: params.opts?.abortSignal,
-        run: async (forkClient, requestOptions) =>
-          await forkCodexSideThread(
+        run: async (forkClient, requestOptions) => {
+          await ensureSandboxEnvironment(forkClient);
+          const executionCwd = sandboxEnvironment?.cwd ?? cwd;
+          return await forkCodexSideThread(
             forkClient,
             {
               threadId: binding.threadId,
@@ -629,10 +684,10 @@ export async function runCodexAppServerSideQuestion(
               ...(modelSelection.modelProvider
                 ? { modelProvider: modelSelection.modelProvider }
                 : {}),
-              cwd,
+              cwd: executionCwd,
               approvalPolicy,
               approvalsReviewer: modelScopedAppServer.approvalsReviewer,
-              ...(modelScopedAppServer.networkProxy ? {} : { sandbox }),
+              ...(sandboxEnvironment || modelScopedAppServer.networkProxy ? {} : { sandbox }),
               ...(serviceTier ? { serviceTier } : {}),
               config: threadConfig,
               developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
@@ -640,7 +695,8 @@ export async function runCodexAppServerSideQuestion(
               threadSource: "user",
             },
             requestOptions,
-          ),
+          );
+        },
         onClientChange: rebindClientHandlers,
       }),
     );
@@ -678,7 +734,18 @@ export async function runCodexAppServerSideQuestion(
           {
             threadId: childThreadId,
             input: [{ type: "text", text: params.question.trim(), text_elements: [] }],
-            cwd,
+            ...(sandboxEnvironment
+              ? {
+                  cwd: sandboxEnvironment.cwd,
+                  sandboxPolicy: resolveCodexExternalSandboxPolicyForOpenClawSandbox(
+                    params.sandbox ?? undefined,
+                  ),
+                  environments: resolveCodexSandboxEnvironmentSelection(
+                    sandboxEnvironment,
+                    nativeToolSurfaceEnabled,
+                  ),
+                }
+              : { cwd }),
             model: modelSelection.model,
             ...(usesSupervisionConnection ? {} : { personality: CODEX_NATIVE_PERSONALITY_NONE }),
             ...(serviceTier ? { serviceTier } : {}),
@@ -781,8 +848,12 @@ export async function runCodexAppServerSideQuestion(
       }
     } finally {
       flushPendingNativePreToolUseFailures();
-      releaseCodexAppServerClientLease(clientLease);
-      nativeHookRelay?.unregister();
+      try {
+        await releaseSandboxEnvironment();
+      } finally {
+        releaseCodexAppServerClientLease(clientLease);
+        nativeHookRelay?.unregister();
+      }
     }
   }
 }
@@ -925,6 +996,7 @@ function buildSideRunAttemptParams(
     onBlockReply: params.opts?.onBlockReply,
     onPartialReply: params.opts?.onPartialReply,
     hostCapabilities: params.hostCapabilities,
+    sandbox: params.sandbox,
   };
   return sideParams as EmbeddedRunAttemptParamsV2;
 }

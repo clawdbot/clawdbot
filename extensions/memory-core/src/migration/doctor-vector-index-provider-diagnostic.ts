@@ -1,26 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  BundledPluginDoctorStateMigration,
-  PluginStartupPreflightParams,
-} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
 type ProviderFailure = { provider: string; reason: string };
-type ProviderStartupInspection =
-  | { status: "ready" }
-  | {
-      status: "blocked";
-      issues: Array<{
-        provider: string;
-        code: string;
-        message: string;
-        remediation?: readonly string[];
-      }>;
-    }
-  | { status: "indeterminate"; reason: string };
 type VectorProviderFinding = ProviderFailure & {
   agentId: string;
   model: string;
@@ -34,11 +19,6 @@ export type InspectConfiguredProvider = (params: {
   agentDatabasePath: string;
 }) => Promise<ProviderFailure | null>;
 
-export type InspectConfiguredProviderStartup = (
-  params: Parameters<InspectConfiguredProvider>[0] &
-    Pick<PluginStartupPreflightParams, "resolveEmbeddingProviderStartupInspector">,
-) => Promise<ProviderStartupInspection>;
-
 function listConfiguredAgentIds(config: OpenClawConfig): string[] {
   const ids = new Set(Object.keys(config.agents?.entries ?? {}));
   for (const entry of config.agents?.list ?? []) {
@@ -50,30 +30,13 @@ function listConfiguredAgentIds(config: OpenClawConfig): string[] {
 }
 
 async function readExistingVectorModel(databasePath: string): Promise<string | null> {
-  try {
-    return await inspectExistingVectorModel(databasePath, (pathname) => pathname);
-  } catch {
-    return null;
-  }
-}
-
-async function inspectExistingVectorModel(
-  databasePath: string,
-  resolveSqliteReadOnlyLocation: (pathname: string) => string,
-): Promise<string | null> {
   if (!fs.existsSync(databasePath)) {
     return null;
   }
   const { openNodeSqliteDatabase } = await import("openclaw/plugin-sdk/sqlite-runtime");
   let db: ReturnType<typeof openNodeSqliteDatabase> | undefined;
   try {
-    db = openNodeSqliteDatabase(resolveSqliteReadOnlyLocation(databasePath), { readOnly: true });
-    const metadataTable = db
-      .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get("memory_index_meta");
-    if (!metadataTable) {
-      return null;
-    }
+    db = openNodeSqliteDatabase(databasePath, { readOnly: true });
     const row = db
       .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
       .get(MEMORY_INDEX_META_KEY) as { value?: unknown } | undefined;
@@ -83,6 +46,8 @@ async function inspectExistingVectorModel(
         ? parsed.model.trim()
         : "";
     return model && model !== "fts-only" ? model : null;
+  } catch {
+    return null;
   } finally {
     db?.close();
   }
@@ -162,89 +127,10 @@ function formatFinding(finding: VectorProviderFinding): string {
 
 export function createVectorIndexProviderDiagnostic(
   inspectProvider: InspectConfiguredProvider,
-  inspectProviderStartup?: InspectConfiguredProviderStartup,
-): BundledPluginDoctorStateMigration {
+): PluginDoctorStateMigration {
   return {
     id: "memory-core-vector-index-provider-diagnostic",
     label: "Memory Core vector index provider readiness",
-    ...(inspectProviderStartup
-      ? {
-          async preflightStartup(params) {
-            const findings = [];
-            const indeterminate: string[] = [];
-            for (const agentId of listConfiguredAgentIds(params.config)) {
-              const agentDatabasePath = path.join(
-                params.stateDir,
-                "agents",
-                agentId,
-                "agent",
-                "openclaw-agent.sqlite",
-              );
-              let model: string | null;
-              try {
-                model = await inspectExistingVectorModel(
-                  agentDatabasePath,
-                  params.resolveSqliteReadOnlyLocation,
-                );
-              } catch (error) {
-                indeterminate.push(
-                  `Could not inspect the memory index for agent ${agentId}: ${error instanceof Error ? error.message : String(error)}`,
-                );
-                continue;
-              }
-              if (!model) {
-                continue;
-              }
-              if (hasConfiguredMemorySecretRef(params.config, agentId)) {
-                indeterminate.push(
-                  `Agent ${agentId}: Memory provider credentials use a SecretRef that preflight does not resolve.`,
-                );
-                continue;
-              }
-              const result = await inspectProviderStartup({
-                config: params.config,
-                agentId,
-                env: params.env,
-                agentDatabasePath,
-                resolveEmbeddingProviderStartupInspector:
-                  params.resolveEmbeddingProviderStartupInspector,
-              });
-              if (result.status === "ready") {
-                continue;
-              }
-              if (result.status === "indeterminate") {
-                indeterminate.push(`Agent ${agentId}: ${result.reason}`);
-                continue;
-              }
-              const configPath = resolveConfigPrefix(params.config, agentId);
-              for (const issue of result.issues) {
-                findings.push({
-                  id: `${agentId}/${issue.provider}/${issue.code}`,
-                  code: issue.code,
-                  message:
-                    `Memory index for agent ${agentId} uses vector model ${model}, but embedding provider ` +
-                    `"${issue.provider}" has a startup prerequisite blocker: ${issue.message}`,
-                  ...(issue.remediation ? { remediation: issue.remediation } : {}),
-                  agentId,
-                  provider: issue.provider,
-                  model,
-                  configPath,
-                });
-              }
-            }
-            if (indeterminate.length > 0) {
-              return {
-                status: "indeterminate" as const,
-                reason: indeterminate.toSorted().join(" "),
-                ...(findings.length > 0 ? { findings } : {}),
-              };
-            }
-            return findings.length > 0
-              ? { status: "blocked" as const, findings }
-              : { status: "ready" as const };
-          },
-        }
-      : {}),
     async detectLegacyState(params) {
       const findings = await collectVectorProviderFindings(params, inspectProvider);
       return findings.length > 0

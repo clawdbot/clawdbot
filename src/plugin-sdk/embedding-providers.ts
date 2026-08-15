@@ -15,7 +15,4 @@ export type {
   EmbeddingProviderCreateResult,
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
-  EmbeddingProviderStartupInspector,
-  EmbeddingProviderStartupInspectionResult,
-  EmbeddingProviderStartupIssue,
 } from "../plugins/embedding-providers.js";

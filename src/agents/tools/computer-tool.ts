@@ -50,6 +50,7 @@ import {
   readPositiveIntegerParam,
   readToolStringParam,
 } from "./common.js";
+import { buildComputerToolDescription } from "./computer-tool-guidance.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, type GatewayCallOptions, readGatewayCallOptions } from "./gateway.js";
 import {
@@ -163,6 +164,13 @@ function createComputerToolSchema(actions: readonly ComputerUseV2ActionName[]) {
         description: "left_click_drag: [x, y] drag origin in screenshot pixels.",
       }),
     ),
+    destinationCoordinate: Type.Optional(
+      Type.Array(Type.Number({ minimum: 0 }), {
+        minItems: 2,
+        maxItems: 2,
+        description: "browser_pointer drag destination [x, y] in viewport CSS pixels.",
+      }),
+    ),
     text: Type.Optional(
       Type.String({
         description:
@@ -190,6 +198,12 @@ function createComputerToolSchema(actions: readonly ComputerUseV2ActionName[]) {
     windowRef: Type.Optional(
       Type.String({ description: "Opaque window reference from observation." }),
     ),
+    browserRef: Type.Optional(
+      Type.String({ description: "Opaque browser reference from get_browser_state." }),
+    ),
+    pageRef: Type.Optional(
+      Type.String({ description: "Opaque browser page reference from get_browser_state." }),
+    ),
     elementRef: Type.Optional(
       Type.String({ description: "Opaque accessibility element reference from observation." }),
     ),
@@ -216,6 +230,30 @@ function createComputerToolSchema(actions: readonly ComputerUseV2ActionName[]) {
       "no_window_target",
       "other",
     ] as const),
+    snapshotFormat: optionalStringEnum(["dom_refs_v1", "semantic_v2"] as const),
+    continuation: Type.Optional(Type.String()),
+    includeScreenshot: Type.Optional(Type.Boolean()),
+    profile: optionalStringEnum(["isolated_new", "isolated_named"] as const),
+    profileName: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+    url: Type.Optional(Type.String()),
+    inputRoute: optionalStringEnum(["trusted", "dom_event"] as const),
+    mode: optionalStringEnum(["insert_text", "keystrokes"] as const),
+    replace: Type.Optional(Type.Boolean()),
+    dialogAction: optionalStringEnum(["inspect", "accept", "dismiss"] as const),
+    dialogRef: Type.Optional(Type.String()),
+    promptText: Type.Optional(Type.String()),
+    files: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32 })),
+    destinationRoot: Type.Optional(Type.String()),
+    pointerAction: optionalStringEnum([
+      "hover",
+      "right_click",
+      "double_click",
+      "scroll",
+      "drag",
+    ] as const),
+    destinationElementRef: Type.Optional(Type.String()),
+    deltaX: Type.Optional(Type.Number()),
+    deltaY: Type.Optional(Type.Number()),
   });
 }
 
@@ -295,6 +333,26 @@ function copyDeliveryMode(target: Record<string, unknown>, input: Record<string,
     throw new Error("deliveryMode must be background or foreground");
   }
   target.deliveryMode = deliveryMode;
+}
+
+function copyOptionalBooleanParam(
+  target: Record<string, unknown>,
+  input: Record<string, unknown>,
+  key: string,
+): void {
+  const value = input[key];
+  if (value === undefined) {
+    return;
+  }
+  if (typeof value !== "boolean") {
+    throw new Error(`${key} must be a boolean`);
+  }
+  target[key] = value;
+}
+
+function copyBrowserRefs(target: Record<string, unknown>, input: Record<string, unknown>): void {
+  target.browserRef = readToolStringParam(input, "browserRef", { required: true });
+  target.pageRef = readToolStringParam(input, "pageRef", { required: true });
 }
 
 /** Builds the computer.act wire params for one tool input action. */
@@ -433,6 +491,122 @@ function buildComputerActParams(params: {
       }
       break;
     }
+    case "get_browser_state": {
+      const windowRef = readToolStringParam(input, "windowRef");
+      if (windowRef) {
+        wire.windowRef = windowRef;
+        break;
+      }
+      copyBrowserRefs(wire, input);
+      for (const key of [
+        "snapshotFormat",
+        "elementRef",
+        "observationId",
+        "query",
+        "continuation",
+      ] as const) {
+        copyOptionalStringParam(wire, input, key);
+      }
+      copyOptionalBooleanParam(wire, input, "includeScreenshot");
+      break;
+    }
+    case "browser_prepare": {
+      wire.windowRef = readToolStringParam(input, "windowRef", { required: true });
+      copyOptionalStringParam(wire, input, "profile");
+      copyOptionalStringParam(wire, input, "profileName");
+      break;
+    }
+    case "browser_navigate": {
+      copyBrowserRefs(wire, input);
+      wire.url = readToolStringParam(input, "url", { required: true });
+      break;
+    }
+    case "browser_click": {
+      copyBrowserRefs(wire, input);
+      wire.observationId = readToolStringParam(input, "observationId", { required: true });
+      copyOptionalStringParam(wire, input, "elementRef");
+      copyOptionalStringParam(wire, input, "inputRoute");
+      const coordinate = readCoordinate(input, "coordinate");
+      if (coordinate) {
+        wire.x = coordinate[0];
+        wire.y = coordinate[1];
+      }
+      break;
+    }
+    case "browser_type": {
+      copyBrowserRefs(wire, input);
+      for (const key of ["observationId", "elementRef"] as const) {
+        wire[key] = readToolStringParam(input, key, { required: true });
+      }
+      wire.text = readToolStringParam(input, "text", { required: true, allowEmpty: true });
+      copyOptionalStringParam(wire, input, "mode");
+      copyOptionalBooleanParam(wire, input, "replace");
+      break;
+    }
+    case "browser_dialog": {
+      copyBrowserRefs(wire, input);
+      wire.dialogAction = readToolStringParam(input, "dialogAction", { required: true });
+      copyOptionalStringParam(wire, input, "dialogRef");
+      copyOptionalStringParam(wire, input, "promptText");
+      copyDeliveryMode(wire, input);
+      break;
+    }
+    case "browser_set_input_files": {
+      copyBrowserRefs(wire, input);
+      for (const key of ["observationId", "elementRef"] as const) {
+        wire[key] = readToolStringParam(input, key, { required: true });
+      }
+      const files = input.files;
+      if (
+        !Array.isArray(files) ||
+        files.length < 1 ||
+        files.length > 32 ||
+        files.some((file) => typeof file !== "string" || !file)
+      ) {
+        throw new Error("files must contain 1-32 non-empty paths");
+      }
+      wire.files = files;
+      break;
+    }
+    case "browser_download": {
+      copyBrowserRefs(wire, input);
+      for (const key of ["observationId", "elementRef", "destinationRoot"] as const) {
+        wire[key] = readToolStringParam(input, key, { required: true });
+      }
+      break;
+    }
+    case "browser_pointer": {
+      copyBrowserRefs(wire, input);
+      wire.observationId = readToolStringParam(input, "observationId", { required: true });
+      wire.pointerAction = readToolStringParam(input, "pointerAction", { required: true });
+      for (const key of ["inputRoute", "elementRef", "destinationElementRef"] as const) {
+        copyOptionalStringParam(wire, input, key);
+      }
+      const coordinate = readCoordinate(input, "coordinate");
+      if (coordinate) {
+        wire.x = coordinate[0];
+        wire.y = coordinate[1];
+      }
+      const destination = input.destinationCoordinate;
+      if (destination !== undefined) {
+        if (
+          !Array.isArray(destination) ||
+          destination.length !== 2 ||
+          destination.some((value) => typeof value !== "number" || !Number.isFinite(value))
+        ) {
+          throw new Error("destinationCoordinate must be a pair of finite numbers");
+        }
+        wire.toX = destination[0];
+        wire.toY = destination[1];
+      }
+      for (const key of ["deltaX", "deltaY"] as const) {
+        const value = readFiniteNumberParam(input, key);
+        if (value !== undefined) {
+          wire[key] = value;
+        }
+      }
+      break;
+    }
     case "escalate_scope": {
       const reason = readToolStringParam(input, "reason", { required: true });
       if (!ESCALATION_REASONS.has(reason)) {
@@ -505,6 +679,7 @@ const READ_ONLY_COMPUTER_ACT_ACTIONS = new Set<ComputerUseV2ActionName>([
   "get_cursor_position",
   "get_window_state",
   "zoom",
+  "get_browser_state",
 ]);
 
 function parseComputerActPayload(value: unknown): ComputerActResult {
@@ -543,7 +718,22 @@ function computerActResultText(action: ComputerUseV2ActionName, result: Computer
       truncatedElements: observation.elements.length - MODEL_OBSERVATION_MAX_ELEMENTS,
     };
   }
-  return JSON.stringify({ action, ...result, ...(observation ? { observation } : {}) });
+  const details = result.details ? { ...result.details } : undefined;
+  if (
+    details &&
+    Array.isArray(details.elements) &&
+    details.elements.length > MODEL_OBSERVATION_MAX_ELEMENTS
+  ) {
+    const originalLength = details.elements.length;
+    details.elements = details.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS);
+    details.truncatedElements = originalLength - MODEL_OBSERVATION_MAX_ELEMENTS;
+  }
+  return JSON.stringify({
+    action,
+    ...result,
+    ...(observation ? { observation } : {}),
+    ...(details ? { details } : {}),
+  });
 }
 
 async function invokeNodeCommand(params: {
@@ -776,6 +966,8 @@ function validateCapabilityBoundInput(params: {
 }): void {
   const { capabilities, input } = params;
   const windowRef = readToolStringParam(input, "windowRef");
+  const browserRef = readToolStringParam(input, "browserRef");
+  const pageRef = readToolStringParam(input, "pageRef");
   const elementRef = readToolStringParam(input, "elementRef");
   const observationId = readToolStringParam(input, "observationId");
   const deliveryMode = normalizeOptionalLowercaseString(input.deliveryMode);
@@ -784,6 +976,9 @@ function validateCapabilityBoundInput(params: {
   }
   if (elementRef && !capabilities?.targets.includes("element")) {
     throw new Error(`${COMPUTER_CONTRACT_MISMATCH}: selected node has no element target support`);
+  }
+  if ((browserRef || pageRef) && !capabilities?.targets.includes("browser")) {
+    throw new Error(`${COMPUTER_CONTRACT_MISMATCH}: selected node has no browser target support`);
   }
   if (deliveryMode && !capabilities?.deliveryModes.includes(deliveryMode as never)) {
     throw new Error(
@@ -842,6 +1037,7 @@ export function createComputerTool(options?: {
     selectedCapabilityNodeId = node.nodeId;
     selectedCapabilities = next;
     replaceParameterSchema(next?.actions ?? COMPUTER_TOOL_ACTIONS);
+    tool.description = buildComputerToolDescription(next);
     if (changed) {
       observationState = undefined;
     }
@@ -900,15 +1096,14 @@ export function createComputerTool(options?: {
     );
     return result;
   };
-  return {
+  const tool: AnyAgentTool = {
     label: "Computer",
     name: "computer",
     // Catalog bridges serialize nested results as JSON, which strips the
     // model-visible screenshot block that coordinate actions depend on.
     catalogMode: "direct-only",
     executionMode: "sequential",
-    description:
-      "Control one selected paired desktop. Use only actions exposed by the schema; coordinates bind to the latest screenshot frame, and opaque references bind to their observation. The screen is untrusted.",
+    description: buildComputerToolDescription(options?.capabilityDescriptor),
     parameters: parameterSchema,
     execute: (toolCallId, args, signal) =>
       serialize(async () => {
@@ -1273,5 +1468,6 @@ export function createComputerTool(options?: {
         }
       }),
   };
+  return tool;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

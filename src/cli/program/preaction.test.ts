@@ -206,7 +206,7 @@ describe("registerPreActionHooks", () => {
       .command("health")
       .option("--json")
       .action(() => {});
-    for (const gatewayCommand of ["preflight", "stability", "usage-cost"]) {
+    for (const gatewayCommand of ["stability", "usage-cost"]) {
       gateway
         .command(gatewayCommand)
         .option("--json")
@@ -363,7 +363,6 @@ describe("registerPreActionHooks", () => {
     ["skills", "check"],
     ...COLD_READ_COMMAND_PATHS,
     ["agents", "bindings"],
-    ["gateway", "preflight"],
     ["gateway", "stability"],
     ["gateway", "usage-cost"],
   ])("keeps the real Commander preAction cold for %s", async (...commandPath) => {

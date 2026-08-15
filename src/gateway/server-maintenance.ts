@@ -94,7 +94,6 @@ export function startGatewayMaintenanceTimers(params: {
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
-  runDevicePairSetupCompletionGc?: (nowMs: number) => unknown;
   enableSkillCurator?: boolean;
   runSkillCollectionReconcile?: () => Promise<unknown>;
 }): {
@@ -197,15 +196,12 @@ export function startGatewayMaintenanceTimers(params: {
   };
   void performDeliveryQueueMediaGc();
 
-  const runDevicePairSetupCompletionGc =
-    params.runDevicePairSetupCompletionGc ??
-    ((nowMs: number) => pruneExpiredDevicePairSetupCompletions({ nowMs }));
   let devicePairSetupCompletionGcInFlight: Promise<void> | null = null;
   const performDevicePairSetupCompletionGc = (nowMs: number) => {
     if (devicePairSetupCompletionGcInFlight) {
       return devicePairSetupCompletionGcInFlight;
     }
-    devicePairSetupCompletionGcInFlight = Promise.resolve(runDevicePairSetupCompletionGc(nowMs))
+    devicePairSetupCompletionGcInFlight = pruneExpiredDevicePairSetupCompletions({ nowMs })
       .then(() => undefined)
       .catch((error: unknown) => {
         params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);

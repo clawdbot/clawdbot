@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
+import { verifyWorkerAdmissionHandshake, type ExpectedWorkerBuild } from "./admission.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
@@ -16,6 +17,7 @@ const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
 type WorkerEnvironmentAccessOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
+  prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
   resolveWorkerGateway?: () => { host: "127.0.0.1" | "::1"; port: number } | undefined;
@@ -153,12 +155,24 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!gateway) {
         throw serviceError("invalid_state", "Worker gateway ingress is unavailable");
       }
+      let currentBundle: ExpectedWorkerBuild;
+      try {
+        currentBundle = await options.prepareCurrentBundle();
+      } catch {
+        throw serviceError("invalid_state", "Current worker build identity is unavailable");
+      }
+      if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
+        throw serviceError(
+          "invalid_state",
+          "Worker must bootstrap the current build before continuing",
+        );
+      }
       const provider = providerFor(record.providerId);
       // Tunnel ownership is registered synchronously by the manager. Release the durable-state
       // lock while SSH connects so drain/destroy can fence an indefinitely reconnecting start.
       startup = tunnels.start({
         ...request,
-        bundleHash: record.bootstrapReceipt.bundleHash,
+        bundleHash: currentBundle.bundleHash,
         gateway,
         ssh: record.sshEndpoint,
         sharedHost: record.sharedHost,

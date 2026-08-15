@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
 
 type DriverClickButton = import("@trycua/cua-driver").ClickButton;
 type DriverCaptureScope = import("@trycua/cua-driver").CaptureScope;
@@ -310,10 +311,17 @@ class DirectCuaDriverSession implements CuaDriverSession {
 }
 
 async function loadCuaDriverSdk(): Promise<CuaDriverSdk> {
+  const artifactVerification = verifyInstalledCuaDriverArtifacts();
+  if (!artifactVerification.ok) {
+    throw new Error(artifactVerification.diagnostic);
+  }
   return (await import("@trycua/cua-driver")) as CuaDriverSdk;
 }
 
 function unavailableError(failure: unknown): Error {
+  if (failure instanceof Error && /^COMPUTER_DRIVER_[A-Z_]+:/u.test(failure.message)) {
+    return failure;
+  }
   const detail = failure instanceof Error ? failure.message : String(failure);
   return new Error(`COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: ${detail}`, {
     cause: failure,

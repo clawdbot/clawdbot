@@ -24,7 +24,7 @@ type DevicePairSetupCompletion = Pick<DevicePairSetupCompletedEvent, "setupId" |
 type DevicePairSetupDeliveryUncertain = Pick<
   DevicePairSetupDeliveryUncertainEvent,
   "setupId" | "access"
-> & { deviceName?: string };
+>;
 
 export type DevicePairSetupLifecycle =
   | { phase: "selection"; access: DevicePairSetupAccess }
@@ -51,7 +51,6 @@ export type DevicePairSetupLifecycle =
   | {
       phase: "delivery-uncertain";
       access: DevicePairSetupDeliveryUncertain["access"];
-      deviceName?: string;
     }
   | { phase: "expired"; access: DevicePairSetupAccess };
 export function requestDevicePairJoinSetup(client: GatewayRequestClient) {
@@ -263,7 +262,8 @@ export function parseDevicePairSetupCompletion(payload: unknown): DevicePairSetu
 export function parseDevicePairSetupDeliveryUncertain(
   payload: unknown,
 ): DevicePairSetupDeliveryUncertain | null {
-  return parseDevicePairSetupCompletion(payload);
+  const completion = parseDevicePairSetupCompletion(payload);
+  return completion ? { setupId: completion.setupId, access: completion.access } : null;
 }
 
 export function completeDevicePairSetup(
@@ -310,7 +310,6 @@ export function markDevicePairSetupDeliveryUncertain(
   state.devicePairSetupLifecycle = {
     phase: "delivery-uncertain",
     access: outcome.access,
-    ...(outcome.deviceName ? { deviceName: outcome.deviceName } : {}),
   };
   state.onDevicePairSetupChange();
   return true;

@@ -158,35 +158,10 @@ Named profiles must also use the native service identity derived from `OPENCLAW_
 
 Set `OPENCLAW_SUPERVISOR_MODE=external` only when another process manager owns the Gateway lifecycle. In this mode:
 
-- `openclaw gateway restart` preserves the existing safe, forced, and bounded-wait behavior while targeting the verified running Gateway instead of launchd, systemd, or Task Scheduler.
+- `openclaw gateway restart` preserves the existing safe, forced, and bounded-wait behavior while targeting the verified running Gateway instead of launchd, systemd, or Task Scheduler. Exact-lock restart delivery runs inside that Gateway, so a replacement CLI does not migrate shared state before the old process hands off.
 - Native service install, start, stop, and uninstall operations are refused with guidance to use the external supervisor.
 - OpenClaw self-update is refused so the supervisor can stop the Gateway, replace and finalize the runtime, and restart it safely.
 - A fresh-process restart writes a bounded SQLite handoff before clean exit. If persistence fails, the Gateway falls back to an in-process restart instead of exiting without a consumable handoff.
-
-Before stopping a healthy Gateway for an external upgrade, run the target release's own startup preflight with the exact target config, state directory, environment, and plugin installation:
-
-```bash
-openclaw gateway preflight --json
-```
-
-The command inspects deterministic startup prerequisites declared by core and bundled, host-audited plugin startup-migration owners, including Gateway authentication selection, session SQLite import validation, and selected embedding providers. It does not run migrations, resolve credentials, execute operator-installed plugin code, run login-shell startup files, download models, start provider services, write config or state, or perform network requests. Active credential references, a declared external plugin contract that would require executable inspection, enabled shell fallback with missing Gateway auth bindings that could change the effective startup decision, or a provider artifact whose exact cache identity requires network resolution therefore make the result `indeterminate` instead of being resolved. A reported remediation is operator guidance only; preflight never performs it.
-
-Exit codes:
-
-- `0`: `status: "ready"` and no declared deterministic blocker was found.
-- `1`: `status: "blocked"` and `blockers` contains stable machine diagnostics.
-- `2`: `status: "indeterminate"` because the target could not produce a trustworthy verdict, for example due to invalid config, unreadable protected state, or a selected provider without non-mutating inspection support.
-
-The JSON contract is versioned as `openclaw.gateway.startup-preflight` version `1`. Every result includes `ok`, `status`, `checksRun`, `blockers`, and `errors`. Each blocker includes a stable `id`, `pluginId`, `migrationId`, `code`, and `message`, with provider-owned remediation and context when available.
-
-Supervisors must keep the old Gateway running for exits `1` and `2`. Only proceed to snapshot and cutover after exit `0` and a parsed `status: "ready"` result. Probe this command on the exact target runtime instead of inferring support from an OpenClaw version or scraping startup error text.
-
-`gateway preflight` is intentionally separate from:
-
-- `config validate`, which remains schema and static-config validation.
-- `doctor`, which is a broader diagnostic and repair workflow.
-- `gateway health` and `/readyz`, which inspect a running Gateway.
-- `database preflight`, which checks a copied state database's schema compatibility.
 
 An external supervisor can also claim durable ownership of shared-state writes:
 

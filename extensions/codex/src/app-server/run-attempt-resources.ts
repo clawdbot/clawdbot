@@ -72,6 +72,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     nativeSubagentMonitor: undefined as
       | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>
       | undefined,
+    runtimeContinuationStarted: false,
     nativePreToolUseFailureFallbackActive: false,
     nativePreToolUseFailureFallbackTerminalReason: undefined as
       | CodexNativePreToolUseFailure["disposition"]
@@ -187,6 +188,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       claimDirectChild: (childThreadId) => state.nativeHookRelay?.claimDirectChild(childThreadId),
       rejectPendingDirectChild: (childThreadId, reason) =>
         state.nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
+      ...(params.sessionKey && params.agentHarnessTaskRuntimeScope
+        ? {
+            onDirectChildAccepted: () => {
+              state.runtimeContinuationStarted = true;
+            },
+          }
+        : {}),
     });
   };
   const releaseCurrentRoute = () => {

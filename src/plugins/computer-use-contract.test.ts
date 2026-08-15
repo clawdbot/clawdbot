@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES,
   COMPUTER_USE_V2_ACTION_NAMES,
   parseComputerActParamsJSON,
   parseComputerActResult,
@@ -117,9 +118,41 @@ describe("Computer Use wire contract", () => {
         JSON.stringify({ action: "get_window_state", windowRef: "window-1", app: "wrong-family" }),
       ),
     ).toThrow("COMPUTER_INVALID_REQUEST");
-    expect(() => parseComputerActParamsJSON(JSON.stringify({ action: "browser_click" }))).toThrow(
-      "COMPUTER_INVALID_REQUEST",
-    );
+    expect(
+      parseComputerActParamsJSON(
+        JSON.stringify({
+          action: "browser_click",
+          browserRef: "browser-1",
+          pageRef: "page-1",
+          observationId: "observation-1",
+          elementRef: "element-1",
+          inputRoute: "dom_event",
+        }),
+      ),
+    ).toMatchObject({ action: "browser_click", browserRef: "browser-1" });
+    expect(() =>
+      parseComputerActParamsJSON(
+        JSON.stringify({
+          action: "browser_prepare",
+          windowRef: "window-1",
+          strategy: { kind: "existing_profile" },
+        }),
+      ),
+    ).toThrow("COMPUTER_INVALID_REQUEST");
+  });
+
+  it("keeps only the unimplemented recording family contract-gated", () => {
+    expect(COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES).toEqual([
+      "get_recording_state",
+      "start_recording",
+      "stop_recording",
+      "replay_trajectory",
+    ]);
+    for (const action of COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES) {
+      expect(() => parseComputerActParamsJSON(JSON.stringify({ action }))).toThrow(
+        "COMPUTER_INVALID_REQUEST",
+      );
+    }
   });
 
   it("caps semantic observations and provider detail records", () => {

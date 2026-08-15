@@ -51,8 +51,8 @@ struct MacNodeHostWorkerTests {
     @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
         let input = MacNodeHostWorkerRetryPolicy.Input(
             launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"]),
-            configurationGeneration: 4)
+                command: ["/usr/local/bin/openclaw", "node", "worker"],
+                configurationGeneration: 4))
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 5)
 
         try policy.prepareForStart(input)
@@ -76,11 +76,12 @@ struct MacNodeHostWorkerTests {
     @Test func `new worker input resets an exhausted crash retry budget`() throws {
         let original = MacNodeHostWorkerRetryPolicy.Input(
             launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"]),
-            configurationGeneration: 4)
+                command: ["/usr/local/bin/openclaw", "node", "worker"],
+                configurationGeneration: 4))
         let updated = MacNodeHostWorkerRetryPolicy.Input(
-            launch: original.launch,
-            configurationGeneration: 5)
+            launch: MacNodeHostWorkerLaunch(
+                command: original.launch.command,
+                configurationGeneration: 5))
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 1)
 
         try policy.prepareForStart(original)
@@ -429,7 +430,9 @@ struct MacNodeHostWorkerTests {
     @Test func `ready worker exit notifies its route owner`() async throws {
         try await confirmation("unexpected worker exit") { confirmed in
             let exitGate = AsyncTestGate()
-            let worker = MacNodeHostWorker(session: GatewayNodeSession()) {
+            let expectedGeneration: UInt64 = 42
+            let worker = MacNodeHostWorker(session: GatewayNodeSession()) { generation in
+                #expect(generation == expectedGeneration)
                 confirmed()
                 exitGate.open()
             }
@@ -440,7 +443,8 @@ struct MacNodeHostWorkerTests {
             """
 
             _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-                command: ["/bin/sh", "-c", script]))
+                command: ["/bin/sh", "-c", script],
+                configurationGeneration: expectedGeneration))
             await exitGate.wait()
         }
     }

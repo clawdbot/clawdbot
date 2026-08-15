@@ -83,17 +83,6 @@ export type EmbeddingProviderCreateResult = {
   runtime?: EmbeddingProviderRuntime;
 };
 
-export type EmbeddingProviderStartupIssue = {
-  code: string;
-  message: string;
-  remediation?: readonly string[];
-};
-
-export type EmbeddingProviderStartupInspectionResult =
-  | { status: "ready" }
-  | { status: "blocked"; issues: readonly EmbeddingProviderStartupIssue[] }
-  | { status: "indeterminate"; reason: string };
-
 /** Adapter contract registered by core or plugin embedding providers. */
 export type EmbeddingProviderAdapter = {
   id: string;
@@ -103,22 +92,9 @@ export type EmbeddingProviderAdapter = {
   resolveIndexIdentity?: (
     options: EmbeddingProviderCreateOptions,
   ) => EmbeddingProviderIndexIdentity;
-  /**
-   * Inspect deterministic startup prerequisites without creating the provider,
-   * resolving credentials, making network requests, downloading models, or
-   * starting services.
-   */
-  inspectStartupPrerequisites?: (
-    options: EmbeddingProviderCreateOptions,
-  ) => Promise<EmbeddingProviderStartupInspectionResult> | EmbeddingProviderStartupInspectionResult;
   create: (options: EmbeddingProviderCreateOptions) => Promise<EmbeddingProviderCreateResult>;
   formatSetupError?: (err: unknown) => string;
 };
-
-export type EmbeddingProviderStartupInspector = Pick<
-  EmbeddingProviderAdapter,
-  "id" | "defaultModel" | "transport" | "formatSetupError" | "inspectStartupPrerequisites"
->;
 
 /** Registered embedding provider with optional owning plugin metadata. */
 export type RegisteredEmbeddingProvider = {

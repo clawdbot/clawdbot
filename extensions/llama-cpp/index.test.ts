@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { EmbeddingProviderCreateOptions } from "openclaw/plugin-sdk/embedding-providers";
+import { createLocalEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRegistryFixture,
@@ -20,7 +20,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensureModel: vi.fn(),
-  inspectModelFile: vi.fn(),
   prepareServer: vi.fn(),
   inspectRuntime: vi.fn(),
   genericCreate: vi.fn(),
@@ -38,16 +37,10 @@ vi.mock("./src/managed-server.js", async (importOriginal) => ({
   inspectLlamaServerRuntime: mocks.inspectRuntime,
 }));
 
-vi.mock("./src/model-cache.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./src/model-cache.js")>()),
-  inspectLlamaCppModelFile: mocks.inspectModelFile,
-}));
-
 import llamaCppPlugin from "./index.js";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
-  DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
   LLAMA_CPP_PROVIDER_ID,
   resolveLegacyLlamaCppModelCacheDir,
 } from "./src/defaults.js";
@@ -59,7 +52,6 @@ let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 beforeEach(() => {
   previousPluginRegistry = getActivePluginRegistry();
   mocks.ensureModel.mockResolvedValue("/models/model.gguf");
-  mocks.inspectModelFile.mockResolvedValue({ status: "ready" });
   mocks.prepareServer.mockResolvedValue({});
   mocks.inspectRuntime.mockResolvedValue({
     engine: "llama.cpp",
@@ -103,11 +95,7 @@ function registerTextProvider(): ProviderPlugin {
   return expectDefined(providers[0], "llama.cpp provider");
 }
 
-function configuredOptions(
-  params: { embeddingModelPath?: string; chatModelPath?: string | null } = {},
-): EmbeddingProviderCreateOptions {
-  const chatModelPath =
-    params.chatModelPath === undefined ? "/models/chat.gguf" : params.chatModelPath;
+function configuredOptions() {
   return {
     config: {
       models: {
@@ -130,7 +118,7 @@ function configuredOptions(
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 8192,
                 maxTokens: 2048,
-                ...(chatModelPath ? { params: { modelPath: chatModelPath } } : {}),
+                params: { modelPath: "/models/chat.gguf" },
               },
             ],
           },
@@ -139,11 +127,18 @@ function configuredOptions(
     },
     provider: "local",
     model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
-    ...(params.embeddingModelPath ? { local: { modelPath: params.embeddingModelPath } } : {}),
   };
 }
 
 describe("llama.cpp provider plugin", () => {
+  it("keeps pre-managed installed provider imports loadable without reviving the old runtime", async () => {
+    await expect(createLocalEmbeddingProvider({}, {})).rejects.toThrow(
+      "The legacy in-process llama.cpp embedding runtime is retired",
+    );
+    expect(mocks.ensureModel).not.toHaveBeenCalled();
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+  });
+
   it("uses the normal OpenAI-compatible text transport", () => {
     expect(registerTextProvider()).toEqual(
       expect.objectContaining({
@@ -177,197 +172,6 @@ describe("llama.cpp provider plugin", () => {
         transport: "local",
       },
     });
-  });
-
-  it("reports missing managed setup without downloading models or starting a server", async () => {
-    expect(
-      await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.({
-        config: {},
-        provider: "local",
-        model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
-      }),
-    ).toEqual({
-      status: "blocked",
-      issues: [
-        {
-          code: "managed-server-config-missing",
-          message: expect.stringContaining(
-            "Local embeddings need the managed llama.cpp server config",
-          ),
-          remediation: [
-            "Run `openclaw configure` and choose llama.cpp once.",
-            "Retry `openclaw memory status --deep` after setup completes.",
-          ],
-        },
-      ],
-    });
-    expect(mocks.ensureModel).not.toHaveBeenCalled();
-    expect(mocks.prepareServer).not.toHaveBeenCalled();
-    expect(mocks.genericCreate).not.toHaveBeenCalled();
-  });
-
-  it("accepts configured managed setup with valid cached chat and embedding models", async () => {
-    expect(
-      await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(
-        configuredOptions({ embeddingModelPath: "/models/embedding.gguf" }),
-      ),
-    ).toEqual({ status: "ready" });
-    expect(mocks.inspectModelFile.mock.calls).toEqual([
-      [{ filePath: "/models/chat.gguf" }],
-      [{ filePath: "/models/embedding.gguf" }],
-    ]);
-    expect(mocks.ensureModel).not.toHaveBeenCalled();
-    expect(mocks.prepareServer).not.toHaveBeenCalled();
-    expect(mocks.genericCreate).not.toHaveBeenCalled();
-  });
-
-  it("expands home-relative embedding paths before passive inspection", async () => {
-    expect(
-      await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(
-        configuredOptions({ embeddingModelPath: "~/models/embedding.gguf" }),
-      ),
-    ).toEqual({ status: "ready" });
-    expect(mocks.inspectModelFile.mock.calls).toEqual([
-      [{ filePath: "/models/chat.gguf" }],
-      [{ filePath: path.join(os.homedir(), "models", "embedding.gguf") }],
-    ]);
-    expect(mocks.ensureModel).not.toHaveBeenCalled();
-    expect(mocks.prepareServer).not.toHaveBeenCalled();
-    expect(mocks.genericCreate).not.toHaveBeenCalled();
-  });
-
-  it("reports a missing cached chat model without downloading or starting services", async () => {
-    mocks.inspectModelFile.mockResolvedValueOnce({ status: "missing" });
-
-    expect(
-      await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(
-        configuredOptions({ embeddingModelPath: "/models/embedding.gguf" }),
-      ),
-    ).toEqual({
-      status: "blocked",
-      issues: [
-        {
-          code: "chat-model-cache-missing",
-          message: "Managed llama.cpp chat model is not cached at /models/chat.gguf.",
-          remediation: [
-            "Run `openclaw configure` and choose llama.cpp once.",
-            "Retry `openclaw memory status --deep` after setup completes.",
-          ],
-        },
-      ],
-    });
-    expect(mocks.ensureModel).not.toHaveBeenCalled();
-    expect(mocks.prepareServer).not.toHaveBeenCalled();
-    expect(mocks.genericCreate).not.toHaveBeenCalled();
-  });
-
-  it("reports a missing default chat cache because ordinary startup does not download it", async () => {
-    mocks.inspectModelFile.mockResolvedValueOnce({ status: "missing" });
-
-    expect(
-      await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(
-        configuredOptions({
-          chatModelPath: null,
-          embeddingModelPath: "/models/embedding.gguf",
-        }),
-      ),
-    ).toEqual({
-      status: "blocked",
-      issues: [
-        {
-          code: "chat-model-cache-missing",
-          message: expect.stringContaining(DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE),
-          remediation: [
-            "Run `openclaw configure` and choose llama.cpp once.",
-            "Retry `openclaw memory status --deep` after setup completes.",
-          ],
-        },
-      ],
-    });
-    expect(mocks.ensureModel).not.toHaveBeenCalled();
-    expect(mocks.prepareServer).not.toHaveBeenCalled();
-    expect(mocks.genericCreate).not.toHaveBeenCalled();
-  });
-
-  it("reports a missing selected local embedding model without downloading", async () => {
-    mocks.inspectModelFile
-      .mockResolvedValueOnce({ status: "ready" })
-      .mockResolvedValueOnce({ status: "missing" });
-
-    expect(
-      await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(
-        configuredOptions({ embeddingModelPath: "/models/embedding.gguf" }),
-      ),
-    ).toEqual({
-      status: "blocked",
-      issues: [
-        {
-          code: "embedding-model-cache-missing",
-          message: "Managed llama.cpp embedding model is not cached at /models/embedding.gguf.",
-          remediation: [
-            "Run `openclaw configure` and choose llama.cpp once.",
-            "Retry `openclaw memory status --deep` after setup completes.",
-          ],
-        },
-      ],
-    });
-    expect(mocks.ensureModel).not.toHaveBeenCalled();
-    expect(mocks.prepareServer).not.toHaveBeenCalled();
-    expect(mocks.genericCreate).not.toHaveBeenCalled();
-  });
-
-  it("keeps an unresolved Hugging Face embedding source indeterminate without network access", async () => {
-    const options = configuredOptions({
-      embeddingModelPath: "hf:example/model-GGUF/model.gguf",
-    });
-
-    expect(await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(options)).toEqual({
-      status: "indeterminate",
-      reason:
-        "Model cache identity requires network resolution, which passive inspection does not perform.",
-    });
-    expect(mocks.inspectModelFile).toHaveBeenCalledTimes(1);
-    expect(mocks.ensureModel).not.toHaveBeenCalled();
-    expect(mocks.prepareServer).not.toHaveBeenCalled();
-    expect(mocks.genericCreate).not.toHaveBeenCalled();
-  });
-
-  it("keeps a missing downloadable default embedding model indeterminate", async () => {
-    const options = configuredOptions();
-    mocks.inspectModelFile
-      .mockResolvedValueOnce({ status: "ready" })
-      .mockResolvedValueOnce({ status: "missing" });
-
-    expect(await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(options)).toEqual({
-      status: "indeterminate",
-      reason: expect.stringMatching(
-        /embedding model is not cached.*startup may download it.*passive preflight/iu,
-      ),
-    });
-    expect(mocks.ensureModel).not.toHaveBeenCalled();
-    expect(mocks.prepareServer).not.toHaveBeenCalled();
-    expect(mocks.genericCreate).not.toHaveBeenCalled();
-  });
-
-  it("reports an invalid managed base URL as a deterministic blocker", async () => {
-    const options = configuredOptions();
-    const provider = expectDefined(
-      options.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID],
-      "llama.cpp provider config",
-    );
-    provider.baseUrl = "not-a-url";
-
-    expect(await llamaCppEmbeddingProviderAdapter.inspectStartupPrerequisites?.(options)).toEqual({
-      status: "blocked",
-      issues: [
-        expect.objectContaining({
-          code: "managed-server-base-url-invalid",
-          message: "Managed llama.cpp provider baseUrl must be a valid URL.",
-        }),
-      ],
-    });
-    expect(mocks.ensureModel).not.toHaveBeenCalled();
-    expect(mocks.prepareServer).not.toHaveBeenCalled();
   });
 
   it("routes embeddings through the managed server and reports endpoint facts", async () => {

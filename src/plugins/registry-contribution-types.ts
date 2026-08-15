@@ -11,7 +11,6 @@ import type {
   EmbeddingProviderCreateOptions,
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
-  EmbeddingProviderStartupInspectionResult,
 } from "./embedding-provider-types.js";
 
 export type ContextEngineFactoryContext = {
@@ -119,7 +118,7 @@ export type MemoryEmbeddingProviderCreateResult = {
 
 export type MemoryEmbeddingProviderAdapter = Omit<
   EmbeddingProviderAdapter,
-  "create" | "inspectStartupPrerequisites" | "resolveIndexIdentity"
+  "create" | "resolveIndexIdentity"
 > & {
   autoSelectPriority?: number;
   allowExplicitWhenConfiguredAuto?: boolean;
@@ -127,9 +126,6 @@ export type MemoryEmbeddingProviderAdapter = Omit<
   resolveIndexIdentity?: (
     options: MemoryEmbeddingProviderCreateOptions,
   ) => MemoryEmbeddingProviderIndexIdentity;
-  inspectStartupPrerequisites?: (
-    options: MemoryEmbeddingProviderCreateOptions,
-  ) => Promise<EmbeddingProviderStartupInspectionResult> | EmbeddingProviderStartupInspectionResult;
   create: (
     options: MemoryEmbeddingProviderCreateOptions,
   ) => Promise<MemoryEmbeddingProviderCreateResult>;

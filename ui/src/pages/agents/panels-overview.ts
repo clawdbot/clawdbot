@@ -311,6 +311,7 @@ export function renderAgentOverview(params: {
             ],
             disabled,
             onChange: (value) => onModelChange(agent.id, value || null),
+            onOpen: params.onModelCatalogRetry,
           }),
         })}
         ${renderSettingsRow({

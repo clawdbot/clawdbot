@@ -56,15 +56,6 @@ export const COMPUTER_USE_V1_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(0
 export const COMPUTER_ACT_V1_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 
 export const COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES = [
-  "get_browser_state",
-  "browser_prepare",
-  "browser_navigate",
-  "browser_click",
-  "browser_type",
-  "browser_dialog",
-  "browser_set_input_files",
-  "browser_download",
-  "browser_pointer",
   "get_recording_state",
   "start_recording",
   "stop_recording",
@@ -212,6 +203,104 @@ export const ComputerActParamsSchema = Type.Union([
     x2: Type.Number({ minimum: 0 }),
     y2: Type.Number({ minimum: 0 }),
   }),
+  actionObject(["get_browser_state"], {
+    windowRef: Type.String({ minLength: 1 }),
+  }),
+  actionObject(["get_browser_state"], {
+    browserRef: Type.String({ minLength: 1 }),
+    pageRef: Type.String({ minLength: 1 }),
+    snapshotFormat: Type.Optional(
+      Type.Enum(["dom_refs_v1", "semantic_v2"] as const, { type: "string" }),
+    ),
+    elementRef: Type.Optional(Type.String({ minLength: 1 })),
+    observationId: Type.Optional(Type.String({ minLength: 1 })),
+    query: Type.Optional(Type.String()),
+    continuation: Type.Optional(Type.String({ minLength: 1 })),
+    includeScreenshot: Type.Optional(Type.Boolean()),
+  }),
+  actionObject(["browser_prepare"], {
+    windowRef: Type.String({ minLength: 1 }),
+    profile: Type.Optional(
+      Type.Enum(["isolated_new", "isolated_named"] as const, { type: "string" }),
+    ),
+    profileName: Type.Optional(
+      Type.String({ minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9._-]+$" }),
+    ),
+  }),
+  actionObject(["browser_navigate"], {
+    browserRef: Type.String({ minLength: 1 }),
+    pageRef: Type.String({ minLength: 1 }),
+    url: Type.String({ minLength: 1 }),
+  }),
+  actionObject(["browser_click"], {
+    browserRef: Type.String({ minLength: 1 }),
+    pageRef: Type.String({ minLength: 1 }),
+    observationId: Type.String({ minLength: 1 }),
+    elementRef: Type.Optional(Type.String({ minLength: 1 })),
+    x: Type.Optional(Type.Number({ minimum: 0 })),
+    y: Type.Optional(Type.Number({ minimum: 0 })),
+    inputRoute: Type.Optional(Type.Enum(["trusted", "dom_event"] as const, { type: "string" })),
+  }),
+  actionObject(["browser_type"], {
+    browserRef: Type.String({ minLength: 1 }),
+    pageRef: Type.String({ minLength: 1 }),
+    observationId: Type.String({ minLength: 1 }),
+    elementRef: Type.String({ minLength: 1 }),
+    text: Type.String(),
+    mode: Type.Optional(Type.Enum(["insert_text", "keystrokes"] as const, { type: "string" })),
+    replace: Type.Optional(Type.Boolean()),
+  }),
+  actionObject(["browser_dialog"], {
+    browserRef: Type.String({ minLength: 1 }),
+    pageRef: Type.String({ minLength: 1 }),
+    dialogAction: Type.Literal("inspect"),
+  }),
+  actionObject(["browser_dialog"], {
+    browserRef: Type.String({ minLength: 1 }),
+    pageRef: Type.String({ minLength: 1 }),
+    dialogAction: Type.Literal("accept"),
+    dialogRef: Type.String({ minLength: 1 }),
+    promptText: Type.Optional(Type.String()),
+    deliveryMode: Type.Optional(Type.Enum(DELIVERY_MODES, { type: "string" })),
+  }),
+  actionObject(["browser_dialog"], {
+    browserRef: Type.String({ minLength: 1 }),
+    pageRef: Type.String({ minLength: 1 }),
+    dialogAction: Type.Literal("dismiss"),
+    dialogRef: Type.String({ minLength: 1 }),
+    deliveryMode: Type.Optional(Type.Enum(DELIVERY_MODES, { type: "string" })),
+  }),
+  actionObject(["browser_set_input_files"], {
+    browserRef: Type.String({ minLength: 1 }),
+    pageRef: Type.String({ minLength: 1 }),
+    observationId: Type.String({ minLength: 1 }),
+    elementRef: Type.String({ minLength: 1 }),
+    files: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32 }),
+  }),
+  actionObject(["browser_download"], {
+    browserRef: Type.String({ minLength: 1 }),
+    pageRef: Type.String({ minLength: 1 }),
+    observationId: Type.String({ minLength: 1 }),
+    elementRef: Type.String({ minLength: 1 }),
+    destinationRoot: Type.String({ minLength: 1 }),
+  }),
+  actionObject(["browser_pointer"], {
+    browserRef: Type.String({ minLength: 1 }),
+    pageRef: Type.String({ minLength: 1 }),
+    observationId: Type.String({ minLength: 1 }),
+    pointerAction: Type.Enum(["hover", "right_click", "double_click", "scroll", "drag"] as const, {
+      type: "string",
+    }),
+    inputRoute: Type.Optional(Type.Enum(["trusted", "dom_event"] as const, { type: "string" })),
+    elementRef: Type.Optional(Type.String({ minLength: 1 })),
+    x: Type.Optional(Type.Number({ minimum: 0 })),
+    y: Type.Optional(Type.Number({ minimum: 0 })),
+    destinationElementRef: Type.Optional(Type.String({ minLength: 1 })),
+    toX: Type.Optional(Type.Number({ minimum: 0 })),
+    toY: Type.Optional(Type.Number({ minimum: 0 })),
+    deltaX: Type.Optional(Type.Number()),
+    deltaY: Type.Optional(Type.Number()),
+  }),
   actionObject(["escalate_scope"], {
     reason: Type.Enum(ESCALATION_REASONS, { type: "string" }),
   }),
@@ -233,7 +322,7 @@ const ComputerBoundsSchema = Type.Object(
 
 const ComputerObservationSchema = Type.Object(
   {
-    kind: Type.Enum(["window", "screen"] as const, { type: "string" }),
+    kind: Type.Enum(["window", "screen", "browser"] as const, { type: "string" }),
     base64: Type.Optional(Type.String()),
     format: Type.Optional(Type.Enum(["jpeg", "png"] as const, { type: "string" })),
     width: Type.Optional(Type.Integer({ minimum: 1 })),

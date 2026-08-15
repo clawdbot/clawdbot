@@ -52,6 +52,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   private context?: ApplicationContext;
 
   private openedFor: string | null = null;
+  private openedGroupDefaults = "";
   private openedAgentId = "";
   private messageOwnerKey = "";
   private presenceSignature = "";
@@ -61,6 +62,10 @@ class NewSessionPage extends OpenClawLightDomElement {
   private connectMachineSetup: DevicePairSetup | null = null;
   private connectMachineRequestId = 0;
   @state() private imageLightbox: ImageLightboxItem | null = null;
+  private readonly groupRouteRevalidation = new catalog.GroupRouteRevalidation(
+    () => this.data,
+    () => this.context?.revalidate("new-session"),
+  );
   private readonly gateway: DraftGatewayState;
   private readonly browser: DraftPlaceBrowser;
   private readonly place: DraftPlaceState;
@@ -193,6 +198,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       .watch(
         () => this.context?.sessions,
         (sessions, notify) => sessions.subscribe(notify),
+        (sessions) => this.groupRouteRevalidation.synchronize(sessions),
       )
       .watch(
         () => this.context?.config,
@@ -255,14 +261,20 @@ class NewSessionPage extends OpenClawLightDomElement {
       ? catalog.routeKey(this.data)
       : catalog.routeKeyFromSearch(window.location.search);
     const resolvedAgentId = this.data?.agentId ?? "";
+    const groupDefaults = catalog.groupDefaultsKey(this.data);
     if (this.openedFor !== openKey) {
       const ownedMessage = this.messageOwnerKey === openKey ? this.submission.message : "";
       this.openedFor = openKey;
+      this.openedGroupDefaults = groupDefaults;
       this.openedAgentId = resolvedAgentId;
       this.place.setAgentsHydrated(agentsReady);
       this.resetDraft();
       this.messageOwnerKey = restoreDraft(this.context, this.submission, openKey, ownedMessage);
       return;
+    }
+    if (this.openedGroupDefaults !== groupDefaults) {
+      this.openedGroupDefaults = groupDefaults;
+      this.place.adoptGroupDefaults();
     }
     if (this.openedAgentId !== resolvedAgentId) {
       this.openedAgentId = resolvedAgentId;
@@ -329,11 +341,15 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private renderTargetBar() {
     const agents = this.place.agents();
+    const sessions = this.context?.sessions;
     return catalog.renderBar({
       data: this.data,
+      groupPending: catalog.isGroupRoutePending(this.data, sessions),
       agentSelect: agents.length > 1 ? this.renderAgentSelect() : nothing,
       placeSelect: this.renderPlaceChips(),
-      retrying: this.gateway.catalogRetrying,
+      retrying:
+        this.gateway.catalogRetrying ||
+        Boolean(this.data?.group && sessions?.groupsStatus() === "loading"),
       onRetry: this.gateway.handleCatalogRetry,
     });
   }
@@ -700,3 +716,6 @@ class NewSessionPage extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-new-session-page")) {
   customElements.define("openclaw-new-session-page", NewSessionPage);
 }
+
+export const render = (data: unknown) =>
+  html`<openclaw-new-session-page .data=${data}></openclaw-new-session-page>`;

@@ -162,6 +162,106 @@ describe("sendGatewayHello setup completion ordering", () => {
     );
   });
 
+  it("keeps correlated setup completion uncertain when hello delivery fails", async () => {
+    await withOpenClawTestState(
+      { label: "ws-setup-completion-send-failure", layout: "state-only" },
+      async () => {
+        const paired: PairedDevice = {
+          deviceId: "device-setup-send-failure",
+          publicKey: "public-key-setup-send-failure",
+          displayName: "Test phone",
+          createdAtMs: 1,
+          approvedAtMs: 2,
+        };
+        persistDevicePairingStoreState(
+          { pendingById: {}, pairedByDeviceId: { [paired.deviceId]: paired } },
+          undefined,
+          "paired",
+        );
+        const issued = await issueDevicePairSetupBootstrapToken({
+          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        });
+        const verifyParams = {
+          token: issued.token,
+          deviceId: paired.deviceId,
+          publicKey: paired.publicKey,
+          role: "operator" as const,
+          scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+        };
+        await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
+
+        const broadcast = vi.fn();
+        const close = vi.fn();
+        const context = {
+          handler: {
+            connId: "conn-setup-send-failure",
+            gatewayMethods: [],
+            events: [],
+            buildRequestContext: () => ({ broadcast, nodeRegistry: { get: vi.fn() } }),
+            refreshHealthSnapshot: vi.fn(async () => ({})),
+            close,
+            advanceHandshakePhase: vi.fn(),
+            setCloseCause: vi.fn(),
+            logGateway: { warn: vi.fn() },
+            logHealth: { error: vi.fn() },
+          },
+          frame: { id: "hello-setup-send-failure" },
+          connectParams: {
+            client: { id: "openclaw-ios", version: "dev", platform: "test", mode: "backend" },
+            role: "operator",
+            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+          },
+          configSnapshot: {},
+          sendFrame: vi.fn(async () => {
+            throw new Error("socket closed");
+          }),
+          pendingNodePairingCleanup: {},
+          releasePendingNodePairingCleanup: vi.fn(async () => undefined),
+        };
+        const state = {
+          resolvedAuth: { mode: "none" },
+          role: "operator",
+          scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+          device: { id: paired.deviceId },
+          devicePublicKey: paired.publicKey,
+          hasTokenAuth: false,
+          hasPasswordAuth: false,
+          bootstrapTokenCandidate: issued.token,
+          authResult: { ok: true, method: "bootstrap-token" },
+          authMethod: "bootstrap-token",
+          issuedBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          deviceToken: null,
+          bootstrapDeviceTokens: [],
+          controlUiDeviceAuthMigrationPending: false,
+        };
+
+        await sendGatewayHello(context as never, state as never, {});
+
+        expect(close).toHaveBeenCalled();
+        expect(broadcast).toHaveBeenCalledWith(
+          "device.pair.setup.deliveryUncertain",
+          expect.objectContaining({ setupId: issued.setupId, deviceId: paired.deviceId }),
+          { dropIfSlow: true },
+        );
+        expect(
+          broadcast.mock.calls.some(([event]) => event === "device.pair.setup.completed"),
+        ).toBe(false);
+        await expect(
+          readDevicePairSetupCompletion({ setupId: issued.setupId }),
+        ).resolves.toMatchObject({
+          setupId: issued.setupId,
+          deviceId: paired.deviceId,
+          deliveryState: "uncertain",
+        });
+        await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({
+          ok: false,
+          reason: "bootstrap_token_invalid",
+        });
+      },
+    );
+  });
+
   it("does not consume a setup bearer after the paired public key is replaced", async () => {
     await withOpenClawTestState(
       { label: "ws-setup-completion-replaced-key", layout: "state-only" },

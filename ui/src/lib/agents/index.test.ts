@@ -68,6 +68,7 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
         error: null,
         deletedSessions: [],
         groups: [],
+        groupSettings: [],
         sectionOrder: [],
       },
     },
@@ -332,6 +333,7 @@ describe("loadToolsCatalog", () => {
       agentId: "main",
       profiles: [{ id: "full", label: "Full" }],
       groups: [],
+      groupSettings: [],
     });
     await pending;
 

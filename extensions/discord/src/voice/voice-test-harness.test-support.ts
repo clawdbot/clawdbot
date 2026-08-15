@@ -550,6 +550,7 @@ function buildVoiceTestHarness() {
         route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
         connection: createConnectionMock(),
         player: createAudioPlayerMock(),
+        sessionLifecycle: { status: "active" },
         playbackQueue: Promise.resolve(),
         processingQueue: Promise.resolve(),
         capture: createVoiceCaptureState(),

@@ -46,6 +46,7 @@ import {
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
 import type { GatewaySessionsDefaults, SessionsPatchResult } from "./session-utils.types.js";
+import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 type ThinkingProviderPolicySource = NonNullable<
   Parameters<typeof resolveThinkingProfile>[0]["providerPolicySource"]
@@ -331,14 +332,16 @@ export function getSessionDefaults(
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-  const agentRuntime = resolveModelAgentRuntimeMetadata({
-    cfg,
-    agentId,
-    provider: resolved.provider,
-    model: resolved.model,
-    sessionKey,
-    acpRuntime: false,
-  });
+  const agentRuntime = projectWorkerPlacementAgentRuntime(
+    resolveModelAgentRuntimeMetadata({
+      cfg,
+      agentId,
+      provider: resolved.provider,
+      model: resolved.model,
+      sessionKey,
+      acpRuntime: false,
+    }),
+  );
   const thinkingProfile = resolveGatewayModelThinkingProfile({
     cfg,
     provider: resolved.provider,

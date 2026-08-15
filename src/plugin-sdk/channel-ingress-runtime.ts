@@ -152,7 +152,11 @@ export function fanInChannelIngressLifecycles(
     await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onAbandoned()));
   };
   const failAll = async (error: unknown) => {
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onFailed?.(error)));
+    await Promise.all(
+      lifecycles.map(async (lifecycle) =>
+        lifecycle.onFailed ? await lifecycle.onFailed(error) : await lifecycle.onAbandoned(),
+      ),
+    );
   };
   const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
   // Omit aggregate cancellation unless every durable source supports it. Callers
@@ -209,10 +213,10 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
       }
     },
-    abandon: async (_error?: unknown) => {
+    abandon: async (error?: unknown) => {
       if (!handedOff) {
         handedOff = true;
-        await abandonAll();
+        await (error === undefined ? abandonAll() : failAll(error));
       }
     },
     // Source-compatible lifecycles predate onCancelled. Settle each source through

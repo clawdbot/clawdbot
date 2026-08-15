@@ -20,7 +20,8 @@ import {
   getSessionsHandlers,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, defaultAgentWorkspace, openClient } =
+  setupGatewaySessionsTestHarness();
 
 async function seedLinearTranscript(params: {
   contents: string[];
@@ -853,6 +854,20 @@ test("write-scoped operators manage chat organization but not admin session sett
     expect(reordered.payload?.groups.map((group) => group.name)).toEqual(["Someday", "Travel"]);
     expect(reordered.payload?.sectionOrder).toEqual(["work", "category:Travel", "ungrouped"]);
 
+    const defaultsUpdated = await rpcReq<{
+      ok: true;
+      defaults: Array<{ name: string; cwd?: string; worktree?: boolean }>;
+    }>(ws, "sessions.groups.update", {
+      name: "Travel",
+      cwd: defaultAgentWorkspace,
+      worktree: true,
+    });
+    expect(defaultsUpdated.ok).toBe(true);
+    expect(defaultsUpdated.payload?.defaults).toContainEqual({
+      name: "Travel",
+      cwd: defaultAgentWorkspace,
+      worktree: true,
+    });
     const renamedGroup = await rpcReq<{
       ok: true;
       sectionOrder: string[];

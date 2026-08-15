@@ -1,4 +1,3 @@
-import type { EmbeddingProviderStartupIssue } from "openclaw/plugin-sdk/embedding-providers";
 // Memory Core plugin module implements embeddings behavior.
 import {
   getMemoryEmbeddingProvider,
@@ -31,24 +30,6 @@ type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
-type EmbeddingProviderStartupPreflightResult =
-  | { status: "ready" }
-  | {
-      status: "blocked";
-      issues: Array<EmbeddingProviderStartupIssue & { provider: string }>;
-    }
-  | { status: "indeterminate"; reason: string };
-
-type EmbeddingProviderStartupInspector = Pick<
-  MemoryEmbeddingProviderAdapter,
-  "id" | "defaultModel" | "formatSetupError" | "inspectStartupPrerequisites"
->;
-
-type ResolveEmbeddingProviderStartupInspector = (
-  providerId: string,
-  config: MemoryEmbeddingProviderCreateOptions["config"],
-) => EmbeddingProviderStartupInspector | undefined;
-
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const LOCAL_LLAMA_CPP_PROVIDER_ID = "local";
 
@@ -63,20 +44,8 @@ function createMissingLlamaCppProviderError(): Error {
   );
 }
 
-function formatProviderError(
-  adapter: Pick<MemoryEmbeddingProviderAdapter, "formatSetupError">,
-  err: unknown,
-): string {
+function formatProviderError(adapter: MemoryEmbeddingProviderAdapter, err: unknown): string {
   return adapter.formatSetupError?.(err) ?? formatErrorMessage(err);
-}
-
-function attachProviderToStartupIssue(
-  issue: EmbeddingProviderStartupIssue,
-  provider: string,
-): EmbeddingProviderStartupIssue & { provider: string } {
-  return issue.remediation
-    ? { provider, code: issue.code, message: issue.message, remediation: issue.remediation }
-    : { provider, code: issue.code, message: issue.message };
 }
 
 function getAdapter(
@@ -94,7 +63,7 @@ function getAdapter(
 }
 
 function resolveProviderModel(
-  adapter: Pick<MemoryEmbeddingProviderAdapter, "defaultModel">,
+  adapter: MemoryEmbeddingProviderAdapter,
   requestedModel: string,
 ): string {
   const trimmed = requestedModel.trim();
@@ -102,21 +71,6 @@ function resolveProviderModel(
     return trimmed;
   }
   return adapter.defaultModel ?? "";
-}
-
-function resolveStartupInspector(
-  providerId: string,
-  config: MemoryEmbeddingProviderCreateOptions["config"],
-  resolveInspector?: ResolveEmbeddingProviderStartupInspector,
-): EmbeddingProviderStartupInspector {
-  if (!resolveInspector) {
-    return getAdapter(providerId, config);
-  }
-  const inspector = resolveInspector(providerId, config);
-  if (!inspector) {
-    throw new Error(`Unknown memory embedding provider: ${providerId}`);
-  }
-  return inspector;
 }
 
 export function resolveEmbeddingProviderFallbackModel(
@@ -128,9 +82,9 @@ export function resolveEmbeddingProviderFallbackModel(
   return adapter?.defaultModel ?? fallbackSourceModel;
 }
 
-export function resolveEmbeddingProviderFallbackRemote<
-  TRemote extends NonNullable<MemoryEmbeddingProviderCreateOptions["remote"]>,
->(remote: TRemote | undefined): Omit<TRemote, "apiKey" | "baseUrl" | "headers"> | undefined {
+export function resolveEmbeddingProviderFallbackRemote(
+  remote: MemoryEmbeddingProviderCreateOptions["remote"],
+): MemoryEmbeddingProviderCreateOptions["remote"] {
   if (!remote) {
     return undefined;
   }
@@ -197,99 +151,6 @@ async function createWithAdapter(
     provider: result.provider,
     requestedProvider: options.provider,
     runtime: result.runtime,
-  };
-}
-
-async function inspectWithAdapter(
-  adapter: EmbeddingProviderStartupInspector,
-  options: CreateEmbeddingProviderOptions,
-): Promise<EmbeddingProviderStartupPreflightResult> {
-  if (!adapter.inspectStartupPrerequisites) {
-    return {
-      status: "indeterminate",
-      reason: `Embedding provider "${adapter.id}" does not expose startup prerequisite inspection.`,
-    };
-  }
-  try {
-    const result = await adapter.inspectStartupPrerequisites({
-      ...options,
-      model: resolveProviderModel(adapter, options.model),
-    });
-    if (result.status !== "blocked") {
-      return result;
-    }
-    return {
-      status: "blocked",
-      issues: result.issues.map((issue) => attachProviderToStartupIssue(issue, adapter.id)),
-    };
-  } catch (error) {
-    return {
-      status: "indeterminate",
-      reason: `Embedding provider "${adapter.id}" startup inspection failed: ${formatProviderError(adapter, error)}`,
-    };
-  }
-}
-
-export async function inspectEmbeddingProviderStartupPrerequisites(
-  options: CreateEmbeddingProviderOptions,
-  resolveInspector?: ResolveEmbeddingProviderStartupInspector,
-): Promise<EmbeddingProviderStartupPreflightResult> {
-  const provider =
-    options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
-  let primaryAdapter: EmbeddingProviderStartupInspector;
-  try {
-    primaryAdapter = resolveStartupInspector(provider, options.config, resolveInspector);
-  } catch (error) {
-    return { status: "indeterminate", reason: formatErrorMessage(error) };
-  }
-
-  const primaryResult = await inspectWithAdapter(primaryAdapter, {
-    ...options,
-    provider,
-  });
-  if (primaryResult.status === "ready") {
-    return primaryResult;
-  }
-  if (!options.fallback || options.fallback === "none" || options.fallback === provider) {
-    return primaryResult;
-  }
-
-  let fallbackAdapter: EmbeddingProviderStartupInspector;
-  try {
-    fallbackAdapter = resolveStartupInspector(options.fallback, options.config, resolveInspector);
-  } catch (error) {
-    return {
-      status: "indeterminate",
-      reason: `${primaryResult.status === "indeterminate" ? primaryResult.reason : "Primary provider is blocked"} Fallback inspection failed: ${formatErrorMessage(error)}`,
-    };
-  }
-  const fallbackResult = await inspectWithAdapter(fallbackAdapter, {
-    ...options,
-    provider: options.fallback,
-    model: resolveEmbeddingProviderFallbackModel(options.fallback, options.model, options.config),
-    remote: resolveEmbeddingProviderFallbackRemote(options.remote),
-    fallback: "none",
-  });
-  if (fallbackResult.status === "ready") {
-    return fallbackResult;
-  }
-  if (primaryResult.status === "blocked" && fallbackResult.status === "blocked") {
-    return {
-      status: "blocked",
-      issues: [...primaryResult.issues, ...fallbackResult.issues],
-    };
-  }
-  const reasons = [primaryResult, fallbackResult]
-    .filter(
-      (
-        result,
-      ): result is Extract<EmbeddingProviderStartupPreflightResult, { status: "indeterminate" }> =>
-        result.status === "indeterminate",
-    )
-    .map((result) => result.reason);
-  return {
-    status: "indeterminate",
-    reason: reasons.join(" Fallback: "),
   };
 }
 

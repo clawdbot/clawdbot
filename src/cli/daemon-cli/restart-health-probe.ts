@@ -184,6 +184,7 @@ export async function resolveGatewayRestartProbeAuth(
   } as NodeJS.ProcessEnv;
   const cfg = await createConfigIO({
     env: mergedEnv,
+    observe: false,
     pluginValidation: "skip",
     suppressFutureVersionWarning: true,
   })

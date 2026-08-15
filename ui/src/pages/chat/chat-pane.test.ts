@@ -401,6 +401,43 @@ describe("chat pane header state", () => {
     await vi.waitFor(() => expect(state.chatError).toBe("No desktop available."));
     expect(state.lastError).toBe(state.chatError);
   });
+
+  it.each([
+    {
+      name: "leaving and returning before settlement",
+      retire: (pane: TestChatPane) => {
+        pane.presented = false;
+        pane.presented = true;
+      },
+    },
+    {
+      name: "replacing the Gateway generation",
+      retire: (pane: TestChatPane) => {
+        pane.connectionGeneration += 1;
+      },
+    },
+  ])("does not resurrect a reveal failure after $name", async ({ retire }) => {
+    const revealed = createDeferred<{ ok: false; error: string }>();
+    const request = vi.fn(() => revealed.promise);
+    const { pane, state } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const session = {
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+
+    pane.handleHeaderMenuAction("reveal", session, "/src/openclaw", null);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    retire(pane);
+    revealed.resolve({ ok: false, error: "No desktop available." });
+    await vi.waitFor(() => expect(request).toHaveResolved());
+
+    expect(state.chatError).toBeNull();
+    expect(state.lastError).toBeNull();
+  });
 });
 
 describe("chat pane initialization", () => {

@@ -1,14 +1,17 @@
 // Tlon monitor tests cover authentication, inbound context, and shutdown lifecycle.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
-import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   authenticateMock,
+  buildChannelInboundEnvelopeMock,
+  builtInboundContextPayload,
+  createChannelInboundEnvelopeBuilderMock,
+  formatInboundMediaUnavailableTextMock,
   sleepWithAbortMock,
+  saveRemoteMediaMock,
   sseClientMock,
   ingressMock,
   inboundRuntimeMock,
@@ -16,7 +19,12 @@ const {
   realUrbitFixture,
 } = vi.hoisted(() => ({
   authenticateMock: vi.fn(),
+  buildChannelInboundEnvelopeMock: vi.fn(),
+  builtInboundContextPayload: { kind: "tlon-inbound-context" },
+  createChannelInboundEnvelopeBuilderMock: vi.fn(),
+  formatInboundMediaUnavailableTextMock: vi.fn(),
   sleepWithAbortMock: vi.fn(),
+  saveRemoteMediaMock: vi.fn(),
   sseClientMock: {
     scry: vi.fn().mockResolvedValue({}),
     subscribe: vi.fn().mockResolvedValue(undefined),
@@ -59,18 +67,24 @@ const {
 
 const runningServers: Server[] = [];
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    sleepWithAbort: sleepWithAbortMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  resolveHumanDelayConfig: vi.fn(() => undefined),
+}));
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
-  return { ...actual, saveRemoteMedia: vi.fn() };
-});
+vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
+  createChannelInboundEnvelopeBuilder: createChannelInboundEnvelopeBuilderMock,
+  formatInboundMediaUnavailableText: formatInboundMediaUnavailableTextMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  sleepWithAbort: sleepWithAbortMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  MAX_IMAGE_BYTES: 6 * 1024 * 1024,
+  readRemoteMediaBuffer: vi.fn(),
+  saveRemoteMedia: saveRemoteMediaMock,
+}));
 
 vi.mock("../runtime.js", () => ({
   getTlonRuntime: () => ({
@@ -138,10 +152,11 @@ vi.mock("./ingress.js", () => ({
 import { monitorTlonProvider } from "./index.js";
 import { extractMessageText } from "./utils.js";
 
-const saveRemoteMediaMock = vi.mocked(saveRemoteMedia);
-
 beforeEach(() => {
-  inboundRuntimeMock.buildContext.mockImplementation(buildChannelInboundEventContext);
+  createChannelInboundEnvelopeBuilderMock.mockReturnValue(buildChannelInboundEnvelopeMock);
+  buildChannelInboundEnvelopeMock.mockReturnValue("tlon-envelope");
+  formatInboundMediaUnavailableTextMock.mockReturnValue("formatted-inbound-body");
+  inboundRuntimeMock.buildContext.mockReturnValue(builtInboundContextPayload);
 });
 
 afterEach(async () => {
@@ -228,6 +243,18 @@ describe("monitorTlonProvider inbound media truth", () => {
         })),
       ];
       const originalText = extractMessageText(content);
+      const expectedMedia = Array.from({ length: Math.min(imageCount, 8) }, (_, index) => index)
+        .filter((index) => !failedIndexes.includes(index))
+        .map((index) => ({
+          path: `/tmp/openclaw/media/inbound/photo-${index}.png`,
+          contentType: "image/png",
+        }));
+      const expectedMediaPrompt = [
+        ...expectedMedia.map(
+          ({ path, contentType }) => `[media attached: ${path} (${contentType}) | ${path}]`,
+        ),
+        originalText,
+      ].join("\n");
 
       const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
       try {
@@ -252,26 +279,62 @@ describe("monitorTlonProvider inbound media truth", () => {
           },
         });
 
+        expect(createChannelInboundEnvelopeBuilderMock).toHaveBeenCalledOnce();
+        expect(createChannelInboundEnvelopeBuilderMock).toHaveBeenCalledWith({
+          cfg: {
+            channels: {
+              tlon: {
+                code: "code",
+                network: { dangerouslyAllowPrivateNetwork: true },
+                ownerShip: "~nec",
+                ship: "~zod",
+                url: "https://urbit.example.com",
+              },
+            },
+          },
+          route: {
+            accountId: "default",
+            agentId: "main",
+            dmScope: "main",
+            sessionKey: "agent:main:main",
+          },
+        });
+        expect(buildChannelInboundEnvelopeMock).toHaveBeenCalledOnce();
+        expect(buildChannelInboundEnvelopeMock).toHaveBeenCalledWith({
+          body: expectedMediaPrompt,
+          channel: "Tlon",
+          from: "~nec [owner]",
+          timestamp: 1_700_000_000_000,
+        });
+        expect(formatInboundMediaUnavailableTextMock).toHaveBeenCalledWith({
+          body: originalText,
+          notice: expectedNotice,
+        });
+        expect(inboundRuntimeMock.buildContext).toHaveBeenCalledOnce();
+        const buildContextCall = inboundRuntimeMock.buildContext.mock.calls[0];
+        if (!buildContextCall) {
+          throw new Error("expected inbound context call");
+        }
+        const [contextInput] = buildContextCall;
+        expect(contextInput.message).toMatchObject({
+          body: "tlon-envelope",
+          bodyForAgent: "formatted-inbound-body",
+          commandBody: originalText,
+          rawBody: originalText,
+        });
+        expect(contextInput.extra.Attachments).toHaveLength(expectedAttachments);
+        expect(contextInput.extra.Attachments).toEqual(expectedMedia);
+
         expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
         const dispatchCall = inboundRuntimeMock.dispatch.mock.calls[0];
         if (!dispatchCall) {
           throw new Error("expected inbound dispatch call");
         }
         const [{ ctxPayload, replyOptions }] = dispatchCall;
-        expect(ctxPayload.BodyForAgent).toBe(`${originalText}\n\n${expectedNotice}`);
-        expect(ctxPayload.RawBody).toBe(originalText);
-        expect(ctxPayload.CommandBody).toBe(originalText);
-        expect(ctxPayload.BodyForCommands).toBe(originalText);
-        expect(ctxPayload.Attachments).toHaveLength(expectedAttachments);
+        expect(contextInput).not.toBe(builtInboundContextPayload);
+        expect(ctxPayload).toBe(builtInboundContextPayload);
         expect(replyOptions.media).toHaveLength(expectedAttachments);
-        expect(replyOptions.media).toEqual(
-          Array.from({ length: Math.min(imageCount, 8) }, (_, index) => index)
-            .filter((index) => !failedIndexes.includes(index))
-            .map((index) => ({
-              path: `/tmp/openclaw/media/inbound/photo-${index}.png`,
-              contentType: "image/png",
-            })),
-        );
+        expect(replyOptions.media).toEqual(expectedMedia);
       } finally {
         controller.abort();
         await monitor;

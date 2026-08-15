@@ -9,7 +9,16 @@ import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const artifactMocks = vi.hoisted(() => ({
+  verify: vi.fn(),
+}));
+
+vi.mock("./src/driver-artifacts.js", () => ({
+  verifyInstalledCuaDriverArtifacts: artifactMocks.verify,
+}));
+
 import plugin from "./index.js";
 
 function validateManifestConfig(value: unknown) {
@@ -24,6 +33,10 @@ function validateManifestConfig(value: unknown) {
 }
 
 describe("cua-computer plugin registration", () => {
+  beforeEach(() => {
+    artifactMocks.verify.mockReset().mockReturnValue({ ok: true, applicable: false });
+  });
+
   it("defaults on only for the app-gated macOS provider path", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
@@ -72,6 +85,28 @@ describe("cua-computer plugin registration", () => {
       { command: "screen.snapshot", cap: "screen", dangerous: false },
       { command: "computer.act", cap: "computer", dangerous: true },
     ]);
+  });
+
+  it("logs the typed artifact diagnostic during plugin startup", () => {
+    const error = vi.fn();
+    artifactMocks.verify.mockReturnValue({
+      ok: false,
+      code: "COMPUTER_DRIVER_PACKAGE_MISSING",
+      diagnostic:
+        "COMPUTER_DRIVER_PACKAGE_MISSING: native package absent. Fix: reinstall OpenClaw.",
+      fixHint: "Reinstall OpenClaw.",
+    });
+
+    plugin.register({
+      pluginConfig: {},
+      logger: { error },
+      registerNodeHostCommand: () => {},
+      registerNodeInvokePolicy: () => {},
+    } as unknown as OpenClawPluginApi);
+
+    expect(error).toHaveBeenCalledWith(
+      "COMPUTER_DRIVER_PACKAGE_MISSING: native package absent. Fix: reinstall OpenClaw.",
+    );
   });
 
   it("forwards an explicitly armed computer action and preserves node refusals", async () => {

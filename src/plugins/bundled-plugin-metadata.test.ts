@@ -79,6 +79,7 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "opencode",
   "talk-voice",
   "teams-meetings",
+  "xai",
   "zoom-meetings",
 ] as const;
 
@@ -427,13 +428,6 @@ describe("bundled plugin metadata", () => {
     const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
     expectArtifactPresence(slack?.publicSurfaceArtifacts, {
       contains: ["doctor-contract-api.js"],
-    });
-  });
-
-  it("keeps llama.cpp startup inspection on the bundled public surface", () => {
-    const llamaCpp = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "llama-cpp");
-    expectArtifactPresence(llamaCpp?.publicSurfaceArtifacts, {
-      contains: ["embedding-provider-preflight-api.js"],
     });
   });
 

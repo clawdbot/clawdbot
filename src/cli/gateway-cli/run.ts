@@ -24,10 +24,12 @@ import {
 } from "../../config/io.invalid-config.js";
 import { CONFIG_PATH, normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
+  isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -77,8 +79,6 @@ import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 import { runGatewayLoop } from "./run-loop.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
-import type { GatewayShellEnvFallbackPlan } from "./shell-env-fallback-plan.js";
-import { getGatewayStartGuardErrors } from "./start-guard.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
@@ -234,6 +234,48 @@ function formatModeErrorList(modes: readonly string[]): string {
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
 }
 
+function shouldBlockGatewayBindWithoutExplicitAuth(params: {
+  bindHost: string;
+  hasSharedSecret: boolean;
+  resolvedAuthMode: GatewayAuthMode;
+}): boolean {
+  return (
+    !isLoopbackHost(params.bindHost) &&
+    !params.hasSharedSecret &&
+    params.resolvedAuthMode !== "trusted-proxy"
+  );
+}
+
+function getGatewayStartGuardErrors(params: {
+  allowUnconfigured?: boolean;
+  configExists: boolean;
+  configAuditLocation: string;
+  mode: string | undefined;
+}): string[] {
+  if (params.allowUnconfigured || params.mode === "local") {
+    return [];
+  }
+  if (!params.configExists) {
+    return [
+      `Missing config. Run \`${formatCliCommand("openclaw setup")}\` or set gateway.mode=local (or pass --allow-unconfigured).`,
+    ];
+  }
+  if (params.mode === undefined) {
+    return [
+      [
+        "Gateway start blocked: existing config is missing gateway.mode.",
+        "Treat this as suspicious or clobbered config.",
+        `Re-run \`${formatCliCommand("openclaw onboard --mode local")}\` or \`${formatCliCommand("openclaw setup")}\`, set gateway.mode=local manually, or pass --allow-unconfigured.`,
+      ].join(" "),
+      `Config write audit: ${params.configAuditLocation}`,
+    ];
+  }
+  return [
+    `Gateway start blocked: set gateway.mode=local (current: ${params.mode}) or pass --allow-unconfigured.`,
+    `Config write audit: ${params.configAuditLocation}`,
+  ];
+}
+
 async function readGatewayStartupConfig(params: {
   lowerPrecedenceEnv: Readonly<Record<string, string>>;
   opts: GatewayRunOpts;
@@ -282,15 +324,40 @@ async function readGatewayStartupConfig(params: {
   };
 }
 
+type GatewayRunShellEnvFallbackPlan =
+  | { enabled: false }
+  | {
+      enabled: true;
+      expectedKeys: string[];
+      timeoutMs: number;
+    };
+
 async function resolveGatewayRunShellEnvFallbackPlan(
   cfg: OpenClawConfig,
-): Promise<GatewayShellEnvFallbackPlan> {
-  const { resolveGatewayShellEnvFallbackPlan } = await import("./shell-env-fallback-plan.js");
-  return resolveGatewayShellEnvFallbackPlan(cfg);
+): Promise<GatewayRunShellEnvFallbackPlan> {
+  const { createConfigRuntimeEnv } = await import("../../config/env-vars.js");
+  const {
+    resolveShellEnvFallbackTimeoutMs,
+    shouldDeferShellEnvFallback,
+    shouldEnableShellEnvFallback,
+  } = await import("../../infra/shell-env.js");
+  const planEnv = createConfigRuntimeEnv(cfg, process.env);
+  const enabled =
+    (shouldEnableShellEnvFallback(planEnv) || cfg.env?.shellEnv?.enabled === true) &&
+    !shouldDeferShellEnvFallback(planEnv);
+  if (!enabled) {
+    return { enabled: false };
+  }
+  const { resolveShellEnvExpectedKeys } = await import("../../config/shell-env-expected-keys.js");
+  return {
+    enabled: true,
+    expectedKeys: resolveShellEnvExpectedKeys(planEnv),
+    timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(planEnv),
+  };
 }
 
 async function loadGatewayRunShellEnvFallback(
-  plan: Extract<GatewayShellEnvFallbackPlan, { enabled: true }>,
+  plan: Extract<GatewayRunShellEnvFallbackPlan, { enabled: true }>,
 ): Promise<Record<string, string>> {
   const { loadShellEnvFallback } = await import("../../infra/shell-env.js");
   const valuesBeforeLoad = new Map(plan.expectedKeys.map((key) => [key, process.env[key]]));
@@ -325,14 +392,8 @@ async function clearGatewayRunShellEnvFallback(
   clearShellEnvAppliedKeys(keys);
 }
 
-function gatewayRunShellEnvFallbackPlanSignature(plan: GatewayShellEnvFallbackPlan): string {
-  return plan.enabled
-    ? JSON.stringify({
-        enabled: true,
-        expectedKeys: plan.expectedKeys,
-        timeoutMs: plan.timeoutMs,
-      })
-    : JSON.stringify(plan);
+function gatewayRunShellEnvFallbackPlanSignature(plan: GatewayRunShellEnvFallbackPlan): string {
+  return JSON.stringify(plan);
 }
 
 async function readGatewayStartupConfigWithShellEnv(params: {
@@ -969,18 +1030,35 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           ...(passwordRaw ? { password: passwordRaw } : {}),
         }
       : undefined;
-  const { inspectGatewayStartupAuth, shouldBlockGatewayBindWithoutExplicitAuth } =
-    await import("../../gateway/startup-auth.js");
-  const authInspection = await startupTrace.measure("cli.auth-resolve", () =>
-    inspectGatewayStartupAuth({
-      cfg,
+  const { resolveGatewayAuth } = await import("../../gateway/auth.js");
+  const resolvedAuth = await startupTrace.measure("cli.auth-resolve", () =>
+    resolveGatewayAuth({
+      authConfig: cfg.gateway?.auth,
       authOverride,
       env: process.env,
-      tailscaleOverride: tailscaleMode ? { mode: tailscaleMode } : undefined,
+      tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
     }),
   );
-  const resolvedAuth = authInspection.auth;
   const resolvedAuthMode = resolvedAuth.mode;
+  const tokenValue = resolvedAuth.token;
+  const passwordValue = resolvedAuth.password;
+  const hasToken = typeof tokenValue === "string" && tokenValue.trim().length > 0;
+  const hasPassword = typeof passwordValue === "string" && passwordValue.trim().length > 0;
+  const tokenConfigured =
+    hasToken ||
+    hasConfiguredSecretInput(
+      authOverride?.token ?? cfg.gateway?.auth?.token,
+      cfg.secrets?.defaults,
+    );
+  const passwordConfigured =
+    hasPassword ||
+    hasConfiguredSecretInput(
+      authOverride?.password ?? cfg.gateway?.auth?.password,
+      cfg.secrets?.defaults,
+    );
+  const hasSharedSecret =
+    (resolvedAuthMode === "token" && tokenConfigured) ||
+    (resolvedAuthMode === "password" && passwordConfigured);
   const authHints: string[] = [];
   if (miskeys.hasGatewayToken) {
     authHints.push('Found "gateway.token" in config. Use "gateway.auth.token" instead.');
@@ -990,7 +1068,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       '"gateway.remote.token" is for remote CLI calls; it does not enable local gateway auth.',
     );
   }
-  if (authInspection.passwordMissing) {
+  if (resolvedAuthMode === "password" && !passwordConfigured) {
     defaultRuntime.error(
       [
         "Gateway auth is set to password, but no password is configured.",
@@ -1012,7 +1090,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   if (
     shouldBlockGatewayBindWithoutExplicitAuth({
       bindHost: healthHost,
-      hasSharedSecret: authInspection.hasSharedSecret,
+      hasSharedSecret,
       resolvedAuthMode,
     })
   ) {

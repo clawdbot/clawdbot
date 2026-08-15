@@ -4,6 +4,7 @@ import { createStreamingResponse } from "../../test-support/streaming-error-resp
 
 // Capture every call to postTrustedWebToolsJson so we can assert on extraHeaders.
 const postTrustedWebToolsJson = vi.fn();
+const writeCache = vi.fn();
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>()),
@@ -12,7 +13,7 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   postTrustedWebToolsJson,
   readCache: () => undefined,
   resolveCacheTtlMs: () => 300_000,
-  writeCache: vi.fn(),
+  writeCache,
 }));
 
 vi.mock("./config.js", () => ({
@@ -33,6 +34,7 @@ describe("tavily client X-Client-Source header", () => {
 
   beforeEach(() => {
     postTrustedWebToolsJson.mockReset();
+    writeCache.mockReset();
     postTrustedWebToolsJson.mockImplementation(
       async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
         parse(Response.json({ results: [] })),
@@ -292,6 +294,29 @@ describe("tavily client X-Client-Source header", () => {
 
       await expect(operation).rejects.toBe(reason);
       expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
+    },
+  );
+
+  it.each(["search", "extract"] as const)(
+    "does not cache a %s result completed after caller cancellation",
+    async (kind) => {
+      const controller = new AbortController();
+      const reason = new Error(`${kind} cancelled after response`);
+      postTrustedWebToolsJson.mockImplementationOnce(async () => {
+        controller.abort(reason);
+        return { results: [] };
+      });
+
+      const operation =
+        kind === "search"
+          ? runTavilySearch({ query: "late cancel", signal: controller.signal })
+          : runTavilyExtract({
+              urls: ["https://example.com/late-cancel"],
+              signal: controller.signal,
+            });
+
+      await expect(operation).rejects.toBe(reason);
+      expect(writeCache).not.toHaveBeenCalled();
     },
   );
 });

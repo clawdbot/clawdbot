@@ -115,6 +115,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         runOwnsCompactionAfterHook: vi.fn(async () => {}),
         adoptCompactionTranscript: vi.fn(async () => undefined),
         getActiveSession: () => ({ id: "session-1", file: baseRunParams.sessionFile }),
+        prepareCompactedTranscriptRetry: vi.fn(async () => {}),
         armPostCompactionGuard: vi.fn(),
       },
       {

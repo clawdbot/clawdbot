@@ -268,7 +268,6 @@ export function createPageState(
   } as unknown as ChatPageHost;
 
   state.resetToolStream = () => resetToolStream(state as never);
-  state.onModelChanged = () => undefined;
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {

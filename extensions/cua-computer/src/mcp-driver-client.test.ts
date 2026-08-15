@@ -209,7 +209,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         delivery: { mode: 0, deliveredCount: 1 },
         evidence: [{ kind: 0 }],
       });
-
       await driver.dispose();
       await vi.waitFor(() => {
         closed = endpoint.requests.some(
@@ -269,6 +268,9 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       const calls = Array.from({ length: 65 }, () => driver.callTool("list_windows", {}));
       await expect(calls[64]).rejects.toThrow("too many pending requests");
       await vi.waitFor(() => expect(held).toHaveLength(64));
+      expect(held[0]?.params?.arguments).toMatchObject({
+        session: expect.stringMatching(/^openclaw-/),
+      });
       for (const request of held) {
         endpoint.respond(request, toolResult({ windows: [] }));
       }

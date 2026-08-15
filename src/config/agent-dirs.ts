@@ -119,12 +119,8 @@ export function findDuplicateAgentDirs(
   deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
 ): DuplicateAgentDir[] {
   const byDir = new Map<string, { agentDir: string; agentIds: string[] }>();
-  const agentIds = collectReferencedAgentIds(cfg);
-  if (agentIds.length < 2) {
-    return [];
-  }
 
-  for (const agentId of agentIds) {
+  for (const agentId of collectReferencedAgentIds(cfg)) {
     const agentDir = resolveEffectiveAgentDir(cfg, agentId, deps);
     const key = canonicalizeAgentDir(agentDir);
     const entry = byDir.get(key);

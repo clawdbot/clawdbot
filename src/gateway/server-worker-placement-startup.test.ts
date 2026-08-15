@@ -72,7 +72,7 @@ describe("worker placement startup health lifetime", () => {
         listWorkspaceReconciliationOwners: () => [],
       } as never,
       environments: environments as never,
-      admitNewPlacements: true,
+      gatewayNamespace: "gateway-test",
       revokeSessionAuthority: vi.fn(),
       warn,
     });
@@ -157,7 +157,7 @@ describe("worker placement startup health lifetime", () => {
         listWorkspaceReconciliationOwners: () => [],
       } as never,
       environments: environments as never,
-      admitNewPlacements: true,
+      gatewayNamespace: "gateway-test",
       revokeSessionAuthority: vi.fn(),
       warn: vi.fn(),
     });

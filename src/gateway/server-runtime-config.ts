@@ -43,161 +43,6 @@ type GatewayRuntimeConfig = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
 };
 
-type GatewayStartupRuntimePolicyIssue = {
-  code:
-    | "gateway-tailscale-funnel-password-required"
-    | "gateway-tailscale-auth-unsafe"
-    | "gateway-tailscale-loopback-required"
-    | "gateway-bind-auth-required"
-    | "gateway-control-ui-origins-required"
-    | "gateway-trusted-proxies-required";
-  message: string;
-  remediation: readonly string[];
-  configPath:
-    | "gateway.auth"
-    | "gateway.auth.mode"
-    | "gateway.bind"
-    | "gateway.controlUi.allowedOrigins"
-    | "gateway.trustedProxies";
-};
-
-export type GatewayStartupRuntimePolicyInspection =
-  | { status: "ready" }
-  | { status: "blocked"; issue: GatewayStartupRuntimePolicyIssue }
-  | { status: "indeterminate"; reason: string };
-
-/**
- * Inspect the pure Gateway runtime policy enforced after bind and auth resolution.
- * An indeterminate host class keeps host-dependent policy passive.
- */
-export function inspectGatewayStartupRuntimePolicy(params: {
-  authMode: ResolvedGatewayAuth["mode"];
-  hasSharedSecret: boolean;
-  bindHost?: string;
-  hostClass: "loopback" | "non-loopback" | "indeterminate";
-  controlUiEnabled: boolean;
-  controlUiAllowedOrigins: readonly string[];
-  dangerouslyAllowHostHeaderOriginFallback: boolean;
-  tailscaleMode: "off" | "serve" | "funnel";
-  trustedProxies: readonly string[];
-  port?: number;
-}): GatewayStartupRuntimePolicyInspection {
-  if (params.tailscaleMode === "funnel" && params.authMode !== "password") {
-    return {
-      status: "blocked",
-      issue: {
-        code: "gateway-tailscale-funnel-password-required",
-        message:
-          "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
-        remediation: [
-          "Set gateway.auth.mode=password and provide gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD.",
-        ],
-        configPath: "gateway.auth.mode",
-      },
-    };
-  }
-  if (
-    isUnsafeGatewayTailscaleNoAuth({
-      authMode: params.authMode,
-      tailscaleMode: params.tailscaleMode,
-    })
-  ) {
-    return {
-      status: "blocked",
-      issue: {
-        code: "gateway-tailscale-auth-unsafe",
-        message: formatUnsafeGatewayTailscaleNoAuthMessage(params.tailscaleMode),
-        remediation: [
-          "Configure token, password, or trusted-proxy auth before exposing the Gateway through Tailscale.",
-        ],
-        configPath: "gateway.auth",
-      },
-    };
-  }
-  if (params.hostClass === "indeterminate") {
-    if (params.authMode === "trusted-proxy" && params.trustedProxies.length === 0) {
-      return {
-        status: "blocked",
-        issue: {
-          code: "gateway-trusted-proxies-required",
-          message:
-            "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
-          remediation: ["Configure gateway.trustedProxies with at least one trusted proxy IP."],
-          configPath: "gateway.trustedProxies",
-        },
-      };
-    }
-    return {
-      status: "indeterminate",
-      reason:
-        "Gateway runtime policy depends on the effective bind host, which passive preflight did not resolve.",
-    };
-  }
-  if (params.tailscaleMode !== "off" && params.hostClass !== "loopback") {
-    return {
-      status: "blocked",
-      issue: {
-        code: "gateway-tailscale-loopback-required",
-        message: "tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)",
-        remediation: ["Set gateway.bind=loopback when gateway.tailscale.mode is enabled."],
-        configPath: "gateway.bind",
-      },
-    };
-  }
-  if (
-    params.hostClass === "non-loopback" &&
-    !params.hasSharedSecret &&
-    params.authMode !== "trusted-proxy"
-  ) {
-    const target = params.bindHost
-      ? `${params.bindHost}${params.port ? `:${params.port}` : ""}`
-      : "a non-loopback host";
-    return {
-      status: "blocked",
-      issue: {
-        code: "gateway-bind-auth-required",
-        message: `refusing to bind gateway to ${target} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD; legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored)`,
-        remediation: [
-          "Set gateway.auth.token/password or the corresponding target environment variable.",
-        ],
-        configPath: "gateway.auth",
-      },
-    };
-  }
-  if (
-    params.controlUiEnabled &&
-    params.hostClass === "non-loopback" &&
-    params.controlUiAllowedOrigins.length === 0 &&
-    !params.dangerouslyAllowHostHeaderOriginFallback
-  ) {
-    return {
-      status: "blocked",
-      issue: {
-        code: "gateway-control-ui-origins-required",
-        message:
-          "non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
-        remediation: [
-          "Set gateway.controlUi.allowedOrigins to the explicit browser origins for this Gateway.",
-        ],
-        configPath: "gateway.controlUi.allowedOrigins",
-      },
-    };
-  }
-  if (params.authMode === "trusted-proxy" && params.trustedProxies.length === 0) {
-    return {
-      status: "blocked",
-      issue: {
-        code: "gateway-trusted-proxies-required",
-        message:
-          "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
-        remediation: ["Configure gateway.trustedProxies with at least one trusted proxy IP."],
-        configPath: "gateway.trustedProxies",
-      },
-    };
-  }
-  return { status: "ready" };
-}
-
 /** Resolves bind, auth, HTTP, Tailscale, and hook settings for one gateway start. */
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: OpenClawConfig;
@@ -300,20 +145,43 @@ export async function resolveGatewayRuntimeConfig(params: {
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
   assertGatewayAuthConfigured(resolvedAuth, params.cfg.gateway?.auth);
-  const runtimePolicy = inspectGatewayStartupRuntimePolicy({
-    authMode,
-    hasSharedSecret,
-    bindHost,
-    hostClass: isLoopbackHost(bindHost) ? "loopback" : "non-loopback",
-    controlUiEnabled,
-    controlUiAllowedOrigins,
-    dangerouslyAllowHostHeaderOriginFallback,
-    tailscaleMode,
-    trustedProxies,
-    port: params.port,
-  });
-  if (runtimePolicy.status === "blocked") {
-    throw new Error(runtimePolicy.issue.message);
+  if (tailscaleMode === "funnel" && authMode !== "password") {
+    throw new Error(
+      "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
+    );
+  }
+  if (isUnsafeGatewayTailscaleNoAuth({ authMode, tailscaleMode })) {
+    throw new Error(formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode));
+  }
+  if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
+    throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
+  }
+  if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
+    throw new Error(
+      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD; legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored)`,
+    );
+  }
+  if (
+    controlUiEnabled &&
+    !isLoopbackHost(bindHost) &&
+    controlUiAllowedOrigins.length === 0 &&
+    !dangerouslyAllowHostHeaderOriginFallback
+  ) {
+    // Remote Control UI must use explicit origins unless the operator deliberately accepts
+    // Host-header fallback; otherwise any reachable host name can become a browser origin.
+    throw new Error(
+      "non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
+    );
+  }
+
+  if (authMode === "trusted-proxy") {
+    // Trusted-proxy auth trusts headers only after the request has matched an allowed proxy IP.
+    // Starting without that list would convert the mode into unauthenticated header spoofing.
+    if (trustedProxies.length === 0) {
+      throw new Error(
+        "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
+      );
+    }
   }
 
   if (hooksConfig) {

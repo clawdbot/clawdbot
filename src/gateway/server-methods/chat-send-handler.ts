@@ -6,7 +6,10 @@ import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.j
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
-import { prepareChatSendAttachments } from "./chat-send-attachments.js";
+import {
+  discardPreparedChatSendAttachments,
+  prepareChatSendAttachments,
+} from "./chat-send-attachments.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import {
@@ -71,12 +74,14 @@ async function handleChatSendWithOptions(
     return;
   }
   if (activeRunAbort.controller.signal.aborted) {
+    void discardPreparedChatSendAttachments(preparedAttachments.value.offloadedRefs);
     finishAbortedChatSend();
     return;
   }
   // Attachment preparation can suspend. Recheck immediately before the
   // synchronous ACK path so aborts and hot routing reloads cannot cross it.
   if (sessionRoutingChanged(context.getRuntimeConfig())) {
+    void discardPreparedChatSendAttachments(preparedAttachments.value.offloadedRefs);
     admitted.value.rejectSessionRoutingChanged();
     return;
   }

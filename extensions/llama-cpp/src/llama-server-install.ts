@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
@@ -65,6 +66,17 @@ function assertSupportedLinuxRuntime(asset: LlamaServerAsset): void {
 
 function assetUrl(asset: LlamaServerAsset): string {
   return `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_SERVER_RELEASE}/${asset.name}`;
+}
+
+export async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  await new Promise<void>((resolve, reject) => {
+    const input = fs.createReadStream(filePath);
+    input.on("data", (chunk) => hash.update(chunk));
+    input.once("error", reject);
+    input.once("end", resolve);
+  });
+  return hash.digest("hex");
 }
 
 function readResponseSha256(response: Response): string | undefined {

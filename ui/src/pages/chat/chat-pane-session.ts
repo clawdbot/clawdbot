@@ -22,6 +22,7 @@ import {
 } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history.ts";
 import {
@@ -286,6 +287,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     this.catalogCursor = undefined;
     this.catalogSession = null;
     this.catalogHost = null;
+    // Payload-store entries and their object URLs are reclaimed only by
+    // explicit release; clearing the array alone strands them for the tab.
+    releaseChatAttachmentPayloads(state.chatAttachments);
     state.chatAttachments = [];
     state.chatLoading = true;
     state.requestUpdate();

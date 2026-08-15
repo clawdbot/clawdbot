@@ -25,23 +25,12 @@ export async function executePluginInstall(
     runtime,
     opts,
     run: async (ctx) => {
-      const runPluginInstall =
-        ctx.deps?.runPluginInstall ??
-        (async (
-          spec: string,
-          pluginRuntime: RuntimeEnv,
-          installOptions: { allowInstallPolicyWarningPrompt: false },
-        ) => {
-          const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
-          await runPluginInstallCommand({
-            raw: spec,
-            opts: {},
-            runtime: pluginRuntime,
-            ...installOptions,
-          });
-        });
       await ctx.commit(async () => {
-        await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime), {
+        const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
+        await runPluginInstallCommand({
+          raw: operation.spec,
+          opts: {},
+          runtime: createNoExitRuntime(ctx.runtime),
           allowInstallPolicyWarningPrompt: false,
         });
       });

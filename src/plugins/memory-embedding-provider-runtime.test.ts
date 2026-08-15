@@ -167,7 +167,6 @@ describe("memory embedding provider runtime resolution", () => {
     const runtimeFacts = () => ({ model: "generic-model" });
     Object.defineProperty(provider, runtimeFactsKey, { value: runtimeFacts });
     const create = vi.fn(async () => ({ provider, runtime }));
-    const inspectStartupPrerequisites = vi.fn(() => ({ status: "ready" as const }));
     registerEmbeddingProvider({
       id: "generic",
       defaultModel: "generic-default",
@@ -176,7 +175,6 @@ describe("memory embedding provider runtime resolution", () => {
         model: options.model,
         cacheKeyData: { dimensions: options.dimensions },
       }),
-      inspectStartupPrerequisites,
       create,
     });
 
@@ -191,13 +189,6 @@ describe("memory embedding provider runtime resolution", () => {
     expect(adapter?.resolveIndexIdentity?.(options)).toEqual({
       model: "generic-model",
       cacheKeyData: { dimensions: 7 },
-    });
-    expect(await adapter?.inspectStartupPrerequisites?.(options)).toEqual({
-      status: "ready",
-    });
-    expect(inspectStartupPrerequisites).toHaveBeenCalledWith({
-      ...options,
-      dimensions: 7,
     });
 
     const result = await adapter?.create(options);

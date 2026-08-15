@@ -33,13 +33,10 @@ import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
   resolveManagedLlamaServerPaths,
+  sha256File,
   type LlamaDownloadProgress,
   type LlamaServerAsset,
 } from "./llama-server-install.js";
-import {
-  inspectLlamaCppModelFile,
-  resolveLlamaCppModelCacheInspectionTarget,
-} from "./model-cache.js";
 
 type ModelArtifact = {
   source: string;
@@ -199,6 +196,28 @@ function defaultArtifact(source: string): ModelArtifact | undefined {
   return undefined;
 }
 
+async function assertGguf(filePath: string): Promise<void> {
+  const handle = await fsp.open(filePath, "r").catch((error: unknown) => {
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    if (code === "ENOENT") {
+      throw new Error(
+        `Model file is missing: ${filePath}. Run interactive llama.cpp setup or correct params.modelPath.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  });
+  try {
+    const header = Buffer.alloc(4);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead !== 4 || header.toString("ascii") !== "GGUF") {
+      throw new Error(`Model is not a GGUF file: ${filePath}`);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
 async function resolveModelArtifact(source: string, signal?: AbortSignal): Promise<ModelArtifact> {
   const known = defaultArtifact(source);
   if (known) {
@@ -226,35 +245,12 @@ export async function ensureLlamaCppModel(params: {
   onProgress?: LlamaDownloadProgress;
 }): Promise<string> {
   const localSource = resolveHomePath(params.source);
-  const cacheTarget = resolveLlamaCppModelCacheInspectionTarget({
-    source: localSource,
-    cacheDir: params.cacheDir,
-  });
-  if (cacheTarget.status === "invalid") {
-    throw new Error(cacheTarget.reason);
-  }
-  if (cacheTarget.status === "inspectable") {
-    const inspection = await inspectLlamaCppModelFile({
-      filePath: cacheTarget.filePath,
-      ...(cacheTarget.expectedSha256 ? { expectedSha256: cacheTarget.expectedSha256 } : {}),
-    });
-    if (inspection.status === "ready") {
-      return cacheTarget.filePath;
-    }
-    if (cacheTarget.sourceKind === "local") {
-      if (inspection.status === "missing") {
-        throw new Error(
-          `Model file is missing: ${cacheTarget.filePath}. Run interactive llama.cpp setup or correct params.modelPath.`,
-        );
-      }
-      throw new Error(`Model is not a GGUF file: ${cacheTarget.filePath}`);
-    }
-    if (inspection.status === "invalid" && !cacheTarget.expectedSha256) {
-      throw new Error(`Model is not a GGUF file: ${cacheTarget.filePath}`);
-    }
-    if (!params.download) {
-      throw new Error(`Model is not cached at ${cacheTarget.filePath}`);
-    }
+  if (!/^(?:hf|huggingface|https):/iu.test(localSource)) {
+    const localPath = path.isAbsolute(localSource)
+      ? localSource
+      : path.resolve(params.cacheDir, localSource);
+    await assertGguf(localPath);
+    return localPath;
   }
   const artifact = await resolveModelArtifact(localSource, params.signal);
   const destination = path.join(params.cacheDir, artifact.fileName);
@@ -263,15 +259,19 @@ export async function ensureLlamaCppModel(params: {
     return await pending;
   }
   const load = (async () => {
-    const inspection = await inspectLlamaCppModelFile({
-      filePath: destination,
-      expectedSha256: artifact.expectedSha256,
-    });
-    if (inspection.status === "ready") {
-      return destination;
-    }
-    if (inspection.status === "invalid" && !artifact.expectedSha256) {
-      throw new Error(`Model is not a GGUF file: ${destination}`);
+    const exists = await fsp
+      .stat(destination)
+      .then((stat) => stat.isFile())
+      .catch(() => false);
+    if (exists) {
+      if (artifact.expectedSha256) {
+        if ((await sha256File(destination)) === artifact.expectedSha256) {
+          return destination;
+        }
+      } else {
+        await assertGguf(destination);
+        return destination;
+      }
     }
     if (!params.download) {
       throw new Error(`Model is not cached at ${destination}`);
@@ -285,13 +285,7 @@ export async function ensureLlamaCppModel(params: {
       signal: params.signal,
       onProgress: params.onProgress,
     });
-    const downloadedInspection = await inspectLlamaCppModelFile({
-      filePath: destination,
-      expectedSha256: artifact.expectedSha256,
-    });
-    if (downloadedInspection.status !== "ready") {
-      throw new Error(`Model is not a GGUF file: ${destination}`);
-    }
+    await assertGguf(destination);
     return destination;
   })();
   modelPromises.set(destination, load);

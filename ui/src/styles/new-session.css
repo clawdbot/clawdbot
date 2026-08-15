@@ -767,9 +767,4 @@ wa-dropdown.new-session-page__start-menu {
   .new-session-page__select {
     position: static;
   }
-
-  wa-popover.new-session-page__select::part(body) {
-    width: auto;
-    max-width: none;
-  }
 }

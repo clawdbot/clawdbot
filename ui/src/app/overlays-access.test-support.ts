@@ -473,7 +473,6 @@ export function registerOverlayPairingAccessTests() {
       });
       expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
         phase: "delivery-uncertain",
-        deviceName: "Phone",
         access: "full",
       });
       overlays.dispose();
