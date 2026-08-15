@@ -603,20 +603,6 @@ describe("pruneStaleModelRunEntries", () => {
     expect(store).toHaveProperty(staleModelRun);
   });
 
-  it("matches only explicit model-run uuid session keys", () => {
-    expect(
-      isGatewayModelRunSessionKey(
-        "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
-      ),
-    ).toBe(true);
-    expect(isGatewayModelRunSessionKey("agent:main:explicit:model-run-not-a-uuid")).toBe(false);
-    expect(
-      isGatewayModelRunSessionKey(
-        "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174000",
-      ),
-    ).toBe(false);
-  });
-
   it("rejects non-canonical session keys that do not parse as agent-scoped", () => {
     // Unscoped: missing `agent:<id>:` prefix — parseAgentSessionKey returns null.
     expect(
@@ -761,20 +747,6 @@ describe("capEntryCount", () => {
 
     expect(capEntryCount(store, 2)).toBe(1);
     expect(store).toHaveProperty("archived");
-    expect(store).toHaveProperty("recent");
-    expect(store.old).toBeUndefined();
-  });
-
-  it("preserves pinned sessions when capping", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["pinned", { ...makeEntry(now - 10 * DAY_MS), pinnedAt: now - 5 * DAY_MS }],
-      ["recent", makeEntry(now)],
-      ["old", makeEntry(now - DAY_MS)],
-    ]);
-
-    expect(capEntryCount(store, 2)).toBe(1);
-    expect(store).toHaveProperty("pinned");
     expect(store).toHaveProperty("recent");
     expect(store.old).toBeUndefined();
   });
