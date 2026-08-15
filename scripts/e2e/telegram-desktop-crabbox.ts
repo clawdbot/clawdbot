@@ -326,6 +326,8 @@ export function createDesktopCrabboxWarmupArgs(params: {
   browser?: boolean;
   crabboxClass: string;
   idleTimeout: string;
+  /** Baked application requirement (`name=version`); selects a catalog-only variant image. */
+  imageSdk?: string;
   provider: string;
   tailscale?: boolean;
   target?: string;
@@ -339,6 +341,7 @@ export function createDesktopCrabboxWarmupArgs(params: {
     params.target ?? "linux",
     "--desktop",
     ...(params.browser ? ["--browser"] : []),
+    ...(params.imageSdk ? ["--image-sdk", params.imageSdk] : []),
     "--class",
     params.crabboxClass,
     "--idle-timeout",

@@ -17,6 +17,7 @@ import {
   renderPrepareQr,
   renderReadQrLink,
   renderWaitForMainWindow,
+  startRecorder,
   stopRecorder,
   writeRecorderSession,
 } from "../../scripts/e2e/telegram-desktop-recorder.ts";
@@ -141,6 +142,70 @@ describe("Telegram Desktop recorder CLI", () => {
 });
 
 describe("Telegram Desktop recorder remote contract", () => {
+  it("leases the catalog-only Telegram variant image, never the generic desktop default", async () => {
+    const root = makeTempDir();
+    const calls: Array<{ args: string[]; command: string }> = [];
+    const mockedRun: RunCommand = async (params) => {
+      calls.push({ args: params.args, command: params.command });
+      if (params.args[0] === "warmup") {
+        return { stderr: "", stdout: "leased cbx_0a1b2c slug=quiet-crab" };
+      }
+      return { stderr: "", stdout: "" };
+    };
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => {
+        throw new Error("stop after warmup");
+      }),
+      runCommand: mockedRun,
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+    } satisfies RecorderOperations;
+
+    await expect(
+      startRecorder(
+        root,
+        {
+          command: "start",
+          chat: "-1001234567890",
+          crabboxClass: "standard",
+          idleTimeout: "1h",
+          json: false,
+          outputDir: "out",
+          provider: "aws",
+          recordFps: 24,
+          ttl: "2h",
+          userDriver: ["python3", "driver.py"],
+        },
+        operations,
+      ),
+    ).rejects.toThrow("stop after warmup");
+
+    const warmup = calls.find((call) => call.args[0] === "warmup");
+    expect(warmup?.args).toEqual([
+      "warmup",
+      "--provider",
+      "aws",
+      "--target",
+      "linux",
+      "--desktop",
+      "--image-sdk",
+      "telegram-desktop=7.0.9",
+      "--class",
+      "standard",
+      "--idle-timeout",
+      "1h",
+      "--ttl",
+      "2h",
+    ]);
+    // Failure after leasing must not leak the variant box.
+    expect(calls).toContainEqual({
+      args: ["stop", "--provider", "aws", "cbx_0a1b2c"],
+      command: "crabbox",
+    });
+  });
+
   it("renders only golden-image desktop operations", () => {
     const scripts = [
       renderGoldenImagePreflight(),

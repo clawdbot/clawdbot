@@ -222,11 +222,15 @@ and logs, build motion GIFs, terminate the Telegram Desktop authorization, and
 release the Crabbox lease. Add `--keep-box` only when the lease must remain
 available for WebVNC inspection.
 
-The Crabbox golden image must provide an executable Telegram Desktop at
+The recorder leases the Crabbox Telegram variant image
+(`--image-sdk telegram-desktop=7.0.9`, a catalog-only promotion baked with
+`CRABBOX_LINUX_TELEGRAM_DESKTOP=1`; the generic desktop image never carries the
+client). That image must provide an executable Telegram Desktop at
 `/opt/Telegram/Telegram`, a readable desktop version marker, `wmctrl`,
 `xdotool`, `scrot`, `ffmpeg`, `zbarimg`, and `xdpyinfo`, plus a reachable
-`DISPLAY=:99`. Recorder startup fails when this contract is incomplete. It
-does not install packages or download replacements.
+`DISPLAY=:99`. Crabbox refuses the lease when no matching image is promoted,
+and recorder startup fails when the contract is incomplete. It does not
+install packages or download replacements.
 
 ### `telegram-desktop-builder`
 

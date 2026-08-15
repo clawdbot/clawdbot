@@ -48,6 +48,10 @@ export {
 
 const REMOTE_ROOT = "/tmp/openclaw-telegram-desktop-recorder";
 const TELEGRAM_BINARY = "/opt/Telegram/Telegram";
+// Crabbox variant image baked with CRABBOX_LINUX_TELEGRAM_DESKTOP=1 and promoted
+// catalog-only; the generic desktop image never carries the client, so the lease
+// must ask for it or Crabbox fails before leasing.
+const TELEGRAM_IMAGE_SDK = "telegram-desktop=7.0.9";
 const TELEGRAM_WORKDIR = `${REMOTE_ROOT}/desktop`;
 const DEFAULT_PREVIEW_FPS = 24;
 const DEFAULT_PREVIEW_WIDTH = 1920;
@@ -291,6 +295,7 @@ export async function startRecorder(
         args: createDesktopCrabboxWarmupArgs({
           crabboxClass: opts.crabboxClass,
           idleTimeout: opts.idleTimeout,
+          imageSdk: TELEGRAM_IMAGE_SDK,
           provider: opts.provider,
           ttl: opts.ttl,
         }),
