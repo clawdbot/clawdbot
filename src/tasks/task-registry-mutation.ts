@@ -14,6 +14,8 @@ import { findLatestTaskForFlowId, listTasksForFlowId } from "./task-registry-que
 import {
   cloneTaskDeliveryState,
   cloneTaskRecord,
+  isWarmProjectedTaskRecord,
+  markWarmProjectedTaskRecord,
   normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import {
@@ -24,6 +26,7 @@ import {
   deleteParentFlowIdIndex,
   deleteRelatedSessionKeyIndex,
   emitTaskRegistryObserverEvent,
+  hydrateWarmProjectedTaskForMutation,
   taskRegistryLog,
   rebuildRunIdIndex,
   taskDeliveryStates,
@@ -155,11 +158,23 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   if (!current) {
     return null;
   }
-  const next = normalizeTaskTimestamps({
-    ...current,
+  const touchesDeferredField =
+    Object.hasOwn(patch, "terminalSummary") || Object.hasOwn(patch, "detail");
+  const mutationBase =
+    isWarmProjectedTaskRecord(current) && touchesDeferredField
+      ? hydrateWarmProjectedTaskForMutation(current)
+      : current;
+  if (!mutationBase) {
+    return null;
+  }
+  let next = normalizeTaskTimestamps({
+    ...mutationBase,
     ...patch,
     ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
   });
+  if (isWarmProjectedTaskRecord(current) && !touchesDeferredField) {
+    next = markWarmProjectedTaskRecord(next);
+  }
   if (Object.hasOwn(patch, "error") && patch.error === undefined) {
     delete next.error;
   }

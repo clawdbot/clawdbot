@@ -8,6 +8,7 @@ import type { TaskRegistryControlRuntime } from "./task-registry-control.types.j
 import {
   cloneTaskDeliveryState,
   cloneTaskRecord,
+  isWarmProjectedTaskRecord,
   normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
@@ -178,6 +179,38 @@ export function tryPersistTaskUpsert(
       error,
     });
     return false;
+  }
+}
+
+export function hydrateWarmProjectedTaskForMutation(task: TaskRecord): TaskRecord | null {
+  if (!isWarmProjectedTaskRecord(task)) {
+    return task;
+  }
+  const readTask = getTaskRegistryStore().getTask;
+  if (!readTask) {
+    taskRegistryLog.warn("Cannot hydrate projected task before deferred-field mutation", {
+      taskId: task.taskId,
+      runId: task.runId,
+    });
+    return null;
+  }
+  try {
+    const hydrated = readTask(task.taskId);
+    if (!hydrated) {
+      taskRegistryLog.warn("Projected task is missing from durable store", {
+        taskId: task.taskId,
+        runId: task.runId,
+      });
+      return null;
+    }
+    return normalizeTaskTimestamps(hydrated);
+  } catch (error) {
+    taskRegistryLog.warn("Failed to hydrate projected task before deferred-field mutation", {
+      taskId: task.taskId,
+      runId: task.runId,
+      error,
+    });
+    return null;
   }
 }
 

@@ -33,6 +33,12 @@ import {
   findTaskByRunId,
   getTaskById,
   listFreshTasksForOwnerKey,
+  listTaskRecordPage,
+  listTaskRecordsUnsorted,
+  listTasksForAgentId,
+  listTasksForFlowId,
+  listTasksForOwnerKey as listTasksForOwnerKeyFromRegistry,
+  listTasksForRelatedSessionKey,
   markTaskTerminalById,
   reloadTaskRegistryFromStore,
   updateTaskNotifyPolicyById,
@@ -582,6 +588,175 @@ describe("task-registry store runtime", () => {
 
         const restored = loadTaskRegistryStateFromSqlite().tasks.get(task.taskId);
         expect(restored).toHaveProperty("detail", null);
+      },
+    );
+  });
+
+  it("keeps settled terminal payloads out of warm restore and hydrates exact history reads", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-lazy-history-" },
+      async () => {
+        const terminalSummary = `terminal-${"s".repeat(64_000)}`;
+        const detail = { kind: "history", payload: "d".repeat(64_000) };
+        const settled: TaskRecord = {
+          ...createStoredTask(),
+          taskId: "task-settled-large",
+          runId: "run-settled-large",
+          status: "succeeded",
+          deliveryStatus: "delivered",
+          parentFlowId: "flow-settled-large",
+          agentId: "history-agent",
+          endedAt: 200,
+          terminalSummary,
+          detail,
+        };
+        const active: TaskRecord = {
+          ...createStoredTask(),
+          taskId: "task-active-recovery",
+          runId: "run-active-recovery",
+          terminalSummary: "active recovery payload",
+          detail: { checkpoint: "active" },
+        };
+        const undelivered: TaskRecord = {
+          ...settled,
+          taskId: "task-undelivered-terminal",
+          runId: "run-undelivered-terminal",
+          deliveryStatus: "pending",
+          terminalSummary: "deliver after restart",
+          detail: { checkpoint: "delivery" },
+        };
+        saveTaskRegistryStateToSqlite({
+          tasks: new Map([settled, active, undelivered].map((task) => [task.taskId, task])),
+          deliveryStates: new Map(),
+        });
+
+        const database = openOpenClawStateDatabase();
+        const before = database.db
+          .prepare("SELECT terminal_summary, detail_json FROM task_runs WHERE task_id = ?")
+          .get(settled.taskId);
+        const warm = loadTaskRegistryStateFromSqlite();
+
+        expect(warm.tasks.get(settled.taskId)).not.toHaveProperty("terminalSummary");
+        expect(warm.tasks.get(settled.taskId)).not.toHaveProperty("detail");
+        expect(warm.tasks.get(active.taskId)).toMatchObject({
+          terminalSummary: active.terminalSummary,
+          detail: active.detail,
+        });
+        expect(warm.tasks.get(undelivered.taskId)).toMatchObject({
+          terminalSummary: undelivered.terminalSummary,
+          detail: undelivered.detail,
+        });
+
+        saveTaskRegistryStateToSqlite(warm);
+        expect(
+          database.db
+            .prepare("SELECT terminal_summary, detail_json FROM task_runs WHERE task_id = ?")
+            .get(settled.taskId),
+        ).toEqual(before);
+
+        reloadTaskRegistryFromStore();
+        expect(
+          updateTaskNotifyPolicyById({
+            taskId: settled.taskId,
+            notifyPolicy: "silent",
+          })?.notifyPolicy,
+        ).toBe("silent");
+        expect(
+          database.db
+            .prepare("SELECT terminal_summary, detail_json FROM task_runs WHERE task_id = ?")
+            .get(settled.taskId),
+        ).toEqual(before);
+        expect(getTaskById(settled.taskId)).toMatchObject({ terminalSummary, detail });
+        expect(
+          listTaskRecordsUnsorted().find((task) => task.taskId === settled.taskId),
+        ).toMatchObject({ terminalSummary, detail });
+        expect(
+          listTaskRecordPage({ offset: 0, limit: 10 }).tasks.find(
+            (task) => task.taskId === settled.taskId,
+          ),
+        ).toMatchObject({ terminalSummary, detail });
+        for (const indexed of [
+          listTasksForOwnerKeyFromRegistry(settled.ownerKey),
+          listTasksForRelatedSessionKey(settled.childSessionKey ?? ""),
+          listTasksForFlowId(settled.parentFlowId ?? ""),
+          listTasksForAgentId(settled.agentId ?? ""),
+        ]) {
+          expect(indexed.find((task) => task.taskId === settled.taskId)).toMatchObject({
+            terminalSummary,
+            detail,
+          });
+        }
+      },
+    );
+  });
+
+  it("persists explicit deferred-field corrections after a projected warm restore", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-late-terminal-correction-" },
+      async () => {
+        const original: TaskRecord = {
+          ...createStoredTask(),
+          taskId: "task-late-terminal-correction",
+          runId: "run-late-terminal-correction",
+          status: "succeeded",
+          deliveryStatus: "delivered",
+          endedAt: 200,
+          terminalSummary: "original terminal summary",
+          detail: { version: "original", payload: "d".repeat(4_000) },
+        };
+        saveTaskRegistryStateToSqlite({
+          tasks: new Map([[original.taskId, original]]),
+          deliveryStates: new Map(),
+        });
+        reloadTaskRegistryFromStore();
+
+        const terminalSummary = "corrected terminal summary";
+        const detail = { version: "corrected", payload: "n".repeat(4_000) };
+        expect(
+          markTaskTerminalById({
+            taskId: original.taskId,
+            status: "succeeded",
+            endedAt: 300,
+            terminalSummary,
+            detail,
+          }),
+        ).toMatchObject({ terminalSummary, detail });
+
+        reloadTaskRegistryFromStore();
+        expect(getTaskById(original.taskId)).toMatchObject({ terminalSummary, detail });
+      },
+    );
+  });
+
+  it("bounds startup hydration across large settled history", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-bounded-warm-" },
+      async () => {
+        const tasks = new Map<string, TaskRecord>();
+        for (let index = 0; index < 100; index++) {
+          const task: TaskRecord = {
+            ...createStoredTask(),
+            taskId: `task-settled-${index}`,
+            runId: `run-settled-${index}`,
+            status: "succeeded",
+            deliveryStatus: "delivered",
+            endedAt: 200 + index,
+            terminalSummary: `summary-${index}-${"s".repeat(8_000)}`,
+            detail: { payload: `${index}-${"d".repeat(8_000)}` },
+          };
+          tasks.set(task.taskId, task);
+        }
+        saveTaskRegistryStateToSqlite({ tasks, deliveryStates: new Map() });
+
+        const warm = loadTaskRegistryStateFromSqlite();
+
+        expect(warm.tasks.size).toBe(100);
+        expect(
+          [...warm.tasks.values()].every(
+            (task) => task.terminalSummary === undefined && task.detail === undefined,
+          ),
+        ).toBe(true);
+        expect(JSON.stringify([...warm.tasks.values()]).length).toBeLessThan(100_000);
       },
     );
   });

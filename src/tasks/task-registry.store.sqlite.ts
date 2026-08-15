@@ -12,6 +12,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { isWarmProjectedTaskRecord, markWarmProjectedTaskRecord } from "./task-registry-records.js";
 import { parseDeliveryContextJson, parseSqliteJsonValue } from "./task-registry.sqlite.shared.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 import {
@@ -83,6 +84,12 @@ const TASK_RUN_SELECT_COLUMNS = [
   "terminal_outcome",
   "detail_json",
 ] as const;
+
+const TASK_RUN_WARM_SELECT_COLUMNS = TASK_RUN_SELECT_COLUMNS.filter(
+  (column) => column !== "terminal_summary" && column !== "detail_json",
+);
+const TASK_RUN_LARGE_SELECT_COLUMNS = ["task_id", "terminal_summary", "detail_json"] as const;
+const TASK_RUN_EXACT_READ_CHUNK_SIZE = 500;
 
 let cachedDatabase: TaskRegistryDatabase | null = null;
 
@@ -219,13 +226,46 @@ function pruneRowsNotInSnapshot(params: {
   params.db.exec(`DELETE FROM ${params.tempTableName}`);
 }
 
-function selectTaskRows(db: DatabaseSync): TaskRegistryRow[] {
+function selectWarmTaskRows(db: DatabaseSync): TaskRegistryRow[] {
   const query = getTaskRegistryKysely(db)
     .selectFrom("task_runs")
-    .select(TASK_RUN_SELECT_COLUMNS)
+    .select(TASK_RUN_WARM_SELECT_COLUMNS)
     .orderBy("created_at", "asc")
     .orderBy("task_id", "asc");
-  return executeSqliteQuerySync(db, query).rows;
+  const rows = executeSqliteQuerySync(db, query).rows;
+  const largeFieldRows = executeSqliteQuerySync(
+    db,
+    getTaskRegistryKysely(db)
+      .selectFrom("task_runs")
+      .select(TASK_RUN_LARGE_SELECT_COLUMNS)
+      .where((eb) =>
+        eb.or([eb("status", "in", ["queued", "running"]), eb("delivery_status", "=", "pending")]),
+      ),
+  ).rows;
+  const largeFieldsByTaskId = new Map(largeFieldRows.map((row) => [row.task_id, row]));
+  return rows.map((row) => {
+    const largeFields = largeFieldsByTaskId.get(row.task_id);
+    return Object.assign(row, {
+      terminal_summary: largeFields?.terminal_summary ?? null,
+      detail_json: largeFields?.detail_json ?? null,
+    }) as TaskRegistryRow;
+  });
+}
+
+function selectTaskRowsByIds(db: DatabaseSync, taskIds: readonly string[]): TaskRegistryRow[] {
+  if (taskIds.length === 0) {
+    return [];
+  }
+  const rows: TaskRegistryRow[] = [];
+  for (let offset = 0; offset < taskIds.length; offset += TASK_RUN_EXACT_READ_CHUNK_SIZE) {
+    const chunk = taskIds.slice(offset, offset + TASK_RUN_EXACT_READ_CHUNK_SIZE);
+    const query = getTaskRegistryKysely(db)
+      .selectFrom("task_runs")
+      .select(TASK_RUN_SELECT_COLUMNS)
+      .where("task_id", "in", chunk);
+    rows.push(...executeSqliteQuerySync(db, query).rows);
+  }
+  return rows;
 }
 
 function selectTaskRowsByOwnerKey(db: DatabaseSync, ownerKey: string): TaskRegistryRow[] {
@@ -291,6 +331,35 @@ export function upsertTaskRunRowInDatabase(
   );
 }
 
+function upsertWarmTaskRunRowInDatabase(
+  database: OpenClawStateDatabase,
+  row: BoundTaskRecord,
+): void {
+  const { db } = database;
+  const {
+    task_id: _taskId,
+    terminal_summary: _terminalSummary,
+    detail_json: _detailJson,
+    ...updates
+  } = row;
+  executeSqliteQuerySync(
+    db,
+    getTaskRegistryKysely(db)
+      .insertInto("task_runs")
+      .values(row)
+      .onConflict((conflict) => conflict.column("task_id").doUpdateSet(updates)),
+  );
+}
+
+function upsertTaskRecordInDatabase(database: OpenClawStateDatabase, task: TaskRecord): void {
+  const row = bindTaskRecord(task);
+  if (isWarmProjectedTaskRecord(task)) {
+    upsertWarmTaskRunRowInDatabase(database, row);
+  } else {
+    upsertTaskRunRowInDatabase(database, row);
+  }
+}
+
 function replaceTaskDeliveryStateRow(
   db: DatabaseSync,
   row: Insertable<TaskDeliveryStateTable>,
@@ -345,15 +414,43 @@ export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
   return runSqliteDeferredTransactionSync(db, () => {
     assertSqliteTableIntegrity(db, path, "task_runs");
     assertSqliteTableIntegrity(db, path, "task_delivery_state");
-    const taskRows = selectTaskRows(db);
+    const taskRows = selectWarmTaskRows(db);
     const deliveryRows = selectTaskDeliveryStateRows(db);
     return {
-      tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
+      tasks: new Map(
+        taskRows.map((row) => {
+          const record = rowToTaskRecord(row);
+          const warmProjected =
+            record.status !== "queued" &&
+            record.status !== "running" &&
+            record.deliveryStatus !== "pending";
+          return [row.task_id, warmProjected ? markWarmProjectedTaskRecord(record) : record];
+        }),
+      ),
       deliveryStates: new Map(
         deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)]),
       ),
     };
   });
+}
+
+export function getTaskRegistryRecordsByIdFromSqlite(taskIds: readonly string[]): TaskRecord[] {
+  const normalizedIds = [...new Set(taskIds.map((taskId) => taskId.trim()).filter(Boolean))];
+  if (normalizedIds.length === 0) {
+    return [];
+  }
+  const { db } = openTaskRegistryDatabase();
+  const recordsById = new Map(
+    selectTaskRowsByIds(db, normalizedIds).map((row) => [row.task_id, rowToTaskRecord(row)]),
+  );
+  return normalizedIds.flatMap((taskId) => {
+    const record = recordsById.get(taskId);
+    return record ? [record] : [];
+  });
+}
+
+export function getTaskRegistryRecordByIdFromSqlite(taskId: string): TaskRecord | undefined {
+  return getTaskRegistryRecordsByIdFromSqlite([taskId])[0];
 }
 
 export function listTaskRegistryRecordsByOwnerKeyFromSqlite(ownerKey: string): TaskRecord[] {
@@ -408,7 +505,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
       });
     }
     for (const task of snapshot.tasks.values()) {
-      upsertTaskRunRowInDatabase(database, bindTaskRecord(task));
+      upsertTaskRecordInDatabase(database, task);
     }
     for (const state of snapshot.deliveryStates.values()) {
       replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(state));
@@ -418,7 +515,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
 
 export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
   withWriteTransaction((database) => {
-    upsertTaskRunRowInDatabase(database, bindTaskRecord(task));
+    upsertTaskRecordInDatabase(database, task);
   });
 }
 
@@ -428,7 +525,7 @@ export function upsertTaskWithDeliveryStateToSqlite(params: {
 }) {
   withWriteTransaction((database) => {
     const { db } = database;
-    upsertTaskRunRowInDatabase(database, bindTaskRecord(params.task));
+    upsertTaskRecordInDatabase(database, params.task);
     if (params.deliveryState) {
       replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(params.deliveryState));
     } else {
