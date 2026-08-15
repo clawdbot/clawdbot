@@ -349,6 +349,16 @@ openclaw-session-owner-chip {
   border: 0;
 }
 
+.login-gate__failure .login-gate__command {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.login-gate__failure .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .login-gate__docs {
   margin-top: 10px;
   font-size: 12px;

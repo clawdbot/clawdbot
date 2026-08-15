@@ -9,15 +9,19 @@ type LoginGateElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-async function mountFailure(lastError: string, lastErrorCode: string | null) {
+async function mountFailure(
+  lastError: string,
+  lastErrorCode: string | null,
+  auth: { hasToken?: boolean; hasPassword?: boolean } = {},
+) {
   const element = document.createElement("openclaw-login-gate") as LoginGateElement;
   element.props = {
     basePath: "",
     connected: false,
     lastError,
     lastErrorCode,
-    hasToken: false,
-    hasPassword: false,
+    hasToken: auth.hasToken ?? false,
+    hasPassword: auth.hasPassword ?? false,
     gatewayUrl: "ws://127.0.0.1:18789",
     token: "",
     password: "",
@@ -83,22 +87,64 @@ describe("login gate failure recovery", () => {
     expect(element.querySelector(".login-gate__failure-refresh")).toBeNull();
   });
 
-  it("offers a one-command recovery before manual pairing approval", async () => {
+  it("offers exact copyable commands before manual pairing approval", async () => {
     const element = await mountFailure(
-      "pairing required",
+      "scope upgrade pending approval (requestId: req-123)",
       ConnectErrorDetailCodes.PAIRING_REQUIRED,
     );
 
-    const steps = Array.from(
-      element.querySelectorAll<HTMLElement>(".login-gate__failure-steps li"),
-      (entry) => entry.textContent?.trim(),
+    const commands = Array.from(
+      element.querySelectorAll<HTMLElement>(".login-gate__failure-steps code"),
+      (entry) => entry.textContent,
     );
-    expect(steps).toEqual([
-      "On the Gateway host, run openclaw dashboard to open a secure one-time pairing link.",
-      "Run openclaw devices list on the Gateway host.",
-      "Approve the pending browser/device request from that list.",
-      "Reconnect after the approval completes.",
+    expect(commands).toEqual([
+      "openclaw dashboard",
+      "openclaw devices list",
+      "openclaw devices approve req-123",
     ]);
+  });
+
+  it.each([
+    {
+      name: "auth-required",
+      error: "unauthorized: gateway token required",
+      code: ConnectErrorDetailCodes.AUTH_REQUIRED,
+      auth: {},
+      commands: [
+        "openclaw gateway auth-token --show",
+        "openclaw doctor --generate-gateway-token",
+      ],
+    },
+    {
+      name: "auth-failed",
+      error: "unauthorized: gateway token mismatch",
+      code: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+      auth: { hasToken: true },
+      commands: ["openclaw dashboard --no-open", "openclaw gateway auth-token --show"],
+    },
+    {
+      name: "protocol-mismatch",
+      error: "protocol mismatch",
+      code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+      auth: {},
+      commands: ["openclaw dashboard", "pnpm ui:dev"],
+    },
+    {
+      name: "network",
+      error: "WebSocket connection failed",
+      code: null,
+      auth: {},
+      commands: ["openclaw status", "openclaw gateway run", "openclaw dashboard --no-open"],
+    },
+  ])("renders the supported $name recovery commands", async (fixture) => {
+    const element = await mountFailure(fixture.error, fixture.code, fixture.auth);
+
+    expect(
+      Array.from(
+        element.querySelectorAll<HTMLElement>(".login-gate__failure-steps code"),
+        (entry) => entry.textContent,
+      ),
+    ).toEqual(fixture.commands);
   });
 
   it("offers only supported recovery for an insecure browser context", async () => {
@@ -125,8 +171,12 @@ describe("login gate failure recovery", () => {
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
       const element = await mountFailure("WebSocket connection failed", null);
-      const command = element.querySelector<HTMLElement>(".login-gate__command");
+      const command = element.querySelector<HTMLElement>(
+        ".login-gate__failure .login-gate__command",
+      );
       const button = command?.querySelector<HTMLButtonElement>(".chat-copy-btn");
+
+      expect(command?.querySelector("code")?.textContent).toBe("openclaw status");
 
       if (interaction === "nested button") {
         button?.click();
@@ -155,8 +205,12 @@ describe("login gate failure recovery", () => {
     Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
     const schedule = vi.spyOn(window, "setTimeout");
     const element = await mountFailure("WebSocket connection failed", null);
-    const command = element.querySelector<HTMLElement>(".login-gate__command");
+    const command = element.querySelector<HTMLElement>(
+      ".login-gate__failure .login-gate__command",
+    );
     const button = command?.querySelector<HTMLButtonElement>(".chat-copy-btn");
+
+    expect(command?.querySelector("code")?.textContent).toBe("openclaw status");
 
     command?.click();
     await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copy failed"));

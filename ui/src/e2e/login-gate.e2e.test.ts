@@ -147,16 +147,29 @@ suite.define(() => {
       },
       expectedKind: "auth-required",
       expectedTitle: "Auth required",
+      expectedCommands: [
+        "openclaw gateway auth-token --show",
+        "openclaw doctor --generate-gateway-token",
+      ],
     },
     {
       name: "pairing approval",
       error: {
         code: "NOT_PAIRED",
         message: "device is not approved",
-        details: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
+        details: {
+          code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+          reason: "not-paired",
+          requestId: "req-browser-123",
+        },
       },
       expectedKind: "pairing-required",
       expectedTitle: "Device pairing required",
+      expectedCommands: [
+        "openclaw dashboard",
+        "openclaw devices list",
+        "openclaw devices approve req-browser-123",
+      ],
     },
     {
       name: "generic transport",
@@ -166,6 +179,11 @@ suite.define(() => {
       },
       expectedKind: "network",
       expectedTitle: "Could not connect",
+      expectedCommands: [
+        "openclaw status",
+        "openclaw gateway run",
+        "openclaw dashboard --no-open",
+      ],
     },
   ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
@@ -182,6 +200,54 @@ suite.define(() => {
       expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(
         fixture.expectedTitle,
       );
+      expect(await failure.locator(".login-gate__command code").allTextContents()).toEqual(
+        fixture.expectedCommands,
+      );
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it("copies the exact pairing approval command from the recovery card", async () => {
+    const requestId = `req-${"a".repeat(124)}`;
+    const context = await suite.browser.newContext({
+      permissions: ["clipboard-read", "clipboard-write"],
+      viewport: { height: 800, width: 375 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    const expectedCommand = `openclaw devices approve ${requestId}`;
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", {
+        code: "NOT_PAIRED",
+        message: "device is not approved",
+        details: {
+          code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+          reason: "not-paired",
+          requestId,
+        },
+      });
+
+      const failure = page.locator('.login-gate__failure[data-kind="pairing-required"]');
+      await failure.waitFor({ timeout: 10_000 });
+      const command = failure.locator(".login-gate__command").filter({ hasText: expectedCommand });
+      await command.click();
+
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
+        expectedCommand,
+      );
+      await expect
+        .poll(() => command.locator(".chat-copy-btn").getAttribute("aria-label"))
+        .toBe("Copied!");
+      expect(
+        await page.evaluate(() => {
+          const card = document.querySelector<HTMLElement>(".login-gate__card");
+          return card ? card.scrollWidth - card.clientWidth : Number.POSITIVE_INFINITY;
+        }),
+      ).toBeLessThanOrEqual(0);
     } finally {
       await closeContext(context);
     }
