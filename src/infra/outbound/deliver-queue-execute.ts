@@ -30,6 +30,7 @@ import {
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   markDeliveryPlatformSendDispatched,
+  moveToFailed,
 } from "./delivery-queue-storage.js";
 import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
@@ -342,15 +343,23 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           (partialSendEvidence ? await persistOwnedPostSendState() : undefined);
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
-          const recordFailure =
-            !partialSendEvidence && partialFailuresAreProvenNotSent
-              ? failDeliveryBeforePlatformSend
-              : failDelivery;
-          await recordOwnedQueueFailure(recordFailure, error).catch((err: unknown) => {
-            log.warn(
-              `failed to mark queued delivery ${queueId} as failed after partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
+          if (!partialSendEvidence && partialFailuresAreProvenNotSent) {
+            // Proven-not-sent partial failures must not be recovered by the queue drain.
+            // The caller has already received the error and owns the retry.
+            await moveToFailed(queueId, platformQueueStateDir, producerClaimId ?? null).catch(
+              (err: unknown) => {
+                log.warn(
+                  `failed to remove queued delivery ${queueId} after proven-not-sent partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
+                );
+              },
             );
-          });
+          } else {
+            await recordOwnedQueueFailure(failDelivery, error).catch((err: unknown) => {
+              log.warn(
+                `failed to mark queued delivery ${queueId} as failed after partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
+              );
+            });
+          }
         } else if (postSendState === "acked") {
           // Direct ack is the fallback when the post-send marker cannot be
           // written. Once the row is gone, recovery cannot run these hooks.

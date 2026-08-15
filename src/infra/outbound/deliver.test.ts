@@ -79,6 +79,7 @@ const queueMocks = vi.hoisted(() => ({
   failDelivery: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   failDeliveryAfterPlatformSend: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   failDeliveryBeforePlatformSend: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+  moveToFailed: vi.fn<(...args: unknown[]) => Promise<string[]>>(async () => []),
   markDeliveryPlatformOutcomeUnknown: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   markDeliveryPlatformSendDispatched: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   markDeliveryPlatformSendAttemptStarted: vi.fn<(...args: unknown[]) => Promise<void>>(
@@ -166,6 +167,11 @@ vi.mock("./delivery-queue-storage.js", () => ({
     queueMocks.failDeliveryAfterPlatformSend(id, error),
   failDeliveryBeforePlatformSend: async (id: string, error: string) =>
     queueMocks.failDeliveryBeforePlatformSend(id, error),
+  moveToFailed: async (
+    id: string,
+    stateDir?: string,
+    expectedPlatformSendAttemptId?: string | null,
+  ) => queueMocks.moveToFailed(id, stateDir, expectedPlatformSendAttemptId),
   markDeliveryPlatformOutcomeUnknown: async (id: string) =>
     queueMocks.markDeliveryPlatformOutcomeUnknown(id),
   markDeliveryPlatformSendDispatched: async (
@@ -531,6 +537,8 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.failDeliveryAfterPlatformSend.mockResolvedValue(undefined);
     queueMocks.failDeliveryBeforePlatformSend.mockClear();
     queueMocks.failDeliveryBeforePlatformSend.mockResolvedValue(undefined);
+    queueMocks.moveToFailed.mockClear();
+    queueMocks.moveToFailed.mockResolvedValue([]);
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockClear();
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockResolvedValue(undefined);
     queueMocks.markDeliveryPlatformSendAttemptStarted.mockClear();
@@ -2162,10 +2170,12 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).resolves.toEqual([]);
 
-    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+    expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
       "mock-queue-id",
-      "partial delivery failure (bestEffort)",
+      undefined,
+      expect.any(String),
     );
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
@@ -2184,10 +2194,12 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).resolves.toEqual([]);
 
-    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+    expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
       "mock-queue-id",
-      "partial delivery failure (bestEffort)",
+      undefined,
+      expect.any(String),
     );
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
