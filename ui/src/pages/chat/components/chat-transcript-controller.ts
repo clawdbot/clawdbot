@@ -249,10 +249,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
             instance.scrollToEnd({ behavior: "auto" });
           }
           if (widthChanged) {
-            // Cached offscreen sizes belong to the old wrapping width. Reset
-            // them, seed current rows, then repeat after any same-commit
-            // re-stamp has attached and completed layout.
-            instance.measure();
+            // Keep stale offscreen sizes as estimates — a full measure() wipe
+            // has no scroll compensation and teleports the reader. resizeItem
+            // re-seeds connected rows with fold-based compensation, so the
+            // anchor row holds still; offscreen rows correct as they connect.
             this.measureConnectedRows();
             this.queueConnectedRowMeasure();
           }
