@@ -315,6 +315,27 @@ openclaw-chat-sidebar-region,
   overflow: hidden;
 }
 
+/* Overflow indicator: the edge that still hides tabs fades out, so a partially
+   scrolled pill reads as "more tabs this way" instead of a hard cut or a tab
+   that lost its label. Edge classes come from panelTabScrollEdgesRef. */
+.side-panel__header .tabstrip.has-scroll-end {
+  mask-image: linear-gradient(to right, black calc(100% - 30px), transparent 100%);
+}
+
+.side-panel__header .tabstrip.has-scroll-start {
+  mask-image: linear-gradient(to right, transparent 0, black 30px);
+}
+
+.side-panel__header .tabstrip.has-scroll-start.has-scroll-end {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black 30px,
+    black calc(100% - 30px),
+    transparent 100%
+  );
+}
+
 .side-panel__header .tabstrip::part(nav) {
   display: flex;
   width: 100%;
@@ -323,12 +344,19 @@ openclaw-chat-sidebar-region,
   align-items: center;
 }
 
+/* Third regime: once every tab is at its floor the row must scroll, not clip.
+   Clipping cuts a tab mid-pill, which reads as an icon-only tab and as a hard
+   label cut past the fade mask that lives inside the pill. */
 .side-panel__header .tabstrip::part(tabs) {
   width: 100%;
   min-width: 0;
   align-items: center;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
   padding-left: 6px;
+  scrollbar-width: none;
+  scroll-snap-type: inline proximity;
+  scroll-padding-inline: 6px;
 }
 
 .side-panel__header .tabstrip::part(body) {
@@ -342,6 +370,7 @@ openclaw-chat-sidebar-region,
   max-width: 160px;
   flex: 0 1 auto;
   scroll-margin-inline-end: 18px;
+  scroll-snap-align: start;
 }
 
 .side-panel__header .tabstrip-tab:not(:first-of-type) {

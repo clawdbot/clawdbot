@@ -85,6 +85,45 @@ function panelTabLabelOverflowRef() {
   };
 }
 
+/** Marks which edges of the tab row still hide tabs, so CSS can fade them out
+ *  instead of letting the scroller slice a pill into an icon-only stub. */
+function panelTabScrollEdgesRef() {
+  let resizeObserver: ResizeObserver | null = null;
+  let detach: (() => void) | null = null;
+  return (element: Element | undefined) => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    detach?.();
+    detach = null;
+    if (!(element instanceof HTMLElement)) {
+      return;
+    }
+    void (async () => {
+      // The scroller is the group's own tabs part, so wait for its first render.
+      await (element as HTMLElement & { updateComplete?: Promise<unknown> }).updateComplete;
+      const scroller = element.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
+      if (!scroller || !element.isConnected) {
+        return;
+      }
+      const update = () => {
+        // Ignore sub-pixel and padding-sized offsets so a resting row does not
+        // fade its first tab for the scroller's own inline padding.
+        const edgeSlack = 8;
+        const hidden = scroller.scrollWidth - scroller.clientWidth;
+        element.classList.toggle("has-scroll-start", scroller.scrollLeft > edgeSlack);
+        element.classList.toggle("has-scroll-end", hidden - scroller.scrollLeft > edgeSlack);
+      };
+      update();
+      scroller.addEventListener("scroll", update, { passive: true });
+      detach = () => scroller.removeEventListener("scroll", update);
+      if (typeof ResizeObserver === "function") {
+        resizeObserver = new ResizeObserver(update);
+        resizeObserver.observe(scroller);
+      }
+    })();
+  };
+}
+
 function reconcileSelectedTabElement(
   element: Element | undefined,
   layoutKey: string,
@@ -171,6 +210,7 @@ export function renderPanelTabStrip(params: {
   return html`
     <wa-tab-group
       class="tabstrip"
+      ${ref(panelTabScrollEdgesRef())}
       .active=${params.activeId ?? ""}
       activation="auto"
       without-scroll-controls
