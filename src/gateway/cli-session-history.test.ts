@@ -10,7 +10,6 @@ import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
-  augmentChatHistoryWithCliSessionImports,
   readClaudeCliFallbackSeed,
   resolveChatHistoryWithCliSessionImports,
 } from "./cli-session-history.js";
@@ -18,7 +17,11 @@ import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js
 import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
-type AugmentCliHistoryParams = Parameters<typeof augmentChatHistoryWithCliSessionImports>[0];
+type AugmentCliHistoryParams = Parameters<typeof resolveChatHistoryWithCliSessionImports>[0];
+
+function augmentChatHistoryWithCliSessionImports(params: AugmentCliHistoryParams): unknown[] {
+  return resolveChatHistoryWithCliSessionImports(params).messages;
+}
 
 function requireFallbackSeed(
   seed: ReturnType<typeof readClaudeCliFallbackSeed>,

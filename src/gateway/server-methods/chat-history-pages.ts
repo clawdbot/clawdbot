@@ -29,12 +29,12 @@ export function readChatHistoryMessageId(message: unknown): string | undefined {
   return typeof metadata?.id === "string" ? metadata.id : undefined;
 }
 
-export function readChatHistoryMessageSeq(message: unknown): number | undefined {
+function readChatHistoryMessageSeq(message: unknown): number | undefined {
   const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
   return asPositiveSafeInteger(metadata?.seq);
 }
 
-type ChatHistoryPage = {
+export type ChatHistoryPage = {
   activeLeafEntryId?: string | null;
   messages: unknown[];
   responseOffset?: number;
@@ -49,6 +49,48 @@ type ChatHistoryPage = {
     exhausted?: true;
   };
 };
+
+export function resolveChatHistoryNextOffset(params: {
+  messages: unknown[];
+  totalMessages: number;
+  offset: number;
+  rawPageMessages: number;
+  replayOldestRecord?: boolean;
+}): number {
+  const oldestSeq = params.messages
+    .map((message) => readChatHistoryMessageSeq(message))
+    .find((seq): seq is number => typeof seq === "number");
+  if (oldestSeq !== undefined) {
+    const recordOffset = params.totalMessages - oldestSeq + 1;
+    const replayOffset = recordOffset - 1;
+    if (params.replayOldestRecord && replayOffset > params.offset) {
+      return replayOffset;
+    }
+    // A replay cursor that does not advance strands every older record. Skip
+    // the pathological projected siblings and continue with the next record.
+    return Math.max(params.offset + 1, recordOffset);
+  }
+  return params.offset + params.rawPageMessages;
+}
+
+export function shouldReplayOldestChatHistoryRecord(params: {
+  projected: unknown[];
+  bounded: unknown[];
+}): boolean {
+  const oldestSeq = params.bounded
+    .map((message) => readChatHistoryMessageSeq(message))
+    .find((seq): seq is number => typeof seq === "number");
+  if (oldestSeq === undefined) {
+    return false;
+  }
+  const projectedCount = params.projected.filter(
+    (message) => readChatHistoryMessageSeq(message) === oldestSeq,
+  ).length;
+  const boundedCount = params.bounded.filter(
+    (message) => readChatHistoryMessageSeq(message) === oldestSeq,
+  ).length;
+  return boundedCount < projectedCount;
+}
 
 function resolveChatHistoryActiveLeafEntryId(
   readPage: ReadRecentSessionMessagesResult,

@@ -24,25 +24,20 @@ const runtime = vi.hoisted(() => ({
     cfg: {},
     storePath: "/tmp/openclaw-sessions.json",
     entry: { sessionId: "sess-main" },
+    canonicalKey: "agent:main:main",
   })),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai" })),
-  readSessionMessagesAsync: vi.fn(async (): Promise<unknown[]> => []),
-  readRecentSessionMessagesWithStatsAsync: vi.fn(async () => ({
+  readChatHistoryPage: vi.fn(async () => ({
     messages: [] as unknown[],
-    totalMessages: 0,
+    responseOffset: undefined as number | undefined,
+    pagination: { offset: 0, totalMessages: 0, rawPageMessages: 0 },
   })),
-  readSessionMessagesPageWithStatsAsync: vi.fn(async () => ({
-    messages: [] as unknown[],
-    totalMessages: 0,
-  })),
-  augmentChatHistoryWithCliSessionImports: vi.fn(
-    ({ localMessages }: { localMessages?: unknown[] }) => localMessages ?? [],
+  resolveChatHistoryNextOffset: vi.fn(
+    ({ offset, rawPageMessages }: { offset: number; rawPageMessages: number }) =>
+      offset + rawPageMessages,
   ),
+  shouldReplayOldestChatHistoryRecord: vi.fn(() => false),
   resolveEffectiveChatHistoryMaxChars: vi.fn(() => 100_000),
-  dropPreSessionStartAnnouncePairs: vi.fn((messages: unknown[]) => messages),
-  projectChatDisplayMessages: vi.fn((messages: unknown[]): unknown[] => messages),
-  projectRecentChatDisplayMessages: vi.fn((messages: unknown[]): unknown[] => messages),
-  augmentChatHistoryWithCanvasBlocks: vi.fn((messages: unknown[]) => messages),
   getMaxChatHistoryMessagesBytes: vi.fn(() => 100_000),
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
   replaceOversizedChatHistoryMessages: vi.fn(({ messages }: { messages: unknown[] }) => ({
@@ -63,13 +58,9 @@ describe("embedded gateway stub", () => {
   beforeEach(() => {
     runtime.getRuntimeConfig.mockClear();
     runtime.resolveSessionKeyFromResolveParams.mockReset();
-    runtime.augmentChatHistoryWithCliSessionImports.mockClear();
-    runtime.projectChatDisplayMessages.mockClear();
-    runtime.projectRecentChatDisplayMessages.mockClear();
-    runtime.dropPreSessionStartAnnouncePairs.mockClear();
-    runtime.readSessionMessagesAsync.mockClear();
-    runtime.readRecentSessionMessagesWithStatsAsync.mockClear();
-    runtime.readSessionMessagesPageWithStatsAsync.mockClear();
+    runtime.readChatHistoryPage.mockClear();
+    runtime.resolveChatHistoryNextOffset.mockClear();
+    runtime.shouldReplayOldestChatHistoryRecord.mockClear();
     runtime.loadSessionEntry.mockClear();
     runtime.resolveSessionAgentId.mockClear();
     runtime.resolveSessionStoreKey.mockClear();
@@ -222,48 +213,39 @@ describe("embedded gateway stub", () => {
     expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
   });
 
-  it("projects embedded chat history through the shared display projector", async () => {
-    // Embedded history must use the same projection path as gateway history so
-    // byte/message limits and display filtering stay aligned.
-    const rawMessages = [
-      { role: "user", content: "hello" },
-      { role: "assistant", content: "hi" },
-    ];
-    const projectedMessages = [{ role: "assistant", content: "hi" }];
-    runtime.readSessionMessagesAsync.mockImplementationOnce(async () => rawMessages);
-    runtime.projectRecentChatDisplayMessages.mockReturnValueOnce(projectedMessages);
+  it("delegates embedded chat history to the canonical history reader", async () => {
+    const recoveredMessages = [{ role: "assistant", content: "visible before silent tail" }];
+    runtime.readChatHistoryPage.mockResolvedValueOnce({
+      messages: recoveredMessages,
+      responseOffset: undefined,
+      pagination: { offset: 0, totalMessages: 42, rawPageMessages: 42 },
+    });
 
     const callGateway = createEmbeddedCallGateway();
     const result = await callGateway<{ messages: unknown[] }>({
       method: "chat.history",
-      params: { sessionKey: "agent:main:main" },
+      params: { sessionKey: "agent:main:main", limit: 1 },
     });
 
-    expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
-      maxChars: 100_000,
-      maxMessages: 200,
+    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith({
+      entry: { sessionId: "sess-main" },
+      provider: "openai",
+      sessionId: "sess-main",
+      storePath: "/tmp/openclaw-sessions.json",
+      sessionAgentId: "main",
+      canonicalKey: "agent:main:main",
+      max: 1,
+      maxHistoryBytes: 100_000,
+      effectiveMaxChars: 100_000,
+      offset: undefined,
+      messageId: undefined,
     });
-    expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionEntry: { sessionId: "sess-main" },
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/openclaw-sessions.json",
-      },
-      {
-        mode: "recent",
-        maxMessages: 200,
-        maxBytes: 1024 * 1024,
-        allowResetArchiveFallback: true,
-      },
-    );
-    expect(result.messages).toEqual(projectedMessages);
+    expect(result.messages).toEqual(recoveredMessages);
   });
 
   it("scopes embedded global chat history to the requested agent", async () => {
     const callGateway = createEmbeddedCallGateway();
-    await callGateway<{ messages: unknown[] }>({
+    await callGateway({
       method: "chat.history",
       params: { sessionKey: "global", agentId: "work" },
     });
@@ -277,10 +259,8 @@ describe("embedded gateway stub", () => {
   });
 
   it("infers embedded global chat history scope from agent-prefixed aliases", async () => {
-    // Agent-prefixed global aliases carry the target agent id even when the
-    // caller does not pass agentId separately.
     const callGateway = createEmbeddedCallGateway();
-    await callGateway<{ messages: unknown[] }>({
+    await callGateway({
       method: "chat.history",
       params: { sessionKey: "agent:work:main" },
     });
@@ -293,51 +273,20 @@ describe("embedded gateway stub", () => {
     });
   });
 
-  it("passes the requested recent history window to projection", async () => {
-    const rawMessages = [
-      { role: "user", content: "visible older" },
-      { role: "assistant", content: "hidden newer" },
+  it("uses shared pagination after applying the embedded response budget", async () => {
+    const projectedMessages = [
+      { role: "assistant", content: "older", __openclaw: { seq: 6 } },
+      { role: "assistant", content: "newer", __openclaw: { seq: 7 } },
     ];
-    runtime.readSessionMessagesAsync.mockImplementationOnce(async () => rawMessages);
-
-    const callGateway = createEmbeddedCallGateway();
-    await callGateway<{ messages: unknown[] }>({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:main", limit: 1 },
+    const boundedMessages = [projectedMessages[1]];
+    runtime.readChatHistoryPage.mockResolvedValueOnce({
+      messages: projectedMessages,
+      responseOffset: 2,
+      pagination: { offset: 2, totalMessages: 10, rawPageMessages: 2 },
     });
-
-    expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
-      maxChars: 100_000,
-      maxMessages: 1,
-    });
-    expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionEntry: { sessionId: "sess-main" },
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/openclaw-sessions.json",
-      },
-      {
-        mode: "recent",
-        maxMessages: 1,
-        maxBytes: 1024 * 1024,
-        allowResetArchiveFallback: true,
-      },
-    );
-  });
-
-  it("uses a bounded page read for offset chat history pages", async () => {
-    const rawMessages = [
-      { role: "user", content: "oldest" },
-      { role: "assistant", content: "older" },
-      { role: "user", content: "newer" },
-      { role: "assistant", content: "latest" },
-    ];
-    runtime.readSessionMessagesPageWithStatsAsync.mockImplementationOnce(async () => ({
-      messages: rawMessages.slice(0, 2),
-      totalMessages: rawMessages.length,
-    }));
+    runtime.enforceChatHistoryFinalBudget.mockReturnValueOnce({ messages: boundedMessages });
+    runtime.shouldReplayOldestChatHistoryRecord.mockReturnValueOnce(true);
+    runtime.resolveChatHistoryNextOffset.mockReturnValueOnce(4);
 
     const callGateway = createEmbeddedCallGateway();
     const result = await callGateway<{
@@ -351,232 +300,45 @@ describe("embedded gateway stub", () => {
       params: { sessionKey: "agent:main:main", limit: 2, offset: 2 },
     });
 
-    expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
-    expect(runtime.readSessionMessagesPageWithStatsAsync).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionEntry: { sessionId: "sess-main" },
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/openclaw-sessions.json",
-      },
-      {
-        offset: 2,
-        maxMessages: 3,
-        allowResetArchiveFallback: true,
-      },
+    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
+      expect.objectContaining({ max: 2, offset: 2 }),
     );
-    expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith(rawMessages.slice(0, 2), {
-      maxChars: 100_000,
+    expect(runtime.shouldReplayOldestChatHistoryRecord).toHaveBeenCalledWith({
+      projected: projectedMessages,
+      bounded: boundedMessages,
     });
-    expect(result).toMatchObject({
-      messages: rawMessages.slice(0, 2),
-      offset: 2,
-      hasMore: false,
-      totalMessages: 4,
-    });
-    expect(result.nextOffset).toBeUndefined();
-  });
-
-  it("caps projected offset chat history pages to the requested limit", async () => {
-    const rawMessages = [
-      { role: "assistant", content: "overread", __openclaw: { seq: 1 } },
-      { role: "assistant", content: "page anchor", __openclaw: { seq: 2 } },
-    ];
-    const projectedMessages = [
-      { role: "assistant", content: "projected one", __openclaw: { seq: 2 } },
-      { role: "assistant", content: "projected two", __openclaw: { seq: 3 } },
-    ];
-    runtime.readSessionMessagesPageWithStatsAsync.mockImplementationOnce(async () => ({
-      messages: rawMessages,
-      totalMessages: 4,
-    }));
-    runtime.projectChatDisplayMessages.mockReturnValueOnce(projectedMessages);
-
-    const callGateway = createEmbeddedCallGateway();
-    const result = await callGateway<{
-      messages: unknown[];
-      nextOffset?: number;
-      hasMore?: boolean;
-    }>({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:main", limit: 1, offset: 1 },
-    });
-
-    expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith([rawMessages[1]], {
-      maxChars: 100_000,
-    });
-    expect(result.messages).toEqual([projectedMessages[1]]);
-    expect(result.nextOffset).toBe(2);
-    expect(result.hasMore).toBe(true);
-  });
-
-  it("filters offset chat history pages at the session start boundary", async () => {
-    const rawMessages = [
-      { role: "user", content: "stale announce", __openclaw: { seq: 1 } },
-      { role: "assistant", content: "stale reply", __openclaw: { seq: 2 } },
-    ];
-    const filteredMessages: unknown[] = [];
-    runtime.loadSessionEntry.mockReturnValueOnce({
-      cfg: {},
-      storePath: "/tmp/openclaw-sessions.json",
-      entry: { sessionId: "sess-main", sessionStartedAt: 1234 } as {
-        sessionId: string;
-        sessionStartedAt: number;
-      },
-    });
-    runtime.readSessionMessagesPageWithStatsAsync.mockImplementationOnce(async () => ({
-      messages: rawMessages,
-      totalMessages: 2,
-    }));
-    runtime.dropPreSessionStartAnnouncePairs.mockReturnValueOnce(filteredMessages);
-
-    const callGateway = createEmbeddedCallGateway();
-    const result = await callGateway<{ messages: unknown[] }>({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:main", limit: 1, offset: 1 },
-    });
-
-    expect(runtime.dropPreSessionStartAnnouncePairs).toHaveBeenCalledWith(rawMessages, 1234);
-    expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith(filteredMessages, {
-      maxChars: 100_000,
-    });
-    expect(result.messages).toEqual(filteredMessages);
-  });
-
-  it("does not merge full CLI imports into explicit offset chat history pages", async () => {
-    const rawMessages = [{ role: "assistant", content: "local page", __openclaw: { seq: 2 } }];
-    runtime.readSessionMessagesPageWithStatsAsync.mockImplementationOnce(async () => ({
-      messages: rawMessages,
-      totalMessages: 2,
-    }));
-
-    const callGateway = createEmbeddedCallGateway();
-    const result = await callGateway<{ messages: unknown[] }>({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:main", limit: 1, offset: 1 },
-    });
-
-    expect(runtime.augmentChatHistoryWithCliSessionImports).not.toHaveBeenCalled();
-    expect(result.messages).toEqual(rawMessages);
-  });
-
-  it("overreads bounded recent history for the first offset page", async () => {
-    const rawMessages = [
-      { role: "user", content: "visible older", __openclaw: { seq: 6 } },
-      { role: "assistant", content: "hidden control", __openclaw: { seq: 7 } },
-      { role: "assistant", content: "visible latest", __openclaw: { seq: 8 } },
-    ];
-    const projectedMessages = [rawMessages[0], rawMessages[2]];
-    runtime.readRecentSessionMessagesWithStatsAsync.mockImplementationOnce(async () => ({
-      messages: rawMessages,
+    expect(runtime.resolveChatHistoryNextOffset).toHaveBeenCalledWith({
+      messages: boundedMessages,
       totalMessages: 10,
-    }));
-    runtime.projectRecentChatDisplayMessages.mockReturnValueOnce(projectedMessages);
-
-    const callGateway = createEmbeddedCallGateway();
-    const result = await callGateway<{
-      messages: unknown[];
-      offset?: number;
-      nextOffset?: number;
-      hasMore?: boolean;
-      totalMessages?: number;
-    }>({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:main", limit: 2, offset: 0 },
+      offset: 2,
+      rawPageMessages: 2,
+      replayOldestRecord: true,
     });
-
-    expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
-    expect(runtime.readRecentSessionMessagesWithStatsAsync).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionEntry: { sessionId: "sess-main" },
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/openclaw-sessions.json",
-      },
-      {
-        maxMessages: 61,
-        maxBytes: 1024 * 1024,
-        allowResetArchiveFallback: true,
-      },
-    );
-    expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
-      maxChars: 100_000,
-      maxMessages: 2,
-    });
-    expect(result).toMatchObject({
-      messages: projectedMessages,
-      offset: 0,
-      nextOffset: 5,
+    expect(result).toEqual({
+      sessionKey: "agent:main:main",
+      sessionId: "sess-main",
+      messages: boundedMessages,
+      offset: 2,
+      nextOffset: 4,
       hasMore: true,
       totalMessages: 10,
+      thinkingLevel: undefined,
+      fastMode: undefined,
+      verboseLevel: undefined,
     });
   });
 
-  it("computes offset continuation from the final budgeted chat history page", async () => {
-    const rawMessages = [
-      { role: "user", content: "visible older", __openclaw: { seq: 6 } },
-      { role: "assistant", content: "visible newer", __openclaw: { seq: 7 } },
-      { role: "assistant", content: "visible latest", __openclaw: { seq: 8 } },
-    ];
-    const returnedMessages = [rawMessages[2]];
-    runtime.readRecentSessionMessagesWithStatsAsync.mockImplementationOnce(async () => ({
-      messages: rawMessages,
-      totalMessages: 10,
-    }));
-    runtime.enforceChatHistoryFinalBudget.mockReturnValueOnce({ messages: returnedMessages });
-
+  it("normalizes string chat history limits before delegating", async () => {
     const callGateway = createEmbeddedCallGateway();
-    const result = await callGateway<{
-      messages: unknown[];
-      nextOffset?: number;
-      hasMore?: boolean;
-    }>({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:main", limit: 3, offset: 0 },
-    });
-
-    expect(result.messages).toEqual(returnedMessages);
-    expect(result.nextOffset).toBe(3);
-    expect(result.hasMore).toBe(true);
-  });
-
-  it("normalizes string chat history limits before projection", async () => {
-    const rawMessages = [
-      { role: "user", content: "older" },
-      { role: "assistant", content: "newer" },
-    ];
-    runtime.readSessionMessagesAsync.mockResolvedValueOnce(rawMessages);
-
-    const callGateway = createEmbeddedCallGateway();
-    await callGateway<{ messages: unknown[] }>({
+    await callGateway({
       method: "chat.history",
       params: { sessionKey: "agent:main:main", limit: "2" },
     });
 
-    expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
-      maxChars: 100_000,
-      maxMessages: 2,
-    });
-    expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionEntry: { sessionId: "sess-main" },
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/openclaw-sessions.json",
-      },
-      {
-        mode: "recent",
-        maxMessages: 2,
-        maxBytes: 1024 * 1024,
-        allowResetArchiveFallback: true,
-      },
-    );
+    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(expect.objectContaining({ max: 2 }));
   });
 
-  it("rejects malformed chat history limits before reading session files", async () => {
+  it("rejects malformed chat history limits before reading history", async () => {
     const callGateway = createEmbeddedCallGateway();
 
     await expect(
@@ -591,10 +353,10 @@ describe("embedded gateway stub", () => {
         params: { sessionKey: "agent:main:main", limit: -1 },
       }),
     ).rejects.toThrow("limit must be a positive integer");
-    expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
+    expect(runtime.readChatHistoryPage).not.toHaveBeenCalled();
   });
 
-  it("rejects malformed chat history offsets before reading session files", async () => {
+  it("rejects malformed chat history offsets before reading history", async () => {
     const callGateway = createEmbeddedCallGateway();
 
     await expect(
@@ -615,8 +377,6 @@ describe("embedded gateway stub", () => {
         params: { sessionKey: "agent:main:main", offset: "1abc" },
       }),
     ).rejects.toThrow("offset must be a non-negative integer");
-    expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
-    expect(runtime.readRecentSessionMessagesWithStatsAsync).not.toHaveBeenCalled();
-    expect(runtime.readSessionMessagesPageWithStatsAsync).not.toHaveBeenCalled();
+    expect(runtime.readChatHistoryPage).not.toHaveBeenCalled();
   });
 });

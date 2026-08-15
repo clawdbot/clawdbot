@@ -62,10 +62,3 @@ export function resolveChatHistoryWithCliSessionImports(params: {
     ? { messages, imported: true }
     : { messages: params.localMessages, imported: false };
 }
-
-/** Augments local chat history with bound Claude CLI session messages when applicable. */
-export function augmentChatHistoryWithCliSessionImports(
-  params: Parameters<typeof resolveChatHistoryWithCliSessionImports>[0],
-): unknown[] {
-  return resolveChatHistoryWithCliSessionImports(params).messages;
-}
