@@ -77,6 +77,34 @@ function resolveSelectedMemoryPluginIds(params: {
     : [];
 }
 
+// Every selected model provider must join the immutable run generation before
+// request-time hooks resolve; late provider loading is intentionally forbidden.
+function resolveSelectedProviderOwnerPluginIds(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir: string;
+}): string[] {
+  const providerOwnerPluginIds = dedupePluginIds(
+    resolveOwningPluginIdsForProviderRef(params) ?? [],
+  );
+  if (providerOwnerPluginIds.length === 0) {
+    return [];
+  }
+  const safeProviderOwnerPluginIds = dedupePluginIds([
+    ...resolveBundledProviderCompatPluginIds({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      onlyPluginIds: providerOwnerPluginIds,
+    }),
+    ...resolveActivatableProviderOwnerPluginIds({
+      pluginIds: providerOwnerPluginIds,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+    }),
+  ]);
+  return providerOwnerPluginIds.filter((pluginId) => safeProviderOwnerPluginIds.includes(pluginId));
+}
+
 /** Resolve manifest owners required by one selected non-core harness runtime. */
 export function resolveAgentHarnessOwnerPluginIds(params: {
   runtime: string;
@@ -98,29 +126,13 @@ export function resolveAgentHarnessOwnerPluginIds(params: {
   ) {
     return harnessPluginIds;
   }
-  const providerOwnerPluginIds = dedupePluginIds(
-    resolveOwningPluginIdsForProviderRef(params) ?? [],
-  );
+  const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds(params);
   if (providerOwnerPluginIds.length === 0) {
     return harnessPluginIds;
   }
-  const safeProviderOwnerPluginIds = dedupePluginIds([
-    ...resolveBundledProviderCompatPluginIds({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      onlyPluginIds: providerOwnerPluginIds,
-    }),
-    ...resolveActivatableProviderOwnerPluginIds({
-      pluginIds: providerOwnerPluginIds,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-    }),
-  ]);
   return dedupePluginIds([
     ...harnessPluginIds,
-    ...providerOwnerPluginIds.filter(
-      (pluginId) => pluginId !== "codex" && safeProviderOwnerPluginIds.includes(pluginId),
-    ),
+    ...providerOwnerPluginIds.filter((pluginId) => pluginId !== "codex"),
   ]);
 }
 
@@ -196,6 +208,13 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   for (const selection of params.selections) {
     const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
     if (!requiresAgentHarnessPluginSelection(selection, config)) {
+      const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({
+        provider: selection.provider,
+        config,
+        workspaceDir: params.workspaceDir,
+      });
+      pluginIds.push(...providerOwnerPluginIds);
+      forceActivatedPluginIds.push(...providerOwnerPluginIds);
       continue;
     }
     const harnessPluginIds = resolveAgentHarnessOwnerPluginIds({
