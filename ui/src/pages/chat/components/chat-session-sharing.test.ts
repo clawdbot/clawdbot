@@ -88,8 +88,9 @@ describe("chat session sharing menu", () => {
             members: [],
             identities: [
               { type: "human", id: "profile-vyctor", label: "Vyctor Brzezowski" },
-              // Channel-shaped IDs are canonical for human profiles too; the
-              // recorded type, not the ID string, must drive presentation.
+              // Human identity IDs are opaque (e.g. an inbound SenderId) and
+              // can contain "channel:" as a substring; the recorded type,
+              // not the ID string, must drive presentation.
               { type: "human", id: "channel:chn_design", label: "Design" },
               { type: "agent", id: "discord:channel:operations", label: "Operations" },
               { type: "system", id: "channel:audit", label: "Audit" },
