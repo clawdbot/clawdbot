@@ -65,6 +65,7 @@ import {
   skillWorkshopAgentEventActor,
 } from "./skill-workshop-tool-helpers.js";
 import {
+  formatProposalEvaluationSummary,
   formatProposalInspect,
   formatProposalList,
   listProposalEntries,
@@ -445,7 +446,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           content: [
             {
               type: "text",
-              text: `Evaluated skill proposal ${evaluated.record.id} with ${evaluated.evaluation.outcomes.length} evaluator result(s).`,
+              text: `Evaluated skill proposal ${evaluated.record.id} with ${evaluated.evaluation.outcomes.length} evaluator result(s).\n${formatProposalEvaluationSummary(evaluated.evaluation)}`,
             },
           ],
           details: {
