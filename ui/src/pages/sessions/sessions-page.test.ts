@@ -631,19 +631,22 @@ describe("sessions page lifecycle", () => {
 
   it("retargets the Gateway after deleting the current session", async () => {
     const key = "agent:writer:work";
+    const sessionId = "session-writer-work";
     const sessions = createSessions({
       deleteMany: vi.fn(async () => ({ deleted: [key], errors: [], preservedWorktrees: [] })),
     });
     const mutableGateway = createGateway({} as GatewayBrowserClient);
     mutableGateway.emit({ sessionKey: key });
     const page = await createPage(createContext(mutableGateway.gateway, sessions));
-    page.result = { count: 1, sessions: [{ key }] } as SessionsListResult;
+    page.result = { count: 1, sessions: [{ key, sessionId }] } as SessionsListResult;
     page.selectedKeys = new Set([key]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteSelected();
 
-    expect(sessions.deleteMany).toHaveBeenCalledWith([{ key, agentId: undefined }]);
+    expect(sessions.deleteMany).toHaveBeenCalledWith([
+      { key, agentId: undefined, expectedSessionId: sessionId },
+    ]);
     expect(mutableGateway.setSessionKey).toHaveBeenCalledWith("agent:writer:main");
     expect(page.result?.sessions).toEqual([]);
     expect(page.selectedKeys).toEqual(new Set());

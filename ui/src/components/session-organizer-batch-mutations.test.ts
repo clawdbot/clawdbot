@@ -482,8 +482,18 @@ describe("session organizer destructive confirmations", () => {
     await pending;
 
     expect(harness.deleteMany).toHaveBeenCalledWith([
-      { key: rows[0]!.key, agentId: "main", deleteTranscript: true },
-      { key: rows[1]!.key, agentId: "main", deleteTranscript: true },
+      {
+        key: rows[0]!.key,
+        agentId: "main",
+        deleteTranscript: true,
+        expectedSessionId: rows[0]!.sessionId,
+      },
+      {
+        key: rows[1]!.key,
+        agentId: "main",
+        deleteTranscript: true,
+        expectedSessionId: rows[1]!.sessionId,
+      },
     ]);
   });
 
@@ -565,7 +575,11 @@ describe("session organizer destructive confirmations", () => {
     await deleteSession(harness.host, sessionRow(0), harness.scope, { offerSkip: true });
 
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(harness.deleteOne).toHaveBeenCalledOnce();
+    expect(harness.deleteOne).toHaveBeenCalledWith(sessionRow(0).key, {
+      agentId: "main",
+      deleteTranscript: true,
+      expectedSessionId: sessionRow(0).sessionId,
+    });
   });
 
   it("asks again after the preference is reset", async () => {

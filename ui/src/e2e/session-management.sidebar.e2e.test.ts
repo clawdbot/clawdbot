@@ -1003,14 +1003,18 @@ suite.define(() => {
       await context.close();
     }
   });
-  it("deletes a sidebar session through the in-app confirm", async () => {
+  it("rejects deleting a same-key replacement after the in-app confirm", async () => {
     const key = "agent:main:research";
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      recordVideo: captureUiProofEnabled
+        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
     });
     const page = await context.newPage();
+    const proofVideo = page.video();
     // Playwright auto-dismisses native dialogs, which is exactly how a
     // bridge-less WebView behaves. Deleting must not depend on one.
     const nativeDialogs: string[] = [];
@@ -1042,14 +1046,39 @@ suite.define(() => {
 
       const confirmModal = await waitForConfirmModal(page);
       await captureUiProof(page, "sidebar-delete-session-confirm.png");
-      await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
-
-      await expect(gateway.waitForRequest("sessions.delete")).resolves.toMatchObject({
-        params: { deleteTranscript: true, key },
+      await gateway.deferNext("sessions.delete");
+      await confirmModal.getByRole("button", { name: "Delete", exact: true }).evaluate((button) => {
+        if (!(button instanceof HTMLButtonElement)) {
+          throw new Error("expected delete confirmation button");
+        }
+        button.click();
+        button.click();
       });
+
+      const request = await gateway.waitForRequest("sessions.delete");
+      expect(request).toMatchObject({
+        params: { deleteTranscript: true, expectedSessionId: `session:${key}`, key },
+      });
+      await expectRequestCountStable(gateway, "sessions.delete", 1);
+      await gateway.rejectDeferred("sessions.delete", {
+        code: "INVALID_REQUEST",
+        message: `Session ${key} changed before deletion. Retry.`,
+      });
+      const visibleError = page.locator("[data-sidebar-session-error]");
+      await expect
+        .poll(() => visibleError.textContent())
+        .toContain("changed before deletion. Retry.");
+      expect(await visibleError.textContent()).not.toContain("GatewayRequestError");
+      await row.waitFor({ state: "visible" });
+      await captureUiProof(page, "sidebar-delete-session-replaced-error.png");
       expect(nativeDialogs).toEqual([]);
     } finally {
       await context.close();
+      if (proofVideo) {
+        await proofVideo.saveAs(
+          path.join(uiProofArtifactDir, "sidebar-delete-session-replaced.webm"),
+        );
+      }
     }
   });
 });

@@ -157,6 +157,7 @@ export function requestSessionDelete(
   return client.request<SessionDeleteResponse>("sessions.delete", {
     ...buildSessionRequestParams(key, options.agentId),
     deleteTranscript: options.deleteTranscript ?? true,
+    ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
     ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
   });
 }

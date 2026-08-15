@@ -771,7 +771,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   publishSessionMutationError(scope: SidebarSessionMutationScope, error: unknown): void {
     if (this.isSessionMutationScopeCurrent(scope)) {
-      this.sessionMutationError = String(error);
+      this.sessionMutationError = error instanceof Error ? error.message : String(error);
       this.notify();
     }
   }

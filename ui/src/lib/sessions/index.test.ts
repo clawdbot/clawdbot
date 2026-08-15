@@ -364,9 +364,15 @@ describe("createSessionCapability", () => {
     const { gateway } = createGatewayHarness(client);
     const sessions = createSessionCapability(gateway);
 
-    await expect(sessions.delete(key)).resolves.toEqual({ deleted: false });
+    await expect(
+      sessions.delete(key, { expectedSessionId: "session-before-replacement" }),
+    ).resolves.toEqual({ deleted: false });
     expect(sessions.state.deletedSessions).toEqual([]);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("sessions.delete", {
+      key,
+      deleteTranscript: true,
+      expectedSessionId: "session-before-replacement",
+    });
     sessions.dispose();
   });
 
