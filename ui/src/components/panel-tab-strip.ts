@@ -106,28 +106,30 @@ export function renderPanelTabStrip(params: {
   onNew: () => void;
   newLabel: string;
   newDisabled?: boolean;
-  newControl?: TemplateResult;
+  newControl?: TemplateResult | typeof nothing;
   separateTabs?: boolean;
   onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
 }) {
   const newButton = (slotted: boolean) =>
-    params.newControl
-      ? html`<span slot=${slotted ? "nav" : nothing} class="tabstrip-new-control"
-          >${params.newControl}</span
-        >`
-      : html`
-          <button
-            slot=${slotted ? "nav" : nothing}
-            class="rail-header__action tabstrip-new"
-            type="button"
-            ?disabled=${params.newDisabled}
-            title=${params.newLabel}
-            aria-label=${params.newLabel}
-            @click=${params.onNew}
-          >
-            ${icons.plus}
-          </button>
-        `;
+    params.newControl === nothing
+      ? nothing
+      : params.newControl
+        ? html`<span slot=${slotted ? "nav" : nothing} class="tabstrip-new-control"
+            >${params.newControl}</span
+          >`
+        : html`
+            <button
+              slot=${slotted ? "nav" : nothing}
+              class="rail-header__action tabstrip-new"
+              type="button"
+              ?disabled=${params.newDisabled}
+              title=${params.newLabel}
+              aria-label=${params.newLabel}
+              @click=${params.onNew}
+            >
+              ${icons.plus}
+            </button>
+          `;
   if (params.tabs.length === 0) {
     // Web Awesome 3.10 dereferences its first tab when an empty group becomes
     // visible. Keep the new-session control outside the group until one exists.

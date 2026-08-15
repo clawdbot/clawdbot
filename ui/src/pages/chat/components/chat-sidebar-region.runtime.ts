@@ -221,52 +221,12 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           },
           onNew: () => undefined,
           newLabel: t("chat.sidePanel.addTab"),
-          newControl: this.renderTypeMenu(),
+          newControl: nothing,
           separateTabs: true,
           onReorder: (panelId, targetPanelId, placement) =>
             this.callbacks?.reorderPanel(panelId, targetPanelId, placement),
         })}
-        <div class="rail-header__actions side-panel__actions">
-          ${openUrl
-            ? html`<a
-                class="rail-header__action"
-                href=${openUrl}
-                target="_blank"
-                rel="noopener"
-                aria-label=${t("chat.sessionDiscussion.openExternal")}
-                title=${t("chat.sessionDiscussion.openExternal")}
-                >${icons.externalLink}</a
-              >`
-            : nothing}
-          ${this.renderDockControls()}
-          <openclaw-tooltip
-            .content=${t(this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand")}
-          >
-            <button
-              class="rail-header__action side-panel__expand"
-              type="button"
-              aria-pressed=${String(this.layout.expanded === true)}
-              aria-label=${t(
-                this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand",
-              )}
-              @click=${() => this.callbacks?.setExpanded(this.layout.expanded !== true)}
-            >
-              ${this.layout.expanded ? icons.minimize : icons.maximize}
-            </button>
-          </openclaw-tooltip>
-          <openclaw-tooltip .content=${t("chat.sidePanel.minimize")}>
-            <button
-              class="rail-header__action side-panel__minimize"
-              type="button"
-              aria-label=${t("chat.sidePanel.minimize")}
-              @click=${() => this.callbacks?.setOpen(false)}
-            >
-              ${sidebarDock(this.layout) === "bottom"
-                ? icons.panelBottomClose
-                : icons.panelRightClose}
-            </button>
-          </openclaw-tooltip>
-        </div>
+        ${this.renderHeaderActions(openUrl)}
       </header>
     `;
   }
@@ -276,7 +236,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       return nothing;
     }
     const dock = sidebarDock(this.layout);
-    return html`
+    return html`<span class="side-panel__action-group side-panel__action-group--dock">
       <openclaw-tooltip .content=${t("browser.dockBottom")}>
         <button
           class="rail-header__action side-panel__dock-bottom"
@@ -299,7 +259,55 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           ${icons.panelRightOpen}
         </button>
       </openclaw-tooltip>
-    `;
+    </span>`;
+  }
+
+  private renderHeaderActions(openUrl: string | null) {
+    const expandLabel = t(
+      this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand",
+    );
+    return html`<div class="rail-header__actions side-panel__actions">
+      <span class="side-panel__action-group side-panel__action-group--content">
+        ${this.renderTypeMenu()}
+        ${openUrl
+          ? html`<a
+              class="rail-header__action"
+              href=${openUrl}
+              target="_blank"
+              rel="noopener"
+              aria-label=${t("chat.sessionDiscussion.openExternal")}
+              title=${t("chat.sessionDiscussion.openExternal")}
+              >${icons.externalLink}</a
+            >`
+          : nothing}
+      </span>
+      ${this.renderDockControls()}
+      <span class="side-panel__action-group side-panel__action-group--layout">
+        <openclaw-tooltip .content=${expandLabel}>
+          <button
+            class="rail-header__action side-panel__expand"
+            type="button"
+            aria-pressed=${String(this.layout.expanded === true)}
+            aria-label=${expandLabel}
+            @click=${() => this.callbacks?.setExpanded(this.layout.expanded !== true)}
+          >
+            ${this.layout.expanded ? icons.minimize : icons.maximize}
+          </button>
+        </openclaw-tooltip>
+      </span>
+      <span class="side-panel__action-group side-panel__action-group--close">
+        <openclaw-tooltip .content=${t("common.close")}>
+          <button
+            class="rail-header__action side-panel__minimize"
+            type="button"
+            aria-label=${t("common.close")}
+            @click=${() => this.callbacks?.setOpen(false)}
+          >
+            ${icons.x}
+          </button>
+        </openclaw-tooltip>
+      </span>
+    </div>`;
   }
 
   private renderEmpty(panel?: SidebarPanel) {
@@ -418,34 +426,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           ? this.renderHeader(column)
           : html`<header class="rail-header side-panel__header side-panel__header--empty">
               <strong class="side-panel__empty-header-title">${t("chat.sidePanel.label")}</strong>
-              <div class="rail-header__actions side-panel__actions">
-                ${this.renderTypeMenu()} ${this.renderDockControls()}
-                <openclaw-tooltip
-                  .content=${t(
-                    this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand",
-                  )}
-                >
-                  <button
-                    class="rail-header__action side-panel__expand"
-                    type="button"
-                    aria-pressed=${String(this.layout.expanded === true)}
-                    aria-label=${t(
-                      this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand",
-                    )}
-                    @click=${() => this.callbacks?.setExpanded(this.layout.expanded !== true)}
-                  >
-                    ${this.layout.expanded ? icons.minimize : icons.maximize}
-                  </button>
-                </openclaw-tooltip>
-                <button
-                  class="rail-header__action side-panel__minimize"
-                  type="button"
-                  aria-label=${t("chat.sidePanel.minimize")}
-                  @click=${() => this.callbacks?.setOpen(false)}
-                >
-                  ${dock === "bottom" ? icons.panelBottomClose : icons.panelRightClose}
-                </button>
-              </div>
+              ${this.renderHeaderActions(null)}
             </header>`}
         ${this.renderBody(column)}
       </section>`;

@@ -352,7 +352,7 @@ suite.define(() => {
           await page.mouse.click(300, 100);
           await captureRichPanel(page, `rails-tabs-bottom-${themeMode}`);
 
-          await sidePanel(page).getByRole("button", { name: "Minimize side panel" }).click();
+          await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
           await page.locator(".chat-side-panel-toggle").click();
           await expect
             .poll(() =>
@@ -409,7 +409,7 @@ suite.define(() => {
             .toBe("none");
           await sidePanel(page).getByRole("button", { name: "Restore side panel" }).click();
 
-          await sidePanel(page).getByRole("button", { name: "Minimize side panel" }).click();
+          await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
           await expect.poll(() => sidePanel(page).count()).toBe(0);
           await page.locator(".chat-side-panel-toggle").click();
           await expect
@@ -467,7 +467,7 @@ suite.define(() => {
               .click();
           }
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
-          await sidePanel(page).getByRole("button", { name: "Minimize side panel" }).click();
+          await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
           await page.locator(".chat-side-panel-toggle").click();
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
           expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);
