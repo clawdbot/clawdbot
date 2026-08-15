@@ -1091,6 +1091,283 @@ describe("gateway session utils", () => {
     expect(row.agentRuntime).toEqual({ id: "codex", source: "session" });
   });
 
+  test.each([true, false])(
+    "projects current context for a stale different-runtime producer (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000 }],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "stale-openclaw",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "openclaw",
+          contextTokens: 272_000,
+          contextTokensSource: "runtime",
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.agentRuntime?.id).toBe("codex");
+      expect(row.contextTokens).toBe(1_000_000);
+    },
+  );
+
+  test.each([true, false])(
+    "projects current Codex context when producer provenance is missing (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000 }],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "missing-provenance",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          contextTokens: 272_000,
+        } as SessionEntry,
+        lightweightListRow,
+      });
+
+      expect(row.agentRuntime?.id).toBe("codex");
+      expect(row.contextTokens).toBe(1_000_000);
+    },
+  );
+
+  test("projects a changed explicit cap for the same runtime and model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000 }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "stale-cap",
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        contextTokens: 272_000,
+        contextTokensSource: "runtime",
+      } as SessionEntry,
+    });
+
+    expect(row.contextTokens).toBe(1_000_000);
+  });
+
+  test.each([
+    {
+      name: "matching native Codex telemetry",
+      configuredRuntime: "codex",
+      entry: {
+        agentHarnessId: "codex",
+        contextTokens: 1_000_000,
+        contextTokensSource: "runtime",
+      },
+    },
+    {
+      name: "a locked Codex session under OpenClaw config",
+      configuredRuntime: "openclaw",
+      expectedRuntime: "codex",
+      entry: {
+        agentHarnessId: "codex",
+        contextTokens: 1_000_000,
+        modelSelectionLocked: true,
+      },
+    },
+    {
+      name: "locked legacy telemetry without harness provenance",
+      configuredRuntime: "openclaw",
+      expectedRuntime: "openclaw",
+      entry: {
+        contextTokens: 1_000_000,
+        modelSelectionLocked: true,
+      },
+    },
+  ])("preserves $name", ({ configuredRuntime, entry, expectedRuntime = "codex" }) => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: configuredRuntime } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.6-sol", contextWindow: 272_000 }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "native-window",
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        ...entry,
+      } as SessionEntry,
+    });
+
+    expect(row.agentRuntime?.id).toBe(expectedRuntime);
+    expect(row.contextTokens).toBe(1_000_000);
+  });
+
+  test.each([true, false])(
+    "does not reuse stale transcript context after an OpenClaw to Codex change (lightweight=%s)",
+    async (lightweightListRow) => {
+      await withStateDirEnv("session-utils-stale-transcript-context-", async ({ stateDir }) => {
+        const sessionId = "stale-transcript-context";
+        const sessionKey = "agent:main:main";
+        const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const entry = {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "openclaw",
+        } as SessionEntry;
+        await seedSessionEntries(storePath, { [sessionKey]: entry });
+        appendTranscriptMessages({
+          sessionId,
+          sessionKey,
+          storePath,
+          messages: [
+            {
+              role: "assistant",
+              content: "old OpenClaw turn",
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: { input: 1, output: 1 },
+            },
+          ],
+        });
+        const cfg = {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.6-sol" },
+              models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                models: [
+                  { id: "gpt-5.5", contextWindow: 272_000 },
+                  { id: "gpt-5.6-sol", contextWindow: 1_000_000 },
+                ],
+              },
+            },
+          },
+        } as OpenClawConfig;
+
+        const row = buildGatewaySessionRow({
+          cfg,
+          storePath,
+          store: { [sessionKey]: entry },
+          key: sessionKey,
+          entry,
+          lightweightListRow,
+        });
+
+        expect(row.agentRuntime?.id).toBe("codex");
+        expect(row.model).toBe("gpt-5.6-sol");
+        expect(row.contextTokens).toBe(1_000_000);
+      });
+    },
+  );
+
+  test("invalidates a persisted resolved cap after the cap is removed", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.6-sol", contextWindow: 1_000_000 }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "removed-cap",
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "codex",
+        contextTokens: 272_000,
+        contextTokensSource: "resolved",
+      } as SessionEntry,
+    });
+
+    expect(row.contextTokens).toBe(1_000_000);
+  });
+
   test.each(["xhigh", "max"] as const)(
     "preserves catalog-less persisted %s in session change projections",
     (thinkingLevel) => {

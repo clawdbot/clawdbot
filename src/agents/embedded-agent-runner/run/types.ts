@@ -314,6 +314,8 @@ export type EmbeddedRunAttemptResult = {
   cloudCodeAssistFormatError: boolean;
   /** Effective context window reported by the harness during this attempt. */
   contextTokens?: number;
+  /** Whether the harness observed the window or carried prepared resolution forward. */
+  contextTokensSource?: "runtime" | "resolved";
   attemptUsage?: NormalizedUsage;
   promptCache?: ContextEnginePromptCacheInfo;
   contextBudgetStatus?: SessionContextBudgetStatus;

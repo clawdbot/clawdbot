@@ -402,10 +402,46 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   });
 
   describe("context token fallback", () => {
+    it("prefers the harness-reported runtime window and provenance", async () => {
+      const session = makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          agentHarnessId: "openclaw",
+          contextTokens: 222_000,
+          contextTokensSource: "resolved",
+        }),
+      });
+      resolveCronSessionMock.mockReturnValue(session);
+      lookupContextTokensMock.mockReturnValue(512_000);
+      runWithModelFallbackMock.mockResolvedValueOnce({
+        result: {
+          payloads: [{ text: "test output" }],
+          meta: {
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+              agentHarnessId: "codex",
+              contextTokens: 1_000_000,
+              contextTokensSource: "runtime",
+            },
+          },
+        },
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+
+      const result = await runSkillFilterCase();
+
+      expect(result.status).toBe("ok");
+      expect(session.sessionEntry.agentHarnessId).toBe("codex");
+      expect(session.sessionEntry.contextTokens).toBe(1_000_000);
+      expect(session.sessionEntry.contextTokensSource).toBe("runtime");
+    });
+
     it("preserves existing session contextTokens when no configured or cached model window is loaded", async () => {
       const session = makeCronSession({
         sessionEntry: makeCronSessionEntry({
           contextTokens: 222_000,
+          contextTokensSource: "runtime",
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
@@ -415,12 +451,14 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       expect(result.status).toBe("ok");
       expect(session.sessionEntry.contextTokens).toBe(222_000);
+      expect(session.sessionEntry.contextTokensSource).toBe("runtime");
     });
 
     it("prefers sync-configured model contextTokens over the previous session value", async () => {
       const session = makeCronSession({
         sessionEntry: makeCronSessionEntry({
           contextTokens: 222_000,
+          contextTokensSource: "runtime",
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
@@ -430,6 +468,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       expect(result.status).toBe("ok");
       expect(session.sessionEntry.contextTokens).toBe(512_000);
+      expect(session.sessionEntry.contextTokensSource).toBe("resolved");
       expect(lookupContextTokensMock).toHaveBeenCalledWith("gpt-5.4", {
         allowAsyncLoad: false,
       });

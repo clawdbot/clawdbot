@@ -254,7 +254,10 @@ export async function runPreparedCliAgent(
   const sessionBindingDisabled = context.preparedBackend.backend.sessionMode === "none";
   const preparedContextAgentMeta =
     isClaudeCliBackend(params.provider) && context.contextWindowInfo
-      ? { contextTokens: context.contextWindowInfo.tokens }
+      ? {
+          contextTokens: context.contextWindowInfo.tokens,
+          contextTokensSource: "resolved" as const,
+        }
       : {};
   const isolatedCompletion = params.isolatedCompletion === true;
   const controlOperation = params.controlOperation !== undefined;

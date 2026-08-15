@@ -91,6 +91,7 @@ export async function resetReplyRunSession(params: {
     cacheRead: undefined,
     cacheWrite: undefined,
     contextTokens: undefined,
+    contextTokensSource: undefined,
     contextBudgetStatus: undefined,
     systemPromptReport: undefined,
     fallbackNotice: undefined,

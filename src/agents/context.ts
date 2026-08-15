@@ -38,6 +38,7 @@ export {
   ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
   ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
 } from "./context-resolution.js";
+export { resolveExplicitContextTokensForModel } from "./context-resolution.js";
 export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
 export {
   applyConfiguredContextWindows,

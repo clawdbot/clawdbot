@@ -27,6 +27,7 @@ const MODEL_OVERRIDE_RUNTIME_FIELDS = [
   "model",
   "fallbackNotice",
   "contextTokens",
+  "contextTokensSource",
   "contextBudgetStatus",
 ] as const satisfies ReadonlyArray<keyof SessionEntry>;
 const MODEL_OVERRIDE_RUNTIME_FIELD_SET = new Set<keyof SessionEntry>(MODEL_OVERRIDE_RUNTIME_FIELDS);

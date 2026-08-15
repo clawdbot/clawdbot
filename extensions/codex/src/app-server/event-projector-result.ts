@@ -45,6 +45,7 @@ type CodexAttemptResultInput = {
   aborted: boolean;
   tokenUsage: EmbeddedRunAttemptResult["attemptUsage"];
   contextTokens: number | undefined;
+  contextTokensSource: EmbeddedRunAttemptResult["contextTokensSource"];
   completedCompactionCount: number;
   activeItemCount: number;
   completedItemCount: number;
@@ -212,6 +213,7 @@ export function buildCodexAttemptResult(
     acceptedSessionSpawns: input.toolTelemetry.acceptedSessionSpawns,
     cloudCodeAssistFormatError: false,
     contextTokens: input.contextTokens,
+    contextTokensSource: input.contextTokensSource,
     attemptUsage: projectedUsage,
     ...(input.completedCompactionCount > 0
       ? { compactionCount: input.completedCompactionCount }

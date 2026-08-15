@@ -175,6 +175,22 @@ function resolveConfiguredRuntimeContextTokens(
     : undefined;
 }
 
+export function resolveExplicitContextTokensForModel(
+  params: Pick<ContextTokenResolutionParams, "cfg" | "model" | "modelProvider" | "provider">,
+): number | undefined {
+  const ref = resolveProviderModelRef(params);
+  if (!ref) {
+    return undefined;
+  }
+  const configured = resolveConfiguredRuntimeContextTokens(
+    params.cfg,
+    ref.provider,
+    params.modelProvider,
+    ref.model,
+  );
+  return configured?.source === "contextTokens" ? configured.value : undefined;
+}
+
 function resolveModelFamilyId(modelId: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;

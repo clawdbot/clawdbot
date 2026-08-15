@@ -91,20 +91,42 @@ export async function finalizeCronRun(params: {
     finalRunResult.meta?.agentMeta?.provider ??
     execution.fallbackProvider ??
     execution.liveSelection.provider;
-  const contextTokens =
-    resolvePositiveContextTokens(prepared.agentCfg?.contextTokens) ??
-    (await cronContextRuntimeLoader.load()).lookupContextTokens(modelUsed, {
+  const runtimeContextTokens = resolvePositiveContextTokens(
+    finalRunResult.meta?.agentMeta?.contextTokens,
+  );
+  const configuredContextTokens = resolvePositiveContextTokens(prepared.agentCfg?.contextTokens);
+  const modelContextTokens = (await cronContextRuntimeLoader.load()).lookupContextTokens(
+    modelUsed,
+    {
       allowAsyncLoad: false,
-    }) ??
-    resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
+    },
+  );
+  const persistedContextTokens = resolvePositiveContextTokens(
+    prepared.cronSession.sessionEntry.contextTokens,
+  );
+  const contextTokens =
+    runtimeContextTokens ??
+    configuredContextTokens ??
+    modelContextTokens ??
+    persistedContextTokens ??
     DEFAULT_CONTEXT_TOKENS;
+  const contextTokensSource =
+    runtimeContextTokens !== undefined
+      ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "resolved")
+      : configuredContextTokens !== undefined || modelContextTokens !== undefined
+        ? "resolved"
+        : (prepared.cronSession.sessionEntry.contextTokensSource ?? "resolved");
 
   if (!params.isAborted()) {
     setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
       provider: providerUsed,
       model: modelUsed,
     });
+    prepared.cronSession.sessionEntry.agentHarnessId = normalizeOptionalString(
+      finalRunResult.meta?.agentMeta?.agentHarnessId,
+    );
     prepared.cronSession.sessionEntry.contextTokens = contextTokens;
+    prepared.cronSession.sessionEntry.contextTokensSource = contextTokensSource;
     if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
       const cliSessionBinding = finalRunResult.meta?.agentMeta?.cliSessionBinding;
       const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();

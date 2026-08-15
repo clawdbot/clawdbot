@@ -1,7 +1,14 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
-import { resolveContextTokensForModel } from "../agents/context.js";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
+import {
+  resolveContextTokensForModel,
+  resolveExplicitContextTokensForModel,
+} from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -322,27 +329,6 @@ export function buildGatewaySessionRow(params: {
         entry,
         rowContext: params.rowContext,
       }) ?? asNonNegativeFiniteNumber(transcriptUsage?.estimatedCostUsd));
-  const contextTokens = lightweight
-    ? (resolvePositiveNumber(entry?.contextTokens) ??
-      resolvePositiveNumber(
-        resolveContextTokensForModel({
-          cfg,
-          provider: rowModelProvider,
-          model: rowModel,
-          allowAsyncLoad: false,
-        }),
-      ))
-    : (resolvePositiveNumber(entry?.contextTokens) ??
-      resolvePositiveNumber(transcriptUsage?.contextTokens) ??
-      resolvePositiveNumber(
-        resolveContextTokensForModel({
-          cfg,
-          provider: rowModelProvider,
-          model: rowModel,
-          allowAsyncLoad: false,
-        }),
-      ));
-
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
@@ -378,6 +364,48 @@ export function buildGatewaySessionRow(params: {
     rowContext,
     providerPolicySource: lightweight ? "active" : undefined,
   });
+  const configuredAgentContextTokens =
+    resolveAgentConfig(cfg, sessionAgentId)?.contextTokens ?? cfg.agents?.defaults?.contextTokens;
+  const hasExplicitContextTokens =
+    resolvePositiveNumber(configuredAgentContextTokens) !== undefined ||
+    resolvePositiveNumber(
+      resolveExplicitContextTokensForModel({
+        cfg,
+        provider: rowModelProvider,
+        model: rowModel,
+      }),
+    ) !== undefined;
+  const resolvedCurrentContextTokens = resolvePositiveNumber(
+    resolveContextTokensForModel({
+      cfg,
+      provider: rowModelProvider,
+      model: rowModel,
+      contextTokensOverride: configuredAgentContextTokens,
+      allowAsyncLoad: false,
+    }),
+  );
+  const persistedContextTokens = resolvePositiveNumber(entry?.contextTokens);
+  const persistedContextMatchesCurrentSelection =
+    persistedContextTokens !== undefined &&
+    entry?.contextTokensSource === "runtime" &&
+    normalizeLowercaseStringOrEmpty(entry?.modelProvider) ===
+      normalizeLowercaseStringOrEmpty(rowModelProvider) &&
+    normalizeLowercaseStringOrEmpty(entry?.model) === normalizeLowercaseStringOrEmpty(rowModel) &&
+    normalizeLowercaseStringOrEmpty(entry?.agentHarnessId) ===
+      normalizeLowercaseStringOrEmpty(thinkingProjection.agentRuntime.id);
+  // A locked session owns its native window, including legacy rows that predate
+  // harness provenance. Otherwise telemetry must match the producing selection.
+  const trustedPersistedContextTokens =
+    entry?.modelSelectionLocked === true || persistedContextMatchesCurrentSelection
+      ? persistedContextTokens
+      : undefined;
+  const currentContextTokens = hasExplicitContextTokens
+    ? resolvedCurrentContextTokens
+    : trustedPersistedContextTokens;
+  const contextTokens =
+    entry?.modelSelectionLocked === true
+      ? (trustedPersistedContextTokens ?? currentContextTokens ?? resolvedCurrentContextTokens)
+      : (currentContextTokens ?? resolvedCurrentContextTokens);
   const fastModeState = resolveFastModeState({
     cfg,
     provider: selectedModelProvider,

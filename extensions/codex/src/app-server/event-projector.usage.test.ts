@@ -27,6 +27,7 @@ describe("CodexAppServerEventProjector usage projection", () => {
 
     expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
       contextTokens: 1_050_000,
+      contextTokensSource: "resolved",
     });
   });
 
@@ -69,6 +70,7 @@ describe("CodexAppServerEventProjector usage projection", () => {
     });
     expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
       contextTokens: 875_900,
+      contextTokensSource: "runtime",
     });
   });
 
