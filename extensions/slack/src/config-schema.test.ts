@@ -166,6 +166,25 @@ describe("slack config schema", () => {
     expectSlackConfigIssue({ presenceEvents: { prompt: false } }, "presenceEvents.prompt");
   });
 
+  it("caps presence event prompts at the AGENTS.md bootstrap limit", () => {
+    const maxPrompt = "x".repeat(20_000);
+    const oversizedPrompt = `${maxPrompt}x`;
+
+    expectSlackConfigValid({ presenceEvents: { prompt: maxPrompt } });
+    expectSlackConfigIssue(
+      { presenceEvents: { prompt: oversizedPrompt } },
+      "presenceEvents.prompt",
+    );
+    expectSlackConfigIssue(
+      { accounts: { ops: { presenceEvents: { prompt: oversizedPrompt } } } },
+      "accounts.ops.presenceEvents.prompt",
+    );
+    expectSlackConfigIssue(
+      { channels: { C123: { presenceEvents: { prompt: oversizedPrompt } } } },
+      "channels.C123.presenceEvents.prompt",
+    );
+  });
+
   it("accepts historyLimit overrides per account", () => {
     const res = SlackConfigSchema.safeParse({
       historyLimit: 7,

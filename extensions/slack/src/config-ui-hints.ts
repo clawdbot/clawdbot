@@ -109,7 +109,7 @@ export const slackChannelConfigUiHints = {
   },
   "presenceEvents.prompt": {
     label: "Slack Presence Event Prompt",
-    help: "Replace the default greeting guidance appended after presence facts. Use an empty string to omit event-specific guidance and let workspace instructions such as AGENTS.md govern behavior.",
+    help: "Replace the default greeting guidance appended after presence facts. Use an empty string to omit event-specific guidance and let workspace instructions such as AGENTS.md govern behavior. Maximum: 20,000 characters.",
   },
   "channels.*.presenceEvents.mode": {
     label: "Slack Channel Presence Event Mode",
@@ -117,7 +117,7 @@ export const slackChannelConfigUiHints = {
   },
   "channels.*.presenceEvents.prompt": {
     label: "Slack Channel Presence Event Prompt",
-    help: "Override the account-level presence-event prompt for one Slack channel.",
+    help: "Override the account-level presence-event prompt for one Slack channel. Maximum: 20,000 characters.",
   },
   "execApprovals.enabled": {
     label: "Slack Exec Approvals Enabled",
