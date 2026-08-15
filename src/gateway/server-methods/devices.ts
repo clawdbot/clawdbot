@@ -818,7 +818,11 @@ export const deviceHandlers: GatewayRequestHandlers = {
       role: entry.role,
     });
     if (entry.role === "node") {
-      invalidateNodeWakeState(normalizedDeviceId);
+      // Revoking a node token ends its authority like pairing removal does:
+      // run the same teardown owner so pending actions/work, wake state,
+      // surface caps, and worker placements are not stranded on a dead node.
+      clearRemovedNodeRuntimeState({ nodeId: normalizedDeviceId, context });
+      await reconcileRevokedDeviceWorker(context, normalizedDeviceId);
     }
     // Mark affected clients invalid *before* responding so any RPCs already
     // pipelined into their WS socket buffer are rejected at the per-request
