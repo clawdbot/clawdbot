@@ -279,6 +279,21 @@ suite.define(() => {
             "Side chat",
             "Desktop",
           ]);
+          await expect
+            .poll(() =>
+              sidePanel(page)
+                .locator(":scope > .side-panel__header .tabstrip-tab__label")
+                .evaluateAll((labels) =>
+                  labels.some((label) => {
+                    const element = label as HTMLElement;
+                    return (
+                      element.scrollWidth > element.clientWidth + 1 &&
+                      getComputedStyle(element).maskImage !== "none"
+                    );
+                  }),
+                ),
+            )
+            .toBe(true);
 
           await selectTab(page, "Files");
           await captureRichPanel(page, `rails-tabs-rich-${themeMode}`);
@@ -471,6 +486,21 @@ suite.define(() => {
           await page.locator(".chat-side-panel-toggle").click();
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
           expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);
+          await openFromEmpty(page, "Terminal");
+          const terminalLabel = sidePanel(page)
+            .locator(":scope > .side-panel__header .tabstrip-tab__label")
+            .filter({ hasText: "Terminal" });
+          await expect
+            .poll(() =>
+              terminalLabel.evaluate((label) => {
+                const element = label as HTMLElement;
+                return {
+                  fits: element.scrollWidth <= element.clientWidth + 1,
+                  mask: getComputedStyle(element).maskImage,
+                };
+              }),
+            )
+            .toEqual({ fits: true, mask: "none" });
         },
       );
     },

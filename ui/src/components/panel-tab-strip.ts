@@ -61,6 +61,25 @@ function focusNeedsRecovery(element: Element, current: Element | null): boolean 
   );
 }
 
+function panelTabLabelOverflowRef() {
+  let resizeObserver: ResizeObserver | null = null;
+  return (element: Element | undefined) => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    if (!(element instanceof HTMLElement)) {
+      return;
+    }
+    const update = () => {
+      element.classList.toggle("is-overflowing", element.scrollWidth > element.clientWidth + 1);
+    };
+    update();
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(update);
+      resizeObserver.observe(element);
+    }
+  };
+}
+
 function reconcileSelectedTabElement(
   element: Element | undefined,
   tabOrder: string,
@@ -271,7 +290,9 @@ export function renderPanelTabStrip(params: {
               ${tab.icon == null || tab.icon === nothing
                 ? nothing
                 : html`<span class="tabstrip-tab__icon" aria-hidden="true">${tab.icon}</span>`}
-              <span class="tabstrip-tab__label">${tab.label}</span>
+              <span class="tabstrip-tab__label" ${ref(panelTabLabelOverflowRef())}
+                >${tab.label}</span
+              >
               ${tab.badge ? html`<span class="tabstrip-tab__badge">${tab.badge}</span>` : nothing}
               ${tab.statusLabel
                 ? html`<span class="tabstrip-tab__status">${tab.statusLabel}</span>`

@@ -426,6 +426,9 @@ openclaw-chat-sidebar-region,
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: clip;
+}
+
+.side-panel__header .tabstrip-tab__label.is-overflowing {
   -webkit-mask-image: linear-gradient(to right, black calc(100% - 14px), transparent);
   mask-image: linear-gradient(to right, black calc(100% - 14px), transparent);
 }
