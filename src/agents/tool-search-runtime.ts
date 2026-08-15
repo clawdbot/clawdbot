@@ -269,11 +269,19 @@ export function readToolSearchCallArgs(
   return { id, input: { ...dottedInput, ...flattenedInput } };
 }
 
-function hasDispatcherSelector(record: Record<string, unknown>): boolean {
-  return ["id", "toolId", "name"].some((key) => {
+// Both tool_call/tool_describe schemas require the literal `id` key; `toolId`
+// and `name` are dispatcher-level aliases that readToolSearchId/readToolSearchCallArgs
+// resolve, but Value.Check has no knowledge of that fallback and rejects a
+// selector that only carries an alias. Hoisting must canonicalize whichever
+// alias it finds into `id`, not just relocate it a level up.
+function readDispatcherSelectorValue(record: Record<string, unknown>): string | undefined {
+  for (const key of ["id", "toolId", "name"] as const) {
     const value = record[key];
-    return typeof value === "string" && value.trim().length > 0;
-  });
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -284,18 +292,24 @@ function hasDispatcherSelector(record: Record<string, unknown>): boolean {
  * before `readToolSearchId`/`readToolSearchCallArgs` ever run, and the model has
  * no way to recover (#124084). Only acts when the outer object carries no
  * selector of its own and the nested object carries one, so a genuinely
- * malformed or selector-less call is still rejected exactly as before.
+ * malformed or selector-less call is still rejected exactly as before. The
+ * nested selector is canonicalized to `id` (whether it arrived as `id`,
+ * `toolId`, or `name`) since the schema itself only recognizes `id`.
  */
 export function prepareToolSearchDispatcherArguments(args: unknown): unknown {
-  if (!isRecord(args) || hasDispatcherSelector(args)) {
+  if (!isRecord(args) || readDispatcherSelectorValue(args) !== undefined) {
     return args;
   }
   const nestedInput = args.args ?? args.input;
-  if (!isRecord(nestedInput) || !hasDispatcherSelector(nestedInput)) {
+  if (!isRecord(nestedInput)) {
+    return args;
+  }
+  const selectorValue = readDispatcherSelectorValue(nestedInput);
+  if (selectorValue === undefined) {
     return args;
   }
   const { args: _wrappedArgs, input: _wrappedInput, ...outerRest } = args;
-  return { ...outerRest, ...nestedInput };
+  return { ...outerRest, ...nestedInput, id: selectorValue };
 }
 
 function getTelemetry(catalog: ToolSearchCatalogSession) {

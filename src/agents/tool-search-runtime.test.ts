@@ -277,9 +277,14 @@ describe("Tool Search dispatcher argument preparation", () => {
       expected: { id: "example_tool", args: { path: "/x" } },
     },
     {
-      label: "args-wrapped toolId/name aliases",
+      label: "args-wrapped toolId alias, canonicalized to id",
       input: { args: { toolId: "example_tool" } },
-      expected: { toolId: "example_tool" },
+      expected: { id: "example_tool", toolId: "example_tool" },
+    },
+    {
+      label: "args-wrapped name alias, canonicalized to id",
+      input: { args: { name: "example_tool" } },
+      expected: { id: "example_tool", name: "example_tool" },
     },
     {
       label: "sibling keys alongside the wrapper are preserved",
@@ -316,6 +321,34 @@ describe("Tool Search dispatcher argument preparation", () => {
     expect(target.execute).toHaveBeenCalledOnce();
     expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ path: "/x" });
   });
+
+  it.each([
+    { label: "toolId", key: "toolId" as const },
+    { label: "name", key: "name" as const },
+  ])(
+    "admits a double-wrapped tool_call payload with a nested $label alias through the real schema and dispatch",
+    async ({ key }) => {
+      const target = fakeTool("inspect_resource");
+      const { catalogRef, config } = createRuntime([target]);
+      const callTool = createToolSearchTools({ catalogRef, config }).find(
+        (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
+      );
+      expect(callTool).toBeDefined();
+
+      const doubleWrapped = { args: { [key]: "inspect_resource", args: { path: "/x" } } };
+      const prepared = callTool!.prepareArguments?.(doubleWrapped);
+      expect(prepared).toEqual({
+        id: "inspect_resource",
+        [key]: "inspect_resource",
+        args: { path: "/x" },
+      });
+      expect(Value.Check(callTool!.parameters, prepared)).toBe(true);
+
+      await callTool!.execute("double-wrapped-alias-call", prepared);
+      expect(target.execute).toHaveBeenCalledOnce();
+      expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ path: "/x" });
+    },
+  );
 
   it("still rejects a double-wrapped payload with no readable selector", async () => {
     const target = fakeTool("inspect_resource");
