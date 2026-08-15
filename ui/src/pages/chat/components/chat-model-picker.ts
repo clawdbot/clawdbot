@@ -39,6 +39,8 @@ type ChatModelPickerParams = {
   open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
   selectedModelValue: string;
+  /** Recorded user pin, so the footer never offers a reset for an inherited default. */
+  sessionModelPinned: boolean;
   sessionKey: string;
   triggerModelLabel: string;
   triggerStatusLabel?: string;
@@ -613,14 +615,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       ${params.contextWindow
                         ? renderContextWindowControl(params.contextWindow, params.sessionKey)
                         : nothing}
-                      ${params.modelOptions.length > 0 && params.selectedModelValue !== ""
+                      ${params.sessionModelPinned && params.modelOptions.length > 0
                         ? html`<footer class="chat-controls__model-provenance">
-                            <span>${t("chat.modelControls.sessionOverride")}</span>
-                            <openclaw-tooltip
-                              .content=${t("chat.modelControls.resetToDefault", {
-                                model: defaultModelOption?.label ?? params.triggerModelLabel,
-                              })}
-                            >
+                            <span>${t("chat.modelControls.onlyForSession")}</span>
                               <button
                                 class="chat-controls__model-reset"
                                 data-chat-model-reset="true"
@@ -649,9 +646,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                   }
                                 }}
                               >
-                                ${t("chat.modelControls.useDefault")}
+                                ${t("chat.modelControls.useDefaultModel", { model: params.defaultModelLabel })}
                               </button>
-                            </openclaw-tooltip>
+
                           </footer>`
                         : nothing}
                     `

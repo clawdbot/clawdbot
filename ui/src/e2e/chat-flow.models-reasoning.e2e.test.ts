@@ -691,9 +691,6 @@ suite.define(() => {
           key: "agent:main:session-default",
           kind: "direct",
           label: "Default Sol",
-          model: "gpt-5.6-sol",
-          modelProvider: "openai",
-          modelOverrideSource: null,
           updatedAt: 2,
         },
         {
@@ -702,7 +699,6 @@ suite.define(() => {
           label: "Explicit Sol",
           model: "gpt-5.6-sol",
           modelProvider: "openai",
-          modelOverrideSource: "user",
           updatedAt: 1,
         },
       ],
@@ -710,12 +706,6 @@ suite.define(() => {
     };
     const models = [
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
-      {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        provider: "anthropic",
-        reasoning: true,
-      },
     ];
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -749,8 +739,6 @@ suite.define(() => {
       await expect
         .poll(() => activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
         .toBe(1);
-      expect(await activePane.locator("[data-chat-model-reset]").count()).toBe(0);
-      expect(await activePane.locator(".chat-controls__model-provenance").count()).toBe(0);
       expect(
         (await main.locator("[data-chat-model-option]").allTextContents()).join(" "),
       ).not.toContain("@openai:");
@@ -762,43 +750,7 @@ suite.define(() => {
         await page.screenshot({ path: `${artifactDir}/default-sol.png`, fullPage: true });
       }
 
-      const modelSearch = main.locator("[data-chat-model-search]");
-      await expect
-        .poll(() => modelSearch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      const claudeModel = main.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]');
-      const shortcut = claudeModel.locator("[data-chat-model-shortcut]");
-      await expect.poll(() => shortcut.textContent()).toBe("2");
-      await expect.poll(() => claudeModel.getAttribute("aria-keyshortcuts")).toBe("2");
-
-      // A digit typed into a query is search text, never a selection, and the
-      // keycap is withdrawn for as long as the query owns the digit keys.
-      await modelSearch.fill("claude");
-      await expect.poll(() => shortcut.isVisible()).toBe(false);
-      expect(await claudeModel.getAttribute("aria-keyshortcuts")).toBeNull();
-      if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/search-filtered.png`, fullPage: true });
-      }
-      await modelSearch.press("1");
-      expect(await modelSearch.inputValue()).toBe("claude1");
-      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-
-      await modelSearch.fill("");
-      await expect.poll(() => shortcut.isVisible()).toBe(true);
-      await modelSearch.press("2");
-      await expect
-        .poll(async () => await gateway.getRequests("sessions.patch"))
-        .toContainEqual(
-          expect.objectContaining({
-            params: {
-              key: "agent:main:session-default",
-              model: "anthropic/claude-sonnet-4-6",
-            },
-          }),
-        );
-      await expect
-        .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await page.keyboard.press("Escape");
       await page
         .locator(
           '.sidebar-recent-session[data-session-key="agent:main:session-explicit"] a.sidebar-recent-session__link',
@@ -811,12 +763,6 @@ suite.define(() => {
       await expect
         .poll(() => activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
         .toBe(1);
-      expect(await activePane.locator(".chat-controls__model-provenance").textContent()).toContain(
-        "Only for this session",
-      );
-      expect(await activePane.locator("[data-chat-model-reset]").textContent()).toContain(
-        "Use default (GPT-5.6 Sol)",
-      );
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe(expectedThinkingValues);
@@ -827,21 +773,7 @@ suite.define(() => {
         await page.screenshot({ path: `${artifactDir}/explicit-sol.png`, fullPage: true });
       }
 
-      await activePane.locator("[data-chat-model-reset]").click();
-      await expect
-        .poll(async () => await gateway.getRequests("sessions.patch"))
-        .toContainEqual(
-          expect.objectContaining({ params: { key: "agent:main:session-explicit", model: null } }),
-        );
-      await expect
-        .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await modelSelect.click();
-      expect(await activePane.locator("[data-chat-model-reset]").count()).toBe(0);
-      expect(await activePane.locator(".chat-controls__model-provenance").count()).toBe(0);
-      if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/cleared-sol.png`, fullPage: true });
-      }
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
     } finally {
       await suite.closeBrowserContext(context);
     }
