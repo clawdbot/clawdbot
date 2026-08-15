@@ -446,3 +446,112 @@ describe("preemptive-compaction", () => {
     expect(result.shouldCompact).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Measured anchor (W10 Lane A): the precheck must trust the provider's own
+// billed usage over the char-ratio estimate. The char estimate over-counted a
+// real 44,984-token session as 64,001 (tool results at 2 chars/token, then
+// x1.2 SAFETY_MARGIN) and rejected prompts that FIT -- every web turn died at
+// our own precheck while two thirds of the model's window sat unused.
+// ---------------------------------------------------------------------------
+
+function makeAssistantWithUsage(usage: {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "measured reply" }],
+    timestamp: timestamp++,
+    usage: {
+      input: usage.input,
+      output: usage.output,
+      cacheRead: usage.cacheRead ?? 0,
+      cacheWrite: usage.cacheWrite ?? 0,
+      totalTokens: usage.input + usage.output + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0),
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  } as unknown as AgentMessage;
+}
+
+describe("measured prompt anchor", () => {
+  // A tool-heavy history whose CHAR estimate is enormous: tool results are
+  // charged at 2 chars/token, so ~600k chars estimates to >360k "tokens".
+  const fatToolText = "x".repeat(200_000);
+
+  it("reports the last usage-bearing assistant's billed total", async () => {
+    const { resolveMeasuredPromptAnchorTokens } = await import("./preemptive-compaction.js");
+    const messages: AgentMessage[] = [
+      makeAssistantWithUsage({ input: 999_999, output: 1 }),
+      makeAssistantWithUsage({ input: 1_000, output: 500, cacheRead: 40_000, cacheWrite: 3_000 }),
+    ];
+    expect(resolveMeasuredPromptAnchorTokens(messages)).toBe(1_000 + 500 + 40_000 + 3_000);
+  });
+
+  it("admits a prompt the char estimate would reject, when usage proves it fits", () => {
+    const history: AgentMessage[] = [
+      makeToolResultMessage(fatToolText),
+      makeToolResultMessage(fatToolText),
+      makeToolResultMessage(fatToolText),
+      // The provider ALREADY billed this exact context: 45k prompt tokens.
+      makeAssistantWithUsage({ input: 900, output: 150, cacheRead: 44_000 }),
+    ];
+    const withAnchor = shouldPreemptivelyCompactBeforePrompt({
+      messages: history,
+      systemPrompt: "sys",
+      prompt: "short follow-up question",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    });
+    expect(withAnchor.route).toBe("fits");
+    expect(withAnchor.pressureSource).toBe("measured_anchor");
+    expect(withAnchor.estimatedPromptTokens).toBeLessThan(50_000);
+
+    // CONTROL -- the failing state this feature fixes: strip the usage and the
+    // identical history is rejected on arithmetic alone. If this control ever
+    // stops overflowing, the fixture no longer exercises the defect.
+    const withoutUsage = shouldPreemptivelyCompactBeforePrompt({
+      messages: history.slice(0, 3).concat(makeAssistantHistory("measured reply")),
+      systemPrompt: "sys",
+      prompt: "short follow-up question",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    });
+    expect(withoutUsage.route).not.toBe("fits");
+    expect(withoutUsage.pressureSource).toBe("transcript_estimate");
+  });
+
+  it("still counts the unmeasured suffix after the anchor", () => {
+    const history: AgentMessage[] = [
+      makeAssistantWithUsage({ input: 100_000, output: 5_000 }),
+      // ~120k chars of NEW tool results at 2 chars/token = ~60k tokens, x1.2.
+      makeToolResultMessage("y".repeat(120_000)),
+    ];
+    const decision = shouldPreemptivelyCompactBeforePrompt({
+      messages: history,
+      systemPrompt: "sys",
+      prompt: "q",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    });
+    expect(decision.pressureSource).toBe("measured_anchor");
+    expect(decision.estimatedPromptTokens).toBeGreaterThan(128_000 - 20_000);
+    expect(decision.route).not.toBe("fits");
+  });
+
+  it("ignores zeroed usage and falls back to the char estimate", async () => {
+    const { resolveMeasuredPromptAnchorTokens } = await import("./preemptive-compaction.js");
+    const messages: AgentMessage[] = [makeAssistantWithUsage({ input: 0, output: 0 })];
+    expect(resolveMeasuredPromptAnchorTokens(messages)).toBeUndefined();
+    const decision = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "q",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    });
+    expect(decision.pressureSource).toBe("transcript_estimate");
+  });
+});

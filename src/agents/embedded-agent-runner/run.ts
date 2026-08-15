@@ -179,6 +179,7 @@ import {
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import { resolveMeasuredPromptAnchorTokens } from "./run/preemptive-compaction.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import {
   buildBeforeModelResolveAttachments,
@@ -2032,7 +2033,15 @@ export async function runEmbeddedAgent(
             const overflowDiagId = createCompactionDiagId();
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
-            const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
+            // Provider-reported count from the error text when the provider
+            // rejected; otherwise the session's own measured anchor (the last
+            // assistant call's billed prompt+output). "unknown" survives only
+            // when NEITHER measurement exists (pre-first-call session) -- a
+            // precheck rejection of a session that has completed a turn now
+            // always reports a real number.
+            const observedOverflowTokens =
+              extractObservedOverflowTokenCount(errorText) ??
+              resolveMeasuredPromptAnchorTokens(attempt.messagesSnapshot);
             const overflowTokenCountForCompaction =
               observedOverflowTokens ??
               (ctxInfo.tokens > 0

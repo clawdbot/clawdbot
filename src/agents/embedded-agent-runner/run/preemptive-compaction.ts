@@ -215,12 +215,107 @@ export function estimateRenderedLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
+type MeasuredPromptAnchor = {
+  /** Provider-reported prompt+output tokens of the last assistant call. */
+  baseTokens: number;
+  /** Index of the anchoring assistant message inside the scanned array. */
+  anchorIndex: number;
+};
+
+function toFiniteNonNegative(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return value;
+}
+
+/**
+ * Find the newest assistant message carrying real provider usage. Everything
+ * up to and including that call has a MEASURED size: the provider billed
+ * `input + cacheRead + cacheWrite` prompt tokens for the full context
+ * (system prompt, tools, history) and `output` for the reply, so the next
+ * prompt's true size is that total plus only the messages appended since.
+ *
+ * Char-ratio estimation is kept ONLY for the unmeasured suffix. This exists
+ * because the pure char estimate over-counted a real 44,984-token session as
+ * 64,001 (tool results are charged at 2 chars/token, then everything x1.2
+ * SAFETY_MARGIN) and rejected prompts that fit with a third of the model's
+ * window to spare -- an empty turn born entirely from arithmetic.
+ *
+ * Returns undefined when no assistant message carries usable usage (fresh
+ * session, or compaction replaced history) -- callers fall back to the char
+ * estimate, which is the pre-existing behavior.
+ */
+function resolveMeasuredPromptAnchor(messages: AgentMessage[]): MeasuredPromptAnchor | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const record = messages[index] as unknown as Record<string, unknown>;
+    if (record.role !== "assistant" || !isRecord(record.usage)) {
+      continue;
+    }
+    const usage = record.usage as Record<string, unknown>;
+    const input = toFiniteNonNegative(usage.input);
+    const output = toFiniteNonNegative(usage.output);
+    if (input === undefined || output === undefined) {
+      continue;
+    }
+    const promptTokens =
+      input +
+      (toFiniteNonNegative(usage.cacheRead) ?? 0) +
+      (toFiniteNonNegative(usage.cacheWrite) ?? 0);
+    if (promptTokens <= 0) {
+      // Zeroed usage (provider did not report) is not a measurement.
+      continue;
+    }
+    return { baseTokens: promptTokens + output, anchorIndex: index };
+  }
+  return undefined;
+}
+
+/** The anchor's measured token total, for diagnostics (observedTokens=...). */
+export function resolveMeasuredPromptAnchorTokens(
+  messages: AgentMessage[] | undefined,
+): number | undefined {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return undefined;
+  }
+  return resolveMeasuredPromptAnchor(messages)?.baseTokens;
+}
+
+export function estimatePrePromptTokensWithSource(params: {
+  messages: AgentMessage[];
+  systemPrompt?: string;
+  prompt: string;
+}): { estimatedPromptTokens: number; source: string } {
+  const anchor = resolveMeasuredPromptAnchor(params.messages);
+  if (!anchor) {
+    return {
+      estimatedPromptTokens: estimateLlmBoundaryTokenPressure(params),
+      source: "transcript_estimate",
+    };
+  }
+  const suffixTokens = params.messages
+    .slice(anchor.anchorIndex + 1)
+    .reduce((sum, message) => sum + estimateMessageTokenPressure(message), 0);
+  const promptTokens =
+    MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.prompt);
+  // The system prompt is already inside the anchor's measured input tokens;
+  // re-adding it would double-count the whole bootstrap. SAFETY_MARGIN
+  // applies only to the estimated suffix -- the measured base needs none.
+  return {
+    estimatedPromptTokens: Math.max(
+      0,
+      anchor.baseTokens + Math.ceil((suffixTokens + promptTokens) * SAFETY_MARGIN),
+    ),
+    source: "measured_anchor",
+  };
+}
+
 export function estimatePrePromptTokens(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
 }): number {
-  return estimateLlmBoundaryTokenPressure(params);
+  return estimatePrePromptTokensWithSource(params).estimatedPromptTokens;
 }
 
 function normalizeLlmBoundaryTokenPressure(
@@ -253,24 +348,27 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   const llmBoundaryTokenPressure = normalizeLlmBoundaryTokenPressure(
     params.llmBoundaryTokenPressure,
   );
+  const basePressure = estimatePrePromptTokensWithSource({
+    messages: params.messages,
+    systemPrompt: params.systemPrompt,
+    prompt: params.prompt,
+  });
   let estimatedPromptTokens =
-    llmBoundaryTokenPressure?.estimatedPromptTokens ??
-    estimatePrePromptTokens({
-      messages: params.messages,
-      systemPrompt: params.systemPrompt,
-      prompt: params.prompt,
-    });
-  let pressureSource = llmBoundaryTokenPressure?.source ?? "transcript_estimate";
+    llmBoundaryTokenPressure?.estimatedPromptTokens ?? basePressure.estimatedPromptTokens;
+  let pressureSource = llmBoundaryTokenPressure?.source ?? basePressure.source;
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
-    const unwindowedEstimatedPromptTokens = estimatePrePromptTokens({
+    const unwindowedPressure = estimatePrePromptTokensWithSource({
       messages: params.unwindowedMessages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
     });
-    if (unwindowedEstimatedPromptTokens > estimatedPromptTokens) {
-      estimatedPromptTokens = unwindowedEstimatedPromptTokens;
+    if (unwindowedPressure.estimatedPromptTokens > estimatedPromptTokens) {
+      estimatedPromptTokens = unwindowedPressure.estimatedPromptTokens;
       messagesForPressure = params.unwindowedMessages;
-      pressureSource = "unwindowed_transcript_estimate";
+      pressureSource =
+        unwindowedPressure.source === "measured_anchor"
+          ? "unwindowed_measured_anchor"
+          : "unwindowed_transcript_estimate";
     }
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
