@@ -42,11 +42,8 @@ type CodexRealtimeAudioPeerFactory = (
 const createAudioPeer: CodexRealtimeAudioPeerFactory = (callbacks, signal) =>
   RealtimeWebRtcAudioPeer.create({
     callbacks,
+    diagnosticLabel: "Codex realtime",
     signal,
-    loadDependencies: async () => {
-      const [werift, libopus] = await Promise.all([import("werift"), import("libopus-wasm")]);
-      return { werift, libopus };
-    },
   });
 
 class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {

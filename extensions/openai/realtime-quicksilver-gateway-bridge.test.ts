@@ -1,13 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { REALTIME_WEBRTC_RELAY_FRAME_BYTES as OPENAI_QUICKSILVER_RELAY_FRAME_BYTES } from "openclaw/plugin-sdk/realtime-voice";
-import { describe, expect, it, vi } from "vitest";
-import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
-import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
-  OpenAIQuicksilverAudioPeer,
-  type OpenAIQuicksilverAudioPeerCallbacks,
-  type OpenAIQuicksilverAudioPeerContract,
-} from "./realtime-quicksilver-peer.runtime.js";
+  RealtimeWebRtcAudioPeer,
+  type RealtimeWebRtcAudioPeerCallbacks as OpenAIQuicksilverAudioPeerCallbacks,
+  type RealtimeWebRtcAudioPeerContract as OpenAIQuicksilverAudioPeerContract,
+  RealtimeWebRtcPendingAudio as OpenAIQuicksilverPendingAudio,
+  REALTIME_WEBRTC_RELAY_FRAME_BYTES as OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
+} from "openclaw/plugin-sdk/realtime-voice";
+import { describe, expect, it, vi } from "vitest";
+import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
   releaseOpenAIQuicksilverSession,
   reserveOpenAIQuicksilverSession,
@@ -22,6 +22,13 @@ import {
   FakeSocket,
   parseSent,
 } from "./realtime-quicksilver.test-helpers.js";
+
+const OpenAIQuicksilverAudioPeer = {
+  create: (params: Parameters<typeof RealtimeWebRtcAudioPeer.create>[0]) =>
+    RealtimeWebRtcAudioPeer.create({ ...params, diagnosticLabel: "GPT-Live" }),
+  convertRelayPcm: (pcm: Buffer) => RealtimeWebRtcAudioPeer.convertRelayPcm(pcm),
+  convertQuicksilverPcm: (pcm: Int16Array) => RealtimeWebRtcAudioPeer.convertWebRtcPcm(pcm),
+};
 
 function createRelayTone(): Buffer {
   const pcm = Buffer.alloc(480 * 2);
@@ -528,11 +535,12 @@ describe("GPT-Live werift audio peer", () => {
     const { RTCPeerConnection } = await import("werift");
     const closePeer = vi.spyOn(RTCPeerConnection.prototype, "close");
     try {
-      const { OpenAIQuicksilverAudioPeer: ReloadedPeer } =
-        await import("./realtime-quicksilver-peer.runtime.js");
+      const { RealtimeWebRtcAudioPeer: ReloadedPeer } =
+        await import("openclaw/plugin-sdk/realtime-voice");
       await expect(
         ReloadedPeer.create({
           callbacks: { onAudio: vi.fn(), onError: vi.fn() },
+          diagnosticLabel: "GPT-Live",
           iceServers: [],
         }),
       ).rejects.toThrow("decoder init failed");
@@ -568,10 +576,11 @@ describe("GPT-Live werift audio peer", () => {
     const closePeer = vi.spyOn(RTCPeerConnection.prototype, "close");
     const controller = new AbortController();
     try {
-      const { OpenAIQuicksilverAudioPeer: ReloadedPeer } =
-        await import("./realtime-quicksilver-peer.runtime.js");
+      const { RealtimeWebRtcAudioPeer: ReloadedPeer } =
+        await import("openclaw/plugin-sdk/realtime-voice");
       const creation = ReloadedPeer.create({
         callbacks: { onAudio: vi.fn(), onError: vi.fn() },
+        diagnosticLabel: "GPT-Live",
         iceServers: [],
         signal: controller.signal,
       });

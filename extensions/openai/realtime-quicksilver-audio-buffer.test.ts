@@ -1,6 +1,8 @@
-import { REALTIME_WEBRTC_RELAY_FRAME_BYTES as OPENAI_QUICKSILVER_RELAY_FRAME_BYTES } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  RealtimeWebRtcPendingAudio as OpenAIQuicksilverPendingAudio,
+  REALTIME_WEBRTC_RELAY_FRAME_BYTES as OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
-import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 
 const MAX_PENDING_AUDIO_BYTES = OPENAI_QUICKSILVER_RELAY_FRAME_BYTES * 250;
 

@@ -20,10 +20,6 @@ const RTP_SEQUENCE_HALF_RANGE = RTP_SEQUENCE_MODULUS / 2;
 
 type WeriftModule = typeof import("werift");
 type LibopusModule = typeof import("libopus-wasm");
-type RealtimeWebRtcAudioPeerDependencies = {
-  werift: WeriftModule;
-  libopus: LibopusModule;
-};
 type WeriftPeerConnection = InstanceType<WeriftModule["RTCPeerConnection"]>;
 type WeriftTransceiver = ReturnType<WeriftPeerConnection["addTransceiver"]>;
 type WeriftRtpPacket = InstanceType<WeriftModule["RtpPacket"]>;
@@ -94,10 +90,9 @@ export class RealtimeWebRtcAudioPeer implements RealtimeWebRtcAudioPeerContract 
     callbacks: RealtimeWebRtcAudioPeerCallbacks;
     diagnosticLabel?: string;
     iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
-    loadDependencies: () => Promise<RealtimeWebRtcAudioPeerDependencies>;
     signal?: AbortSignal;
   }): Promise<RealtimeWebRtcAudioPeer> {
-    const { werift, libopus } = await params.loadDependencies();
+    const [werift, libopus] = await Promise.all([import("werift"), import("libopus-wasm")]);
     params.signal?.throwIfAborted();
     const peer = new werift.RTCPeerConnection({
       codecs: {

@@ -1,11 +1,11 @@
-import { REALTIME_WEBRTC_RELAY_FRAME_BYTES as OPENAI_QUICKSILVER_RELAY_FRAME_BYTES } from "openclaw/plugin-sdk/realtime-voice";
-import { describe, expect, it, vi } from "vitest";
-import type { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
-import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
-  OpenAIQuicksilverAudioPeer,
-  type OpenAIQuicksilverAudioPeerContract,
-} from "./realtime-quicksilver-peer.runtime.js";
+  RealtimeWebRtcAudioPeer as OpenAIQuicksilverAudioPeer,
+  type RealtimeWebRtcAudioPeerContract as OpenAIQuicksilverAudioPeerContract,
+  type RealtimeWebRtcPendingAudio as OpenAIQuicksilverPendingAudio,
+  REALTIME_WEBRTC_RELAY_FRAME_BYTES as OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
+} from "openclaw/plugin-sdk/realtime-voice";
+import { describe, expect, it, vi } from "vitest";
+import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { createCallResponse, FakeSocket } from "./realtime-quicksilver.test-helpers.js";
 
 const MAX_PENDING_RELAY_FRAMES = 250;
@@ -92,6 +92,7 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
     }
     const peer = await OpenAIQuicksilverAudioPeer.create({
       callbacks: peerCallbacks,
+      diagnosticLabel: "GPT-Live",
       iceServers: [],
     });
     vi.spyOn(peer, "createOffer").mockResolvedValue("v=offer\r\n");

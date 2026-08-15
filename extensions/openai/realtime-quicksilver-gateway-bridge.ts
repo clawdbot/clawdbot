@@ -2,17 +2,15 @@
 import { randomUUID } from "node:crypto";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceBridgeCreateRequest,
+import {
+  RealtimeWebRtcPendingAudio as OpenAIQuicksilverPendingAudio,
+  type RealtimeVoiceBridge,
+  type RealtimeVoiceBridgeCreateRequest,
+  type RealtimeWebRtcAudioPeerCallbacks as OpenAIQuicksilverAudioPeerCallbacks,
+  type RealtimeWebRtcAudioPeerContract as OpenAIQuicksilverAudioPeerContract,
 } from "openclaw/plugin-sdk/realtime-voice";
 import WebSocket, { type RawData } from "ws";
-import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
-import type {
-  OpenAIQuicksilverAudioPeerCallbacks,
-  OpenAIQuicksilverAudioPeerContract,
-} from "./realtime-quicksilver-peer.runtime.js";
 import {
   releaseOpenAIQuicksilverSession,
   reserveOpenAIQuicksilverSession,
@@ -210,9 +208,12 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       const createPeer =
         this.config.createPeer ??
         (async (callbacks: OpenAIQuicksilverAudioPeerCallbacks, signal: AbortSignal) => {
-          const { OpenAIQuicksilverAudioPeer } =
-            await import("./realtime-quicksilver-peer.runtime.js");
-          return await OpenAIQuicksilverAudioPeer.create({ callbacks, signal });
+          const { RealtimeWebRtcAudioPeer } = await import("openclaw/plugin-sdk/realtime-voice");
+          return await RealtimeWebRtcAudioPeer.create({
+            callbacks,
+            diagnosticLabel: "GPT-Live",
+            signal,
+          });
         });
       const peerPromise = createPeer(
         {

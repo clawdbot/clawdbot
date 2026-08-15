@@ -1,12 +1,12 @@
 import { readCodexCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import {
+  RealtimeWebRtcAudioPeer as OpenAIQuicksilverAudioPeer,
+  type RealtimeWebRtcAudioPeerContract as OpenAIQuicksilverAudioPeerContract,
+  type RealtimeWebRtcPendingAudio as OpenAIQuicksilverPendingAudio,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it } from "vitest";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
-import type { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
-import {
-  OpenAIQuicksilverAudioPeer,
-  type OpenAIQuicksilverAudioPeerContract,
-} from "./realtime-quicksilver-peer.runtime.js";
 import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-quicksilver-session.js";
 import type { OpenAIQuicksilverAuth } from "./realtime-quicksilver-wire.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
@@ -186,7 +186,11 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
         logger: { debug: () => undefined, warn: () => undefined },
         resolveAuth: async () => ({ type: "api-key", token: apiKey }),
         createPeer: async (callbacks, signal): Promise<OpenAIQuicksilverAudioPeerContract> => {
-          const peer = await OpenAIQuicksilverAudioPeer.create({ callbacks, signal });
+          const peer = await OpenAIQuicksilverAudioPeer.create({
+            callbacks,
+            diagnosticLabel: "GPT-Live",
+            signal,
+          });
           peerCreated();
           await peerAdoption;
           return peer;

@@ -645,18 +645,12 @@ importers:
       '@openai/codex':
         specifier: 0.147.0
         version: 0.147.0
-      libopus-wasm:
-        specifier: 0.2.0
-        version: 0.2.0
       smol-toml:
         specifier: 1.7.1
         version: 1.7.1
       typebox:
         specifier: 1.3.6
         version: 1.3.6
-      werift:
-        specifier: 0.24.1
-        version: 0.24.1(supports-color@10.2.2)
       ws:
         specifier: 8.21.1
         version: 8.21.1
