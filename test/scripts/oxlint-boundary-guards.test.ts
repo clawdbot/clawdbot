@@ -16,7 +16,7 @@ const cases = [
   {
     rule: "openclaw-boundaries/no-widen-then-assert",
     violation: `${FIXTURES}/widen-then-assert-violation.test.ts`,
-    violations: 1,
+    violations: 3,
   },
 ];
 

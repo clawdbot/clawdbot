@@ -54,6 +54,7 @@ const FUNCTION_BOUNDARY_TYPES = new Set([
   "TSDeclareFunction",
   "TSEmptyBodyFunctionExpression",
 ]);
+const MAX_TRANSPARENT_ALIAS_DEPTH = 32;
 
 function unwrapExpressionParentheses(expression) {
   let current = expression;
@@ -144,6 +145,25 @@ function broadTypeKind(type) {
 
 function assertedExpression(node) {
   return unwrapExpressionParentheses(node.expression);
+}
+
+function assertedIdentifier(node) {
+  let expression = assertedExpression(node);
+  while (expression.type === "TSAsExpression" || expression.type === "TSTypeAssertion") {
+    expression = assertedExpression(expression);
+  }
+  return expression.type === "Identifier" ? expression : null;
+}
+
+function isNestedAssertion(node) {
+  let parent = node.parent;
+  while (parent?.type === "ParenthesizedExpression") {
+    parent = parent.parent;
+  }
+  return (
+    (parent?.type === "TSAsExpression" || parent?.type === "TSTypeAssertion") &&
+    assertedExpression(parent) === node
+  );
 }
 
 function assertionFromExpression(expression) {
@@ -339,6 +359,47 @@ function widenedBinding(variable, scopes) {
   return evidence === null ? null : { broadKind, evidence, declaredAt: declarator.end, boundary };
 }
 
+function resolveWidenedBinding(variable, scopes, boundary, assertedAt) {
+  const visitedVariables = new Set();
+  let current = variable;
+  for (let depth = 0; depth < MAX_TRANSPARENT_ALIAS_DEPTH; depth += 1) {
+    if (visitedVariables.has(current)) {
+      return null;
+    }
+    visitedVariables.add(current);
+
+    const widened = widenedBinding(current, scopes);
+    if (widened !== null) {
+      return widened;
+    }
+
+    const declarator = variableDeclarator(current);
+    if (
+      declarator === null ||
+      declarator.parent.type !== "VariableDeclaration" ||
+      declarator.parent.kind !== "const" ||
+      declarator.id.type !== "Identifier" ||
+      (declarator.id.typeAnnotation !== null && declarator.id.typeAnnotation !== undefined) ||
+      declarator.init === null ||
+      declarator.end >= assertedAt ||
+      current.references.some((reference) => reference.isWrite() && !reference.init) ||
+      functionBoundary(declarator) !== boundary
+    ) {
+      return null;
+    }
+
+    const initializer = unwrapExpressionParentheses(declarator.init);
+    if (initializer.type !== "Identifier") {
+      return null;
+    }
+    current = resolvedVariableForIdentifier(scopes, initializer);
+    if (current === null) {
+      return null;
+    }
+  }
+  return null;
+}
+
 function assertionIsNarrower(sourceText, broadKind, evidence, assertedType) {
   if (broadTypeKind(assertedType) !== null) {
     return false;
@@ -378,8 +439,11 @@ function noWidenThenAssertRule({ roots }) {
 
       let scopes = [];
       const checkAssertion = (node) => {
-        const expression = assertedExpression(node);
-        if (expression.type !== "Identifier") {
+        if (isNestedAssertion(node)) {
+          return;
+        }
+        const expression = assertedIdentifier(node);
+        if (expression === null) {
           return;
         }
 
@@ -387,11 +451,12 @@ function noWidenThenAssertRule({ roots }) {
         if (variable === null) {
           return;
         }
-        const widened = widenedBinding(variable, scopes);
+        const boundary = functionBoundary(node);
+        const widened = resolveWidenedBinding(variable, scopes, boundary, node.start);
         if (
           widened === null ||
           node.start <= widened.declaredAt ||
-          functionBoundary(node) !== widened.boundary ||
+          boundary !== widened.boundary ||
           !assertionIsNarrower(
             context.sourceCode.text,
             widened.broadKind,
