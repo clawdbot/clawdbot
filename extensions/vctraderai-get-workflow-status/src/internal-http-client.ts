@@ -133,9 +133,7 @@ export class BffRequestError extends Error {
     // the message is what the tool runner shows the model.
     const summary = `vctraderai bff request failed: ${detail.code} (${detail.status}) ${detail.message}`;
     super(
-      detail.retrySuggestion
-        ? `${summary} — retry_suggestion: ${detail.retrySuggestion}`
-        : summary,
+      detail.retrySuggestion ? `${summary} — retry_suggestion: ${detail.retrySuggestion}` : summary,
     );
     this.name = "BffRequestError";
     this.detail = detail;
@@ -196,12 +194,14 @@ export function createBffFetch(deps: BffClientDeps = {}): BffFetchFn {
     assertAllowlistedPath(path);
     const baseUrl = readEnv("PFM_BFF_BASE_URL") ?? DEFAULT_BFF_BASE_URL;
     const token = readEnv("OPENCLAW_GATEWAY_TOKEN");
+    const workspaceId = readEnv("PFM_AGENT_WORKSPACE_ID") ?? readEnv("PFM_WORKSPACE_ID");
     const queryString = buildQueryString(options.query);
     const url = `${baseUrl}${path}${queryString}`;
     const effectiveThreadId = options.threadId ?? boundThreadId;
     const headers: Record<string, string> = {
       accept: "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : undefined),
+      ...(workspaceId ? { "x-openclaw-workspace": workspaceId } : undefined),
       ...(effectiveThreadId ? { "x-openclaw-thread": effectiveThreadId } : undefined),
       ...options.headers,
     };

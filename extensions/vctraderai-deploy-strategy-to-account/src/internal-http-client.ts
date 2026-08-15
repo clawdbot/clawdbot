@@ -203,6 +203,7 @@ export function createBffFetch(deps: BffClientDeps = {}): BffFetchFn {
     assertAllowlistedPath(path);
     const baseUrl = readEnv("PFM_BFF_BASE_URL") ?? DEFAULT_BFF_BASE_URL;
     const token = readEnv("OPENCLAW_GATEWAY_TOKEN");
+    const workspaceId = readEnv("PFM_AGENT_WORKSPACE_ID") ?? readEnv("PFM_WORKSPACE_ID");
     const queryString = buildQueryString(options.query);
     const url = `${baseUrl}${path}${queryString}`;
     const hasBody = options.body !== undefined;
@@ -211,6 +212,7 @@ export function createBffFetch(deps: BffClientDeps = {}): BffFetchFn {
       accept: "application/json",
       ...(hasBody ? { "content-type": "application/json" } : undefined),
       ...(token ? { authorization: `Bearer ${token}` } : undefined),
+      ...(workspaceId ? { "x-openclaw-workspace": workspaceId } : undefined),
       ...(effectiveThreadId ? { "x-openclaw-thread": effectiveThreadId } : undefined),
       ...options.headers,
     };
