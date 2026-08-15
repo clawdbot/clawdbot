@@ -463,6 +463,71 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
   });
 
+  it("keeps a post-handoff silent final instead of recovering the pre-tool answer", async () => {
+    const projector = await createProjector(await createParams());
+    const lateTool = {
+      type: "commandExecution",
+      id: "late-tool",
+      command: "/bin/bash -lc 'printf late'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "late",
+      exitCode: 0,
+      durationMs: 1,
+    };
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { ...lateTool, status: "inProgress", aggregatedOutput: null, exitCode: null },
+      }),
+    );
+    await projector.handleNotification(forCurrentTurn("item/completed", { item: lateTool }));
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("NO_REPLY", "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: "NO_REPLY",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
+  });
+
   it("does not reselect a final answer superseded by late tool work", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({

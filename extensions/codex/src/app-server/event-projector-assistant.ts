@@ -314,10 +314,18 @@ export class CodexAssistantProjection {
 
   collectAssistantTexts(): string[] {
     const afterHandoff = this.collectPersistableAssistantTexts(this.persistableAssistantBarrier);
-    if (afterHandoff.length > 0) {
-      return afterHandoff;
+    const audibleAfterHandoff = afterHandoff.filter((text) => !isSilentReplyText(text));
+    if (audibleAfterHandoff.length > 0) {
+      return audibleAfterHandoff;
     }
-    const recoveredAudible = this.collectPersistableAssistantTexts(0);
+    // A post-handoff silent token is the new terminal identity. Recover a
+    // pre-barrier answer only when that segment has no persistable text.
+    if (afterHandoff.length > 0) {
+      return afterHandoff.slice(-1);
+    }
+    const recoveredAudible = this.collectPersistableAssistantTexts(0).filter(
+      (text) => !isSilentReplyText(text),
+    );
     if (recoveredAudible.length > 0) {
       return recoveredAudible.slice(-1);
     }
@@ -589,7 +597,7 @@ export class CodexAssistantProjection {
       }
     }
     texts.reverse();
-    return texts.filter((text) => !isSilentReplyText(text));
+    return texts;
   }
 
   private noteNativeWorkBarrier(item: CodexThreadItem | undefined): void {
