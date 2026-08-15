@@ -389,7 +389,6 @@ describe("registerDirectoryCli", () => {
     if (mode === "JSON") {
       const payload = JSON.parse(runtimeState.runtimeLogs.at(-1) ?? "");
       expect(payload).toEqual({ error: error.message });
-      expect(Object.keys(payload)).toEqual(["error"]);
       expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
     } else {
       expect(runtimeErrors()).toEqual([error.message]);

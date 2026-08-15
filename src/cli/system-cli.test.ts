@@ -135,7 +135,6 @@ describe("system-cli", () => {
     if (mode === "JSON") {
       const payload = JSON.parse(runtimeLogs.at(-1) ?? "");
       expect(payload).toEqual({ error: error.message });
-      expect(Object.keys(payload)).toEqual(["error"]);
       expect(runtimeErrors).toEqual([]);
     } else {
       expect(runtimeErrors).toEqual([error.message]);
