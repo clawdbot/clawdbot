@@ -308,7 +308,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   };
 
   const createHandle = (
-    entry: Omit<NodeTunnelEntry, "handle">,
+    entry: Omit<NodeTunnelEntry, "handle" | "readiness">,
     restoredWorkspace: NodeWorkerWorkspaceBinding | undefined,
   ): { handle: WorkerTunnelHandle; validateRestoredWorkspace: () => Promise<void> } => {
     let workspaceReady = restoredWorkspace !== undefined;
@@ -674,9 +674,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         };
         const readiness = createDeferredCore<WorkerTunnelHandle>();
         void readiness.promise.catch(() => undefined);
-        const pendingEntry = Object.assign(base, { readiness });
-        const created = createHandle(pendingEntry, restoredWorkspace);
-        const entry = Object.assign(pendingEntry, { handle: created.handle });
+        const created = createHandle(base, restoredWorkspace);
+        const entry = Object.assign(base, { readiness, handle: created.handle });
         entries.set(entry.environmentId, entry);
         try {
           await created.validateRestoredWorkspace();
