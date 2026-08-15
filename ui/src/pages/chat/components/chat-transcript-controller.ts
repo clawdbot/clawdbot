@@ -101,8 +101,36 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   // re-invoke them for every visible row and re-measure each row every render.
   // Lit tracks the last element per callback, so each row needs its own.
   private readonly scrollElementRef = (element?: Element) => {
-    this.threadInnerElement = element instanceof HTMLDivElement ? element : null;
+    const next = element instanceof HTMLDivElement ? element : null;
+    if (next === this.threadInnerElement) {
+      return;
+    }
+    this.threadInnerElement = next;
+    this.queueScrollElementAttach();
   };
+  // The transcript template can be stamped by a host other than the pane that
+  // drives this controller: sidebar panels receive it as a property and render
+  // it in their own, later update cycle. The virtualizer re-resolves its
+  // scroll element only inside _willUpdate, which runs on the pane's update —
+  // after a foreign-host re-stamp (chat<->dashboard face switch docking chat
+  // into the sidebar) no pane update follows, so the virtualizer stays
+  // detached and paints zero rows until an unrelated re-render. Attachment
+  // must follow the DOM identity this ref records, not the pane render cycle.
+  private scrollElementAttachQueued = false;
+  private queueScrollElementAttach(): void {
+    if (this.scrollElementAttachQueued) {
+      return;
+    }
+    this.scrollElementAttachQueued = true;
+    queueMicrotask(() => {
+      this.scrollElementAttachQueued = false;
+      const instance = this.virtualizerController.getVirtualizer();
+      if (this.connected && instance.scrollElement !== this.scrollElement) {
+        this.virtualizerController.hostUpdated();
+        this.host.requestUpdate();
+      }
+    });
+  }
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
   private pruneDetachedRowsQueued = false;
   private pendingRowMeasureFrame: number | null = null;
@@ -195,6 +223,14 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       followOnAppend: false,
       observeElementRect: (instance, callback) =>
         observeElementRect(instance, (rect) => {
+          // A zero rect is a hide/teardown transition (pane cache display:none
+          // or a face switch unmounting the transcript), not a real resize.
+          // Reacting to it wipes every measured row height via measure() and
+          // records garbage as the last width/height; keep the last real rect
+          // so a remount with unchanged geometry restores rows instantly.
+          if (rect.width === 0 || rect.height === 0) {
+            return;
+          }
           const previousHeight = this.observedHeight;
           const widthChanged = this.observedWidth !== null && this.observedWidth !== rect.width;
           const heightChanged = previousHeight !== null && previousHeight !== rect.height;
