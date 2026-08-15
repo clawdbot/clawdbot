@@ -20,6 +20,7 @@ import {
   validateLiveShardReportPayload,
 } from "../../scripts/test-live-shard.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { waitForPidFile } from "../helpers/process-wait.js";
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
@@ -586,12 +587,8 @@ describe("scripts/test-live-shard", () => {
           },
         );
 
-        await waitFor(() => existsSync(childPidPath), 5_000);
-        await waitFor(() => existsSync(descendantPidPath), 5_000);
-        childPid = Number(readFileSync(childPidPath, "utf8"));
-        descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
-        expect(Number.isInteger(childPid)).toBe(true);
-        expect(Number.isInteger(descendantPid)).toBe(true);
+        childPid = await waitForPidFile(childPidPath, 5_000);
+        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
 
         runner.kill("SIGTERM");
 
