@@ -530,6 +530,42 @@ describe("worker environment service", () => {
     expect(support.testState.store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
   });
 
+  it("allows a large bundle bootstrap to outlive the former service deadline", async () => {
+    vi.useFakeTimers();
+    support.testState.prepareInstallation = vi.fn(async () => ({
+      ...support.BUNDLE_ARTIFACT,
+      tarballBytes: 243_000_000,
+    }));
+    let finishBootstrap: (() => void) | undefined;
+    const bootstrapPending = new Promise<void>((resolve) => {
+      finishBootstrap = resolve;
+    });
+    let bootstrapSignal: AbortSignal | undefined;
+    support.testState.bootstrapWorker = vi.fn(async ({ signal }) => {
+      bootstrapSignal = signal;
+      await bootstrapPending;
+      return support.BOOTSTRAP_RECEIPT;
+    });
+    const workerService = support.createService(support.createProvider());
+
+    const creation = workerService.create("development", "request-large-bundle-bootstrap");
+    await support.waitForFast(() =>
+      expect(support.testState.bootstrapWorker).toHaveBeenCalledOnce(),
+    );
+    let creationError: unknown;
+    try {
+      await vi.advanceTimersByTimeAsync(35 * 60_000 + 1);
+      expect(bootstrapSignal?.aborted).toBe(false);
+    } finally {
+      finishBootstrap?.();
+      await creation.catch((error: unknown) => {
+        creationError = error;
+      });
+    }
+    expect(creationError).toBeUndefined();
+    expect(support.testState.store.list()[0]).toMatchObject({ state: "ready" });
+  });
+
   it("adopts one committed provision across a service and store restart", async () => {
     const physicalLeases = new Set<string>();
     const operationIds: string[] = [];

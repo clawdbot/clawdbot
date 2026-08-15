@@ -18,7 +18,7 @@ const gatewayClientState = vi.hoisted(() => ({
     version: "2026.4.24",
     buildId: "build-test",
     connId: "conn-test",
-  },
+  } as { version: string; buildId?: string; connId: string },
   connectError: "scope upgrade pending approval (requestId: req-123)",
   connectErrorDetails: {
     code: "PAIRING_REQUIRED",
@@ -326,6 +326,11 @@ describe("probeGateway", () => {
       role: "operator",
       scopes: ["operator.read"],
     };
+    gatewayClientState.helloServer = {
+      version: "2026.4.24",
+      buildId: "build-test",
+      connId: "conn-test",
+    };
     gatewayClientState.connectError = "scope upgrade pending approval (requestId: req-123)";
     gatewayClientState.connectErrorDetails = {
       code: "PAIRING_REQUIRED",
@@ -418,6 +423,21 @@ describe("probeGateway", () => {
       buildId: "build-test",
       connId: "conn-test",
     });
+  });
+
+  it("keeps legacy server metadata compatible when build identity is absent", async () => {
+    gatewayClientState.helloServer = {
+      version: "2026.4.24",
+      connId: "conn-test",
+    };
+
+    const result = await runTokenLightweightProbe();
+
+    expect(result.server).toEqual({
+      version: "2026.4.24",
+      connId: "conn-test",
+    });
+    expect(result.server).not.toHaveProperty("buildId");
   });
 
   it("preserves structured missing-scope details from a post-connect request", async () => {

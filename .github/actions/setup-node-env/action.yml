@@ -425,6 +425,19 @@ runs:
         restore-keys: |
           ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
+    # Prune before saving: prefix-key restores accrete every prior lockfile
+    # generation into the archive (measured 2.05 GiB, ~36s restore per job).
+    # Pruning collapses it to the current lockfile's closure; a dropped entry
+    # costs one registry refetch in a later job at worst.
+    - name: Prune pnpm store before save
+      if: ${{ inputs.install-deps == 'true' && inputs.use-actions-cache == 'true' && (inputs.dependency-cache != 'true' || steps.dependency-cache.outputs.cache-hit != 'true') && inputs.save-actions-cache == 'true' && runner.os != 'Windows' && steps.setup-pnpm.outputs.store-cache-hit != 'true' }}
+      shell: bash
+      working-directory: ${{ steps.package-manager.outputs.project-dir }}
+      run: |
+        du -sh "${{ steps.setup-pnpm.outputs.store-path }}" || true
+        pnpm store prune
+        du -sh "${{ steps.setup-pnpm.outputs.store-path }}" || true
+
     - name: Save pnpm store cache
       if: ${{ inputs.install-deps == 'true' && inputs.use-actions-cache == 'true' && (inputs.dependency-cache != 'true' || steps.dependency-cache.outputs.cache-hit != 'true') && inputs.save-actions-cache == 'true' && runner.os != 'Windows' && steps.setup-pnpm.outputs.store-cache-hit != 'true' }}
       uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5

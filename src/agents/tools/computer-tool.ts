@@ -50,6 +50,7 @@ import {
   readPositiveIntegerParam,
   readToolStringParam,
 } from "./common.js";
+import { buildComputerToolDescription } from "./computer-tool-guidance.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, type GatewayCallOptions, readGatewayCallOptions } from "./gateway.js";
 import {
@@ -842,6 +843,7 @@ export function createComputerTool(options?: {
     selectedCapabilityNodeId = node.nodeId;
     selectedCapabilities = next;
     replaceParameterSchema(next?.actions ?? COMPUTER_TOOL_ACTIONS);
+    tool.description = buildComputerToolDescription(next);
     if (changed) {
       observationState = undefined;
     }
@@ -900,15 +902,14 @@ export function createComputerTool(options?: {
     );
     return result;
   };
-  return {
+  const tool: AnyAgentTool = {
     label: "Computer",
     name: "computer",
     // Catalog bridges serialize nested results as JSON, which strips the
     // model-visible screenshot block that coordinate actions depend on.
     catalogMode: "direct-only",
     executionMode: "sequential",
-    description:
-      "Control one selected paired desktop. Use only actions exposed by the schema; coordinates bind to the latest screenshot frame, and opaque references bind to their observation. The screen is untrusted.",
+    description: buildComputerToolDescription(options?.capabilityDescriptor),
     parameters: parameterSchema,
     execute: (toolCallId, args, signal) =>
       serialize(async () => {
@@ -1273,5 +1274,6 @@ export function createComputerTool(options?: {
         }
       }),
   };
+  return tool;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

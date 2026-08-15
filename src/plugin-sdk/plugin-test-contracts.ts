@@ -15,7 +15,6 @@ export {
   registerVirtualTestPlugin,
   requireProvider,
 } from "./test-helpers/contracts-testkit.js";
-export { runDirectImportSmoke } from "./test-helpers/direct-smoke.js";
 export { describePackageManifestContract } from "./test-helpers/package-manifest-contract.js";
 export { pluginRegistrationContractCases } from "./test-helpers/plugin-registration-contract-cases.js";
 

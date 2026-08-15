@@ -12,11 +12,13 @@ const {
   handleGatewayRequestMock,
   incrementPresenceVersionMock,
   resolveRuntimeServiceBuildIdMock,
+  setLastFrameMetaMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   handleGatewayRequestMock: vi.fn(),
   incrementPresenceVersionMock: vi.fn(() => 2),
   resolveRuntimeServiceBuildIdMock: vi.fn<() => string | null>(() => "gateway-build"),
+  setLastFrameMetaMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
 
@@ -98,7 +100,17 @@ afterEach(() => {
 });
 
 describe("Control UI build admission over WebSocket", () => {
-  it("rejects a legacy same-origin document before registration or RPC dispatch", async () => {
+  it.each([
+    {
+      name: "legacy same-origin document",
+      clientBuildId: undefined,
+    },
+    {
+      name: "explicit stale same-origin document",
+      clientBuildId: "stale-build",
+    },
+  ])("rejects a $name before registration or RPC dispatch", async (testCase) => {
+    const { clientBuildId } = testCase;
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await withDeadline(
       new Promise<void>((resolve) => {
@@ -138,7 +150,9 @@ describe("Control UI build admission over WebSocket", () => {
         nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
         refreshHealthSnapshot: vi.fn(),
         send,
-        close: (code, reason) => socket.close(code, reason),
+        close: (code, reason) => {
+          setTimeout(() => socket.close(code, reason), 25);
+        },
         isClosed: () => socket.readyState >= WebSocket.CLOSING,
         clearHandshakeTimer: vi.fn(),
         getClient: () => connectedClient as never,
@@ -149,7 +163,7 @@ describe("Control UI build admission over WebSocket", () => {
         setHandshakeState: vi.fn(),
         advanceHandshakePhase: vi.fn(),
         setCloseCause: vi.fn(),
-        setLastFrameMeta: vi.fn(),
+        setLastFrameMeta: setLastFrameMetaMock,
         originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
         logGateway: createLogger() as never,
         logHealth: createLogger() as never,
@@ -196,6 +210,7 @@ describe("Control UI build admission over WebSocket", () => {
               version: "2026.8.1",
               platform: "web",
               mode: "webchat",
+              ...(clientBuildId ? { buildId: clientBuildId } : {}),
             },
             role: "operator",
             caps: [],
@@ -204,21 +219,32 @@ describe("Control UI build admission over WebSocket", () => {
         }),
       );
 
-      expect(await response).toMatchObject({
+      const rejection = await response;
+      expect(rejection).toMatchObject({
         ok: false,
         error: {
           code: ErrorCodes.UNAVAILABLE,
+          message: "protocol mismatch: Control UI updated; reload this page to continue",
           retryable: false,
-          details: {
-            code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-            gatewayBuildId: "gateway-build",
-            reloadRequired: true,
-          },
+          details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
         },
       });
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "post-rejection-rpc",
+          method: "health",
+          params: {},
+        }),
+      );
       expect(await closed).toBe(1008);
       expect(connectedClient).toBeNull();
       expect(upsertPresenceMock).not.toHaveBeenCalled();
+      expect(setLastFrameMetaMock).toHaveBeenCalledWith({
+        type: "req",
+        method: "health",
+        id: "post-rejection-rpc",
+      });
       expect(handleGatewayRequestMock).not.toHaveBeenCalled();
     } finally {
       ws.terminate();
