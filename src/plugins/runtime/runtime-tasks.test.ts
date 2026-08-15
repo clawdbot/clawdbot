@@ -1,16 +1,16 @@
 // Runtime task tests cover plugin task runtime registration, invocation, and cleanup.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getDetachedTaskLifecycleRuntime,
-  setDetachedTaskLifecycleRuntime,
-} from "../../tasks/detached-task-runtime.js";
+import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
+import { createTaskRecord } from "../../tasks/task-registry.js";
+import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import {
   getRuntimeTaskMocks,
   installRuntimeTaskDeliveryMock,
   resetRuntimeTaskTestState,
 } from "./runtime-task-test-harness.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
-import { createRuntimeTaskFlows, createRuntimeTaskRuns } from "./runtime-tasks.js";
+import { createRuntimeTasks } from "./runtime-tasks.js";
 
 const runtimeTaskMocks = getRuntimeTaskMocks();
 
@@ -18,12 +18,7 @@ afterEach(() => {
   resetRuntimeTaskTestState();
 });
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function requireRecordById(items: readonly unknown[], id: string): Record<string, unknown> {
   for (const item of items) {
@@ -48,23 +43,26 @@ describe("runtime tasks", () => {
   });
 
   it("exposes canonical task and TaskFlow DTOs without leaking raw registry fields", () => {
-    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+    const runtimeTasks = createRuntimeTasks({
+      managedTaskFlow: createRuntimeTaskFlow(),
+    });
+    const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
       requesterOrigin: {
         channel: "telegram",
         to: "telegram:123",
       },
     });
-    const taskFlows = createRuntimeTaskFlows().bindSession({
+    const taskFlows = runtimeTasks.flows.bindSession({
       sessionKey: "agent:main:main",
     });
-    const taskRuns = createRuntimeTaskRuns().bindSession({
+    const taskRuns = runtimeTasks.runs.bindSession({
       sessionKey: "agent:main:main",
     });
-    const otherTaskFlows = createRuntimeTaskFlows().bindSession({
+    const otherTaskFlows = runtimeTasks.flows.bindSession({
       sessionKey: "agent:main:other",
     });
-    const otherTaskRuns = createRuntimeTaskRuns().bindSession({
+    const otherTaskRuns = runtimeTasks.runs.bindSession({
       sessionKey: "agent:main:other",
     });
 
@@ -145,10 +143,13 @@ describe("runtime tasks", () => {
   });
 
   it("maps task cancellation results onto canonical task DTOs", async () => {
-    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+    const runtimeTasks = createRuntimeTasks({
+      managedTaskFlow: createRuntimeTaskFlow(),
+    });
+    const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
     });
-    const taskRuns = createRuntimeTaskRuns().bindSession({
+    const taskRuns = runtimeTasks.runs.bindSession({
       sessionKey: "agent:main:main",
     });
 
@@ -191,10 +192,13 @@ describe("runtime tasks", () => {
   });
 
   it("routes runtime task cancellation through the detached task runtime seam", async () => {
-    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+    const runtimeTasks = createRuntimeTasks({
+      managedTaskFlow: createRuntimeTaskFlow(),
+    });
+    const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
     });
-    const taskRuns = createRuntimeTaskRuns().bindSession({
+    const taskRuns = runtimeTasks.runs.bindSession({
       sessionKey: "agent:main:main",
     });
 
@@ -240,10 +244,13 @@ describe("runtime tasks", () => {
   });
 
   it("does not allow cross-owner task cancellation or leak task details", async () => {
-    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+    const runtimeTasks = createRuntimeTasks({
+      managedTaskFlow: createRuntimeTaskFlow(),
+    });
+    const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
     });
-    const otherTaskRuns = createRuntimeTaskRuns().bindSession({
+    const otherTaskRuns = runtimeTasks.runs.bindSession({
       sessionKey: "agent:main:other",
     });
 
@@ -279,5 +286,88 @@ describe("runtime tasks", () => {
       reason: "Task not found.",
     });
     expect(otherTaskRuns.get(child.task.taskId)).toBeUndefined();
+  });
+
+  it("isolates task runs for agents sharing a bare session key", async () => {
+    const runtimeTasks = createRuntimeTasks({
+      managedTaskFlow: createRuntimeTaskFlow(),
+    });
+    const opsTaskRuns = runtimeTasks.runs.bindSession({
+      sessionKey: "global",
+      agentId: "ops",
+    });
+    const researchTaskRuns = runtimeTasks.runs.bindSession({
+      sessionKey: "global",
+      agentId: "research",
+    });
+    const agentlessTaskRuns = runtimeTasks.runs.bindSession({
+      sessionKey: "global",
+    });
+    const opsTask = createTaskRecord({
+      runtime: "acp",
+      ownerKey: "global",
+      scopeKind: "session",
+      requesterAgentId: "ops",
+      childSessionKey: "agent:ops:acp:child",
+      runId: "ops-global-run",
+      task: "Ops global task",
+      status: "running",
+    });
+    const researchTask = createTaskRecord({
+      runtime: "acp",
+      ownerKey: "global",
+      scopeKind: "session",
+      requesterAgentId: "research",
+      childSessionKey: "agent:research:acp:child",
+      runId: "research-global-run",
+      task: "Research global task",
+      status: "running",
+    });
+    if (!opsTask || !researchTask) {
+      throw new Error("expected paired global tasks to be created");
+    }
+
+    expect(opsTaskRuns.get(opsTask.taskId)?.id).toBe(opsTask.taskId);
+    expect(opsTaskRuns.list().map((task) => task.id)).toEqual([opsTask.taskId]);
+    expect(opsTaskRuns.resolve("ops-global-run")?.id).toBe(opsTask.taskId);
+
+    expect(researchTaskRuns.get(opsTask.taskId)).toBeUndefined();
+    expect(researchTaskRuns.list().map((task) => task.id)).toEqual([researchTask.taskId]);
+    expect(researchTaskRuns.resolve("ops-global-run")).toBeUndefined();
+    expect(agentlessTaskRuns.get(opsTask.taskId)).toBeUndefined();
+    expect(agentlessTaskRuns.list()).toEqual([]);
+    expect(agentlessTaskRuns.resolve("ops-global-run")).toBeUndefined();
+
+    const researchCancel = await researchTaskRuns.cancel({
+      taskId: opsTask.taskId,
+      cfg: {} as never,
+    });
+    expect(researchCancel).toEqual({
+      found: false,
+      cancelled: false,
+      reason: "Task not found.",
+    });
+    const agentlessCancel = await agentlessTaskRuns.cancel({
+      taskId: opsTask.taskId,
+      cfg: {} as never,
+    });
+    expect(agentlessCancel).toEqual({
+      found: false,
+      cancelled: false,
+      reason: "Task not found.",
+    });
+    expect(runtimeTaskMocks.cancelSessionMock).not.toHaveBeenCalled();
+
+    const opsCancel = await opsTaskRuns.cancel({
+      taskId: opsTask.taskId,
+      cfg: {} as never,
+    });
+    expect(opsCancel.found).toBe(true);
+    expect(opsCancel.cancelled).toBe(true);
+    expect(runtimeTaskMocks.cancelSessionMock).toHaveBeenCalledWith({
+      cfg: {},
+      sessionKey: "agent:ops:acp:child",
+      reason: "task-cancel",
+    });
   });
 });

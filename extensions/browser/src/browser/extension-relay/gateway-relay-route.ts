@@ -1,43 +1,39 @@
-/**
- * Gateway-hosted extension relay upgrade handler.
- *
- * Lets the OpenClaw Chrome extension connect DIRECTLY to a remote gateway over
- * `wss://` — no OpenClaw node host on the browser machine. This is the
- * cross-machine path for #53599: a user installs only the extension and pastes
- * a `wss://gateway/browser/extension#<secret>` pairing string.
- *
- * The gateway route is registered with `auth: "plugin"` and no nodeCapability,
- * so the gateway does NOT pre-enforce gateway-token auth (browser WebSockets
- * cannot send an Authorization header anyway). This handler self-validates the
- * host-local relay secret from the WebSocket subprotocol list, then attaches
- * the socket to the same ExtensionRelayBridge the loopback relay uses — so all
- * CDP synthesis, tab-group scoping, and the in-process Playwright /cdp client
- * are unchanged.
- */
+/** Direct Gateway extension relay with in-band Browser Relay Authentication v2. */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { WebSocketServer } from "ws";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   getBrowserControlState,
   startBrowserControlServiceFromConfig,
 } from "../../control-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProfile } from "../config.js";
-import { extensionRelayTokenMatches, readExtensionRelayToken } from "./relay-auth.js";
+import {
+  BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
+  getBrowserRelayAuthV2Authority,
+  invalidateBrowserRelayAuthV2Authority,
+  parseExtensionRelayResource,
+} from "./auth-v2.js";
+import { handlePreAuthWebSocketUpgrade } from "./preauth-websocket-guard.js";
+import { readExtensionRelayToken } from "./relay-auth.js";
 import { ensureExtensionRelayForProfile } from "./relay-lifecycle.js";
 import {
-  attachExtensionWebSocket,
-  EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
   isAllowedExtensionOrigin,
+  LEGACY_EXTENSION_RELAY_PROTOCOL,
   requestExtensionProtocolToken,
+  requestProtocols,
+} from "./relay-request.js";
+import {
+  attachExtensionWebSocket,
+  authenticateExtensionWebSocket,
+  EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
 } from "./relay-server.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay-gateway");
+const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
 
-/** Path the browser plugin registers on the gateway (ends in /extension so the pairing parser accepts it). */
-export const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
-
-// Single noServer WebSocketServer for all gateway-hosted extension upgrades.
 let wss: WebSocketServer | null = null;
 function getWss(): WebSocketServer {
   wss ??= new WebSocketServer({ noServer: true, maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES });
@@ -47,22 +43,15 @@ function getWss(): WebSocketServer {
 function destroy(socket: Duplex, statusLine: string): void {
   try {
     socket.write(`HTTP/1.1 ${statusLine}\r\nConnection: close\r\n\r\n`);
+  } finally {
     socket.destroy();
-  } catch {
-    // socket already gone
   }
 }
 
-function requestedProfileName(req: IncomingMessage, fallback: string): string {
-  try {
-    const value = new URL(req.url ?? "/", "http://127.0.0.1").searchParams.get("profile");
-    return value?.trim() || fallback;
-  } catch {
-    return fallback;
-  }
+function requestedProfileName(resource: string, fallback: string): string {
+  return new URL(resource, "http://127.0.0.1").searchParams.get("profile") ?? fallback;
 }
 
-/** First extension-driver profile name, defaulting to the built-in `chrome`. */
 function defaultExtensionProfileName(profiles: Record<string, { driver?: string }>): string {
   for (const [name, profile] of Object.entries(profiles)) {
     if (profile.driver === "extension") {
@@ -72,81 +61,138 @@ function defaultExtensionProfileName(profiles: Record<string, { driver?: string 
   return "chrome";
 }
 
-/**
- * Handle a gateway upgrade for the extension relay path. Returns true when the
- * request was claimed (handled or rejected), false to let the gateway continue.
- */
+async function resolveGatewayBridge(resource: string) {
+  let state = getBrowserControlState();
+  if (!state) {
+    state = await startBrowserControlServiceFromConfig();
+    if (!state) {
+      throw new Error("Browser control is disabled");
+    }
+  }
+  const profileName = requestedProfileName(
+    resource,
+    defaultExtensionProfileName(state.resolved.profiles),
+  );
+  const resolved = resolveProfile(state.resolved, profileName);
+  if (!resolved || resolved.driver !== "extension") {
+    throw new Error(`Extension browser profile "${profileName}" was not found`);
+  }
+  return {
+    bridge: (await ensureExtensionRelayForProfile(state, resolved)).bridge,
+    profileName,
+  };
+}
+
+/** Handle the plugin-owned Gateway upgrade path. */
 export async function handleGatewayExtensionUpgrade(
   req: IncomingMessage,
   socket: Duplex,
   head: Buffer,
 ): Promise<boolean> {
-  const path = (req.url ?? "/").split("?")[0];
-  if (path !== GATEWAY_EXTENSION_RELAY_PATH) {
-    return false;
+  const resource = parseExtensionRelayResource(req.url ?? "/", GATEWAY_EXTENSION_RELAY_PATH);
+  if (!resource) {
+    return (req.url ?? "/").split("?")[0] === GATEWAY_EXTENSION_RELAY_PATH
+      ? (destroy(socket, "400 Bad Request"), true)
+      : false;
   }
-
-  // chrome-extension:// origin hygiene (not a security boundary on its own —
-  // the relay secret is the gate — but rejects obvious cross-site sockets).
   if (!isAllowedExtensionOrigin(req)) {
     destroy(socket, "403 Forbidden");
     return true;
   }
 
-  // Authenticate before lazy-starting Browser control. A valid pairing secret
-  // may start the service; an arbitrary public WebSocket request may not.
-  let state = getBrowserControlState();
-  const expectedToken = readExtensionRelayToken();
-  const candidate = requestExtensionProtocolToken(req);
+  const protocols = requestProtocols(req);
+  const token = readExtensionRelayToken();
+  if (!token) {
+    invalidateBrowserRelayAuthV2Authority();
+    destroy(socket, "401 Unauthorized");
+    return true;
+  }
+
+  if (protocols.length === 1 && protocols[0] === BROWSER_RELAY_EXTENSION_SUBPROTOCOL) {
+    const authority = getBrowserRelayAuthV2Authority(token);
+    if (
+      !handlePreAuthWebSocketUpgrade({
+        wss: getWss(),
+        req,
+        socket,
+        head,
+        onUpgrade: (ws, removePreAuthGuard) => {
+          authenticateExtensionWebSocket({
+            ws,
+            authority,
+            resource,
+            removePreAuthGuard,
+            prepareAuthenticated: async () => {
+              // The proof may finish while an operator rotates the host key. Never
+              // let an old authenticated socket lazy-start or claim a new bridge.
+              if (readExtensionRelayToken() !== token) {
+                throw new Error("browser relay key rotated during authentication");
+              }
+              const { bridge, profileName } = await resolveGatewayBridge(resource);
+              return () => {
+                attachExtensionWebSocket(bridge, ws);
+                log.info(`extension authenticated over gateway for profile "${profileName}"`);
+              };
+            },
+          });
+        },
+      })
+    ) {
+      destroy(socket, "400 Bad Request");
+    }
+    return true;
+  }
+
+  if (protocols.includes(BROWSER_RELAY_EXTENSION_SUBPROTOCOL)) {
+    destroy(socket, "400 Bad Request");
+    return true;
+  }
+
+  const config = getRuntimeConfig();
+  const allowLegacyAuth = config.browser?.extensionRelay?.allowLegacyAuth !== false;
+  const legacyToken = requestExtensionProtocolToken(req);
   if (
-    !expectedToken ||
-    candidate.length === 0 ||
-    !extensionRelayTokenMatches(expectedToken, candidate)
+    !allowLegacyAuth ||
+    !protocols.includes(LEGACY_EXTENSION_RELAY_PROTOCOL) ||
+    legacyToken.length === 0 ||
+    !safeEqualSecret(token, legacyToken)
   ) {
     destroy(socket, "401 Unauthorized");
     return true;
   }
 
-  if (!state) {
-    try {
-      state = await startBrowserControlServiceFromConfig();
-    } catch (err) {
-      log.warn(`failed to start Browser control for extension relay: ${String(err)}`);
-    }
-    if (!state) {
-      destroy(socket, "503 Service Unavailable");
-      return true;
-    }
-  }
-
-  const profileName = requestedProfileName(
-    req,
-    defaultExtensionProfileName(state.resolved.profiles),
-  );
-  const resolved = resolveProfile(state.resolved, profileName);
-  if (!resolved || resolved.driver !== "extension") {
-    destroy(socket, "404 Not Found");
-    return true;
-  }
-
-  let bridge;
+  let resolved;
   try {
-    bridge = (await ensureExtensionRelayForProfile(state, resolved)).bridge;
+    resolved = await resolveGatewayBridge(resource);
   } catch (err) {
-    log.warn(`failed to start relay for profile "${profileName}": ${String(err)}`);
+    log.warn(`failed to start Browser control for legacy extension relay: ${String(err)}`);
     destroy(socket, "503 Service Unavailable");
     return true;
   }
-
+  const authority = getBrowserRelayAuthV2Authority(token);
   getWss().handleUpgrade(req, socket, head, (ws) => {
-    attachExtensionWebSocket(bridge, ws);
-    log.info(`extension connected over gateway for profile "${profileName}"`);
+    if (
+      !authority.registerAuthenticatedConnection(ws, () =>
+        ws.close(4003, "browser relay key rotated"),
+      )
+    ) {
+      ws.terminate();
+      return;
+    }
+    ws.once("close", () => authority.releaseConnection(ws));
+    attachExtensionWebSocket(resolved.bridge, ws);
+    log.warn(`legacy extension authentication accepted for profile "${resolved.profileName}"`);
   });
   return true;
 }
 
-/** Release the shared WebSocketServer (runtime shutdown / tests). */
 export function disposeGatewayExtensionRelay(): void {
-  wss?.close();
+  if (!wss) {
+    return;
+  }
+  for (const client of wss.clients) {
+    client.terminate();
+  }
+  wss.close();
   wss = null;
 }

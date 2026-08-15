@@ -12,7 +12,7 @@ import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
   inlineChannelPluginEntryFactorySource,
-  makeTempDir,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -81,7 +81,7 @@ describe("plugin loader CLI metadata", () => {
 
   it("suppresses trust warning logs during CLI metadata loads", async () => {
     useNoBundledPlugins();
-    const stateDir = makeTempDir();
+    const stateDir = makePluginLoaderTempDir();
     const globalDir = path.join(stateDir, "extensions", "rogue");
     fs.mkdirSync(globalDir, { recursive: true });
     writePlugin({
@@ -127,10 +127,10 @@ describe("plugin loader CLI metadata", () => {
   it("passes validated plugin config into non-activating CLI metadata loads", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
-      id: "config-cli",
+      id: "Config-Cli",
       filename: "config-cli.cjs",
       body: `module.exports = {
-  id: "config-cli",
+  id: "Config-Cli",
   register(api) {
     if (!api.pluginConfig || api.pluginConfig.token !== "ok") {
       throw new Error("missing plugin config");
@@ -151,7 +151,7 @@ describe("plugin loader CLI metadata", () => {
       path.join(plugin.dir, "openclaw.plugin.json"),
       JSON.stringify(
         {
-          id: "config-cli",
+          id: "Config-Cli",
           configSchema: {
             type: "object",
             additionalProperties: false,
@@ -184,12 +184,12 @@ describe("plugin loader CLI metadata", () => {
     });
 
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("cfg");
-    expect(registry.plugins.find((entry) => entry.id === "config-cli")?.status).toBe("loaded");
+    expect(registry.plugins.find((entry) => entry.id === "Config-Cli")?.status).toBe("loaded");
   });
 
   it("uses the real channel entry in cli-metadata mode for CLI metadata capture", async () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
@@ -294,7 +294,7 @@ module.exports = {
   });
 
   it("skips bundled channel full entries that do not provide a dedicated cli-metadata entry", async () => {
-    const bundledRoot = makeTempDir();
+    const bundledRoot = makePluginLoaderTempDir();
     const pluginDir = path.join(bundledRoot, "bundled-skip-channel");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
@@ -361,7 +361,7 @@ module.exports = {
   });
 
   it("prefers bundled channel cli-metadata entries over full channel entries", async () => {
-    const bundledRoot = makeTempDir();
+    const bundledRoot = makePluginLoaderTempDir();
     const pluginDir = path.join(bundledRoot, "bundled-cli-channel");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
     const cliMarker = path.join(pluginDir, "cli-loaded.txt");
@@ -417,6 +417,7 @@ module.exports = {
           name: "bundled-cli-channel",
           description: "Bundled channel CLI metadata",
           hasSubcommands: true,
+          machineOutput: ({ argv }) => argv.includes("--machine"),
         },
       ],
     });
@@ -443,10 +444,16 @@ module.exports = {
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
       "bundled-cli-channel",
     );
+    expect(
+      registry.cliRegistrars[0]?.descriptors[0]?.machineOutput?.({
+        argv: ["node", "openclaw", "bundled-cli-channel", "--machine"],
+        stdoutIsTTY: true,
+      }),
+    ).toBe(true);
   });
 
   it("skips bundled non-channel full entries that do not provide a dedicated cli-metadata entry", async () => {
-    const bundledRoot = makeTempDir();
+    const bundledRoot = makePluginLoaderTempDir();
     const pluginDir = path.join(bundledRoot, "bundled-skip-provider");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
@@ -513,7 +520,7 @@ module.exports = {
 
   it("collects channel CLI metadata during full plugin loads", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
@@ -609,7 +616,7 @@ module.exports = {
 
   it("collects channel CLI metadata during discovery plugin loads", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
     const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
@@ -716,7 +723,7 @@ module.exports = {
 
   it("can force channel runtime entries for CLI registration when setup entries exist", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const setupMarker = path.join(pluginDir, "setup-loaded.txt");
 
@@ -798,7 +805,7 @@ module.exports = {
     const registry = loadOpenClawPlugins({
       activate: false,
       cache: false,
-      forceFullRuntimeForChannelPlugins: true,
+      channelPluginLoadIntent: "full",
       config: {
         plugins: {
           load: { paths: [pluginDir] },
@@ -820,7 +827,7 @@ module.exports = {
   });
 
   it("sets bundled channel runtime before discovery CLI metadata registration", () => {
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
     const channelPluginPath = path.join(pluginDir, "channel.cjs");
     const runtimePath = path.join(pluginDir, "runtime.cjs");
@@ -954,6 +961,59 @@ module.exports = {
     ]);
   });
 
+  it("preserves root machine-output resolvers in metadata and full plugin loads", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "machine-output-cli",
+      filename: "machine-output-cli.cjs",
+      body: `module.exports = {
+  id: "machine-output-cli",
+  register(api) {
+    api.registerCli(() => {}, {
+      descriptors: [{
+        name: "machine-output-cli",
+        description: "Machine output CLI",
+        hasSubcommands: true,
+        machineOutput: ({ argv, stdoutIsTTY }) => argv.includes("--machine") || !stdoutIsTTY,
+      }],
+    });
+    api.registerCli(() => {}, {
+      parentPath: ["nodes"],
+      descriptors: [{
+        name: "nested-machine-output",
+        description: "Nested metadata",
+        hasSubcommands: false,
+        machineOutput: () => true,
+      }],
+    });
+  },
+};`,
+    });
+    const config = {
+      plugins: {
+        load: { paths: [plugin.file] },
+        allow: ["machine-output-cli"],
+      },
+    };
+
+    const metadataRegistry = await loadOpenClawPluginCliRegistry({ cache: false, config });
+    const fullRegistry = loadOpenClawPlugins({ cache: false, config });
+    for (const registry of [metadataRegistry, fullRegistry]) {
+      const resolver = registry.cliRegistrars[0]?.descriptors[0]?.machineOutput;
+      expect(
+        resolver?.({ argv: ["node", "openclaw", "machine-output-cli"], stdoutIsTTY: false }),
+      ).toBe(true);
+      expect(
+        resolver?.({
+          argv: ["node", "openclaw", "machine-output-cli", "--machine"],
+          stdoutIsTTY: true,
+        }),
+      ).toBe(true);
+      const nested = registry.cliRegistrars.find((entry) => entry.parentPath.length > 0);
+      expect(nested?.descriptors[0]).not.toHaveProperty("machineOutput");
+    }
+  });
+
   it("rejects async plugin registration when collecting CLI metadata", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -1085,3 +1145,4 @@ module.exports = {
     expect(memory?.error ?? "").toContain('memory slot set to "memory-other"');
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

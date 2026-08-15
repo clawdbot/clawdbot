@@ -1,9 +1,10 @@
 // Telegram Mini App init-data validation.
 import crypto from "node:crypto";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 
 const INIT_DATA_MAX_AGE_MS = 300_000;
 
-export type TelegramMiniAppInitData = {
+type TelegramMiniAppInitData = {
   hash: string;
   authDateMs: number;
   userId: string;
@@ -44,7 +45,7 @@ export function validateTelegramMiniAppInitData(params: {
     .toSorted();
   const secret = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
   const computedHash = crypto.createHmac("sha256", secret).update(entries.join("\n")).digest("hex");
-  if (!timingSafeHexEqual(computedHash, receivedHash)) {
+  if (!safeEqualSecret(computedHash, receivedHash)) {
     return null;
   }
 
@@ -65,12 +66,4 @@ function parseTelegramMiniAppUser(raw: string): { id: string } | null {
   } catch {
     return null;
   }
-}
-
-// Attacker-controlled input never short-circuits on length: both sides are
-// reduced to fixed-length SHA-256 digests before the constant-time compare.
-function timingSafeHexEqual(left: string, right: string): boolean {
-  const leftDigest = crypto.createHash("sha256").update(left).digest();
-  const rightDigest = crypto.createHash("sha256").update(right).digest();
-  return crypto.timingSafeEqual(leftDigest, rightDigest);
 }

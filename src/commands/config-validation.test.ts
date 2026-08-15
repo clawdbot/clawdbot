@@ -1,8 +1,8 @@
 // Config validation tests cover config snapshot validation and command error handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
-import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
-import { requireValidConfigSnapshot } from "./config-validation.js";
+import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
+import { requireValidConfig } from "./config-validation.js";
 
 const { readConfigFileSnapshot, buildPluginCompatibilitySnapshotNotices } = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -21,7 +21,7 @@ vi.mock("../plugins/status.js", () => ({
     `${notice.pluginId} ${notice.message}`,
 }));
 
-describe("requireValidConfigSnapshot", () => {
+describe("requireValidConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -34,7 +34,7 @@ describe("requireValidConfigSnapshot", () => {
       issues: [],
     });
     buildPluginCompatibilitySnapshotNotices.mockReturnValue([
-      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
     ]);
   }
 
@@ -62,7 +62,7 @@ describe("requireValidConfigSnapshot", () => {
     createValidSnapshot();
     const runtime = createRuntime();
 
-    const config = await requireValidConfigSnapshot(runtime);
+    const config = await requireValidConfig(runtime);
 
     expect(config).toEqual({ plugins: {} });
     expect(runtime.error).not.toHaveBeenCalled();
@@ -71,11 +71,22 @@ describe("requireValidConfigSnapshot", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
+  it("can validate core config without loading plugin schemas", async () => {
+    createValidSnapshot();
+    const runtime = createRuntime();
+
+    await expect(requireValidConfig(runtime, { skipPluginValidation: true })).resolves.toEqual({
+      plugins: {},
+    });
+
+    expect(readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
+  });
+
   it("emits a non-blocking compatibility advisory when explicitly requested", async () => {
     createValidSnapshot();
     const runtime = createRuntime();
 
-    const config = await requireValidConfigSnapshot(runtime, {
+    const config = await requireValidConfig(runtime, {
       includeCompatibilityAdvisory: true,
     });
 
@@ -85,7 +96,7 @@ describe("requireValidConfigSnapshot", () => {
     expect(requireFirstLog(runtime)).toBe(
       [
         "Plugin compatibility: 1 notice.",
-        "- legacy-plugin still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+        "- legacy-plugin is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
         "Review: openclaw doctor",
       ].join("\n"),
     );
@@ -100,7 +111,7 @@ describe("requireValidConfigSnapshot", () => {
     });
     const runtime = createRuntime();
 
-    const config = await requireValidConfigSnapshot(runtime, {
+    const config = await requireValidConfig(runtime, {
       includeCompatibilityAdvisory: true,
     });
 
@@ -132,7 +143,7 @@ describe("requireValidConfigSnapshot", () => {
     });
     const runtime = createRuntime();
 
-    const config = await requireValidConfigSnapshot(runtime);
+    const config = await requireValidConfig(runtime);
 
     expect(config).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("plugin not found"));
@@ -153,7 +164,7 @@ describe("requireValidConfigSnapshot", () => {
     });
     const runtime = createRuntime();
 
-    const config = await requireValidConfigSnapshot(runtime);
+    const config = await requireValidConfig(runtime);
 
     expect(config).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");

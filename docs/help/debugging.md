@@ -15,8 +15,8 @@ Debugging helpers for streaming output, gateway iteration, and startup profiling
 
 ```text
 /debug show
-/debug set messages.responsePrefix="[openclaw]"
-/debug unset messages.responsePrefix
+/debug set channels.whatsapp.responsePrefix="[openclaw]"
+/debug unset channels.whatsapp.responsePrefix
 /debug reset
 ```
 
@@ -35,6 +35,7 @@ Debugging helpers for streaming output, gateway iteration, and startup profiling
 ## Plugin lifecycle trace
 
 Set `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1` for a phase-by-phase breakdown of plugin metadata, discovery, registry, runtime mirror, config mutation, and refresh work. Writes to stderr, so JSON command output stays parseable.
+Plugin load failures include their stack trace while this trace is enabled.
 
 ```bash
 OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1 openclaw plugins install tokenjuice --force
@@ -47,6 +48,12 @@ OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1 openclaw plugins install tokenjuice --force
 ```
 
 Use this before reaching for a CPU profiler. From a source checkout, measure the built runtime with `node dist/entry.js ...` after `pnpm build`; `pnpm openclaw ...` also measures source-runner overhead.
+
+For synchronous module-load timings, use the shared diagnostics surface instead of a separate plugin-only environment switch:
+
+```bash
+OPENCLAW_DIAGNOSTICS=plugin.load-profile openclaw plugins list
+```
 
 ## CLI startup and command profiling
 
@@ -84,7 +91,11 @@ By default this starts or restarts a tmux session named `openclaw-gateway-watch-
 
 ```bash
 tmux attach -t openclaw-gateway-watch-main
+# Read recent output without attaching
+tmux capture-pane -ep -t openclaw-gateway-watch-main -S -200
 ```
+
+The pane uses tmux `remain-on-exit`, so startup failures stay available for attach or capture instead of deleting the session. Re-running `pnpm gateway:watch` respawns that pane.
 
 The tmux pane runs the raw watcher:
 
@@ -92,13 +103,13 @@ The tmux pane runs the raw watcher:
 node scripts/watch-node.mjs gateway --force
 ```
 
-Stop an installed Gateway service before watching the same port:
+Before watching the configured/default port, the tmux wrapper stops the active profile's installed Gateway service. This hands the port to the source watcher without launchd, systemd, or Scheduled Task respawning and replacing it. The service stays installed; restore it after the watch session with:
 
 ```bash
-pnpm openclaw gateway stop
+pnpm openclaw gateway start
 ```
 
-The watcher's `--force` clears the current listener, but it does not disable a supervised service. A launchd, systemd, or Scheduled Task service can otherwise respawn and replace the watched Gateway.
+When an explicit `--port` or `OPENCLAW_GATEWAY_PORT` differs from the installed service's effective port, the wrapper leaves the service running so both Gateways can run side by side.
 
 Foreground mode without tmux:
 
@@ -107,6 +118,8 @@ pnpm gateway:watch:raw
 # or
 OPENCLAW_GATEWAY_WATCH_TMUX=0 pnpm gateway:watch
 ```
+
+Raw mode does not manage the installed service. Run `pnpm openclaw gateway stop` first when it uses the same port.
 
 Keep tmux management but disable auto-attach:
 
@@ -168,9 +181,11 @@ What this does:
 2. **Dev bootstrap** (`gateway --dev`)
    - Writes a minimal config if missing (`gateway.mode=local`, bind loopback).
    - Sets `agents.defaults.workspace` to the dev workspace and `agents.defaults.skipBootstrap=true`.
-   - Seeds the workspace files if missing: `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`.
+   - Seeds the workspace files if missing: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`.
    - Default identity: **C3-PO** (protocol droid).
    - `pnpm gateway:dev` also sets `OPENCLAW_SKIP_CHANNELS=1` to skip channel providers.
+
+All Gateways ignore ambient channel environment triggers by default, so credentials inherited from the launching shell do not connect to channel services without explicit intent. A `channels.<id>` configuration block still enables that channel and can use environment variables for its credentials. Pass `--ambient-channels` to restore ambient channel auto-configuration for that run; `--dev-ambient-channels` remains as a deprecated alias.
 
 Reset flow (fresh start):
 

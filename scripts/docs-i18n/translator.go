@@ -189,6 +189,7 @@ func isRetryableTranslateError(err error) bool {
 		return false
 	}
 	return strings.Contains(message, "placeholder missing") ||
+		strings.Contains(message, "placeholder duplicated") ||
 		strings.Contains(message, "rate limit") ||
 		strings.Contains(message, "429") ||
 		strings.Contains(message, "500") ||
@@ -348,6 +349,9 @@ func normalizeThinking(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "low", "medium", "high", "xhigh":
 		return strings.ToLower(strings.TrimSpace(value))
+	case "max":
+		// Codex CLI supports max for GPT-5.6; xhigh remains the default for older model overrides.
+		return "max"
 	default:
 		return "xhigh"
 	}

@@ -49,6 +49,9 @@ not install or modify anything on the remote host.
   <Step title="Workspace">
     - Default `~/.openclaw/workspace` (configurable).
     - Seeds workspace files needed for first-run bootstrap.
+    - On rerun, an existing agent roster keeps its fleet-wide workspace unless
+      you explicitly confirm the move. Non-interactive reruns warn and preserve
+      the current value.
     - Workspace layout: [Agent workspace](/concepts/agent-workspace).
 
   </Step>
@@ -91,7 +94,7 @@ not install or modify anything on the remote host.
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: only Node is offered interactively. Bun can corrupt memory on WhatsApp/Telegram reconnect and is not a supported daemon runtime for those channels; pass `--daemon-runtime bun` only outside that combination.
+    - Runtime selection: Node is required because OpenClaw's canonical runtime state store uses `node:sqlite`.
 
   </Step>
   <Step title="Health check">
@@ -186,7 +189,8 @@ instead of exiting. Explicit `--auth-choice` runs still fail fast for automation
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6`; the bare direct-API model id resolves to the Sol tier.
+    `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+    supported and resolves to the same tier.
 
     Adding or reauthenticating OpenAI preserves an existing explicit primary
     model, including `openai/gpt-5.5`. If the account does not expose GPT-5.6,
@@ -297,11 +301,13 @@ Credential storage mode:
   - Env refs: validates variable name + non-empty value in the current onboarding environment.
   - Provider refs: validates provider config and resolves the requested id.
   - If preflight fails, onboarding shows the error and lets you retry.
-- In non-interactive mode, `--secret-input-mode ref` is env-backed only.
-  - Set the provider env var in the onboarding process environment.
+- In non-interactive mode, `--secret-input-mode ref` creates only env-backed references for new credentials.
+  - Set the provider env var in the onboarding process environment when adding a new credential.
   - Inline key flags (for example `--openai-api-key`) require that env var to be set; otherwise onboarding fails fast.
-  - For custom providers, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
+  - Existing resolvable named auth profiles are reused unchanged, including existing `env`, `file`, `exec`, and `store` references; no new `apiKey` or `keyRef` is written and no additional provider env var is required.
+  - For new custom-provider credentials, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
   - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise onboarding fails fast.
+  - Existing plaintext profile credentials remain unchanged; reference mode does not migrate them. Run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
 - Gateway auth credentials support plaintext and SecretRef choices in interactive setup:
   - Token mode: **Generate/store plaintext token** (default) or **Use SecretRef**.
   - Password mode: plaintext or SecretRef.
@@ -325,7 +331,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
-- `session.dmScope` (local onboarding defaults this to `per-channel-peer` when unset; existing explicit values are preserved)
+- `session.dmScope` (onboarding preserves explicit values and otherwise leaves it unset, so the `main` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `per-channel-peer`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic)
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Discord, iMessage, Signal, Slack, Telegram, WhatsApp) when you opt in during prompts; Discord and Slack also resolve entered names to IDs
 - `skills.install.nodeManager`
@@ -338,7 +344,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `wizard.lastRunMode`
 - `wizard.securityAcknowledgedAt`
 
-`openclaw agents add` writes `agents.list[]` and optional `bindings`.
+`openclaw agents add` writes `agents.entries.*` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
 Active sessions and transcripts are stored in
@@ -351,13 +357,19 @@ Some channels are delivered as plugins. When selected during setup, the wizard
 prompts to install the plugin (npm or local path) before channel configuration.
 </Note>
 
+### Installed app recommendations
+
+After the model access check succeeds, classic interactive onboarding on macOS scans application names and bundle IDs without requesting macOS privacy permissions. It searches the official plugin catalogs and ClawHub, then asks the configured model to reject false name matches and recommend relevant plugins or skills. Recommended matches are selected by default; optional matches require an explicit selection.
+
+The results screen lists the detected applications and shows: "App names were matched using your configured model and ClawHub search." Set `wizard.appRecommendations` to `false` to disable both this onboarding step and Gateway access to node app inventories. The scan is not used in quickstart or non-macOS onboarding.
+
 ## Non-interactive setup
 
 `--non-interactive` requires `--accept-risk` (acknowledges that agents are
 powerful and full system access is risky):
 
 ```bash
-openclaw onboard --non-interactive --accept-risk \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice apiKey \
   --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```
@@ -378,7 +390,7 @@ Clients (macOS app and Control UI) can render steps without re-implementing onbo
 - Downloads the appropriate release asset from the official `signal-cli` GitHub releases (native build, Linux x86-64 only)
 - On other platforms (macOS, non-x64 Linux), installs via Homebrew instead
 - Stores the release-asset install under `~/.openclaw/tools/signal-cli/<version>/`
-- Writes `channels.signal.cliPath` in config
+- Writes `channels.signal.transport.cliPath` with `kind: "managed-native"` in config
 - Native Windows is not supported yet; run onboarding inside WSL2 to get the Linux install path
 
 ## Related docs

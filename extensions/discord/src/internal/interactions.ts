@@ -16,6 +16,7 @@ import {
 import {
   createInteractionCallback,
   createWebhookMessage,
+  deleteWebhookMessage,
   editWebhookMessage,
   getWebhookMessage,
 } from "./api.js";
@@ -36,9 +37,6 @@ import {
   type DiscordChannel,
   type StructureClient,
 } from "./structures.js";
-
-export { OptionsHandler } from "./interaction-options.js";
-export { ModalFields } from "./modal-fields.js";
 
 type InteractionClient = StructureClient & {
   options: { clientId: string };
@@ -113,7 +111,7 @@ function readInteractionUser(rawData: RawInteraction, client: InteractionClient)
   return null;
 }
 
-export class BaseInteraction {
+class BaseInteraction {
   readonly id: string;
   readonly token: string;
   readonly user: User | null;
@@ -122,6 +120,7 @@ export class BaseInteraction {
   readonly channel: DiscordChannel | null;
   message: Message | null = null;
   private readonly response = new InteractionResponseController();
+  private pendingResponse: Promise<void> = Promise.resolve();
 
   constructor(
     public client: InteractionClient,
@@ -150,28 +149,48 @@ export class BaseInteraction {
     this.response.state = nextState;
   }
 
-  protected async callback(type: InteractionResponseType, data?: unknown) {
-    this.response.recordCallback(type);
-    return await createInteractionCallback(
+  private enqueueResponse<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.pendingResponse.then(operation);
+    // Keep the per-interaction queue live after provider rejection without swallowing it for callers.
+    this.pendingResponse = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async performCallback(type: InteractionResponseType, data?: unknown) {
+    if (this.response.acknowledged) {
+      throw new Error("Discord interaction has already been acknowledged.");
+    }
+    const result = await createInteractionCallback(
       this.client.rest,
       this.id,
       this.token,
       data === undefined ? { type } : { type, data },
     );
+    this.response.recordCallback(type);
+    return result;
+  }
+
+  protected async callback(type: InteractionResponseType, data?: unknown) {
+    return await this.enqueueResponse(() => this.performCallback(type, data));
   }
 
   async reply(payload: MessagePayload): Promise<unknown> {
-    const action = this.response.nextReplyAction();
-    if (action === "edit") {
-      return await this.editReply(payload);
-    }
-    if (action === "follow-up") {
-      return await this.followUp(payload);
-    }
-    return await this.callback(
-      InteractionResponseType.ChannelMessageWithSource,
-      serializePayload(payload),
-    );
+    return await this.enqueueResponse(async () => {
+      const action = this.response.nextReplyAction();
+      if (action === "edit") {
+        return await this.performReplyEdit(payload);
+      }
+      if (action === "follow-up") {
+        return await this.performFollowUp(payload);
+      }
+      return await this.performCallback(
+        InteractionResponseType.ChannelMessageWithSource,
+        serializePayload(payload),
+      );
+    });
   }
 
   async defer(options?: { ephemeral?: boolean }): Promise<unknown> {
@@ -186,6 +205,10 @@ export class BaseInteraction {
   }
 
   async editReply(payload: MessagePayload): Promise<unknown> {
+    return await this.enqueueResponse(() => this.performReplyEdit(payload));
+  }
+
+  private async performReplyEdit(payload: MessagePayload): Promise<unknown> {
     const body = serializePayload(payload);
     const query = needsComponentsV2Query(body) ? { with_components: true } : undefined;
     const result = query
@@ -208,12 +231,22 @@ export class BaseInteraction {
     return result;
   }
 
+  async deleteReply(): Promise<unknown> {
+    return await this.enqueueResponse(async () => {
+      const result = await deleteWebhookMessage(
+        this.client.rest,
+        this.client.options.clientId,
+        this.token,
+        "@original",
+      );
+      this.response.recordReplyDelete();
+      return result;
+    });
+  }
+
   async fetchReply(): Promise<unknown> {
-    return await getWebhookMessage(
-      this.client.rest,
-      this.client.options.clientId,
-      this.token,
-      "@original",
+    return await this.enqueueResponse(() =>
+      getWebhookMessage(this.client.rest, this.client.options.clientId, this.token, "@original"),
     );
   }
 
@@ -228,6 +261,10 @@ export class BaseInteraction {
   }
 
   async followUp(payload: MessagePayload): Promise<unknown> {
+    return await this.enqueueResponse(() => this.performFollowUp(payload));
+  }
+
+  private async performFollowUp(payload: MessagePayload): Promise<unknown> {
     const body = serializePayload(payload);
     return await createWebhookMessage(
       this.client.rest,
@@ -282,6 +319,9 @@ export class BaseComponentInteraction extends BaseInteraction {
   }
   async showModal(modal: Modal): Promise<unknown> {
     return await this.callback(InteractionResponseType.Modal, modal.serialize());
+  }
+  async launchActivity(): Promise<unknown> {
+    return await this.callback(InteractionResponseType.LaunchActivity);
   }
 }
 

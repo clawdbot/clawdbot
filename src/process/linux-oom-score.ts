@@ -115,30 +115,3 @@ export function prepareOomScoreAdjustedSpawn(
     wrapped: true,
   };
 }
-
-export function wrapArgvForChildOomScoreRaise(
-  argv: readonly string[],
-  options?: OomWrapOptions,
-): string[] {
-  const copy = [...argv];
-  if (copy.length === 0) {
-    return copy;
-  }
-  const spawn = prepareOomScoreAdjustedSpawn(copy[0] ?? "", copy.slice(1), options);
-  return [spawn.command, ...spawn.args];
-}
-
-/**
- * Returns `baseEnv` with shell-init keys stripped when argv will be wrapped.
- * Unchanged (including `undefined`) when no wrap applies, so non-Linux and
- * opted-out paths keep exact inherited-env semantics.
- */
-export function hardenedEnvForChildOomWrap(
-  baseEnv: NodeJS.ProcessEnv | undefined,
-  options?: OomWrapOptions,
-): NodeJS.ProcessEnv | undefined {
-  if (!shouldWrapChildForOomScore(options)) {
-    return baseEnv;
-  }
-  return hardenShellEnv(baseEnv);
-}

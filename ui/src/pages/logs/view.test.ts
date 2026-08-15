@@ -24,7 +24,7 @@ function createLevelFilters(overrides: Partial<Record<LogLevel, boolean>> = {}) 
 function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
   return {
     loading: false,
-    error: null,
+    status: { error: null, hasLoaded: false, stale: false },
     file: null,
     entries: [
       {
@@ -61,7 +61,7 @@ function buttonByText(container: Element, text: string): HTMLButtonElement {
 
 async function useTestPortugueseLogsLabels() {
   i18n.registerTranslation("pt-BR", {
-    logsView: {
+    gatewayLogs: {
       title: "Registros",
       subtitle: "Registros do Gateway em JSONL.",
       exportButton: "Exportar {label}",
@@ -86,6 +86,16 @@ afterEach(async () => {
 });
 
 describe("renderLogs", () => {
+  it("renders the subtitle under the section header", () => {
+    const container = document.createElement("div");
+
+    render(renderLogs(createProps()), container);
+
+    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
+      "Gateway file logs (JSONL).",
+    );
+  });
+
   it.each([
     { buttonText: "Exportar visivel", expectedLabel: "visible", filterText: "" },
     { buttonText: "Exportar filtrado", expectedLabel: "filtered", filterText: "matched" },
@@ -105,4 +115,26 @@ describe("renderLogs", () => {
       );
     },
   );
+
+  it("renders a panel-local retry and stale marker without hiding loaded logs", () => {
+    const onRefresh = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderLogs(
+        createProps({
+          status: { error: "logs unavailable", hasLoaded: true, stale: true },
+          onRefresh,
+        }),
+      ),
+      container,
+    );
+
+    const status = container.querySelector(".logs-refresh-status");
+    expect(status?.textContent).toContain("logs unavailable");
+    expect(status?.textContent).toContain("Showing stale data");
+    expect(container.textContent).toContain("matched line");
+    status?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
 });

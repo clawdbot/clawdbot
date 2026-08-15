@@ -9,10 +9,11 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogManifest,
+  resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
 
-export type PersistedBundledPluginRecoveryLocation = {
+type PersistedBundledPluginRecoveryLocation = {
   pluginId: string;
   loadPaths: readonly string[];
 };
@@ -22,8 +23,8 @@ function buildBridgeFromPersistedBundledRecord(
   manifest?: PluginManifestRecord,
 ): ExternalizedBundledPluginBridge | null {
   // Relocation is derived from the previous persisted registry, not a hardcoded
-  // table. A plugin moving from bundled to npm keeps the same plugin id; the old
-  // registry row is the proof that this user actually had it bundled/enabled.
+  // table. The old registry row proves that this user had the plugin bundled;
+  // official catalog metadata owns the external package id when it was renamed.
   if (record.origin !== "bundled" || !record.enabled) {
     return null;
   }
@@ -31,13 +32,22 @@ function buildBridgeFromPersistedBundledRecord(
   const officialInstall = officialEntry
     ? resolveOfficialExternalPluginInstall(officialEntry)
     : null;
-  const npmSpec = officialInstall?.npmSpec?.trim() ?? record.packageInstall?.npm?.spec;
+  const officialNpmSpec = officialInstall?.npmSpec?.trim();
+  const npmSpec = officialNpmSpec ?? record.packageInstall?.npm?.spec;
+  // The catalog integrity pin only covers the catalog's own npm spec, never a
+  // persisted record fallback spec.
+  const expectedIntegrity = officialNpmSpec
+    ? officialInstall?.expectedIntegrity?.trim()
+    : undefined;
   const clawhubSpec = officialInstall?.clawhubSpec?.trim();
   if (!npmSpec && !clawhubSpec) {
     return null;
   }
   const officialChannelId = officialEntry
     ? getOfficialExternalPluginCatalogManifest(officialEntry)?.channel?.id?.trim()
+    : undefined;
+  const externalPluginId = officialEntry
+    ? resolveOfficialExternalPluginId(officialEntry)?.trim()
     : undefined;
   const channelIds = manifest?.channels.length
     ? manifest.channels
@@ -46,10 +56,11 @@ function buildBridgeFromPersistedBundledRecord(
       : [];
   return {
     bundledPluginId: record.pluginId,
-    pluginId: record.pluginId,
+    pluginId: externalPluginId || record.pluginId,
     preferredSource:
       officialInstall?.defaultChoice === "clawhub" && clawhubSpec ? "clawhub" : "npm",
     ...(npmSpec ? { npmSpec } : {}),
+    ...(expectedIntegrity ? { expectedIntegrity } : {}),
     ...(clawhubSpec ? { clawhubSpec } : {}),
     ...(record.enabledByDefault ? { enabledByDefault: true } : {}),
     ...(channelIds.length ? { channelIds } : {}),

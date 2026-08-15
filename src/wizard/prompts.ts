@@ -31,6 +31,7 @@ type WizardTextParams = {
   initialValue?: string;
   placeholder?: string;
   validate?: (value: string) => string | undefined;
+  signal?: AbortSignal;
   // Render as a masked input. The entered value is never echoed to the
   // terminal — keeps secrets out of scrollback, transcripts, and screenshots.
   sensitive?: boolean;
@@ -49,7 +50,7 @@ export type WizardProgress = {
   stop: (message?: string) => void;
 };
 
-export type WizardDeviceCodeParams = {
+type WizardDeviceCodeParams = {
   title: string;
   code: string;
   expiresInMinutes?: number;

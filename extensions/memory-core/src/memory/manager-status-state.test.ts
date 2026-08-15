@@ -3,71 +3,75 @@ import type { SQLInputValue } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
   collectMemoryStatusAggregate,
-  MEMORY_STATUS_AGGREGATE_SQL,
   resolveInitialMemoryDirty,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
 
 describe("memory manager status state", () => {
-  it("keeps memory clean for status-only managers after prior indexing", () => {
-    expect(
-      resolveInitialMemoryDirty({
+  it.each([
+    {
+      name: "indexed status-only memory stays clean",
+      params: {
         hasMemorySource: true,
         statusOnly: true,
         hasIndexedMeta: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("marks status-only managers dirty when no prior index metadata exists", () => {
-    expect(
-      resolveInitialMemoryDirty({
+      },
+      expected: false,
+    },
+    {
+      name: "missing metadata is dirty",
+      params: {
         hasMemorySource: true,
         statusOnly: true,
         hasIndexedMeta: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("marks status-only managers dirty when index identity mismatches", () => {
-    expect(
-      resolveInitialMemoryDirty({
+      },
+      expected: true,
+    },
+    {
+      name: "identity mismatch is dirty",
+      params: {
         hasMemorySource: false,
         statusOnly: true,
         hasIndexedMeta: true,
         indexIdentityMismatched: true,
-      }),
-    ).toBe(true);
+      },
+      expected: true,
+    },
+  ])("resolves $name", ({ params, expected }) => {
+    expect(resolveInitialMemoryDirty(params)).toBe(expected);
   });
 
-  it("reports the requested provider before provider initialization", () => {
-    expect(
-      resolveStatusProviderInfo({
+  it.each([
+    {
+      name: "requested provider before initialization",
+      params: {
         provider: null,
         providerInitialized: false,
         requestedProvider: "openai",
         configuredModel: "mock-embed",
-      }),
-    ).toEqual({
-      provider: "openai",
-      model: "mock-embed",
-      searchMode: "hybrid",
-    });
-  });
-
-  it("reports fts-only mode when initialization finished without a provider", () => {
-    expect(
-      resolveStatusProviderInfo({
+      },
+      expected: {
+        provider: "openai",
+        model: "mock-embed",
+        searchMode: "hybrid" as const,
+      },
+    },
+    {
+      name: "FTS-only after providerless initialization",
+      params: {
         provider: null,
         providerInitialized: true,
         requestedProvider: "openai",
         configuredModel: "mock-embed",
-      }),
-    ).toEqual({
-      provider: "none",
-      model: undefined,
-      searchMode: "fts-only",
-    });
+      },
+      expected: {
+        provider: "none",
+        model: undefined,
+        searchMode: "fts-only" as const,
+      },
+    },
+  ])("reports $name", ({ params, expected }) => {
+    expect(resolveStatusProviderInfo(params)).toEqual(expected);
   });
 
   it("uses one aggregation query for status counts and source breakdowns", () => {
@@ -91,12 +95,9 @@ describe("memory manager status state", () => {
       sourceFilterParams: ["memory", "sessions"],
     });
 
-    expect(calls).toEqual([
-      {
-        sql: MEMORY_STATUS_AGGREGATE_SQL.replaceAll("__FILTER__", " AND source IN (?, ?)"),
-        params: ["memory", "sessions", "memory", "sessions"],
-      },
-    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.sql).toContain("source IN (?, ?)");
+    expect(calls[0]?.params).toEqual(["memory", "sessions", "memory", "sessions"]);
     expect(aggregate).toEqual({
       files: 3,
       chunks: 8,

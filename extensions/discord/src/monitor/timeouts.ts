@@ -38,38 +38,6 @@ export function isAbortError(error: unknown): boolean {
   return "name" in error && String((error as { name?: unknown }).name) === "AbortError";
 }
 
-export function mergeAbortSignals(
-  signals: Array<AbortSignal | undefined>,
-): AbortSignal | undefined {
-  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  if (activeSignals.length === 0) {
-    return undefined;
-  }
-  if (activeSignals.length === 1) {
-    return activeSignals[0];
-  }
-  if (typeof AbortSignal.any === "function") {
-    return AbortSignal.any(activeSignals);
-  }
-  const fallbackController = new AbortController();
-  for (const signal of activeSignals) {
-    if (signal.aborted) {
-      fallbackController.abort();
-      return fallbackController.signal;
-    }
-  }
-  const abortFallback = () => {
-    fallbackController.abort();
-    for (const signal of activeSignals) {
-      signal.removeEventListener("abort", abortFallback);
-    }
-  };
-  for (const signal of activeSignals) {
-    signal.addEventListener("abort", abortFallback, { once: true });
-  }
-  return fallbackController.signal;
-}
-
 /** @deprecated Discord no longer uses this for channel-owned message run timeouts. */
 export async function runDiscordTaskWithTimeout(params: {
   run: (abortSignal: AbortSignal | undefined) => Promise<void>;
@@ -82,10 +50,11 @@ export async function runDiscordTaskWithTimeout(params: {
   const timeoutMs =
     params.timeoutMs === undefined ? undefined : resolveTimerTimeoutMs(params.timeoutMs, 0, 0);
   const timeoutAbortController = timeoutMs ? new AbortController() : undefined;
-  const mergedAbortSignal = mergeAbortSignals([
-    ...(params.abortSignals ?? []),
-    timeoutAbortController?.signal,
-  ]);
+  const abortSignals = [...(params.abortSignals ?? []), timeoutAbortController?.signal].filter(
+    (signal): signal is AbortSignal => Boolean(signal),
+  );
+  const mergedAbortSignal =
+    abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const runPromise = params.run(mergedAbortSignal).catch((error: unknown) => {

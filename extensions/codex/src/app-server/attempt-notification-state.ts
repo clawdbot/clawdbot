@@ -68,17 +68,11 @@ export function isTerminalCodexTurnNotificationForTurn(params: {
   notification: CodexServerNotification;
   threadId: string;
   turnId: string;
-  currentPromptTexts: string[];
 }): boolean {
   if (!isCodexNotificationForTurn(params.notification.params, params.threadId, params.turnId)) {
     return false;
   }
-  return (
-    params.notification.method === "turn/completed" ||
-    isCodexTurnAbortMarkerNotification(params.notification, {
-      currentPromptTexts: params.currentPromptTexts,
-    })
-  );
+  return params.notification.method === "turn/completed";
 }
 
 /**
@@ -115,13 +109,15 @@ export function applyCodexTurnNotificationState(params: {
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
 
   if (isCurrentTurnNotification) {
+    // Update item ownership before scheduling progress watches: a started item
+    // owns its quiet execution window, while its completion starts a new idle window.
+    updateActiveTurnItemIds(notification, params.activeTurnItemIds);
+    updateActiveCompletionBlockerItemIds(notification, params.activeCompletionBlockerItemIds);
     turnWatches.touchActivity(`notification:${notification.method}`, {
       details: describeNotificationActivity(notification),
       attemptProgress: true,
     });
     params.onReportExecutionNotification(notification);
-    updateActiveTurnItemIds(notification, params.activeTurnItemIds);
-    updateActiveCompletionBlockerItemIds(notification, params.activeCompletionBlockerItemIds);
     if (notification.method === "item/completed" && params.activeTurnItemIds.size === 0) {
       params.onScheduleTerminalDynamicToolReleaseCheck();
     }
@@ -285,7 +281,6 @@ export function applyCodexTurnNotificationState(params: {
     notification,
     threadId: params.threadId,
     turnId: params.turnId,
-    currentPromptTexts: params.currentPromptTexts,
   });
 
   return {

@@ -3,15 +3,32 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const workspaceStateMocks = vi.hoisted(() => ({
+  deleteWorkspaceState: vi.fn(),
+  prepareWorkspaceStateDeletion: vi.fn((workspaceDir: string) => ({ workspaceDir })),
+}));
+
+vi.mock("../agents/workspace-state-store.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/workspace-state-store.js")>(
+    "../agents/workspace-state-store.js",
+  )),
+  deleteWorkspaceState: workspaceStateMocks.deleteWorkspaceState,
+  prepareWorkspaceStateDeletion: workspaceStateMocks.prepareWorkspaceStateDeletion,
+}));
+
 import {
   buildCleanupPlan,
+  listAgentSessionDirs,
   removePath,
   removeStateAndLinkedPaths,
-  removeWorkspaceAttestationPaths,
   removeWorkspaceDirs,
 } from "./cleanup-utils.js";
 
@@ -35,7 +52,9 @@ describe("buildCleanupPlan", () => {
 
     expect(plan.configInsideState).toBe(true);
     expect(plan.oauthInsideState).toBe(false);
-    expect(new Set(plan.workspaceDirs)).toEqual(new Set([defaultWorkspace, opsWorkspace]));
+    expect(new Set(plan.workspaceDirs)).toEqual(
+      new Set([path.join(defaultWorkspace, "main"), opsWorkspace]),
+    );
   });
 
   test("includes implicit per-agent workspaces under the state dir", () => {
@@ -63,7 +82,7 @@ describe("buildCleanupPlan", () => {
         });
 
         expect(new Set(plan.workspaceDirs)).toEqual(
-          new Set([path.join(stateDir, "workspace"), path.join(stateDir, "workspace-work")]),
+          new Set([path.join(stateDir, "workspace-main"), path.join(stateDir, "workspace-work")]),
         );
       },
     );
@@ -71,6 +90,10 @@ describe("buildCleanupPlan", () => {
 });
 
 describe("cleanup path removals", () => {
+  beforeEach(() => {
+    workspaceStateMocks.deleteWorkspaceState.mockClear();
+  });
+
   function createRuntimeMock() {
     return {
       log: vi.fn<(message: string) => void>(),
@@ -84,7 +107,7 @@ describe("cleanup path removals", () => {
   it("removes state and only linked paths outside state", async () => {
     const runtime = createRuntimeMock();
     const tmpRoot = path.join(path.parse(process.cwd()).root, "tmp", "openclaw-cleanup");
-    await removeStateAndLinkedPaths(
+    const stateRemoved = await removeStateAndLinkedPaths(
       {
         stateDir: path.join(tmpRoot, "state"),
         configPath: path.join(tmpRoot, "state", "openclaw.json"),
@@ -100,6 +123,28 @@ describe("cleanup path removals", () => {
       "[dry-run] remove /tmp/openclaw-cleanup/state",
       "[dry-run] remove /tmp/openclaw-cleanup/oauth",
     ]);
+    expect(stateRemoved).toBe(true);
+  });
+
+  it("reports when the state directory survives removal", async () => {
+    const runtime = createRuntimeMock();
+    const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("permission denied"));
+
+    try {
+      const stateRemoved = await removeStateAndLinkedPaths(
+        {
+          stateDir: "/tmp/openclaw-cleanup-state-failure",
+          configPath: "/tmp/openclaw-cleanup-state-failure/openclaw.json",
+          oauthDir: "/tmp/openclaw-cleanup-state-failure/credentials",
+          configInsideState: true,
+          oauthInsideState: true,
+        },
+        runtime,
+      );
+      expect(stateRemoved).toBe(false);
+    } finally {
+      rmSpy.mockRestore();
+    }
   });
 
   it("preserves nested workspace paths during state-only removal", async () => {
@@ -150,25 +195,129 @@ describe("cleanup path removals", () => {
     ]);
   });
 
-  it("removes owned legacy workspace attestations", async () => {
+  it("deletes workspace state only after workspace removal succeeds", async () => {
     const runtime = createRuntimeMock();
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cleanup-attest-"));
+    const tmpRoot = tempDirs.make("openclaw-cleanup-workspace-");
     const workspaceDir = path.join(tmpRoot, "workspace");
-    const legacyAttestationPath = `${workspaceDir}.attested`;
+
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      await removeWorkspaceDirs([workspaceDir], runtime, { removeStateRows: true });
+
+      await expect(fs.stat(workspaceDir)).rejects.toThrow();
+      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans workspace state when the workspace directory is already missing", async () => {
+    const runtime = createRuntimeMock();
+    const tmpRoot = tempDirs.make("openclaw-cleanup-missing-workspace-");
+    const workspaceDir = path.join(tmpRoot, "workspace");
+    const siblingMarker = `${workspaceDir}.attested`;
+
+    try {
+      await fs.writeFile(
+        siblingMarker,
+        "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
+      );
+
+      await removeWorkspaceDirs([workspaceDir], runtime, { removeStateRows: true });
+
+      await expect(fs.stat(siblingMarker)).rejects.toThrow();
+      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a retired sibling marker after workspace removal without opening SQLite", async () => {
+    const runtime = createRuntimeMock();
+    const tmpRoot = tempDirs.make("openclaw-cleanup-legacy-");
+    const workspaceDir = path.join(tmpRoot, "workspace");
+    const siblingMarker = `${workspaceDir}.attested`;
 
     try {
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.writeFile(
-        legacyAttestationPath,
-        `openclaw-workspace-attestation:v1\n${new Date().toISOString()}\n`,
+        siblingMarker,
+        "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
       );
 
-      await removeWorkspaceAttestationPaths([workspaceDir], runtime);
+      await removeWorkspaceDirs([workspaceDir], runtime);
 
-      await expect(fs.stat(legacyAttestationPath)).rejects.toThrow();
+      await expect(fs.stat(workspaceDir)).rejects.toThrow();
+      await expect(fs.stat(siblingMarker)).rejects.toThrow();
+      expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
+  });
+
+  it("does not delete workspace state during dry-run", async () => {
+    const runtime = createRuntimeMock();
+
+    await removeWorkspaceDirs(["/tmp/openclaw-workspace"], runtime, {
+      dryRun: true,
+      removeStateRows: true,
+    });
+
+    expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
+  });
+
+  it("previews retired sibling-marker cleanup during workspace dry-run", async () => {
+    const runtime = createRuntimeMock();
+    const tmpRoot = tempDirs.make("openclaw-cleanup-dry-run-legacy-");
+    const workspaceDir = path.join(tmpRoot, "workspace");
+    const siblingMarker = `${workspaceDir}.attested`;
+
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(
+        siblingMarker,
+        "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
+      );
+
+      await removeWorkspaceDirs([workspaceDir], runtime, { dryRun: true });
+
+      expect(runtime.log).toHaveBeenCalledWith(`[dry-run] remove ${siblingMarker}`);
+      await expect(fs.lstat(siblingMarker)).resolves.toBeDefined();
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("retains workspace state when filesystem removal fails", async () => {
+    const runtime = createRuntimeMock();
+    const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("permission denied"));
+
+    try {
+      await removeWorkspaceDirs(["/tmp/openclaw-workspace"], runtime, {
+        removeStateRows: true,
+      });
+    } finally {
+      rmSpy.mockRestore();
+    }
+
+    expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
+  });
+
+  it("continues after an injected workspace remover rejects", async () => {
+    const runtime = createRuntimeMock();
+    const removeWorkspace = vi
+      .fn<(workspace: string) => Promise<boolean>>()
+      .mockRejectedValueOnce(new Error("trash unavailable"))
+      .mockResolvedValueOnce(true);
+
+    const failures = await removeWorkspaceDirs(["/tmp/first", "/tmp/second"], runtime, {
+      removeWorkspace,
+    });
+
+    expect(removeWorkspace).toHaveBeenCalledTimes(2);
+    expect(failures).toEqual(["/tmp/first"]);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("trash unavailable"));
   });
 
   it("refuses to remove the current working directory", async () => {
@@ -206,6 +355,20 @@ describe("cleanup path removals", () => {
     } finally {
       cwdSpy.mockRestore();
       await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("listAgentSessionDirs", () => {
+  it("treats a missing agents root as empty but propagates inspection failures", async () => {
+    await expect(listAgentSessionDirs("/tmp/openclaw-missing-state")).resolves.toEqual([]);
+
+    const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const readdir = vi.spyOn(fs, "readdir").mockRejectedValueOnce(error);
+    try {
+      await expect(listAgentSessionDirs("/tmp/openclaw-unreadable-state")).rejects.toBe(error);
+    } finally {
+      readdir.mockRestore();
     }
   });
 });

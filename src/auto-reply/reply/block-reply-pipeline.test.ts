@@ -2,11 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
-import {
-  createBlockReplyContentKey,
-  createBlockReplyPayloadKey,
-  createBlockReplyPipeline,
-} from "./block-reply-pipeline.js";
+import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
 const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
   new Promise((resolve) => {
@@ -23,48 +19,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-});
-
-describe("createBlockReplyPayloadKey", () => {
-  it("produces different keys for payloads differing only by replyToId", () => {
-    const a = createBlockReplyPayloadKey({ text: "hello world", replyToId: "post-1" });
-    const b = createBlockReplyPayloadKey({ text: "hello world", replyToId: "post-2" });
-    const c = createBlockReplyPayloadKey({ text: "hello world" });
-    expect(a).not.toBe(b);
-    expect(a).not.toBe(c);
-  });
-
-  it("produces different keys for payloads with different text", () => {
-    const a = createBlockReplyPayloadKey({ text: "hello" });
-    const b = createBlockReplyPayloadKey({ text: "world" });
-    expect(a).not.toBe(b);
-  });
-
-  it("produces different keys for payloads with different media", () => {
-    const a = createBlockReplyPayloadKey({ text: "hello", mediaUrl: "file:///a.png" });
-    const b = createBlockReplyPayloadKey({ text: "hello", mediaUrl: "file:///b.png" });
-    expect(a).not.toBe(b);
-  });
-
-  it("produces different keys for payloads with different presentation content", () => {
-    const a = createBlockReplyPayloadKey({
-      presentation: {
-        blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
-      },
-    });
-    const b = createBlockReplyPayloadKey({
-      presentation: {
-        blocks: [{ type: "buttons", buttons: [{ label: "Reject", value: "reject" }] }],
-      },
-    });
-    expect(a).not.toBe(b);
-  });
-
-  it("trims whitespace from text for key comparison", () => {
-    const a = createBlockReplyPayloadKey({ text: "  hello  " });
-    const b = createBlockReplyPayloadKey({ text: "hello" });
-    expect(a).toBe(b);
-  });
 });
 
 describe("createBlockReplyContentKey", () => {
@@ -101,6 +55,22 @@ describe("createBlockReplyContentKey", () => {
 });
 
 describe("createBlockReplyPipeline dedup with threading", () => {
+  it("keeps an un-aborted delivery signal when timeouts are disabled", async () => {
+    let deliverySignal: AbortSignal | undefined;
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (_payload, options) => {
+        deliverySignal = options?.abortSignal;
+      },
+      timeoutMs: 0,
+    });
+
+    pipeline.enqueue({ text: "response text" });
+    await pipeline.flush({ force: true });
+
+    expect(deliverySignal).toBeDefined();
+    expect(deliverySignal?.aborted).toBe(false);
+  });
+
   it("does not count reasoning or commentary as a terminal reply", async () => {
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async () => {},

@@ -2,6 +2,7 @@
  * ACPX turn adapters. Modern runtimes can expose startTurn directly; legacy
  * runtimes that only stream runTurn events are adapted to the newer contract.
  */
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   AcpRuntime,
@@ -67,7 +68,7 @@ class LegacyRunTurnEventQueue {
       return item;
     }
     if (this.error) {
-      throw toLintErrorObject(this.error, "Non-Error thrown");
+      throw toErrorObject(this.error, "Non-Error thrown");
     }
     if (this.closed) {
       return null;
@@ -157,7 +158,7 @@ function legacyRunTurnAsStartTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInpu
 }
 
 /** Start an ACP turn, adapting legacy runTurn-only runtimes when needed. */
-export function startRuntimeTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInput): AcpRuntimeTurn {
+function startRuntimeTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInput): AcpRuntimeTurn {
   return runtime.startTurn?.(input) ?? legacyRunTurnAsStartTurn(runtime, input);
 }
 
@@ -182,18 +183,4 @@ export function lazyStartRuntimeTurn(
       return turnPromise.then((turn) => turn.closeStream(inputArgs));
     },
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

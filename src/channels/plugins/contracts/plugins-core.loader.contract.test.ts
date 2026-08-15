@@ -1,6 +1,7 @@
 // Plugins core loader contract tests cover channel plugin loader setup and teardown behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelTestPluginBase,
   createOutboundTestPlugin,
@@ -8,7 +9,7 @@ import {
 } from "../../../test-utils/channel-plugins.js";
 import { loadChannelOutboundAdapter } from "../outbound/load.js";
 import { createChannelRegistryLoader } from "../registry-loader.js";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../types.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../types.public.js";
 
 const loadChannelPlugin = createChannelRegistryLoader<ChannelPlugin>((entry) => entry.plugin);
 
@@ -101,6 +102,16 @@ describe("channel plugin loader", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+  });
+
+  it("prefers the registry scoped to a bootstrapped channel handler", async () => {
+    setActivePluginRegistry(emptyRegistry);
+
+    const loaded = await withPluginRuntimeRegistryScope(registryWithDemoLoader, () =>
+      loadChannelOutboundAdapter("demo-loader"),
+    );
+
+    expect(loaded).toBe(demoOutbound);
   });
 
   it.each([

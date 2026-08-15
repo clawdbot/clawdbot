@@ -1,37 +1,32 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import type { FastMode, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
-import { normalizeThinkLevel } from "../../lib/chat/thinking.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
+  DEFAULT_SESSION_LIST_QUERY,
   scopedAgentParamsForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
-  resolveSessionKey,
   type SessionCapability,
+  type SessionArchivedFilter,
   type SessionListOptions,
   type SessionRefreshTarget,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
-  DEFAULT_AGENT_ID,
-  DEFAULT_MAIN_KEY,
   isUiGlobalSessionKey,
-  normalizeAgentId,
-  normalizeSessionKeyForUiComparison,
-  resolveUiConfiguredMainKey,
-  resolveUiDefaultAgentId,
+  isUiSelectedGlobalSessionKey,
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { ChatHistoryResult } from "./chat-history.ts";
-
-const CHAT_SESSION_LIST_ACTIVE_MINUTES = 0;
-const CHAT_SESSION_LIST_LIMIT = 50;
+import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
+export { getPendingChatPickerPatch };
 
 type ChatSessionListHost = {
-  sessionsShowArchived?: boolean;
+  sessionsArchivedFilter?: SessionArchivedFilter;
 };
 
 type ChatSessionRefreshHost = ChatSessionListHost &
@@ -48,7 +43,6 @@ type ChatModelSettingsHost = ChatSessionRefreshHost & {
   chatModelCatalog: Parameters<typeof resolveChatModelOverrideValue>[0]["chatModelCatalog"];
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   chatThinkingLevel: string | null;
-  onModelChanged?: () => unknown;
   sessions: SessionCapability;
   sessionsResult?: SessionsListResult | null;
   requestUpdate?: () => void;
@@ -61,17 +55,70 @@ type ChatIdleSessionReconciliationHost = SessionScopeHost & {
   sessionsResult?: SessionsListResult | null;
 };
 
-export function buildChatSessionListOptions(
-  _state: ChatSessionListHost,
+export function retireChatModelSelectionOwnership(
+  host: Pick<
+    ChatModelSettingsHost,
+    "agentsList" | "chatModelSwitchPromises" | "hello" | "requestUpdate" | "sessionKey" | "sessions"
+  >,
+): void {
+  const pendingKeys = Object.keys(host.chatModelSwitchPromises ?? {});
+  const ownedKeys = new Set([host.sessionKey, ...pendingKeys]);
+  if (isUiSelectedGlobalSessionKey(host, host.sessionKey)) {
+    ownedKeys.add("global");
+  }
+  const hasPendingSwitch = pendingKeys.length > 0;
+  const modelOverrides = host.sessions.state?.modelOverrides ?? {};
+  const hasModelOverride = [...ownedKeys].some((key) => Object.hasOwn(modelOverrides, key));
+  if (!hasPendingSwitch && !hasModelOverride) {
+    return;
+  }
+  host.chatModelSwitchPromises = {};
+  for (const key of ownedKeys) {
+    host.sessions.retireModelOverride(key);
+  }
+  host.requestUpdate?.();
+}
+
+export function applySelectedChatAgent(
+  host:
+    | (Pick<
+        ChatModelSettingsHost,
+        | "agentsList"
+        | "chatModelSwitchPromises"
+        | "hello"
+        | "requestUpdate"
+        | "sessionKey"
+        | "sessions"
+      > & {
+        assistantAgentId?: string | null;
+      })
+    | null
+    | undefined,
+  selectedAgentId: string | null,
+): void {
+  if (
+    !host ||
+    !isUiSelectedGlobalSessionKey(host, host.sessionKey) ||
+    (host.assistantAgentId ?? null) === selectedAgentId
+  ) {
+    return;
+  }
+  retireChatModelSelectionOwnership(host);
+  host.assistantAgentId = selectedAgentId;
+  host.requestUpdate?.();
+}
+
+function buildChatSessionListOptions(
+  state: ChatSessionListHost,
   options: { offset?: number; append?: boolean; search?: string | null } = {},
 ): SessionListOptions {
   const result: SessionListOptions = {
-    activeMinutes: CHAT_SESSION_LIST_ACTIVE_MINUTES,
-    limit: CHAT_SESSION_LIST_LIMIT,
+    ...DEFAULT_SESSION_LIST_QUERY,
     includeGlobal: true,
     includeUnknown: true,
     configuredAgentsOnly: true,
-    showArchived: false,
+    includeDerivedTitles: true,
+    archivedFilter: state.sessionsArchivedFilter ?? "active",
   };
   const search = normalizeOptionalString(options.search ?? undefined);
   if (search) {
@@ -235,78 +282,6 @@ function setChatError(host: ChatModelSettingsHost, error: string | null, request
   }
 }
 
-const pendingChatPickerPatches = new WeakMap<SessionCapability, Map<string, Promise<boolean>>>();
-
-type ChatPickerPatchHost = SessionScopeHost & { sessions: SessionCapability };
-
-function resolveChatPickerPatchKey(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  agentId?: string,
-): string {
-  const normalizedKey = normalizeSessionKeyForUiComparison(sessionKey);
-  const match = /^agent:([^:]+):(.*)$/u.exec(normalizedKey);
-  const body = match?.[2] ?? normalizedKey;
-  const isGlobal = isUiGlobalSessionKey(sessionKey);
-  const isMainAlias = [DEFAULT_MAIN_KEY, resolveUiConfiguredMainKey(host)].includes(
-    body.toLowerCase(),
-  );
-  const defaultAgentId = resolveUiDefaultAgentId(host);
-  const parsedAgentId = match?.[1];
-  // Match the Gateway's legacy default-main remap only when the live agent
-  // catalog proves that "main" is not a real agent.
-  const isLegacyDefaultMainAlias =
-    isMainAlias &&
-    normalizeAgentId(parsedAgentId ?? "") === DEFAULT_AGENT_ID &&
-    defaultAgentId !== DEFAULT_AGENT_ID &&
-    host.agentsList?.agents != null &&
-    !host.agentsList.agents.some(
-      (candidate) => normalizeAgentId(candidate.id) === DEFAULT_AGENT_ID,
-    );
-  // Main aliases share the literal global store only in global session scope.
-  const isGlobalMain = host.agentsList?.scope
-    ? host.agentsList.scope === "global"
-    : isUiGlobalSessionKey(resolveSessionKey(DEFAULT_MAIN_KEY, host.hello));
-  const resolvedAgentId =
-    (isLegacyDefaultMainAlias ? defaultAgentId : agentId?.trim() || parsedAgentId) ||
-    (isGlobal ? resolveUiSelectedGlobalAgentId(host) : defaultAgentId);
-  const settingsKey =
-    isGlobal || (isMainAlias && isGlobalMain) ? "global" : isMainAlias ? DEFAULT_MAIN_KEY : body;
-  return `agent:${normalizeAgentId(resolvedAgentId)}:${settingsKey}`;
-}
-
-export function getPendingChatPickerPatch(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  agentId?: string,
-): Promise<boolean> | undefined {
-  const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
-  return pendingChatPickerPatches.get(host.sessions)?.get(patchKey);
-}
-
-export function trackPendingChatPickerPatch(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  patchPromise: Promise<boolean>,
-) {
-  const pendingBySession =
-    pendingChatPickerPatches.get(host.sessions) ?? new Map<string, Promise<boolean>>();
-  pendingChatPickerPatches.set(host.sessions, pendingBySession);
-  const patchKey = resolveChatPickerPatchKey(host, sessionKey);
-  const previous = pendingBySession.get(patchKey);
-  // Aggregate every picker patch across the shared capability; overlapping
-  // Gateway handlers can overtake pane-local or latest-only tracking.
-  const pending = Promise.all([previous ?? true, patchPromise]).then(
-    ([previousReady, patchReady]) => previousReady && patchReady,
-  );
-  pendingBySession.set(patchKey, pending);
-  void pending.finally(() => {
-    if (pendingBySession.get(patchKey) === pending) {
-      pendingBySession.delete(patchKey);
-    }
-  });
-}
-
 // Immediate-apply pickers can overlap patches for the same session. Mirror the
 // pendingModelPatches token guard in sessions/index.ts: only the latest patch
 // may re-assert or roll back the optimistic row, so a slow earlier request
@@ -343,6 +318,12 @@ function patchSessionRow(
   sessionKey: string,
   patch: Partial<SessionsListResult["sessions"][number]>,
 ) {
+  // Mirror into the capability snapshot first: publishes replace the host copy
+  // wholesale, so without the mirror any mid-flight publish reverts this patch
+  // until the post-patch list refresh lands (visible slider snap-back that can
+  // swallow the next keyboard commit). The host copy still updates directly so
+  // hosts without a live capability subscription stay coherent.
+  host.sessions.patchRowLocal(sessionKey, patch);
   const current = host.sessionsResult;
   if (!current) {
     return;
@@ -350,7 +331,7 @@ function patchSessionRow(
   host.sessionsResult = {
     ...current,
     sessions: current.sessions.map((row) =>
-      row.key === sessionKey ? Object.assign({}, row, patch) : row,
+      areUiSessionKeysEquivalent(row.key, sessionKey) ? Object.assign({}, row, patch) : row,
     ),
   };
 }
@@ -363,7 +344,9 @@ export function switchChatFastMode(
   if (!host.client || !host.connected) {
     return Promise.resolve(false);
   }
-  const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
+  const activeRow = host.sessionsResult?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, targetSessionKey),
+  );
   const previousFastMode = activeRow?.fastMode;
   const previousEffectiveFastMode = activeRow?.effectiveFastMode;
   const next: FastMode | undefined =
@@ -386,18 +369,21 @@ export function switchChatFastMode(
   };
   const patchPromise = (async () => {
     try {
-      const patched = await host.sessions.patch(
+      const patched = await patchChatSessionSettings(
+        host,
         targetSessionKey,
         {
           fastMode: next ?? null,
         },
-        scopedAgentParamsForSession(host, targetSessionKey),
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => refreshCurrentChatSessionList(host),
+        },
       );
       if (!patched) {
         rollback();
         return false;
       }
-      await refreshCurrentChatSessionList(host);
       if (isCurrentChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey, token)) {
         patchSessionRow(host, targetSessionKey, { fastMode: next });
       }
@@ -408,7 +394,6 @@ export function switchChatFastMode(
       return false;
     }
   })();
-  trackPendingChatPickerPatch(host, targetSessionKey, patchPromise);
   return patchPromise;
 }
 
@@ -435,7 +420,10 @@ export async function switchChatModel(
   if (currentOverride === nextModel) {
     return true;
   }
-  const previousModelOverride = host.sessions.state.modelOverrides[targetSessionKey];
+  const modelOwnerAgentId = scopedAgentParamsForSession(host, targetSessionKey).agentId;
+  const ownsModelOverride = () =>
+    !isUiSelectedGlobalSessionKey(host, targetSessionKey) ||
+    resolveUiSelectedGlobalAgentId(host) === modelOwnerAgentId;
   setChatError(host, null, true);
   const switchPromiseRef: { current?: Promise<boolean> } = {};
   const clearPendingSwitch = () => {
@@ -447,22 +435,28 @@ export async function switchChatModel(
   };
   const switchPromise: Promise<boolean> = (async () => {
     try {
-      const patched = await host.sessions.patch(
+      const patched = await patchChatSessionSettings(
+        host,
         targetSessionKey,
         {
           model: nextModel || null,
         },
-        scopedAgentParamsForSession(host, targetSessionKey),
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          ownsModelOverride,
+          reconcile: async () => {
+            await refreshCurrentChatSessionList(host);
+          },
+        },
       );
       if (!patched) {
         return false;
       }
-      await host.onModelChanged?.();
-      await refreshCurrentChatSessionList(host);
       return true;
     } catch (err) {
-      host.sessions.setModelOverride(targetSessionKey, previousModelOverride);
-      setChatError(host, `Failed to set model: ${String(err)}`, true);
+      if (ownsModelOverride()) {
+        setChatError(host, `Failed to set model: ${String(err)}`, true);
+      }
       return false;
     } finally {
       clearPendingSwitch();
@@ -474,7 +468,6 @@ export async function switchChatModel(
     ...host.chatModelSwitchPromises,
     [targetSessionKey]: switchPromise,
   };
-  trackPendingChatPickerPatch(host, targetSessionKey, switchPromise);
   host.requestUpdate?.();
   return switchPromise;
 }
@@ -487,7 +480,9 @@ export function switchChatThinkingLevel(
   if (!host.client || !host.connected) {
     return Promise.resolve(false);
   }
-  const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
+  const activeRow = host.sessionsResult?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, targetSessionKey),
+  );
   const previousThinkingLevel = activeRow?.thinkingLevel;
   const normalizedNext =
     (normalizeThinkLevel(nextThinkingLevel) ?? nextThinkingLevel.trim()) || undefined;
@@ -514,18 +509,21 @@ export function switchChatThinkingLevel(
   };
   const patchPromise = (async () => {
     try {
-      const patched = await host.sessions.patch(
+      const patched = await patchChatSessionSettings(
+        host,
         targetSessionKey,
         {
           thinkingLevel: normalizedNext ?? null,
         },
-        scopedAgentParamsForSession(host, targetSessionKey),
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => refreshCurrentChatSessionList(host),
+        },
       );
       if (!patched) {
         rollback();
         return false;
       }
-      await refreshCurrentChatSessionList(host);
       if (isCurrentChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey, token)) {
         patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
         if (host.sessionKey === targetSessionKey) {
@@ -539,6 +537,5 @@ export function switchChatThinkingLevel(
       return false;
     }
   })();
-  trackPendingChatPickerPatch(host, targetSessionKey, patchPromise);
   return patchPromise;
 }

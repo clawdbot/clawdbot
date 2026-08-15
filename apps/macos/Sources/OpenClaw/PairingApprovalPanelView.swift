@@ -1,32 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Floating approval UI listing every pending pairing request as a card.
-/// Liquid Glass surface on macOS 26+, material fallback on macOS 15.
+/// Approval dialog listing every pending pairing request as a card. The host
+/// panel draws native window chrome; this view only lays out the content.
 struct PairingApprovalPanelView: View {
     let center: PairingApprovalCenter
 
-    /// Transparent margin around the glass so the drawn shadow has room;
-    /// the NSPanel shadow is disabled (it would trace a square window edge).
-    static let shadowMargin: CGFloat = 32
-
     var body: some View {
-        self.surface
+        self.content
             .frame(width: PairingApprovalPanelController.panelWidth)
-            .compositingGroup()
-            .shadow(color: .black.opacity(0.28), radius: 22, x: 0, y: 10)
-            .padding(Self.shadowMargin)
-    }
-
-    @ViewBuilder
-    private var surface: some View {
-        if #available(macOS 26.0, *) {
-            self.content
-                .glassEffect(.regular, in: .rect(cornerRadius: 24))
-        } else {
-            self.content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
-        }
     }
 
     private var content: some View {
@@ -40,7 +22,6 @@ struct PairingApprovalPanelView: View {
                     ForEach(cards) { card in
                         PairingRequestCardView(
                             card: card,
-                            isBusy: self.center.decisionsInFlight.contains(card.requestId),
                             isOnlyRequest: cards.count == 1,
                             onDecision: { self.center.decide(card, $0) })
                     }
@@ -61,7 +42,6 @@ struct PairingApprovalPanelView: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
         if cards.count > 1 {
-            let allBusy = cards.allSatisfy { self.center.decisionsInFlight.contains($0.id) }
             HStack(spacing: 8) {
                 notNow
                 Spacer()
@@ -85,7 +65,6 @@ struct PairingApprovalPanelView: View {
                 }
                 .pairingActionStyle(prominent: true)
             }
-            .disabled(allBusy)
         } else {
             HStack {
                 Spacer()
@@ -113,7 +92,6 @@ struct PairingApprovalPanelView: View {
 
 struct PairingRequestCardView: View {
     let card: PairingApprovalCenter.Card
-    let isBusy: Bool
     let isOnlyRequest: Bool
     let onDecision: (PairingApprovalCenter.Decision) -> Void
 
@@ -149,8 +127,6 @@ struct PairingRequestCardView: View {
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 16).fill(.quinary))
-        .disabled(self.isBusy)
-        .opacity(self.isBusy ? 0.6 : 1)
     }
 
     private var icon: some View {
@@ -267,9 +243,8 @@ extension View {
 /// can assert copy and symbols without instantiating views.
 enum PairingCardPresentation {
     struct AccessRow: Identifiable, Equatable {
-        /// Derived from the raw grant, not display text: distinct grants can
-        /// render identically (e.g. caps `voice`/`audio`) and colliding ids
-        /// would let SwiftUI drop rows from the approval surface.
+        /// Single grants use their raw value; intentional grouped grants use a
+        /// dedicated group id so SwiftUI never drops a rendered access row.
         let id: String
         let symbol: String
         let text: String
@@ -382,7 +357,7 @@ enum PairingCardPresentation {
                     isElevated: true))
             }
             rows.append(contentsOf: self.friendlyCapNames(card.caps).map {
-                AccessRow(id: "cap:\($0.raw)", symbol: $0.symbol, text: $0.text, isElevated: false)
+                AccessRow(id: $0.id, symbol: $0.symbol, text: $0.text, isElevated: false)
             })
             // Approval persists the whole declared command surface; list the
             // remaining commands so none of it is granted invisibly.
@@ -550,28 +525,57 @@ enum PairingCardPresentation {
         }
     }
 
-    static func friendlyCapNames(_ caps: [String]) -> [(raw: String, symbol: String, text: String)] {
+    private static let sessionProviderByCapability = [
+        "codex-app-server-threads": "Codex",
+        "codex-cli-sessions": "Codex",
+        "claude-sessions": "Claude",
+        "opencode-sessions": "OpenCode",
+        "pi-sessions": "Pi",
+    ]
+
+    static func friendlyCapNames(_ caps: [String]) -> [(id: String, symbol: String, text: String)] {
         var seen = Set<String>()
-        return caps.compactMap { cap in
+        let normalizedCaps = caps.compactMap { cap -> String? in
             let normalized = cap.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard !normalized.isEmpty, seen.insert(normalized).inserted else {
                 return nil
             }
+            return normalized
+        }
+
+        var seenSessionProviders = Set<String>()
+        let sessionProviders = normalizedCaps.compactMap { capability -> String? in
+            guard let provider = self.sessionProviderByCapability[capability],
+                  seenSessionProviders.insert(provider).inserted
+            else { return nil }
+            return provider
+        }
+        var renderedSessionGroup = false
+
+        return normalizedCaps.compactMap { normalized in
+            if self.sessionProviderByCapability[normalized] != nil {
+                guard !renderedSessionGroup else { return nil }
+                renderedSessionGroup = true
+                return (
+                    "cap-group:sessions",
+                    "rectangle.stack",
+                    "Sessions: \(sessionProviders.joined(separator: ", "))")
+            }
             switch normalized {
             case "screen":
-                return (normalized, "rectangle.inset.filled.badge.record", "Screen capture")
+                return ("cap:\(normalized)", "rectangle.inset.filled.badge.record", "Screen capture")
             case "camera":
-                return (normalized, "camera", "Camera")
+                return ("cap:\(normalized)", "camera", "Camera")
             case "file":
-                return (normalized, "folder", "File transfer")
+                return ("cap:\(normalized)", "folder", "File transfer")
             case "location":
-                return (normalized, "location", "Location")
+                return ("cap:\(normalized)", "location", "Location")
             case "voice", "audio":
-                return (normalized, "mic", "Microphone and voice")
+                return ("cap:\(normalized)", "mic", "Microphone and voice")
             case "canvas":
-                return (normalized, "paintbrush", "Canvas display")
+                return ("cap:\(normalized)", "paintbrush", "Canvas display")
             default:
-                return (normalized, "puzzlepiece.extension", self.prettifyRawName(normalized))
+                return ("cap:\(normalized)", "puzzlepiece.extension", self.prettifyRawName(normalized))
             }
         }
     }

@@ -8,7 +8,7 @@ import {
 import { detectInlineEvalInSegments } from "./risks.js";
 
 /** Normalized policy analysis result for argv and shell commands. */
-export type CommandPolicyAnalysis =
+type CommandPolicyAnalysis =
   | {
       ok: true;
       source: "argv" | "shell";

@@ -16,10 +16,7 @@ const NIX_STORE_ROOT = "/nix/store";
 // - /nix/store in OPENCLAW_NIX_MODE: immutable Nix package outputs, where
 //   hardlinked files are normal package-store layout rather than user mutation.
 /** Returns true when a plugin root resolves inside the immutable Nix store. */
-export function isNixStorePluginRoot(
-  rootDir: string,
-  realpathCache?: Map<string, string>,
-): boolean {
+function isNixStorePluginRoot(rootDir: string, realpathCache?: Map<string, string>): boolean {
   const rootRealPath = safeRealpathSync(rootDir, realpathCache) ?? path.resolve(rootDir);
   return rootRealPath === NIX_STORE_ROOT || rootRealPath.startsWith(`${NIX_STORE_ROOT}/`);
 }

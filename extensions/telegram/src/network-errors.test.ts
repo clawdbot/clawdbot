@@ -1,15 +1,16 @@
 // Telegram tests cover network errors plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
   isRetryableTelegramApiError,
+  isTelegramAuthenticationError,
   isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
   isTelegramPollingNetworkError,
   isTelegramServerError,
   tagTelegramNetworkError,
+  TelegramRequestNotStartedError,
 } from "./network-errors.js";
 
 const errorWithCode = (message: string, code: string) =>
@@ -60,6 +61,20 @@ describe("Telegram error_code predicate contracts", () => {
   );
 });
 
+describe("isTelegramAuthenticationError", () => {
+  it.each([
+    ["Unauthorized", 401, true],
+    ["Forbidden", 403, false],
+    ["Not Found", 404, true],
+  ])("returns %s for error_code %s", (message, errorCode, expected) => {
+    expect(isTelegramAuthenticationError(errorWithTelegramCode(message, errorCode))).toBe(expected);
+  });
+
+  it("does not infer authentication failure from an unstructured message", () => {
+    expect(isTelegramAuthenticationError(new Error("Unauthorized"))).toBe(false);
+  });
+});
+
 describe("isRecoverableTelegramNetworkError", () => {
   it("tracks Telegram polling origin separately from generic network matching", () => {
     const slackDnsError = Object.assign(
@@ -74,10 +89,6 @@ describe("isRecoverableTelegramNetworkError", () => {
 
     tagTelegramNetworkError(slackDnsError, {
       method: "getUpdates",
-      url: "https://api.telegram.org/bot123456:ABC/getUpdates",
-    });
-    expect(getTelegramNetworkErrorOrigin(slackDnsError)).toEqual({
-      method: "getupdates",
       url: "https://api.telegram.org/bot123456:ABC/getUpdates",
     });
     expect(isTelegramPollingNetworkError(slackDnsError)).toBe(true);
@@ -161,6 +172,17 @@ describe("isRecoverableTelegramNetworkError", () => {
     ).toBe(true);
   });
 
+  it("keeps request-not-started markers recoverable across Telegram contexts", () => {
+    const marker = new TelegramRequestNotStartedError();
+    const wrapped = Object.assign(new Error("Network request for 'getUpdates' failed!"), {
+      name: "HttpError",
+      error: marker,
+    });
+
+    expect(isRecoverableTelegramNetworkError(marker, { context: "send" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(wrapped, { context: "polling" })).toBe(true);
+  });
+
   it("returns false for unrelated errors", () => {
     expect(isRecoverableTelegramNetworkError(new Error("invalid token"))).toBe(false);
   });
@@ -174,7 +196,6 @@ describe("isRecoverableTelegramNetworkError", () => {
     const inner = new Error("inner");
     tagTelegramNetworkError(inner, { method: " ", url: " " });
     const outer = Object.assign(new Error("outer"), { cause: inner });
-    expect(getTelegramNetworkErrorOrigin(outer)).toEqual({ method: null, url: null });
     expect(isTelegramPollingNetworkError(outer)).toBe(false);
   });
 
@@ -270,6 +291,17 @@ describe("isSafeToRetrySendError", () => {
     expect(isSafeToRetrySendError(wrapped)).toBe(false);
   });
 
+  it("accepts only direct and exact grammY-wrapped request-not-started markers", () => {
+    const marker = new TelegramRequestNotStartedError();
+
+    expect(isSafeToRetrySendError(marker)).toBe(true);
+    expect(
+      isSafeToRetrySendError(
+        new MockHttpError("Network request for 'sendMessage' failed!", marker),
+      ),
+    ).toBe(true);
+  });
+
   it.each([
     ["status", Object.assign(new Error("Misdirected Request"), { status: 421 })],
     ["statusCode", Object.assign(new Error("Misdirected Request"), { statusCode: "421" })],
@@ -288,8 +320,8 @@ describe("isSafeToRetrySendError", () => {
         Object.assign(new Error("Misdirected Request"), { status: 421 }),
       ),
     ],
-  ])("treats Telegram 421 Misdirected Request as safe to retry via %s", (_name, err) => {
-    expect(isSafeToRetrySendError(err)).toBe(true);
+  ])("does not infer safe retry from broad Telegram 421 shape %s", (_name, err) => {
+    expect(isSafeToRetrySendError(err)).toBe(false);
   });
 
   it("does not parse malformed status strings as Telegram 421", () => {

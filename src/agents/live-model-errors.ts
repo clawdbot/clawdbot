@@ -31,6 +31,17 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/\bnot supported model\b/i.test(msg)) {
     return true;
   }
+  // OpenAI-backed runtimes reject account/plan-restricted models with
+  // "The '<model>' model is not supported when using <runtime> with <account>".
+  // The model id must change (or the account), so treat it as model-unavailable;
+  // the account suffix keeps capability errors out of this class.
+  if (
+    /\bmodel\b[^.]{0,120}?\bis not supported when using\b[^.]{0,80}?\bwith a ChatGPT account\b/i.test(
+      msg,
+    )
+  ) {
+    return true;
+  }
   if (/model:\s*[a-z0-9._/-]+/i.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) {
     return true;
   }

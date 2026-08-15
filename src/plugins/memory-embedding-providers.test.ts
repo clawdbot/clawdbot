@@ -2,17 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearMemoryEmbeddingProviders,
-  getMemoryEmbeddingProvider,
   getRegisteredMemoryEmbeddingProvider,
-  listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
   restoreRegisteredMemoryEmbeddingProviders,
-  restoreMemoryEmbeddingProviders,
   type MemoryEmbeddingProviderAdapter,
 } from "./memory-embedding-providers.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { withPluginRegistrationContext } from "./runtime.js";
 
-const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
 const INITIAL_REGISTERED_MEMORY_EMBEDDING_PROVIDERS = listRegisteredMemoryEmbeddingProviders();
 
 function createAdapter(id: string): MemoryEmbeddingProviderAdapter {
@@ -56,14 +54,16 @@ function expectRegisteredProviderState(params: {
 }
 
 function expectMemoryEmbeddingProviderIds(expectedIds: readonly string[]) {
-  expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([...expectedIds]);
+  expect(listRegisteredMemoryEmbeddingProviders().map((entry) => entry.adapter.id)).toEqual([
+    ...expectedIds,
+  ]);
 }
 
 function expectCurrentMemoryEmbeddingProvider(
   id: string,
   adapter: MemoryEmbeddingProviderAdapter | undefined,
 ) {
-  expect(getMemoryEmbeddingProvider(id)).toBe(adapter);
+  expect(getRegisteredMemoryEmbeddingProvider(id)?.adapter).toBe(adapter);
 }
 
 function expectMemoryEmbeddingProviderState(params: {
@@ -115,17 +115,6 @@ describe("memory embedding provider registry", () => {
     });
   });
 
-  it("restores a previous snapshot", () => {
-    const alpha = createAdapter("alpha");
-    const beta = createAdapter("beta");
-    registerMemoryEmbeddingProvider(alpha);
-
-    restoreMemoryEmbeddingProviders([beta]);
-
-    expectCurrentMemoryEmbeddingProvider("alpha", undefined);
-    expectCurrentMemoryEmbeddingProvider("beta", beta);
-  });
-
   it.each([
     {
       name: "tracks owner plugin ids in registered snapshots",
@@ -157,17 +146,35 @@ describe("memory embedding provider registry", () => {
     expectMemoryEmbeddingProviderIds([]);
   });
 
-  it("stores adapters in a process-global singleton map", () => {
+  it("stores adapters in the active registry", () => {
     const alpha = createAdapter("alpha");
     registerMemoryEmbeddingProvider(alpha, { ownerPluginId: "memory-core" });
 
-    const globalRegistry = (globalThis as Record<PropertyKey, unknown>)[
-      MEMORY_EMBEDDING_PROVIDERS_KEY
-    ] as Map<string, { adapter: MemoryEmbeddingProviderAdapter; ownerPluginId?: string }>;
-
-    expect(globalRegistry.get("alpha")).toEqual({
+    expect(getRegisteredMemoryEmbeddingProvider("alpha")).toEqual({
       adapter: alpha,
       ownerPluginId: "memory-core",
     });
+  });
+
+  it("uses builder ownership without displacing another plugin's adapter", () => {
+    const building = createEmptyPluginRegistry();
+    const original = createAdapter("shared");
+    building.memoryEmbeddingProviders.push({
+      pluginId: "first-plugin",
+      provider: original,
+      source: "runtime",
+    });
+
+    expect(() =>
+      withPluginRegistrationContext(building, "failing-plugin", () => {
+        registerMemoryEmbeddingProvider(createAdapter("shared"));
+      }),
+    ).toThrow("memory embedding provider shared already registered by first-plugin");
+    expect(building.memoryEmbeddingProviders[0]?.provider).toBe(original);
+
+    withPluginRegistrationContext(building, "builder-plugin", () => {
+      registerMemoryEmbeddingProvider(createAdapter("owned"));
+    });
+    expect(building.memoryEmbeddingProviders[1]?.pluginId).toBe("builder-plugin");
   });
 });

@@ -1,8 +1,11 @@
 // Legacy cron payload migration for provider/channel aliases and OpenAI Codex model refs.
 import {
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
   readStringValue as readString,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { toCanonicalOpenAIModelRef } from "../shared/codex-route-model-ref.js";
+import { migrateLegacyTaskSuggestionToolList } from "../shared/legacy-tool-name-migration.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -12,9 +15,7 @@ type LegacyAgentTurnCommandPayload = {
   timeoutSeconds?: number;
 };
 
-export type UnresolvedAgentTurnShellToolPromptKind =
-  | "commandPromptWithoutShellAccess"
-  | "shellToolPrompt";
+type UnresolvedAgentTurnShellToolPromptKind = "commandPromptWithoutShellAccess" | "shellToolPrompt";
 
 const LEGACY_AGENT_TURN_COMMAND_MARKER_RE = /\bCommand to run\s*:/iu;
 const LEGACY_AGENT_TURN_COMMAND_FIELD_RE = /^\s*-\s*(command|workdir|timeout)\s*:\s*(.*?)\s*$/iu;
@@ -30,6 +31,161 @@ const LEGACY_DELIVERY_HINT_FIELDS = [
   "threadId",
 ] as const;
 
+export function normalizePayloadKind(payload: UnknownRecord) {
+  const raw = normalizeOptionalLowercaseString(payload.kind) ?? "";
+  if (raw === "agentturn") {
+    if (payload.kind !== "agentTurn") {
+      payload.kind = "agentTurn";
+      return true;
+    }
+    return false;
+  }
+  if (raw === "systemevent") {
+    if (payload.kind !== "systemEvent") {
+      payload.kind = "systemEvent";
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+export function inferPayloadIfMissing(raw: UnknownRecord) {
+  const message = normalizeOptionalString(raw.message) ?? "";
+  const text = normalizeOptionalString(raw.text) ?? "";
+  const command = normalizeOptionalString(raw.command) ?? "";
+  if (message) {
+    raw.payload = { kind: "agentTurn", message };
+    return true;
+  }
+  if (text) {
+    raw.payload = { kind: "systemEvent", text };
+    return true;
+  }
+  if (command) {
+    raw.payload = { kind: "systemEvent", text: command };
+    return true;
+  }
+  return false;
+}
+
+export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: UnknownRecord) {
+  let mutated = false;
+
+  const copyTrimmedString = (field: "model" | "thinking") => {
+    const existing = normalizeOptionalString(payload[field]);
+    if (existing) {
+      return;
+    }
+    const value = normalizeOptionalString(raw[field]);
+    if (value) {
+      payload[field] = value;
+      mutated = true;
+    }
+  };
+  copyTrimmedString("model");
+  copyTrimmedString("thinking");
+
+  if (
+    typeof payload.timeoutSeconds !== "number" &&
+    typeof raw.timeoutSeconds === "number" &&
+    Number.isFinite(raw.timeoutSeconds)
+  ) {
+    payload.timeoutSeconds = Math.max(0, Math.floor(raw.timeoutSeconds));
+    mutated = true;
+  }
+
+  if (
+    typeof payload.allowUnsafeExternalContent !== "boolean" &&
+    typeof raw.allowUnsafeExternalContent === "boolean"
+  ) {
+    payload.allowUnsafeExternalContent = raw.allowUnsafeExternalContent;
+    mutated = true;
+  }
+
+  if (typeof payload.deliver !== "boolean" && typeof raw.deliver === "boolean") {
+    payload.deliver = raw.deliver;
+    mutated = true;
+  }
+  const channel = normalizeOptionalString(raw.channel);
+  if (typeof payload.channel !== "string" && channel) {
+    payload.channel = channel;
+    mutated = true;
+  }
+  const to = normalizeOptionalString(raw.to);
+  if (typeof payload.to !== "string" && to) {
+    payload.to = to;
+    mutated = true;
+  }
+  const rawThreadId = normalizeOptionalString(raw.threadId);
+  if (
+    !("threadId" in payload) &&
+    ((typeof raw.threadId === "number" && Number.isFinite(raw.threadId)) || Boolean(rawThreadId))
+  ) {
+    payload.threadId = rawThreadId ?? raw.threadId;
+    mutated = true;
+  }
+  if (
+    typeof payload.bestEffortDeliver !== "boolean" &&
+    typeof raw.bestEffortDeliver === "boolean"
+  ) {
+    payload.bestEffortDeliver = raw.bestEffortDeliver;
+    mutated = true;
+  }
+  const provider = normalizeOptionalString(raw.provider);
+  if (typeof payload.provider !== "string" && provider) {
+    payload.provider = provider;
+    mutated = true;
+  }
+
+  return mutated;
+}
+
+export function stripLegacyTopLevelFields(raw: UnknownRecord) {
+  if ("model" in raw) {
+    delete raw.model;
+  }
+  if ("thinking" in raw) {
+    delete raw.thinking;
+  }
+  if ("timeoutSeconds" in raw) {
+    delete raw.timeoutSeconds;
+  }
+  if ("allowUnsafeExternalContent" in raw) {
+    delete raw.allowUnsafeExternalContent;
+  }
+  if ("message" in raw) {
+    delete raw.message;
+  }
+  if ("text" in raw) {
+    delete raw.text;
+  }
+  if ("deliver" in raw) {
+    delete raw.deliver;
+  }
+  if ("channel" in raw) {
+    delete raw.channel;
+  }
+  if ("to" in raw) {
+    delete raw.to;
+  }
+  if ("threadId" in raw) {
+    delete raw.threadId;
+  }
+  if ("bestEffortDeliver" in raw) {
+    delete raw.bestEffortDeliver;
+  }
+  if ("provider" in raw) {
+    delete raw.provider;
+  }
+  if ("command" in raw) {
+    delete raw.command;
+  }
+  if ("timeout" in raw) {
+    delete raw.timeout;
+  }
+}
+
 function hasShellToolAccess(toolsAllow: unknown): boolean {
   if (toolsAllow === undefined) {
     return true;
@@ -43,22 +199,46 @@ function hasShellToolAccess(toolsAllow: unknown): boolean {
   });
 }
 
-function toCanonicalOpenAIModelRef(value: unknown): string | undefined {
-  const raw = readString(value);
-  if (typeof raw !== "string") {
-    return undefined;
+type LegacyOpenAICodexCronModelRoute = {
+  legacyModelRef: string;
+  canonicalModelRef: string;
+};
+
+function readLegacyOpenAICodexCronModelRoute(
+  value: unknown,
+): LegacyOpenAICodexCronModelRoute | undefined {
+  const legacyModelRef = readString(value)?.trim();
+  const canonicalModelRef = legacyModelRef ? toCanonicalOpenAIModelRef(legacyModelRef) : undefined;
+  return legacyModelRef && canonicalModelRef ? { legacyModelRef, canonicalModelRef } : undefined;
+}
+
+/** Legacy and canonical route pairs retained for namespace-specific migration blockers. */
+export function collectLegacyOpenAICodexCronModelRoutes(
+  payload: UnknownRecord,
+): LegacyOpenAICodexCronModelRoute[] {
+  const routes = new Map<string, LegacyOpenAICodexCronModelRoute>();
+  const add = (value: unknown) => {
+    const route = readLegacyOpenAICodexCronModelRoute(value);
+    if (route) {
+      routes.set(`${route.legacyModelRef}\u0000${route.canonicalModelRef}`, route);
+    }
+  };
+  add(payload.model);
+  if (Array.isArray(payload.fallbacks)) {
+    for (const fallback of payload.fallbacks) {
+      add(fallback);
+    }
   }
-  const trimmed = raw.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0) {
-    return undefined;
-  }
-  const provider = trimmed.slice(0, slash).trim().toLowerCase();
-  if (provider !== "openai-codex") {
-    return undefined;
-  }
-  const model = trimmed.slice(slash + 1).trim();
-  return model ? `openai/${model}` : undefined;
+  return [...routes.values()];
+}
+
+/** Canonical OpenAI refs whose legacy cron shape implied the Codex runtime. */
+function collectLegacyOpenAICodexCronModelRefs(payload: UnknownRecord): string[] {
+  return [
+    ...new Set(
+      collectLegacyOpenAICodexCronModelRoutes(payload).map((route) => route.canonicalModelRef),
+    ),
+  ];
 }
 
 function normalizeChannel(value: string): string {
@@ -116,29 +296,35 @@ function parseLegacyAgentTurnCommandMessage(message: string): LegacyAgentTurnCom
   };
 }
 
-/** Return true when a cron payload contains legacy `openai-codex/*` model refs. */
+/** Return true when a cron payload contains legacy Codex-route model refs. */
 export function hasLegacyOpenAICodexCronModelRef(payload: UnknownRecord): boolean {
-  if (toCanonicalOpenAIModelRef(payload.model)) {
-    return true;
-  }
-  const fallbacks = payload.fallbacks;
-  return (
-    Array.isArray(fallbacks) && fallbacks.some((fallback) => toCanonicalOpenAIModelRef(fallback))
-  );
+  return collectLegacyOpenAICodexCronModelRefs(payload).length > 0;
 }
 
-function migrateLegacyOpenAICodexModelRefs(payload: UnknownRecord): boolean {
+function migrateLegacyOpenAICodexModelRefs(
+  payload: UnknownRecord,
+  shouldMigrate: (modelRef: string, legacyModelRef: string) => boolean,
+): boolean {
   let mutated = false;
 
-  const model = toCanonicalOpenAIModelRef(payload.model);
-  if (model && payload.model !== model) {
-    payload.model = model;
+  const model = readLegacyOpenAICodexCronModelRoute(payload.model);
+  if (
+    model &&
+    shouldMigrate(model.canonicalModelRef, model.legacyModelRef) &&
+    payload.model !== model.canonicalModelRef
+  ) {
+    payload.model = model.canonicalModelRef;
     mutated = true;
   }
 
   const fallbacks = payload.fallbacks;
   if (Array.isArray(fallbacks)) {
-    const next = fallbacks.map((fallback) => toCanonicalOpenAIModelRef(fallback) ?? fallback);
+    const next = fallbacks.map((fallback) => {
+      const route = readLegacyOpenAICodexCronModelRoute(fallback);
+      return route && shouldMigrate(route.canonicalModelRef, route.legacyModelRef)
+        ? route.canonicalModelRef
+        : fallback;
+    });
     if (next.some((fallback, index) => fallback !== fallbacks[index])) {
       payload.fallbacks = next;
       mutated = true;
@@ -149,8 +335,18 @@ function migrateLegacyOpenAICodexModelRefs(payload: UnknownRecord): boolean {
 }
 
 /** Normalize legacy cron payload channel/provider and model reference fields in place. */
-export function migrateLegacyCronPayload(payload: UnknownRecord): boolean {
+export function migrateLegacyCronPayload(
+  payload: UnknownRecord,
+  options: {
+    migrateCodexModelRefs?: boolean;
+    shouldMigrateCodexModelRef?: (modelRef: string, legacyModelRef: string) => boolean;
+  } = {},
+): boolean {
   let mutated = false;
+
+  if (migrateLegacyTaskSuggestionToolList(payload.toolsAllow)) {
+    mutated = true;
+  }
 
   const channelValue = readString(payload.channel);
   const providerValue = readString(payload.provider);
@@ -174,7 +370,11 @@ export function migrateLegacyCronPayload(payload: UnknownRecord): boolean {
     mutated = true;
   }
 
-  if (migrateLegacyOpenAICodexModelRefs(payload)) {
+  const shouldMigrateCodexModelRef =
+    options.migrateCodexModelRefs === true
+      ? (options.shouldMigrateCodexModelRef ?? (() => true))
+      : () => false;
+  if (migrateLegacyOpenAICodexModelRefs(payload, shouldMigrateCodexModelRef)) {
     mutated = true;
   }
 

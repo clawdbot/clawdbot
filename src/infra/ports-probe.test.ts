@@ -3,15 +3,21 @@ import net from "node:net";
 import { describe, expect, it } from "vitest";
 import { probePortUsage, tryListenOnPort } from "./ports-probe.js";
 
-async function withListeningServer(cb: (address: net.AddressInfo) => Promise<void>): Promise<void> {
+async function withListeningServer(
+  cb: (address: net.AddressInfo) => Promise<void>,
+  host = "127.0.0.1",
+): Promise<void> {
   const server = net.createServer();
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
+      server.listen(0, host, () => resolve());
     });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EPERM") {
+    if (
+      (err as NodeJS.ErrnoException).code === "EPERM" ||
+      (err as NodeJS.ErrnoException).code === "EADDRNOTAVAIL"
+    ) {
       return;
     }
     throw err;
@@ -32,17 +38,36 @@ async function withListeningServer(cb: (address: net.AddressInfo) => Promise<voi
 
 describe("tryListenOnPort", () => {
   it("can bind and release an ephemeral loopback port", async () => {
-    let listened;
+    let port;
     try {
-      await tryListenOnPort({ port: 0, host: "127.0.0.1", exclusive: true });
-      listened = true;
+      port = await tryListenOnPort({ port: 0, host: "127.0.0.1", exclusive: true });
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "EPERM") {
         return;
       }
       throw err;
     }
-    expect(listened).toBe(true);
+    expect(port).toBeGreaterThan(0);
+    // Release proof stays tied to the allocated port: a lingering listener
+    // would accept this probe, a released port refuses it. A rebind assertion
+    // instead collides with any foreign outbound socket occupying the port on
+    // busy runners (EADDRINUSE flake) without detecting leaks any better.
+    await expect(
+      new Promise<"accepted" | "refused">((resolve, reject) => {
+        const socket = net.connect({ port, host: "127.0.0.1" });
+        socket.once("connect", () => {
+          socket.destroy();
+          resolve("accepted");
+        });
+        socket.once("error", (err) => {
+          if ((err as NodeJS.ErrnoException).code === "ECONNREFUSED") {
+            resolve("refused");
+            return;
+          }
+          reject(err);
+        });
+      }),
+    ).resolves.toBe("refused");
   });
 
   it("rejects when the port is already in use", async () => {
@@ -71,5 +96,12 @@ describe("probePortUsage", () => {
     await withListeningServer(async (address) => {
       await expect(probePortUsage(address.port)).resolves.toBe("busy");
     });
+  });
+
+  it("can scope a probe to a free loopback address when another address owns the port", async () => {
+    await withListeningServer(async (address) => {
+      await expect(probePortUsage(address.port)).resolves.toBe("busy");
+      await expect(probePortUsage(address.port, ["127.0.0.1"])).resolves.toBe("free");
+    }, "127.0.0.2");
   });
 });

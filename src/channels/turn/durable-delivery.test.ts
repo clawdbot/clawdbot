@@ -18,15 +18,12 @@ vi.mock("../message/send.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../message/send.js")>();
   return {
     ...actual,
-    sendDurableMessageBatch: mocks.sendDurableMessageBatch,
+    sendDurableMessageBatchCore: mocks.sendDurableMessageBatch,
   };
 });
 
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
-import {
-  deliverInboundReplyWithMessageSendContext,
-  resolveDurableInboundReplyToId,
-} from "./durable-delivery.js";
+import { deliverInboundReplyWithMessageSendContextCore } from "./durable-delivery.js";
 
 type SendDurableMessageBatchRequest = {
   cfg?: unknown;
@@ -88,43 +85,8 @@ describe("durable inbound reply delivery", () => {
     });
   });
 
-  it("preserves explicit null reply targets instead of falling back to context ids", () => {
-    expect(
-      resolveDurableInboundReplyToId({
-        replyToId: null,
-        payload: { text: "plain reply" },
-        ctxPayload: ctxPayload({
-          ReplyToIdFull: "context-full-reply",
-          ReplyToId: "context-reply",
-        }),
-      }),
-    ).toBeNull();
-  });
-
-  it("falls back to payload and context reply targets when no explicit null is provided", () => {
-    expect(
-      resolveDurableInboundReplyToId({
-        payload: { text: "payload reply", replyToId: "payload-reply" },
-        ctxPayload: ctxPayload({
-          ReplyToIdFull: "context-full-reply",
-          ReplyToId: "context-reply",
-        }),
-      }),
-    ).toBe("payload-reply");
-
-    expect(
-      resolveDurableInboundReplyToId({
-        payload: { text: "context reply" },
-        ctxPayload: ctxPayload({
-          ReplyToIdFull: "context-full-reply",
-          ReplyToId: "context-reply",
-        }),
-      }),
-    ).toBe("context-full-reply");
-  });
-
   it("preserves explicit null thread targets instead of falling back to context thread", async () => {
-    await deliverInboundReplyWithMessageSendContext({
+    await deliverInboundReplyWithMessageSendContextCore({
       cfg: {},
       channel: "telegram",
       agentId: "main",
@@ -148,7 +110,7 @@ describe("durable inbound reply delivery", () => {
   });
 
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {
-    await deliverInboundReplyWithMessageSendContext({
+    await deliverInboundReplyWithMessageSendContextCore({
       cfg: {},
       channel: "telegram",
       agentId: "main",
@@ -170,7 +132,7 @@ describe("durable inbound reply delivery", () => {
   });
 
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {
-    await deliverInboundReplyWithMessageSendContext({
+    await deliverInboundReplyWithMessageSendContextCore({
       cfg: {},
       channel: "telegram",
       agentId: "main",
@@ -210,7 +172,7 @@ describe("durable inbound reply delivery", () => {
       sentBeforeError: true,
     });
 
-    const result = await deliverInboundReplyWithMessageSendContext({
+    const result = await deliverInboundReplyWithMessageSendContextCore({
       cfg: {},
       channel: "telegram",
       agentId: "main",

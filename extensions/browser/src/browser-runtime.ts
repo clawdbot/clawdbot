@@ -22,9 +22,7 @@ export {
   browserCreateProfile,
   browserDeleteProfile,
   browserDoctor,
-  browserImportProfile,
   browserProfiles,
-  browserSystemProfiles,
   browserResetProfile,
   browserSnapshot,
   browserStart,
@@ -39,7 +37,6 @@ export type {
   BrowserDeleteProfileResult,
   BrowserDoctorCheck,
   BrowserDoctorReport,
-  BrowserGraphicsDiagnostics,
   BrowserImportProfileResult,
   BrowserResetProfileResult,
   BrowserStatus,
@@ -73,7 +70,6 @@ export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
 export {
   isBrowserHostLocalRoute,
-  isBrowserSystemProfileImport,
   isPersistentBrowserProfileMutation,
   normalizeBrowserRequestPath,
   resolveRequestedBrowserProfile,

@@ -8,6 +8,8 @@ import net from "node:net";
 import os from "node:os";
 import type { GatewayNodePairingConfig } from "../config/types.gateway.js";
 import { normalizeDevicePublicKeyBase64Url } from "../infra/device-identity.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { isLoopbackAddress, isPrivateOrLoopbackAddress, isTrustedProxyAddress } from "./net.js";
 import {
   isEligibleFreshNodePairingRequest,
@@ -23,20 +25,20 @@ import {
 // module adds no new public config export to the plugin-SDK surface.
 type SshVerifyConfigObject = Exclude<NonNullable<GatewayNodePairingConfig["sshVerify"]>, boolean>;
 
-export type NodePairingSshVerifyPolicy = {
+type NodePairingSshVerifyPolicy = {
   user: string;
   identity?: string;
   timeoutMs: number;
   cidrs?: string[];
 };
 
-export type NodePairingSshVerifyPlan = {
+type NodePairingSshVerifyPlan = {
   policy: NodePairingSshVerifyPolicy;
   /** Normalized SSH target address (IPv4-mapped prefixes stripped). */
   host: string;
 };
 
-export type NodePairingSshVerifyOutcome =
+type NodePairingSshVerifyOutcome =
   | { ok: true; user: string; host: string }
   | { ok: false; reason: "probe-failed" | "identity-unreadable" | "identity-mismatch" };
 
@@ -64,7 +66,7 @@ function resolveProcessUser(): string | undefined {
 }
 
 /** Normalize the enabled-by-default config union into a probe policy, or null when off. */
-export function resolveNodePairingSshVerifyPolicy(
+function resolveNodePairingSshVerifyPolicy(
   raw: boolean | SshVerifyConfigObject | undefined,
 ): NodePairingSshVerifyPolicy | null {
   if (raw === false) {
@@ -170,19 +172,7 @@ function pruneCooldowns(nowMs: number) {
       cooldownExpiryByKey.delete(key);
     }
   }
-  while (cooldownExpiryByKey.size > MAX_COOLDOWN_ENTRIES) {
-    const oldest = cooldownExpiryByKey.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    cooldownExpiryByKey.delete(oldest);
-  }
-}
-
-/** Test-only reset for the process-local probe bookkeeping. */
-export function resetNodePairingSshVerifyStateForTests() {
-  inFlightByKey.clear();
-  cooldownExpiryByKey.clear();
+  pruneMapToMaxSize(cooldownExpiryByKey, MAX_COOLDOWN_ENTRIES);
 }
 
 /**
@@ -244,9 +234,6 @@ export function startNodePairingSshVerify(params: {
     return { ok: true, user: params.plan.policy.user, host: params.plan.host };
   })();
 
-  const tracked = done.finally(() => {
-    inFlightByKey.delete(key);
-  });
-  inFlightByKey.set(key, tracked);
+  const tracked = getOrCreatePromise(inFlightByKey, key, () => done, { evictOnSettled: true });
   return { done: tracked, alreadyInFlight: false };
 }

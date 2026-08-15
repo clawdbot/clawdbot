@@ -163,28 +163,33 @@ describe("resolveAuthForTarget", () => {
   });
 
   it("does not force remote auth type from local auth mode", async () => {
-    const auth = await resolveAuthForTarget(
-      {
-        gateway: {
-          auth: {
-            mode: "password",
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, // pragma: allowlist secret
+      async () => {
+        const auth = await resolveAuthForTarget(
+          {
+            gateway: {
+              auth: {
+                mode: "password",
+              },
+              remote: {
+                token: "remote-token",
+                password: "remote-password", // pragma: allowlist secret
+              },
+            },
           },
-          remote: {
-            token: "remote-token",
-            password: "remote-password", // pragma: allowlist secret
+          {
+            id: "configRemote",
+            kind: "configRemote",
+            url: "wss://remote.example:18789",
+            active: true,
           },
-        },
-      },
-      {
-        id: "configRemote",
-        kind: "configRemote",
-        url: "wss://remote.example:18789",
-        active: true,
-      },
-      {},
-    );
+          {},
+        );
 
-    expect(auth).toEqual({ token: "remote-token", password: undefined });
+        expect(auth).toEqual({ token: "remote-token", password: undefined });
+      },
+    );
   });
 
   it("redacts resolver internals from unresolved SecretRef diagnostics", async () => {
@@ -250,6 +255,32 @@ describe("probe reachability classification", () => {
     expect(renderProbeSummaryLine(probe, false)).toBe(
       "Connect: ok (51ms) · Capability: write-capable · Read probe: limited - missing scope: operator.read",
     );
+  });
+
+  it("uses structured missing-scope probe details before the display message", () => {
+    const probe = {
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 51,
+      error: "permission denied",
+      missingScopeErrorDetails: {
+        code: "MISSING_SCOPE" as const,
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+      close: null,
+      auth: {
+        role: "operator",
+        scopes: ["operator.write"],
+        capability: "write_capable" as const,
+      },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    };
+
+    expect(isScopeLimitedProbeFailure(probe)).toBe(true);
   });
 
   it("treats post-connect read failures as reachable with failed diagnostics", () => {

@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 // Stores config health fingerprints in shared SQLite state.
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -5,6 +6,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.js";
 
 export type ConfigHealthFingerprint = {
   hash: string;
@@ -34,7 +36,7 @@ export type ConfigHealthState = {
 
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 
-export type ConfigHealthStateDeps = {
+type ConfigHealthStateDeps = {
   env: NodeJS.ProcessEnv;
   homedir: () => string;
   logger: Pick<typeof console, "warn">;
@@ -65,10 +67,6 @@ function stringifyConfigHealthFingerprint(
   return value ? JSON.stringify(value) : null;
 }
 
-function formatConfigHealthStateError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function readConfigHealthStateFromStore(deps: ConfigHealthStateDeps): ConfigHealthState {
   try {
     const database = openOpenClawStateDatabase({ env: resolveConfigHealthStateEnv(deps) });
@@ -97,7 +95,10 @@ export function readConfigHealthStateFromStore(deps: ConfigHealthStateDeps): Con
         ]),
       ),
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof OpenClawStateOwnershipError) {
+      throw error;
+    }
     return {};
   }
 }
@@ -142,6 +143,9 @@ export function writeConfigHealthStateToStore(
       { env: resolveConfigHealthStateEnv(deps) },
     );
   } catch (error) {
-    deps.logger.warn(`Config health-state write failed: ${formatConfigHealthStateError(error)}`);
+    if (error instanceof OpenClawStateOwnershipError) {
+      throw error;
+    }
+    deps.logger.warn(`Config health-state write failed: ${formatErrorMessage(error)}`);
   }
 }

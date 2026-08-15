@@ -1,8 +1,8 @@
 // Covers channel account metadata security audit findings.
 import { describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectChannelSecurityFindings } from "./audit-channel.js";
+import { collectChannelSecurityFindingsCore } from "./audit-channel.js";
 
 function stubChannelPlugin(): ChannelPlugin {
   return {
@@ -39,7 +39,7 @@ function stubChannelPlugin(): ChannelPlugin {
 }
 
 function requireDangerousMatchingFinding(
-  findings: Awaited<ReturnType<typeof collectChannelSecurityFindings>>,
+  findings: Awaited<ReturnType<typeof collectChannelSecurityFindingsCore>>,
 ) {
   const finding = findings.find(
     (entry) => entry.checkId === "channels.discord.allowFrom.dangerous_name_matching_enabled",
@@ -64,7 +64,7 @@ describe("security audit channel account metadata", () => {
       },
     };
 
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg,
       plugins: [stubChannelPlugin()],
     });

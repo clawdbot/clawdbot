@@ -10,7 +10,7 @@ import { getCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin
 import { buildManifestBuiltInModelSuppressionResolver } from "../plugins/manifest-model-suppression.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshotMemoEnvFingerprint } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataEnvFingerprint } from "../plugins/plugin-metadata-snapshot.js";
 
 type ManifestSuppressionResolver = ReturnType<typeof buildManifestBuiltInModelSuppressionResolver>;
 
@@ -27,11 +27,11 @@ type CachedManifestSuppressionResolver = {
 let cachedManifestSuppressionResolver: CachedManifestSuppressionResolver | undefined;
 
 /** Clear cached manifest suppression resolver state for tests and metadata lifecycle resets. */
-export function clearModelSuppressionResolverCacheForTest(): void {
+function clearModelSuppressionResolverCache(): void {
   cachedManifestSuppressionResolver = undefined;
 }
 
-registerPluginMetadataProcessMemoLifecycleClear(clearModelSuppressionResolverCacheForTest);
+registerPluginMetadataProcessMemoLifecycleClear(clearModelSuppressionResolverCache);
 
 function resolveCachedManifestSuppressionResolver(params: {
   config?: OpenClawConfig;
@@ -45,7 +45,7 @@ function resolveCachedManifestSuppressionResolver(params: {
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   const cwd = process.cwd();
-  const envFingerprint = resolvePluginMetadataSnapshotMemoEnvFingerprint(params.env);
+  const envFingerprint = resolvePluginMetadataEnvFingerprint(params.env);
   const metadataSnapshot = getCurrentPluginMetadataSnapshotState().snapshot;
   if (
     cached !== undefined &&
@@ -133,7 +133,7 @@ export function shouldSuppressBuiltInModelFromManifest(params: {
 }
 
 /** Return true when any built-in suppression rule applies to a model entry. */
-export function shouldSuppressBuiltInModel(params: {
+export function shouldSuppressBuiltInModelCore(params: {
   provider?: string | null;
   id?: string | null;
   baseUrl?: string | null;
@@ -172,7 +172,7 @@ export function buildSuppressedBuiltInModelError(params: {
 }
 
 /** Build a reusable suppression predicate for repeated catalog filtering. */
-export function buildShouldSuppressBuiltInModel(params: {
+export function buildShouldSuppressBuiltInModelCore(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
 }): (input: { provider?: string | null; id?: string | null; baseUrl?: string | null }) => boolean {

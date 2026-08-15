@@ -3,15 +3,13 @@
  * This state tracks order, last-good profile, and cooldown/failure metadata
  * separately from secret-bearing credentials.
  */
-import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { readPersistedAuthProfileStateRaw, writePersistedAuthProfileStateRaw } from "./sqlite.js";
+import { readPersistedAuthProfileStateRaw, type AuthProfileDatabase } from "./sqlite.js";
 import type {
   AuthProfileBlockedReason,
   AuthProfileBlockedSource,
@@ -38,12 +36,6 @@ const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
 ]);
 const AUTH_BLOCKED_REASONS = new Set<AuthProfileBlockedReason>(["subscription_limit"]);
 const AUTH_BLOCKED_SOURCES = new Set<AuthProfileBlockedSource>(["codex_rate_limits", "wham"]);
-
-// Runtime auth state is operator-controlled durability. Coerce every persisted
-// field through closed enums/numbers so bad rows do not poison auth selection.
-function normalizeFiniteNumber(value: unknown): number | undefined {
-  return asFiniteNumber(value);
-}
 
 function normalizeEnumValue<T extends string>(value: unknown, allowed: Set<T>): T | undefined {
   if (typeof value !== "string") {
@@ -114,19 +106,21 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     return undefined;
   }
   const stats: ProfileUsageStats = {
-    lastUsed: normalizeFiniteNumber(raw.lastUsed),
-    blockedUntil: normalizeFiniteNumber(raw.blockedUntil),
+    lastUsed: asFiniteNumber(raw.lastUsed),
+    blockedUntil: asFiniteNumber(raw.blockedUntil),
     blockedReason: normalizeEnumValue(raw.blockedReason, AUTH_BLOCKED_REASONS),
     blockedSource: normalizeEnumValue(raw.blockedSource, AUTH_BLOCKED_SOURCES),
     blockedModel: normalizeOptionalString(raw.blockedModel),
-    cooldownUntil: normalizeFiniteNumber(raw.cooldownUntil),
+    blockedScope: raw.blockedScope === "model" ? "model" : undefined,
+    cooldownUntil: asFiniteNumber(raw.cooldownUntil),
     cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS),
     cooldownModel: normalizeOptionalString(raw.cooldownModel),
-    disabledUntil: normalizeFiniteNumber(raw.disabledUntil),
+    disabledUntil: asFiniteNumber(raw.disabledUntil),
     disabledReason: normalizeEnumValue(raw.disabledReason, AUTH_FAILURE_REASONS),
-    errorCount: normalizeFiniteNumber(raw.errorCount),
+    errorCount: asFiniteNumber(raw.errorCount),
     failureCounts: normalizeFailureCounts(raw.failureCounts),
-    lastFailureAt: normalizeFiniteNumber(raw.lastFailureAt),
+    lastFailureAt: asFiniteNumber(raw.lastFailureAt),
+    lastProbeAt: asFiniteNumber(raw.lastProbeAt),
   };
   for (const key of Object.keys(stats) as Array<keyof ProfileUsageStats>) {
     if (stats[key] === undefined) {
@@ -192,7 +186,7 @@ export function mergeAuthProfileState(
 /** Loads persisted auth profile runtime state from SQLite. */
 export function loadPersistedAuthProfileState(
   agentDir?: string,
-  database?: OpenClawAgentDatabase,
+  database?: AuthProfileDatabase,
 ): AuthProfileState {
   return coerceAuthProfileState(readPersistedAuthProfileStateRaw(agentDir, database));
 }
@@ -211,17 +205,4 @@ export function buildPersistedAuthProfileState(
     ...(state.lastGood ? { lastGood: state.lastGood } : {}),
     ...(state.usageStats ? { usageStats: state.usageStats } : {}),
   };
-}
-
-/** Saves auth profile runtime state when it differs from the persisted payload. */
-export function savePersistedAuthProfileState(
-  store: AuthProfileState,
-  agentDir?: string,
-): AuthProfileStateStore | null {
-  const payload = buildPersistedAuthProfileState(store);
-  const existingRaw = readPersistedAuthProfileStateRaw(agentDir);
-  if (!payload || !isDeepStrictEqual(existingRaw, payload)) {
-    writePersistedAuthProfileStateRaw(payload, agentDir);
-  }
-  return payload;
 }

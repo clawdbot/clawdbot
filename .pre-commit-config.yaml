@@ -31,13 +31,13 @@ repos:
 
   # GitHub Actions linting
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.10
+    rev: v1.7.12
     hooks:
       - id: actionlint
 
   # GitHub Actions security audit
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.22.0
+    rev: v1.28.0
     hooks:
       - id: zizmor
         args:
@@ -52,7 +52,7 @@ repos:
 
   # Python checks for skills scripts
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.1
+    rev: v0.15.22
     hooks:
       - id: ruff
         files: "^skills/.*\\.py$"

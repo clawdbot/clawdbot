@@ -4,7 +4,7 @@
  */
 import {
   inferToolMetaFromArgs,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
@@ -22,11 +22,21 @@ export function resolveCodexToolProgressDetailMode(
   return value === "raw" ? "raw" : "explain";
 }
 
+export function isCodexCommandBearingToolCall(
+  name: string | undefined,
+  args: Record<string, unknown> | undefined,
+): boolean {
+  const normalizedName = name?.trim().toLowerCase();
+  return (
+    normalizedName === "exec" ||
+    normalizedName === "bash" ||
+    normalizedName === "shell" ||
+    (typeof args?.command === "string" && args.command.trim().length > 0)
+  );
+}
+
 /** Recursively redacts sensitive strings and handles circular values in event payloads. */
-export function sanitizeCodexAgentEventValue(
-  value: unknown,
-  seen = new WeakSet<object>(),
-): unknown {
+function sanitizeCodexAgentEventValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (typeof value === "string") {
     return redactToolPayloadText(value);
   }
@@ -43,7 +53,7 @@ export function sanitizeCodexAgentEventValue(
     }
     seen.add(value);
     const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    for (const [key, child] of Object.entries(value)) {
       out[key] =
         typeof child === "string"
           ? redactSensitiveFieldValue(key, child)
@@ -75,7 +85,7 @@ export function sanitizeCodexToolArguments(
 export function sanitizeCodexToolResponse(
   response: CodexDynamicToolCallResponse,
 ): Record<string, unknown> {
-  return sanitizeCodexAgentEventRecord(response as unknown as Record<string, unknown>);
+  return sanitizeCodexAgentEventRecord({ ...response });
 }
 
 /** Infers compact human-readable tool metadata from Codex dynamic-tool arguments. */

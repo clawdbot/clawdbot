@@ -1,6 +1,7 @@
 // Active session shutdown tracker.
 // Remembers sessions needing `session_end` hooks during gateway shutdown/restart.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 // Module-level tracker of sessions that have received `session_start` but not
 // yet a paired `session_end`. The close handler drains this set on gateway
@@ -15,16 +16,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 // reset / delete / compaction is forgotten before the shutdown drain ever
 // runs. That is what keeps the shutdown finalizer from double-firing.
 
-export type ActiveSessionForShutdown = {
+type ActiveSessionForShutdown = {
   cfg: OpenClawConfig;
   sessionKey: string;
   sessionId: string;
   storePath: string;
   sessionFile?: string;
-  agentId?: string;
+  agentId: string;
 };
 
-const trackedSessions = new Map<string, ActiveSessionForShutdown>();
+const trackedSessions = resolveGlobalMap<string, ActiveSessionForShutdown>(
+  Symbol.for("openclaw.activeSessionsForShutdown"),
+  "close-and-restart",
+);
 
 export function noteActiveSessionForShutdown(entry: ActiveSessionForShutdown): void {
   if (!entry.sessionId) {
@@ -44,8 +48,4 @@ export function listActiveSessionsForShutdown(): ActiveSessionForShutdown[] {
   // Return a snapshot, not the backing map, so shutdown drains can iterate while
   // lifecycle hooks concurrently forget finalized sessions.
   return Array.from(trackedSessions.values());
-}
-
-export function clearActiveSessionsForShutdownTracker(): void {
-  trackedSessions.clear();
 }

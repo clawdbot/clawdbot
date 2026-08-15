@@ -1,17 +1,18 @@
-import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
-import { redactSensitiveText } from "../../logging/redact.js";
+import { RetrySupervisor } from "../../../packages/retry/src/index.js";
+import { sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
+import { withTimeout } from "../../infra/fs-safe.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
+import type { SpawnResult } from "../../process/exec.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
+import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import type { DesktopSessionRegistry } from "../desktop/session-registry.js";
+import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
 import {
-  runCommandWithTimeout,
-  type CommandOptions,
-  type SpawnResult,
-} from "../../process/exec.js";
-import {
+  advanceWorkerSshAfterTransportExit,
   prepareWorkerSsh,
   type PreparedWorkerSsh,
+  runWorkerSshCandidates,
   type WorkerSshIdentityResolver,
   workerSshCommandOptions,
   workerSshOptions,
@@ -22,20 +23,23 @@ import type {
   WorkerTunnelRequest,
   WorkerTunnelStatus,
 } from "./tunnel-contract.js";
+import {
+  createWorkerSshRunner,
+  type WorkerSshProcess,
+  type WorkerSshRunner,
+  workerSshProcessError,
+  WORKER_TUNNEL_READY_MARKER,
+} from "./tunnel-ssh-runner.js";
+import { boundedWorkerError } from "./worker-error.js";
+import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
+import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
-export type {
-  WorkerTunnelHandle,
-  WorkerTunnelRequest,
-  WorkerTunnelStatus,
-  WorkerWorkspaceCommand,
-} from "./tunnel-contract.js";
-
-const READY_MARKER = "OPENCLAW_WORKER_TUNNEL_READY";
+export type { WorkerTunnelHandle } from "./tunnel-contract.js";
 const REMOTE_SOCKET_NAME = "gateway.sock";
 const REMOTE_SETUP_TIMEOUT_MS = 20_000;
-const WORKSPACE_TIMEOUT_MS = 10 * 60_000;
-const STOP_GRACE_MS = 1_500;
-const STDERR_LIMIT = 4_096;
+// A live SSH process without the remote marker is not a usable tunnel. Bound each attempt so the
+// retry supervisor can move on instead of pinning the environment forever.
+const TUNNEL_READY_TIMEOUT_MS = 60_000;
 const DEFAULT_STABLE_CONNECTION_MS = 30_000;
 const DEFAULT_BACKOFF: BackoffPolicy = {
   initialMs: 250,
@@ -43,20 +47,28 @@ const DEFAULT_BACKOFF: BackoffPolicy = {
   factor: 2,
   jitter: 0,
 };
+const tunnelLog = createSubsystemLogger("gateway/worker-tunnel");
 
 const REMOTE_SOCKET_SETUP_SCRIPT = String.raw`set -eu
 directory=$1
 socket=$2
 umask 077
-mkdir -p -- "$directory"
-chmod 700 -- "$directory"
+if [ -e "$directory" ] || [ -L "$directory" ]; then
+  if [ ! -d "$directory" ] || [ -L "$directory" ]; then
+    printf '%s\n' 'unsafe worker tunnel directory' >&2
+    exit 2
+  fi
+else
+  mkdir -- "$directory"
+fi
+chmod 700 "$directory"  # no "--": BSD/macOS chmod treats it as a filename; path is script-owned and absolute
 rm -f -- "$socket"
 `;
 
 const REMOTE_TUNNEL_READY_SCRIPT = String.raw`set -eu
 socket=$1
 test -S "$socket"
-printf '%s\n' '${READY_MARKER}'
+printf '%s\n' '${WORKER_TUNNEL_READY_MARKER}'
 trap 'exit 0' HUP INT TERM
 while :; do sleep 3600; done
 `;
@@ -67,33 +79,22 @@ directory=$2
 rm -f -- "$socket"
 rmdir -- "$directory" 2>/dev/null || true
 `;
+const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker';
 
-export type WorkerSshProcessExit = {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-};
-
-export type WorkerSshProcess = {
-  ready: Promise<void>;
-  exited: Promise<WorkerSshProcessExit>;
-  stop(): Promise<void>;
-};
-
-export type WorkerSshRunner = {
-  start(argv: string[], options: CommandOptions): WorkerSshProcess;
-  run(argv: string[], options: CommandOptions): Promise<SpawnResult>;
-};
-
-export type WorkerTunnelStartRequest = WorkerTunnelRequest & {
+type WorkerTunnelStartRequest = WorkerTunnelRequest & {
+  bundleHash: string;
   gateway: { host: "127.0.0.1" | "::1"; port: number };
   ssh: WorkerSshEndpoint;
+  sharedHost?: boolean;
   resolveIdentity: WorkerSshIdentityResolver;
 };
 
 type TunnelEntry = {
+  bundleHash: string;
   environmentId: string;
   ownerEpoch: number;
   gateway: WorkerTunnelStartRequest["gateway"];
+  sharedHost: boolean;
   remoteDirectory: string;
   remoteSocketPath: string;
   abortController: AbortController;
@@ -102,121 +103,20 @@ type TunnelEntry = {
   process?: WorkerSshProcess;
   initialization?: Promise<void>;
   loop?: Promise<void>;
+  loopSettled: boolean;
   stopPromise?: Promise<void>;
-  ready: Promise<WorkerTunnelHandle>;
-  resolveReady: (handle: WorkerTunnelHandle) => void;
-  rejectReady: (error: Error) => void;
-  readySettled: boolean;
+  readiness: Deferred<WorkerTunnelHandle>;
   workspaceTasks: Set<Promise<unknown>>;
 };
 
-export type WorkerTunnelManagerOptions = {
+type WorkerTunnelManagerOptions = {
   runner?: WorkerSshRunner;
+  desktopSessionRegistry?: DesktopSessionRegistry;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   backoff?: BackoffPolicy;
   now?: () => number;
   stableConnectionMs?: number;
 };
-
-function processError(stderr: string): Error {
-  const detail = redactSensitiveText(stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim();
-  return new Error(detail ? `Worker SSH tunnel failed: ${detail}` : "Worker SSH tunnel failed");
-}
-
-/** Production runner that treats the remote post-forward marker as connection readiness. */
-export function createWorkerSshRunner(): WorkerSshRunner {
-  return {
-    run: runCommandWithTimeout,
-    start(argv, options) {
-      const [command, ...args] = argv;
-      if (!command) {
-        throw new Error("Worker SSH runner requires a command");
-      }
-      const child = spawn(command, args, {
-        env: options.baseEnv,
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-      });
-      let closed = false;
-      let readySettled = false;
-      let resolveReady!: () => void;
-      let rejectReady!: (error: Error) => void;
-      let resolveExited!: (exit: WorkerSshProcessExit) => void;
-      const ready = new Promise<void>((resolve, reject) => {
-        resolveReady = resolve;
-        rejectReady = reject;
-      });
-      const exited = new Promise<WorkerSshProcessExit>((resolve) => {
-        resolveExited = resolve;
-      });
-      let stdout = "";
-      let stderr = "";
-      const settleReadyError = () => {
-        if (readySettled) {
-          return;
-        }
-        readySettled = true;
-        rejectReady(processError(stderr));
-      };
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("error", () => {});
-      child.stdout.on("data", (chunk: string) => {
-        if (readySettled) {
-          return;
-        }
-        stdout = sliceUtf16Safe(`${stdout}${chunk}`, -STDERR_LIMIT);
-        if (stdout.split(/\r?\n/u).includes(READY_MARKER)) {
-          readySettled = true;
-          resolveReady();
-        }
-      });
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("error", () => {});
-      child.stderr.on("data", (chunk: string) => {
-        stderr = sliceUtf16Safe(`${stderr}${chunk}`, -STDERR_LIMIT);
-      });
-      child.once("error", settleReadyError);
-      child.once("close", (code, signal) => {
-        closed = true;
-        settleReadyError();
-        resolveExited({ code, signal });
-      });
-      child.stdin.on("error", () => {});
-      if (options.input !== undefined) {
-        child.stdin.end(options.input);
-      } else {
-        child.stdin.end();
-      }
-
-      let stopPromise: Promise<void> | undefined;
-      return {
-        ready,
-        exited,
-        stop() {
-          return (stopPromise ??= (async () => {
-            if (closed) {
-              return;
-            }
-            child.kill("SIGTERM");
-            let timer: ReturnType<typeof setTimeout> | undefined;
-            await Promise.race([
-              exited,
-              new Promise<void>((resolve) => {
-                timer = setTimeout(resolve, STOP_GRACE_MS);
-                timer.unref?.();
-              }),
-            ]);
-            clearTimeout(timer);
-            if (!closed) {
-              child.kill("SIGKILL");
-              await exited;
-            }
-          })());
-        },
-      };
-    },
-  };
-}
 
 function success(result: SpawnResult): boolean {
   return result.termination === "exit" && result.code === 0;
@@ -249,6 +149,10 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
   const backoff = options.backoff ?? DEFAULT_BACKOFF;
   const now = options.now ?? Date.now;
   const stableConnectionMs = options.stableConnectionMs ?? DEFAULT_STABLE_CONNECTION_MS;
+  const desktop = createWorkerDesktopTunnels({
+    runner,
+    ...(options.desktopSessionRegistry ? { registry: options.desktopSessionRegistry } : {}),
+  });
   const entries = new Map<string, TunnelEntry>();
   const claimedOwnerEpochs = new Map<string, number>();
 
@@ -257,7 +161,13 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
 
   const sshCommand = (
     prepared: PreparedWorkerSsh,
-    params: { input: string; remoteArgs: readonly string[]; signal?: AbortSignal },
+    params: {
+      input: string;
+      port: number;
+      remoteArgs: readonly string[];
+      timeoutMs: number;
+      signal?: AbortSignal;
+    },
   ) => ({
     argv: [
       "ssh",
@@ -266,14 +176,14 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       "-x",
       "-T",
       "-p",
-      String(prepared.port),
+      String(params.port),
       "--",
       prepared.sshTarget,
       workerSshRemoteCommand(["sh", "-s", "--", ...params.remoteArgs]),
     ],
     options: workerSshCommandOptions({
       input: params.input,
-      timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
+      timeoutMs: params.timeoutMs,
       signal: params.signal,
     }),
   });
@@ -283,66 +193,81 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     if (!prepared) {
       throw new Error("Worker tunnel SSH context is unavailable");
     }
-    const command = sshCommand(prepared, {
-      input: REMOTE_SOCKET_SETUP_SCRIPT,
-      remoteArgs: [entry.remoteDirectory, entry.remoteSocketPath],
-      signal: entry.abortController.signal,
-    });
-    const result = await runner.run(command.argv, command.options);
+    const result = await runWorkerSshCandidates(
+      prepared,
+      REMOTE_SETUP_TIMEOUT_MS,
+      async (port, remainingTimeoutMs) => {
+        const command = sshCommand(prepared, {
+          input: REMOTE_SOCKET_SETUP_SCRIPT,
+          port,
+          remoteArgs: [entry.remoteDirectory, entry.remoteSocketPath],
+          timeoutMs: remainingTimeoutMs,
+          signal: entry.abortController.signal,
+        });
+        return await runner.run(command.argv, command.options);
+      },
+    );
     if (!success(result)) {
-      throw processError(result.stderr || result.stdout);
+      throw workerSshProcessError(result.stderr || result.stdout);
     }
   };
 
   const cleanupRemoteSocket = async (entry: TunnelEntry) => {
-    if (!entry.prepared) {
+    const prepared = entry.prepared;
+    if (!prepared) {
       return;
     }
-    const command = sshCommand(entry.prepared, {
-      input: REMOTE_SOCKET_CLEANUP_SCRIPT,
-      remoteArgs: [entry.remoteSocketPath, entry.remoteDirectory],
-    });
-    await runner.run(command.argv, command.options).catch(() => undefined);
+    await runWorkerSshCandidates(
+      prepared,
+      REMOTE_SETUP_TIMEOUT_MS,
+      async (port, remainingTimeoutMs) => {
+        const command = sshCommand(prepared, {
+          input: REMOTE_SOCKET_CLEANUP_SCRIPT,
+          port,
+          remoteArgs: [entry.remoteSocketPath, entry.remoteDirectory],
+          timeoutMs: remainingTimeoutMs,
+        });
+        return await runner.run(command.argv, command.options);
+      },
+    ).catch(() => undefined);
   };
 
-  const createHandle = (entry: TunnelEntry): WorkerTunnelHandle => ({
-    environmentId: entry.environmentId,
-    ownerEpoch: entry.ownerEpoch,
-    remoteSocketPath: entry.remoteSocketPath,
-    async runWorkspaceCommand(command) {
-      if (!isCurrent(entry) || !entry.prepared || entry.status !== "connected") {
-        throw new Error("Worker tunnel owner is no longer connected");
-      }
-      const task = runner.run(
-        [
-          "ssh",
-          ...workerSshOptions(entry.prepared, { forwarding: "disabled" }),
-          "-a",
-          "-x",
-          "-T",
-          "-p",
-          String(entry.prepared.port),
-          "--",
-          entry.prepared.sshTarget,
-          workerSshRemoteCommand(command.argv),
-        ],
-        workerSshCommandOptions({
-          input: command.input,
-          timeoutMs: command.timeoutMs ?? WORKSPACE_TIMEOUT_MS,
-          signal: entry.abortController.signal,
+  const createHandle = (entry: TunnelEntry): WorkerTunnelHandle => {
+    const workspace = createWorkerWorkspaceActions({
+      environmentId: entry.environmentId,
+      sharedHost: entry.sharedHost,
+      ownerSignal: entry.abortController.signal,
+      isConnected: () => isCurrent(entry) && entry.status === "connected",
+      getPrepared: () => entry.prepared,
+      runner,
+      tasks: entry.workspaceTasks,
+      bundleHash: entry.bundleHash,
+    });
+    return {
+      environmentId: entry.environmentId,
+      ownerEpoch: entry.ownerEpoch,
+      launchTurn: (request) =>
+        workspace.runWorkspaceCommand({
+          transportRetry: "never",
+          argv: ["sh", "-c", WORKER_LAUNCH_SCRIPT, "openclaw-worker", entry.bundleHash],
+          input: JSON.stringify(
+            completeWorkerLaunchDescriptor(request.plan, {
+              kind: "unix",
+              socketPath: entry.remoteSocketPath,
+            }),
+          ),
+          timeoutMs: request.timeoutMs,
+          signal: request.signal,
+          onDispatchReady: request.onDispatchReady,
         }),
-      );
-      entry.workspaceTasks.add(task);
-      void task.then(
-        () => entry.workspaceTasks.delete(task),
-        () => entry.workspaceTasks.delete(task),
-      );
-      return await task;
-    },
-    stop: () => stop(entry.environmentId, entry.ownerEpoch),
-  });
+      ...workspace,
+      stop: () => stop(entry.environmentId, entry.ownerEpoch),
+    };
+  };
 
-  const connect = async (entry: TunnelEntry): Promise<WorkerSshProcess> => {
+  const connect = async (
+    entry: TunnelEntry,
+  ): Promise<{ port: number; process: WorkerSshProcess }> => {
     const prepared = entry.prepared;
     if (!prepared) {
       throw new Error("Worker tunnel SSH context is unavailable");
@@ -352,7 +277,8 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       throw new Error("Worker tunnel owner changed during connection");
     }
     const target = `${remoteTargetHost(entry.gateway.host)}:${entry.gateway.port}`;
-    return runner.start(
+    const port = prepared.port;
+    const process = runner.start(
       [
         "ssh",
         ...workerSshOptions(prepared, { forwarding: "explicit" }),
@@ -370,7 +296,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         "-R",
         `${entry.remoteSocketPath}:${target}`,
         "-p",
-        String(prepared.port),
+        String(port),
         "--",
         prepared.sshTarget,
         workerSshRemoteCommand(["sh", "-s", "--", entry.remoteSocketPath]),
@@ -381,33 +307,82 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         signal: entry.abortController.signal,
       }),
     );
+    return { port, process };
   };
 
   const reconnectLoop = async (entry: TunnelEntry) => {
-    let retryAttempt = 0;
+    const reconnectSupervisor = new RetrySupervisor(backoff);
     while (isCurrent(entry)) {
-      entry.status = retryAttempt === 0 ? "connecting" : "reconnecting";
+      entry.status = reconnectSupervisor.attempts === 0 ? "connecting" : "reconnecting";
       let child: WorkerSshProcess | undefined;
+      let childPort: number | undefined;
       try {
-        child = await connect(entry);
+        const connection = await connect(entry);
+        child = connection.process;
+        childPort = connection.port;
         entry.process = child;
-        await child.ready;
+        await withTimeout(child.ready, TUNNEL_READY_TIMEOUT_MS, {
+          message: "Worker tunnel did not become ready within 60 seconds",
+        });
         if (!isCurrent(entry)) {
           await child.stop();
           return;
         }
         entry.status = "connected";
-        if (!entry.readySettled) {
-          entry.readySettled = true;
-          entry.resolveReady(createHandle(entry));
-        }
+        const connectionReadiness = entry.readiness;
+        connectionReadiness.resolve(createHandle(entry));
         const connectedAtMs = now();
-        await child.exited;
-        if (now() - connectedAtMs >= stableConnectionMs) {
-          retryAttempt = 0;
+        const exit = await child.exited.finally(() => {
+          if (isCurrent(entry) && entry.readiness === connectionReadiness) {
+            // Each established child owns one readiness barrier. Replace it as soon as that child
+            // is lost so same-owner callers wait for the reconnect instead of using a stale handle.
+            entry.status = "reconnecting";
+            const readiness = createDeferredCore<WorkerTunnelHandle>();
+            void readiness.promise.catch(() => undefined);
+            entry.readiness = readiness;
+          }
+        });
+        if (entry.prepared) {
+          advanceWorkerSshAfterTransportExit(entry.prepared, childPort, exit);
         }
-      } catch {
-        await child?.stop().catch(() => undefined);
+        if (now() - connectedAtMs >= stableConnectionMs) {
+          reconnectSupervisor.reset();
+        }
+      } catch (error) {
+        if (child && childPort !== undefined) {
+          let stopError: unknown;
+          let stopFailed = false;
+          const stopping = child.stop().catch((failure: unknown) => {
+            stopFailed = true;
+            stopError = failure;
+          });
+          let exit = await Promise.race([
+            child.exited.catch(() => undefined),
+            stopping.then(() => undefined),
+          ]);
+          await stopping;
+          if (stopFailed) {
+            // A failed stop means the SSH child may still be running. Never drop it from
+            // tracking and never retry over it — wait for its real exit first, and keep
+            // that late exit so transport-exit port rotation still advances.
+            tunnelLog.warn("worker tunnel stop failed; waiting for SSH child exit", {
+              environmentId: entry.environmentId,
+              error: boundedWorkerError(stopError),
+              connectError: boundedWorkerError(error),
+            });
+            exit = (await child.exited.catch(() => undefined)) ?? exit;
+          }
+          if (exit && entry.prepared) {
+            advanceWorkerSshAfterTransportExit(entry.prepared, childPort, exit);
+          }
+        }
+        if (isCurrent(entry)) {
+          tunnelLog.warn("worker tunnel connect attempt failed", {
+            environmentId: entry.environmentId,
+            attempt: reconnectSupervisor.attempts + 1,
+            error: boundedWorkerError(error),
+          });
+        }
       } finally {
         if (entry.process === child) {
           entry.process = undefined;
@@ -417,9 +392,9 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         return;
       }
       entry.status = "reconnecting";
-      retryAttempt += 1;
       try {
-        await sleep(computeBackoff(backoff, retryAttempt), entry.abortController.signal);
+        const retry = reconnectSupervisor.next(entry.abortController.signal)!;
+        await sleep(retry.delayMs, retry.signal);
       } catch {
         return;
       }
@@ -435,10 +410,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         entries.delete(entry.environmentId);
       }
       entry.abortController.abort(new Error("Worker tunnel owner stopped"));
-      if (!entry.readySettled) {
-        entry.readySettled = true;
-        entry.rejectReady(new Error("Worker tunnel stopped before connecting"));
-      }
+      entry.readiness.reject(new Error("Worker tunnel stopped before connecting"));
       await entry.process?.stop().catch(() => undefined);
       await entry.initialization?.catch(() => undefined);
       await entry.process?.stop().catch(() => undefined);
@@ -463,30 +435,26 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         throw new Error("Worker tunnel owner epoch is stale");
       }
       if (request.ownerEpoch === current.ownerEpoch) {
-        return await current.ready;
+        return await current.readiness.promise;
       }
     }
 
-    let resolveReady!: (handle: WorkerTunnelHandle) => void;
-    let rejectReady!: (error: Error) => void;
-    const ready = new Promise<WorkerTunnelHandle>((resolve, reject) => {
-      resolveReady = resolve;
-      rejectReady = reject;
-    });
-    void ready.catch(() => undefined);
-    const remoteDirectory = `/tmp/ocw-${randomBytes(8).toString("hex")}`;
+    const environmentKey = stableWorkerPathComponent(request.environmentId, 16);
+    const remoteDirectory = `/tmp/ocw-${environmentKey}-${request.ownerEpoch}`;
+    const readiness = createDeferredCore<WorkerTunnelHandle>();
+    void readiness.promise.catch(() => undefined);
     const entry: TunnelEntry = {
       environmentId: request.environmentId,
+      bundleHash: request.bundleHash,
       ownerEpoch: request.ownerEpoch,
       gateway: request.gateway,
+      sharedHost: request.sharedHost === true,
       remoteDirectory,
       remoteSocketPath: `${remoteDirectory}/${REMOTE_SOCKET_NAME}`,
       abortController: new AbortController(),
       status: "connecting",
-      ready,
-      resolveReady,
-      rejectReady,
-      readySettled: false,
+      loopSettled: false,
+      readiness,
       workspaceTasks: new Set(),
     };
     // Publish the new epoch before any teardown await. Stop/drain always sees the newest owner and
@@ -510,30 +478,26 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         entry.prepared = undefined;
         return;
       }
-      entry.loop = reconnectLoop(entry);
+      entry.loop = reconnectLoop(entry).finally(() => {
+        entry.loopSettled = true;
+      });
       void entry.loop.catch((error: unknown) => {
-        if (!entry.readySettled) {
-          entry.readySettled = true;
-          entry.rejectReady(error instanceof Error ? error : new Error("Worker tunnel failed"));
-        }
+        entry.readiness.reject(error instanceof Error ? error : new Error("Worker tunnel failed"));
       });
     })();
     void entry.initialization.catch((error: unknown) => {
-      if (!entry.readySettled) {
-        entry.readySettled = true;
-        entry.rejectReady(error instanceof Error ? error : new Error("Worker tunnel failed"));
-      }
+      entry.readiness.reject(error instanceof Error ? error : new Error("Worker tunnel failed"));
       void stopEntry(entry);
     });
-    return await entry.ready;
+    return await entry.readiness.promise;
   }
 
   async function stop(environmentId: string, ownerEpoch?: number): Promise<void> {
     const entry = entries.get(environmentId);
-    if (!entry || (ownerEpoch !== undefined && ownerEpoch !== entry.ownerEpoch)) {
-      return;
+    if (entry && (ownerEpoch === undefined || ownerEpoch === entry.ownerEpoch)) {
+      await stopEntry(entry);
     }
-    await stopEntry(entry);
+    await desktop.stop(environmentId, ownerEpoch);
   }
 
   async function stopAll(): Promise<void> {
@@ -542,15 +506,17 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       entries.delete(entry.environmentId);
       entry.abortController.abort(new Error("Worker tunnel manager stopped"));
     }
-    await Promise.all(current.map(stopEntry));
+    await Promise.all([...current.map(stopEntry), desktop.stopAll()]);
   }
 
   return {
+    desktop,
     start,
     stop,
     stopAll,
     status(environmentId: string): WorkerTunnelStatus {
-      return entries.get(environmentId)?.status ?? "stopped";
+      const entry = entries.get(environmentId);
+      return !entry || entry.loopSettled ? "stopped" : entry.status;
     },
   };
 }

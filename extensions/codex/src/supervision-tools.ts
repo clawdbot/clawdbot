@@ -27,13 +27,12 @@ import {
 import { requestCodexAppServerJson } from "./app-server/request.js";
 
 /** Legacy endpoint env retained for the shipped Supervisor tool contract. */
-export const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
+const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
 /** Legacy standalone-MCP transcript gate. Agent tools use canonical config. */
-export const LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV =
+const LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV =
   "OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS";
 /** Legacy standalone-MCP write gate. Agent tools use canonical config. */
-export const LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV =
-  "OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS";
+const LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS";
 
 export const CODEX_SUPERVISION_COMPAT_TOOL_NAMES = [
   "codex_endpoint_probe",
@@ -146,7 +145,7 @@ type EndpointRequest = <T = unknown>(
   requestParams?: unknown,
 ) => Promise<T>;
 
-export type CodexSupervisionToolsOptions = {
+type CodexSupervisionToolsOptions = {
   getPluginConfig: () => unknown;
   getRuntimeConfig?: () => OpenClawConfig | undefined;
   /** Trusted owner bit supplied by the plugin tool context. */
@@ -157,10 +156,6 @@ export type CodexSupervisionToolsOptions = {
   /** Only a trusted standalone MCP adapter may opt into the shipped env gates. */
   useLegacyMcpPolicyEnv?: boolean;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
-}
 
 function asRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
@@ -806,7 +801,7 @@ function redactString(value: string): string {
 }
 
 /** Redacts secret-bearing fields before legacy tool results leave the plugin. */
-export function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
+function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
   if (typeof value === "string") {
     return /authorization|password|secret|token|api[-_]?key/i.test(key)
       ? "[redacted]"
@@ -1082,7 +1077,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       description: "List Codex sessions visible to the OpenClaw supervisor.",
       parameters: SessionsListParamsSchema,
       execute: async (_toolCallId, rawParams) => {
-        const params = asRecord(rawParams);
+        const params = isRecord(rawParams) ? rawParams : {};
         const { endpoints } = current();
         const result = await listSessionSnapshot({
           endpoints,
@@ -1108,7 +1103,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
         requireRawTranscriptAccess(options, pluginConfig);
-        const params = asRecord(rawParams);
+        const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const endpoint = await resolveEndpointForThread({
           endpoints,
@@ -1138,7 +1133,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
         requireWriteAccess(options, pluginConfig);
-        const params = asRecord(rawParams);
+        const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const text = readStringParam(params, "text", { required: true, allowEmpty: false });
         const mode = readModeParam(params) ?? "auto";
@@ -1187,7 +1182,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
         requireWriteAccess(options, pluginConfig);
-        const params = asRecord(rawParams);
+        const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const endpoint = await resolveEndpointForThread({
           endpoints,
@@ -1223,3 +1218,4 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
     },
   ];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

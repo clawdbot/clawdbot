@@ -1,5 +1,6 @@
 // Tracks host hook state and scheduled turn identifiers.
 import { randomUUID } from "node:crypto";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -8,7 +9,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-export { clearPluginOwnedSessionState } from "./host-hook-cleanup.js";
 import {
   buildPluginAgentTurnPrepareContext,
   isPluginJsonValue,
@@ -28,6 +28,8 @@ const PROJECTION_FAILED = Symbol("plugin-session-extension-projection-failed");
 const MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH = 32 * 1024;
 const MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH = 512;
 const MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION = 32;
+
+type MutableSessionEntry = SessionEntry & Record<string, unknown>;
 
 function normalizeNamespace(value: string): string {
   return value.trim();
@@ -185,7 +187,7 @@ export async function enqueuePluginNextTurnInjection(params: {
   return { ...updated.result, sessionKey: updated.canonicalKey };
 }
 
-export async function drainPluginNextTurnInjections(params: {
+async function drainPluginNextTurnInjections(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   now?: number;
@@ -277,10 +279,12 @@ export function getPluginSessionExtensionStateSync(params: {
 export async function patchPluginSessionExtension(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
   pluginId: string;
   namespace: string;
   value?: PluginJsonValue;
   unset?: boolean;
+  assertCurrent?: () => void;
 }): Promise<{ ok: true; key: string; value?: PluginJsonValue } | { ok: false; error: string }> {
   const namespace = normalizeNamespace(params.namespace);
   const pluginId = params.pluginId.trim();
@@ -317,9 +321,14 @@ export async function patchPluginSessionExtension(params: {
   }
   const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
   const updated = await updateResolvedSessionEntry(
-    { cfg: params.cfg, sessionKey: params.sessionKey },
+    {
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    },
     (entry, context) => {
-      const entryRecord = entry as Record<string, unknown>;
+      params.assertCurrent?.();
+      const entryRecord = entry as MutableSessionEntry;
       const pluginExtensions = { ...entry.pluginExtensions };
       const pluginState = { ...pluginExtensions[pluginId] };
       if (params.unset === true) {
@@ -461,10 +470,6 @@ function collectPluginSessionExtensionProjections(params: {
     }
   }
   return projections;
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return Boolean(value && typeof (value as { then?: unknown }).then === "function");
 }
 
 function discardUnexpectedPromiseProjection(value: PromiseLike<unknown>): void {

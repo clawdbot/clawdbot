@@ -9,6 +9,7 @@ import ai.openclaw.app.protocol.OpenClawCanvasCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
+import ai.openclaw.app.protocol.OpenClawMobileUiCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
@@ -78,6 +79,7 @@ class InvokeDispatcher(
   private val a2uiHandler: A2UIHandler,
   private val debugHandler: DebugHandler,
   private val callLogHandler: CallLogHandler,
+  private val mobileUiHandler: MobileUiHandler,
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
@@ -93,6 +95,7 @@ class InvokeDispatcher(
   private val onCanvasA2uiReset: () -> Unit,
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
+  private val mobileUiAvailable: () -> Boolean,
 ) {
   private val canvasCommandMutex = Mutex()
 
@@ -258,6 +261,10 @@ class InvokeDispatcher(
       // CallLog command
       OpenClawCallLogCommand.Search.rawValue -> callLogHandler.handleCallLogSearch(paramsJson)
 
+      // Mobile accessibility commands
+      OpenClawMobileUiCommand.Observe.rawValue -> mobileUiHandler.handleObserve(paramsJson)
+      OpenClawMobileUiCommand.Act.rawValue -> mobileUiHandler.handleAct(paramsJson)
+
       // Debug commands
       "debug.ed25519" -> debugHandler.handleEd25519()
       "debug.logs" -> debugHandler.handleLogs()
@@ -377,6 +384,15 @@ class InvokeDispatcher(
           GatewaySession.InvokeResult.error(
             code = "INVALID_REQUEST",
             message = "INVALID_REQUEST: unknown command",
+          )
+        }
+      InvokeCommandAvailability.MobileUiAvailable ->
+        if (mobileUiAvailable()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "MOBILE_UI_UNAVAILABLE",
+            message = "MOBILE_UI_UNAVAILABLE: accessibility service is not connected",
           )
         }
     }

@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ensureExtensionRelayToken,
-  extensionRelayTokenMatches,
   readExtensionRelayToken,
   resolveExtensionRelayToken,
 } from "./relay-auth.js";
@@ -32,8 +31,8 @@ describe("extension relay host-local secret", () => {
     expect(resolveExtensionRelayToken()).toBeNull();
   });
 
-  it("creates a 64-hex secret on ensure and persists it privately", () => {
-    const token = ensureExtensionRelayToken();
+  it("creates a 64-hex secret on ensure and persists it privately", async () => {
+    const token = await ensureExtensionRelayToken();
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     const secretPath = path.join(stateDir, "credentials", "browser-extension-relay.secret");
     expect(fs.existsSync(secretPath)).toBe(true);
@@ -42,29 +41,31 @@ describe("extension relay host-local secret", () => {
     }
   });
 
-  it("is stable across calls (does not rotate on read)", () => {
-    const first = ensureExtensionRelayToken();
-    expect(ensureExtensionRelayToken()).toBe(first);
+  it("is stable across calls (does not rotate on read)", async () => {
+    const first = await ensureExtensionRelayToken();
+    await expect(ensureExtensionRelayToken()).resolves.toBe(first);
     expect(readExtensionRelayToken()).toBe(first);
   });
 
-  it("gives different hosts (state dirs) different secrets", () => {
-    const a = ensureExtensionRelayToken();
+  it("adopts the first writer's token under concurrent creation", async () => {
+    const [first, second] = await Promise.all([
+      ensureExtensionRelayToken(),
+      ensureExtensionRelayToken(),
+    ]);
+    expect(second).toBe(first);
+    expect(readExtensionRelayToken()).toBe(first);
+  });
+
+  it("gives different hosts (state dirs) different secrets", async () => {
+    const a = await ensureExtensionRelayToken();
     const otherDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-relay-auth-2-")),
     );
     try {
-      const b = ensureExtensionRelayToken({ ...process.env, OPENCLAW_STATE_DIR: otherDir });
+      const b = await ensureExtensionRelayToken({ ...process.env, OPENCLAW_STATE_DIR: otherDir });
       expect(b).not.toBe(a);
     } finally {
       fs.rmSync(otherDir, { recursive: true, force: true });
     }
-  });
-
-  it("matches tokens in constant time and rejects mismatches", () => {
-    const token = ensureExtensionRelayToken();
-    expect(extensionRelayTokenMatches(token, token)).toBe(true);
-    expect(extensionRelayTokenMatches(token, `${token}x`)).toBe(false);
-    expect(extensionRelayTokenMatches(token, "short")).toBe(false);
   });
 });

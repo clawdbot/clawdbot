@@ -3,6 +3,9 @@ import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseMusicGenerationModelRef } from "../media-generation/model-ref.js";
+import { getMusicGenerationProvider } from "../media-generation/registry.js";
+import { listMusicGenerationProviders } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
@@ -11,9 +14,7 @@ import {
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { parseMusicGenerationModelRef } from "./model-ref.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
-import { getMusicGenerationProvider, listMusicGenerationProviders } from "./provider-registry.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 import type { MusicGenerationResult } from "./types.js";
 
@@ -27,14 +28,12 @@ import type { MusicGenerationResult } from "./types.js";
 const log = createSubsystemLogger("music-generation");
 
 /** Injectable dependencies used by tests and alternate runtime hosts. */
-export type MusicGenerationRuntimeDeps = {
+type MusicGenerationRuntimeDeps = {
   getProvider?: typeof getMusicGenerationProvider;
   listProviders?: typeof listMusicGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;
   log?: Pick<typeof log, "debug">;
 };
-
-export type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 
 /** List runtime-visible music generation providers for a config snapshot. */
 export function listRuntimeMusicGenerationProviders(
@@ -54,10 +53,10 @@ export async function generateMusic(
   const logger = deps.log ?? log;
   const timeoutMs =
     params.timeoutMs ??
-    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.musicGenerationModel);
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.music);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.musicGenerationModel,
+    modelConfig: params.cfg.agents?.defaults?.mediaModels?.music,
     modelOverride: params.modelOverride,
     parseModelRef: parseMusicGenerationModelRef,
     agentDir: params.agentDir,
@@ -68,7 +67,7 @@ export async function generateMusic(
     throw new Error(
       buildNoCapabilityModelConfiguredMessage({
         capabilityLabel: "music-generation",
-        modelConfigKey: "musicGenerationModel",
+        modelConfigKey: "mediaModels.music",
         providers: listProviders(params.cfg),
         fallbackSampleRef: "google/lyria-3-clip-preview",
         getProviderEnvVars: deps.getProviderEnvVars,
@@ -119,6 +118,12 @@ export async function generateMusic(
       });
       if (!Array.isArray(result.tracks) || result.tracks.length === 0) {
         throw new Error("Music generation provider returned no tracks.");
+      }
+      const emptyTrackIndex = result.tracks.findIndex((track) => track.buffer.byteLength === 0);
+      if (emptyTrackIndex >= 0) {
+        throw new Error(
+          `Music generation provider returned an empty track buffer at index ${emptyTrackIndex}.`,
+        );
       }
       return {
         tracks: result.tracks,

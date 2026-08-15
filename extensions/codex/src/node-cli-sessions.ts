@@ -19,8 +19,9 @@ import {
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
 import { formatCodexDisplayText } from "./command-formatters.js";
+import { JSONL_FIRST_LINE_CHUNK_BYTES, visitJsonlLines } from "./jsonl-lines.js";
 
-export const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
+const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
 
 const DEFAULT_SESSION_LIMIT = 10;
@@ -29,7 +30,7 @@ const DEFAULT_RESUME_TIMEOUT_MS = 20 * 60_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const activeResumeSessions = new Set<string>();
 
-export type CodexCliSessionSummary = {
+type CodexCliSessionSummary = {
   sessionId: string;
   updatedAt?: string;
   lastMessage?: string;
@@ -38,12 +39,12 @@ export type CodexCliSessionSummary = {
   messageCount: number;
 };
 
-export type CodexCliSessionsListResult = {
+type CodexCliSessionsListResult = {
   sessions: CodexCliSessionSummary[];
   codexHome: string;
 };
 
-export type CodexCliSessionResumeResult = {
+type CodexCliSessionResumeResult = {
   ok: true;
   sessionId: string;
   text: string;
@@ -119,6 +120,7 @@ export async function listCodexCliSessionsOnNode(params: {
       filter: params.filter,
     },
     timeoutMs: 15_000,
+    scopes: ["operator.write"],
   });
   return { node, result: parseCodexCliSessionsListResult(raw) };
 }
@@ -163,6 +165,7 @@ export async function resumeCodexCliSessionOnNode(params: {
       timeoutMs: params.timeoutMs,
     },
     timeoutMs: (params.timeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS) + 5_000,
+    scopes: ["operator.write"],
   });
   const payload = unwrapNodeInvokePayload(raw);
   if (!isRecord(payload) || payload.ok !== true || typeof payload.text !== "string") {
@@ -320,7 +323,7 @@ async function runCodexExecResume(params: {
   }
 }
 
-export function resolveCodexCliResumeSpawnInvocation(
+function resolveCodexCliResumeSpawnInvocation(
   args: string[],
   runtime: CodexCliResumeSpawnRuntime = DEFAULT_RESUME_SPAWN_RUNTIME,
 ): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
@@ -345,27 +348,23 @@ async function readHistorySessions(
 ): Promise<Map<string, CodexCliSessionSummary>> {
   const summaries = new Map<string, CodexCliSessionSummary>();
   const historyPath = path.join(codexHome, "history.jsonl");
-  const content = await readFileIfExists(historyPath);
-  if (!content) {
-    return summaries;
-  }
-  for (const line of content.split(/\r?\n/u)) {
+  const result = await visitJsonlLines(historyPath, (line) => {
     const trimmed = line.trim();
     if (!trimmed) {
-      continue;
+      return;
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      continue;
+      return;
     }
     if (!isRecord(parsed) || typeof parsed.session_id !== "string") {
-      continue;
+      return;
     }
     const sessionId = parsed.session_id.trim();
     if (!sessionId) {
-      continue;
+      return;
     }
     const entry = summaries.get(sessionId) ?? {
       sessionId,
@@ -379,6 +378,9 @@ async function readHistorySessions(
       entry.updatedAt = timestampMsToIsoString(parsed.ts * 1000) ?? entry.updatedAt;
     }
     summaries.set(sessionId, entry);
+  });
+  if (!result.ok) {
+    return new Map();
   }
   return summaries;
 }
@@ -441,28 +443,24 @@ async function hydrateSessionsFromSessionFiles(
 }
 
 async function readSessionFileSummary(file: string): Promise<CodexCliSessionSummary | null> {
-  const content = await readFileIfExists(file);
-  if (!content) {
-    return null;
-  }
   let sessionId = "";
   let cwd: string | undefined;
   let updatedAt: string | undefined;
   let lastMessage: string | undefined;
   let messageCount = 0;
-  for (const line of content.split(/\r?\n/u)) {
+  const result = await visitJsonlLines(file, (line) => {
     const trimmed = line.trim();
     if (!trimmed) {
-      continue;
+      return;
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      continue;
+      return;
     }
     if (!isRecord(parsed)) {
-      continue;
+      return;
     }
     if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
       updatedAt = parsed.timestamp.trim();
@@ -474,13 +472,19 @@ async function readSessionFileSummary(file: string): Promise<CodexCliSessionSumm
       if (typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()) {
         cwd = parsed.payload.cwd.trim();
       }
-      continue;
+      return;
     }
     const messageText = readResponseItemMessageText(parsed);
     if (messageText) {
       messageCount += 1;
       lastMessage = truncateText(messageText, 140);
     }
+  });
+  if (!result.ok) {
+    return null;
+  }
+  if (result.lineCount === 0) {
+    return null;
   }
   if (!sessionId) {
     sessionId = readSessionIdFromFilename(file) ?? "";
@@ -659,17 +663,17 @@ function resolveCodexHome(): string {
   return process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
 }
 
-async function readFileIfExists(file: string): Promise<string | undefined> {
-  try {
-    return await fs.readFile(file, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
 async function readFirstLine(file: string): Promise<string | undefined> {
-  const content = await readFileIfExists(file);
-  return content?.split(/\r?\n/u)[0];
+  let firstLine: string | undefined;
+  const result = await visitJsonlLines(
+    file,
+    (line) => {
+      firstLine = line;
+      return false;
+    },
+    JSONL_FIRST_LINE_CHUNK_BYTES,
+  );
+  return result.ok ? firstLine : undefined;
 }
 
 async function readFileMtimeIso(file: string): Promise<string | undefined> {

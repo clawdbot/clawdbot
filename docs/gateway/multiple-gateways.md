@@ -91,7 +91,9 @@ Keep these unique per Gateway instance:
 | `gateway.port` (or `--port`) | Unique per instance                  |
 | Derived browser/CDP ports    | See below                            |
 
-Sharing any of these causes config races and port conflicts.
+Sharing any of these causes config, state, or port conflicts. Gateway startup
+enforces unique state-directory ownership even when
+`OPENCLAW_ALLOW_MULTI_GATEWAY=1` skips the per-config singleton.
 
 ## Port mapping (derived)
 

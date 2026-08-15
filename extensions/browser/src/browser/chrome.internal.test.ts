@@ -6,9 +6,10 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { rawDataToString } from "../infra/ws.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -59,8 +60,7 @@ vi.mock("./cdp-timeouts.js", async () => {
 
 import { CHROME_STDERR_HINT_MAX_CHARS } from "./cdp-timeouts.js";
 import {
-  buildOpenClawChromeLaunchArgs,
-  getChromeWebSocketUrl,
+  getChromeWebSocketEndpoint,
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
@@ -71,6 +71,12 @@ import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js"
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 
 const CHROME_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+
+async function getChromeWebSocketUrl(
+  ...args: Parameters<typeof getChromeWebSocketEndpoint>
+): Promise<string | null> {
+  return (await getChromeWebSocketEndpoint(...args))?.url ?? null;
+}
 
 /**
  * Covers the parts of chrome.ts that the mainline chrome.test.ts does
@@ -333,6 +339,13 @@ async function withMockChromeCdpServer(params: {
 describe("chrome.ts internal", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
+      if (!fs.existsSync(candidate)) {
+        throw new Error("ENOENT");
+      }
+      return { isFile: () => true } as fs.Stats;
+    });
   });
 
   afterEach(() => {
@@ -355,155 +368,6 @@ describe("chrome.ts internal", () => {
     it("respects an explicit profile name", () => {
       const dir = resolveOpenClawUserDataDir("my-profile");
       expect(dir.endsWith(path.join("my-profile", "user-data"))).toBe(true);
-    });
-  });
-
-  describe("buildOpenClawChromeLaunchArgs branches", () => {
-    const baseResolved = (overrides: Partial<ResolvedBrowserConfig> = {}): ResolvedBrowserConfig =>
-      ({
-        headless: false,
-        noSandbox: false,
-        extraArgs: [],
-        headlessSource: "default",
-        ...overrides,
-      }) as unknown as ResolvedBrowserConfig;
-
-    const baseProfile: ResolvedBrowserProfile = {
-      name: "openclaw",
-      color: "#FF4500",
-      cdpPort: 19222,
-      cdpUrl: "http://127.0.0.1:19222",
-      cdpIsLoopback: true,
-      driver: "openclaw",
-      headless: false,
-      headlessSource: "default",
-      attachOnly: false,
-    } as unknown as ResolvedBrowserProfile;
-
-    it("toggles headless args", () => {
-      const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved({ headless: false }),
-        profile: { ...baseProfile, headless: true, headlessSource: "profile" },
-        userDataDir: "/tmp/foo",
-      });
-      expect(args).toContain("--headless=new");
-      expect(args).toContain("--disable-gpu");
-    });
-
-    it("lets profile headless=false override global headless=true", () => {
-      const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved({ headless: true, headlessSource: "config" }),
-        profile: { ...baseProfile, headless: false, headlessSource: "profile" },
-        userDataDir: "/tmp/foo",
-      });
-      expect(args).not.toContain("--headless=new");
-      expect(args).not.toContain("--disable-gpu");
-    });
-
-    it("lets a request headless override beat env and profile headed settings", () => {
-      const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved({ headless: false, headlessSource: "config" }),
-        profile: { ...baseProfile, headless: false, headlessSource: "profile" },
-        userDataDir: "/tmp/foo",
-        headlessOverride: true,
-        env: { OPENCLAW_BROWSER_HEADLESS: "0" },
-      });
-      expect(args).toContain("--headless=new");
-      expect(args).toContain("--disable-gpu");
-    });
-
-    it("adds headless args for Linux local managed profiles without a display", () => {
-      const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved(),
-        profile: baseProfile,
-        userDataDir: "/tmp/foo",
-        platform: "linux",
-        env: { DISPLAY: undefined, WAYLAND_DISPLAY: undefined },
-      });
-      expect(args).toContain("--headless=new");
-      expect(args).toContain("--disable-gpu");
-    });
-
-    it("does not apply Linux no-display fallback to remote profiles", () => {
-      const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved(),
-        profile: {
-          ...baseProfile,
-          cdpHost: "10.0.0.42",
-          cdpUrl: "http://10.0.0.42:9222",
-          cdpIsLoopback: false,
-        },
-        userDataDir: "/tmp/foo",
-        platform: "linux",
-        env: { DISPLAY: undefined, WAYLAND_DISPLAY: undefined },
-      });
-      expect(args).not.toContain("--headless=new");
-      expect(args).not.toContain("--disable-gpu");
-    });
-
-    it("toggles no-sandbox args", () => {
-      const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved({ noSandbox: true }),
-        profile: baseProfile,
-        userDataDir: "/tmp/foo",
-      });
-      expect(args).toContain("--no-sandbox");
-      expect(args).not.toContain("--disable-setuid-sandbox");
-    });
-
-    it("adds --disable-dev-shm-usage on linux", () => {
-      const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved(),
-        profile: baseProfile,
-        userDataDir: "/tmp/foo",
-        platform: "linux",
-      });
-      expect(args).toContain("--disable-dev-shm-usage");
-      expect(args).not.toContain("--use-mock-keychain");
-    });
-
-    it("uses a non-interactive keychain for isolated managed profiles on macOS", () => {
-      const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved(),
-        profile: baseProfile,
-        userDataDir: "/tmp/foo",
-        platform: "darwin",
-        useMockKeychain: true,
-      });
-      expect(args).toContain("--use-mock-keychain");
-      expect(args).not.toContain("--disable-dev-shm-usage");
-    });
-
-    it("keeps existing macOS profiles on their original keychain", () => {
-      const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved(),
-        profile: baseProfile,
-        userDataDir: "/tmp/foo",
-        platform: "darwin",
-      });
-      expect(args).not.toContain("--use-mock-keychain");
-    });
-
-    it("propagates extraArgs", () => {
-      const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved({
-          extraArgs: ["--proxy-server=http://localhost:3128", "--mute-audio"],
-        }),
-        profile: baseProfile,
-        userDataDir: "/tmp/foo",
-      });
-      expect(args).toContain("--proxy-server=http://localhost:3128");
-      expect(args).toContain("--mute-audio");
-      expect(args).not.toContain("--no-proxy-server");
-    });
-
-    it("launches managed Chrome direct by default", () => {
-      const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved(),
-        profile: baseProfile,
-        userDataDir: "/tmp/foo",
-      });
-      expect(args).toContain("--no-proxy-server");
     });
   });
 
@@ -1888,10 +1752,12 @@ describe("chrome.ts internal", () => {
     it("buffers stderr chunks when Chrome emits diagnostics while CDP comes up", async () => {
       // Covers onStderr (appending chunks to the bounded stderr tail) plus the
       // stderrHint truthy branch on failure.
-      const configDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-redact-off-"));
-      const configPath = path.join(configDir, "openclaw.json");
-      await fsp.writeFile(configPath, JSON.stringify({ logging: { redactSensitive: "off" } }));
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      const openClawState = await createOpenClawTestState({
+        layout: "state-only",
+        prefix: "openclaw-redact-off-",
+      });
+      await openClawState.writeConfig({ logging: { redactSensitive: "off" } });
+      const configDir = openClawState.root;
       const executablePath = path.join(configDir, "chrome-stderr-existing");
       await fsp.writeFile(executablePath, "");
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
@@ -1937,7 +1803,7 @@ describe("chrome.ts internal", () => {
       expect(message).toContain("Chrome stderr:");
       expect(message).toContain("chrome crash log");
       expect(message).not.toContain(secretToken);
-      await fsp.rm(configDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     });
 
     it("omits the sandbox hint on non-linux platforms", async () => {
@@ -2232,7 +2098,6 @@ describe("chrome.ts internal", () => {
             `${baseUrl}/json/version`,
           );
           expect(release).toHaveBeenCalled();
-          expect(running.releaseCdpProxyBypass).toBeUndefined();
           running.proc.kill?.("SIGTERM");
         },
       });
@@ -2297,3 +2162,4 @@ describe("chrome.ts internal", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

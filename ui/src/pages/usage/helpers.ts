@@ -1,5 +1,5 @@
 // Control UI module implements usage helpers behavior.
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type UsageQueryTerm = {
   key?: string;
@@ -33,6 +33,28 @@ type UsageSessionQueryTarget = {
     modelUsage?: Array<{ provider?: string; model?: string }>;
   } | null;
 };
+
+export function currentLocalDate(): string {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+export function toUsageErrorMessage(error: unknown): string {
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  if (error && typeof error === "object") {
+    try {
+      return JSON.stringify(error) || "request failed";
+    } catch {
+      // Fall through to the stable generic message.
+    }
+  }
+  return "request failed";
+}
 
 export function toggleUsageRangeSelection<T>(
   selected: T[],

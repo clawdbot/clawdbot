@@ -17,18 +17,22 @@ import type {
 import {
   asBoolean,
   asFiniteNumber,
-  asObject,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
   requireInRange,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeLowercaseStringOrEmpty,
+  parseBooleanValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
@@ -78,17 +82,6 @@ type ElevenLabsProviderConfig = {
     speed: number;
   };
 };
-
-function parseBooleanValue(value: string): boolean | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (["true", "1", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  if (["false", "0", "no", "off"].includes(normalized)) {
-    return false;
-  }
-  return undefined;
-}
 
 function parseNumberValue(value: string): number | undefined {
   return parseStrictFiniteNumber(value);
@@ -141,13 +134,13 @@ function normalizeVoiceSettings(
 function normalizeElevenLabsProviderConfig(
   rawConfig: Record<string, unknown>,
 ): ElevenLabsProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.elevenlabs) ?? asObject(rawConfig.elevenlabs);
-  const rawVoiceSettings = asObject(raw?.voiceSettings);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.elevenlabs) ?? asOptionalRecord(rawConfig.elevenlabs);
+  const rawVoiceSettings = asOptionalRecord(raw?.voiceSettings);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.elevenlabs.apiKey",
+      path: "tts.providers.elevenlabs.apiKey",
     }),
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(raw?.baseUrl)),
     voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_ELEVENLABS_VOICE_ID,
@@ -169,7 +162,7 @@ function normalizeElevenLabsProviderConfig(
 
 function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsProviderConfig {
   const defaults = normalizeElevenLabsProviderConfig({});
-  const voiceSettings = asObject(config.voiceSettings);
+  const voiceSettings = asOptionalRecord(config.voiceSettings);
   return {
     apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
@@ -187,6 +180,24 @@ function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsP
   };
 }
 
+function resolveElevenLabsApiKey(...candidates: Array<string | undefined>): string | undefined {
+  return resolveSpeechProviderApiKey(
+    ...candidates,
+    resolveElevenLabsApiKeyWithProfileFallback() ?? undefined,
+    process.env.XI_API_KEY,
+  );
+}
+
+function resolveElevenLabsTalkApiKey(config: SpeechProviderConfig): string | undefined {
+  if (config.apiKey === undefined) {
+    return resolveElevenLabsApiKey();
+  }
+  return normalizeResolvedSecretInputString({
+    value: config.apiKey,
+    path: "talk.providers.elevenlabs.apiKey",
+  });
+}
+
 function mergeVoiceSettingsOverride(
   ctx: SpeechDirectiveTokenParseContext,
   next: Record<string, unknown>,
@@ -194,7 +205,7 @@ function mergeVoiceSettingsOverride(
   return {
     ...ctx.currentOverrides,
     voiceSettings: {
-      ...asObject(ctx.currentOverrides?.voiceSettings),
+      ...asOptionalRecord(ctx.currentOverrides?.voiceSettings),
       ...next,
     },
   };
@@ -204,7 +215,7 @@ function resolveVoiceSettingsOverride(
   base: ElevenLabsProviderConfig["voiceSettings"],
   overrides: unknown,
 ): ElevenLabsProviderConfig["voiceSettings"] {
-  const voiceSettings = asObject(overrides);
+  const voiceSettings = asOptionalRecord(overrides);
   return {
     ...base,
     ...normalizeVoiceSettings(voiceSettings),
@@ -406,8 +417,7 @@ function resolveElevenLabsTtsRequest(
 ): Parameters<typeof elevenLabsTTS>[0] {
   const config = readElevenLabsProviderConfig(req.providerConfig);
   const overrides = req.providerOverrides ?? {};
-  const apiKey =
-    config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
+  const apiKey = resolveElevenLabsApiKey(config.apiKey);
   if (!apiKey) {
     throw new Error("ElevenLabs API key missing");
   }
@@ -440,14 +450,8 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeElevenLabsProviderConfig(baseTtsConfig);
-      const talkVoiceSettings = asObject(talkProviderConfig.voiceSettings);
-      const resolvedTalkApiKey =
-        talkProviderConfig.apiKey === undefined
-          ? (resolveElevenLabsApiKeyWithProfileFallback() ?? undefined)
-          : normalizeResolvedSecretInputString({
-              value: talkProviderConfig.apiKey,
-              path: "talk.providers.elevenlabs.apiKey",
-            });
+      const talkVoiceSettings = asOptionalRecord(talkProviderConfig.voiceSettings);
+      const resolvedTalkApiKey = resolveElevenLabsTalkApiKey(talkProviderConfig);
       return {
         ...base,
         ...(resolvedTalkApiKey === undefined ? {} : { apiKey: resolvedTalkApiKey }),
@@ -529,11 +533,9 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       const config = req.providerConfig
         ? readElevenLabsProviderConfig(req.providerConfig)
         : undefined;
-      const apiKey =
-        req.apiKey ||
-        config?.apiKey ||
-        resolveElevenLabsApiKeyWithProfileFallback() ||
-        process.env.XI_API_KEY;
+      const requestValue = req.apiKey;
+      const configValue = config?.apiKey;
+      const apiKey = resolveElevenLabsApiKey(requestValue, configValue);
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }
@@ -544,11 +546,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       });
     },
     isConfigured: ({ providerConfig }) =>
-      Boolean(
-        readElevenLabsProviderConfig(providerConfig).apiKey ||
-        resolveElevenLabsApiKeyWithProfileFallback() ||
-        process.env.XI_API_KEY,
-      ),
+      Boolean(resolveElevenLabsApiKey(readElevenLabsProviderConfig(providerConfig).apiKey)),
     synthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
       const outputFormat =

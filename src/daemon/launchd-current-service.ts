@@ -1,7 +1,7 @@
 /** Detects whether the current process is running inside a launchd service label. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-export type CurrentProcessLaunchdServiceLabelOptions = {
+type CurrentProcessLaunchdServiceLabelOptions = {
   allowConfiguredLabelFallback?: boolean;
 };
 

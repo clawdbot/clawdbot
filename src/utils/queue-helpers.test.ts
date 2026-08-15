@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   applyQueueDropPolicy,
   applyQueueRuntimeSettings,
-  clearQueueSummaryState,
   countPendingQueueItems,
   drainCollectQueueStep,
   drainNextQueueItem,
@@ -64,9 +63,8 @@ describe("applyQueueRuntimeSettings", () => {
 });
 
 describe("queue summary helpers", () => {
-  it("previewQueueSummaryPrompt does not mutate state", () => {
+  it("renders pending summary state without mutating it", () => {
     const state = {
-      dropPolicy: "summarize" as const,
       droppedCount: 2,
       summaryLines: ["first", "second"],
     };
@@ -79,21 +77,9 @@ describe("queue summary helpers", () => {
     expect(prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
     expect(prompt).toContain("first");
     expect(state).toEqual({
-      dropPolicy: "summarize",
       droppedCount: 2,
       summaryLines: ["first", "second"],
     });
-  });
-
-  it("clearQueueSummaryState resets summary counters", () => {
-    const state = {
-      dropPolicy: "summarize" as const,
-      droppedCount: 5,
-      summaryLines: ["a", "b"],
-    };
-    clearQueueSummaryState(state);
-    expect(state.droppedCount).toBe(0);
-    expect(state.summaryLines).toStrictEqual([]);
   });
 
   it("keeps dropped-item previews free of lone surrogates", () => {

@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "./method-scopes.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
-export type OperatorApprovalAccessBinding = {
+type OperatorApprovalAccessBinding = {
   reviewerDeviceIds?: readonly string[] | null;
 };
 

@@ -11,12 +11,10 @@ export {
   requestFlowCancel,
   reloadTaskFlowRegistryFromStore,
   resolveTaskFlowForLookupToken,
-  resetTaskFlowRegistryForTests,
   resumeFlow,
   setFlowWaiting,
-  syncFlowFromTask,
   syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
 
-export type { TaskFlowSyncResult, TaskFlowUpdateResult } from "./task-flow-registry.js";
+export type { TaskFlowUpdateResult } from "./task-flow-registry.js";

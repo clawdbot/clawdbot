@@ -2,7 +2,7 @@
  * Tests OpenAI Responses phase tracking for gateway request processing.
  */
 import { describe, expect, it } from "vitest";
-import { CreateResponseBodySchema, OutputItemSchema } from "./open-responses.schema.js";
+import { CreateResponseBodySchema } from "./open-responses.schema.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem } from "./openresponses-shape.js";
 
@@ -38,19 +38,6 @@ describe("openresponses phase support", () => {
       ],
     });
     expect(userPhaseRequest.success).toBe(false);
-  });
-
-  it("accepts assistant output item phase metadata", () => {
-    const outputItem = OutputItemSchema.safeParse({
-      type: "message",
-      id: "msg_123",
-      role: "assistant",
-      phase: "final_answer",
-      content: [{ type: "output_text", text: "Done." }],
-      status: "completed",
-    });
-
-    expect(outputItem.success).toBe(true);
   });
 
   it("shapes assistant output items with the provided phase", () => {

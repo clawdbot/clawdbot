@@ -3,20 +3,20 @@ import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-regi
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
+import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
-import { getSuspensionVisibleCronTaskRunCount } from "../tasks/cron-task-cancel.js";
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import {
   type ActiveTaskRestartBlocker,
   formatActiveTaskRestartBlocker,
 } from "../tasks/task-restart-blocker.js";
 
-export type GatewayActiveWorkCounts = {
+type GatewayActiveWorkCounts = {
   queueSize: number;
   pendingReplies: number;
   embeddedRuns: number;
@@ -100,6 +100,7 @@ function normalizeCount(value: number): number {
 
 export function createGatewayActiveWorkSnapshot(
   inspectors: Partial<GatewayActiveWorkInspectors> = {},
+  options: { ignoreTerminalSessions?: boolean } = {},
 ): GatewayActiveWorkSnapshot {
   const resolved = { ...defaultInspectors, ...inspectors };
   const counts: GatewayActiveWorkCounts = {
@@ -118,10 +119,9 @@ export function createGatewayActiveWorkSnapshot(
     terminalSessions: normalizeCount(resolved.getTerminalSessions()),
     totalActive: 0,
   };
-  counts.totalActive = Object.entries(counts).reduce(
-    (total, [key, count]) => (key === "totalActive" ? total : total + count),
-    0,
-  );
+  counts.totalActive =
+    Object.values(counts).reduce((total, count) => total + count, 0) -
+    (options.ignoreTerminalSessions ? counts.terminalSessions : 0);
 
   const blockers: GatewayActiveWorkBlocker[] = [];
   const add = (count: number, kind: GatewayActiveWorkBlocker["kind"], message: string) => {
@@ -160,11 +160,13 @@ export function createGatewayActiveWorkSnapshot(
     "terminal-persistence",
     `${counts.terminalPersistence} pending terminal session write(s)`,
   );
-  add(
-    counts.terminalSessions,
-    "terminal-session",
-    `${counts.terminalSessions} open terminal session(s)`,
-  );
+  if (!options.ignoreTerminalSessions) {
+    add(
+      counts.terminalSessions,
+      "terminal-session",
+      `${counts.terminalSessions} open terminal session(s)`,
+    );
+  }
 
   if (counts.activeTasks > 0) {
     const taskBlockers = resolved.getTaskBlockers();

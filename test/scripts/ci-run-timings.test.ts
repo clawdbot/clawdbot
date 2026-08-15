@@ -1,4 +1,9 @@
 // Ci Run Timings tests cover ci run timings script behavior.
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   collectRunJobsFromPages,
@@ -10,7 +15,7 @@ import {
 } from "../../scripts/ci-run-timings.mjs";
 
 describe("scripts/ci-run-timings.mjs", () => {
-  it("separates queue time from job duration", () => {
+  it("separates start delay from job duration without mislabeling dependency wait", () => {
     const summary = summarizeRunTimings(
       {
         conclusion: "success",
@@ -49,7 +54,7 @@ describe("scripts/ci-run-timings.mjs", () => {
       ["slow", 60],
       ["queued", 10],
     ]);
-    expect(summary.byQueue.map((job) => [job.name, job.queueSeconds])).toEqual([
+    expect(summary.byStartDelay.map((job) => [job.name, job.startDelaySeconds])).toEqual([
       ["queued", 50],
       ["slow", 20],
     ]);
@@ -128,16 +133,24 @@ describe("scripts/ci-run-timings.mjs", () => {
       {
         completedAt: "2026-06-01T13:26:16Z",
         conclusion: "success",
+        createdAt: null,
         databaseId: 101,
+        labels: [],
         name: "preflight",
+        runnerGroupName: null,
+        runnerName: null,
         startedAt: "2026-06-01T13:25:16Z",
         status: "completed",
       },
       {
         completedAt: "2026-06-01T13:28:00Z",
         conclusion: "failure",
+        createdAt: null,
         databaseId: 102,
+        labels: [],
         name: "ci-timings-summary",
+        runnerGroupName: null,
+        runnerName: null,
         startedAt: "2026-06-01T13:27:00Z",
         status: "completed",
       },
@@ -250,18 +263,53 @@ describe("scripts/ci-run-timings.mjs", () => {
 
   it("ignores pnpm passthrough sentinels when parsing monitor args", () => {
     expect(parseRunTimingArgs(["--latest-main", "--", "--limit", "3"])).toEqual({
+      compareHours: 12,
+      detailRuns: 100,
       explicitRunId: undefined,
+      json: false,
       limit: 3,
+      outputPath: null,
       recentLimit: null,
+      trendHours: null,
       useLatestMain: true,
     });
   });
 
   it("parses strict positive integer monitor limits", () => {
-    expect(parseRunTimingArgs(["123456", "--limit=7", "--recent", "4"])).toEqual({
+    expect(parseRunTimingArgs(["123456", "--limit=7"])).toEqual({
+      compareHours: 12,
+      detailRuns: 100,
       explicitRunId: "123456",
+      json: false,
       limit: 7,
-      recentLimit: 4,
+      outputPath: null,
+      recentLimit: null,
+      trendHours: null,
+      useLatestMain: false,
+    });
+    expect(parseRunTimingArgs(["--recent", "4"]).recentLimit).toBe(4);
+  });
+
+  it("parses bounded trend comparison and JSON report options", () => {
+    expect(
+      parseRunTimingArgs([
+        "--trend-hours=72",
+        "--compare-hours",
+        "12",
+        "--detail-runs=80",
+        "--json",
+        "--output",
+        "ci-trend.json",
+      ]),
+    ).toEqual({
+      compareHours: 12,
+      detailRuns: 80,
+      explicitRunId: undefined,
+      json: true,
+      limit: 15,
+      outputPath: "ci-trend.json",
+      recentLimit: null,
+      trendHours: 72,
       useLatestMain: false,
     });
   });
@@ -273,6 +321,9 @@ describe("scripts/ci-run-timings.mjs", () => {
       ["--limit=1e3"],
       ["--recent", "recent"],
       ["--recent", "0"],
+      ["--trend-hours", "0"],
+      ["--compare-hours", "1.5"],
+      ["--detail-runs", "all"],
     ]) {
       expect(() => parseRunTimingArgs(args)).toThrow("must be a positive integer");
     }
@@ -285,6 +336,10 @@ describe("scripts/ci-run-timings.mjs", () => {
       ["--limit", "-h"],
       ["--recent"],
       ["--recent", "-h"],
+      ["--trend-hours"],
+      ["--compare-hours", "--json"],
+      ["--detail-runs"],
+      ["--output="],
     ]) {
       expect(() => parseRunTimingArgs(args)).toThrow("requires a value");
     }
@@ -297,5 +352,143 @@ describe("scripts/ci-run-timings.mjs", () => {
     expect(() => parseRunTimingArgs(["123456", "789012"])).toThrow(
       "Unexpected CI run id argument: 789012",
     );
+  });
+
+  it("rejects ambiguous monitor modes and incomplete comparison windows", () => {
+    expect(() => parseRunTimingArgs(["--recent", "3", "--latest-main"])).toThrow(
+      "--recent cannot be combined",
+    );
+    expect(() => parseRunTimingArgs(["123456", "--latest-main"])).toThrow(
+      "A run id cannot be combined",
+    );
+    expect(() => parseRunTimingArgs(["--trend-hours", "72", "--recent", "3"])).toThrow(
+      "--trend-hours cannot be combined",
+    );
+    expect(() => parseRunTimingArgs(["--trend-hours", "23"])).toThrow("must cover at least two");
+    expect(() => parseRunTimingArgs(["--json"])).toThrow("require --trend-hours");
+  });
+
+  it("balances trend samples, keeps reruns attempt-specific, and counts API retries", () => {
+    const fixtureDir = mkdtempSync(path.join(tmpdir(), "openclaw-ci-timings-"));
+    const fakeGhPath = path.join(fixtureDir, "gh");
+    const reportPath = path.join(fixtureDir, "reports", "trend.json");
+    const retryMarkerPath = path.join(fixtureDir, "retried");
+    const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+    const fixtureNowMs = Date.now();
+    writeFileSync(
+      fakeGhPath,
+      `#!/usr/bin/env node
+const { existsSync, writeFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+const endpoint = args.find((arg) => arg.startsWith("repos/")) ?? "";
+const now = Number(process.env.FIXTURE_NOW_MS);
+const iso = (offsetMs) => new Date(now + offsetMs).toISOString();
+if (endpoint.includes("actions/workflows/ci.yml/runs?")) {
+  console.log(JSON.stringify({ workflow_runs: [
+    { id: 101, status: "completed", conclusion: "success", created_at: iso(-60 * 60_000), updated_at: iso(-50 * 60_000), head_sha: "latest", run_attempt: 1, html_url: "https://example.test/101" },
+    { id: 104, status: "completed", conclusion: "success", created_at: iso(-90 * 60_000), updated_at: iso(-80 * 60_000), head_sha: "latest-unsampled", run_attempt: 1, html_url: "https://example.test/104" },
+    { id: 102, status: "completed", conclusion: "cancelled", created_at: iso(-2 * 60 * 60_000), updated_at: iso(-119 * 60_000), head_sha: "cancelled", run_attempt: 1, html_url: "https://example.test/102" },
+    { id: 106, status: "completed", conclusion: "timed_out", created_at: iso(-3 * 60 * 60_000), updated_at: iso(-2 * 60 * 60_000 - 50 * 60_000), head_sha: "timed-out", run_attempt: 1, html_url: "https://example.test/106" },
+    { id: 103, status: "completed", conclusion: "success", created_at: iso(-13 * 60 * 60_000), updated_at: iso(-12 * 60 * 60_000 - 50 * 60_000), head_sha: "prior-rerun", run_attempt: 2, html_url: "https://example.test/103" }
+  ] }));
+} else if (endpoint.includes("actions/runs/101/attempts/1/jobs?")) {
+  if (!existsSync(process.env.FIXTURE_RETRY_MARKER)) {
+    writeFileSync(process.env.FIXTURE_RETRY_MARKER, "retried\\n");
+    console.error("HTTP 502: fixture transient failure");
+    process.exit(1);
+  }
+  const runStart = now - 60 * 60_000;
+  const at = (seconds) => new Date(runStart + seconds * 1000).toISOString();
+  console.log(JSON.stringify({ total_count: 4, jobs: [
+    { id: 1, name: "preflight", status: "completed", conclusion: "success", created_at: at(10), started_at: at(20), completed_at: at(60), labels: ["blacksmith-4vcpu-ubuntu-2404"], runner_name: "blacksmith-test", runner_group_name: "blacksmith" },
+    { id: 2, name: "checks-node-compact-large-1", status: "completed", conclusion: "success", created_at: at(60), started_at: at(65), completed_at: at(500), labels: ["blacksmith-8vcpu-ubuntu-2404"], runner_name: "blacksmith-test", runner_group_name: "blacksmith" },
+    { id: 3, name: "openclaw/ci-gate", status: "completed", conclusion: "success", created_at: at(500), started_at: at(501), completed_at: at(510), labels: ["ubuntu-24.04"], runner_name: "GitHub Actions", runner_group_name: "GitHub Actions" },
+    { id: 4, name: "matrix.synthetic", status: "completed", conclusion: "success", created_at: at(510), started_at: at(511), completed_at: at(520), labels: ["ubuntu-24.04"], runner_name: "GitHub Actions", runner_group_name: "GitHub Actions" }
+  ] }));
+} else if (endpoint.includes("actions/runs/103/attempts/2/jobs?")) {
+  const runStart = now - 12 * 60 * 60_000 - 55 * 60_000;
+  const at = (seconds) => new Date(runStart + seconds * 1000).toISOString();
+  console.log(JSON.stringify({ total_count: 2, jobs: [
+    { id: 5, name: "preflight", status: "completed", conclusion: "success", created_at: at(10), started_at: at(18), completed_at: at(58), labels: ["blacksmith-4vcpu-ubuntu-2404"], runner_name: "blacksmith-test", runner_group_name: "blacksmith" },
+    { id: 6, name: "checks-node-compact-large-1", status: "completed", conclusion: "success", created_at: at(58), started_at: at(62), completed_at: at(470), labels: ["blacksmith-8vcpu-ubuntu-2404"], runner_name: "blacksmith-test", runner_group_name: "blacksmith" }
+  ] }));
+} else {
+  console.error("unexpected gh invocation", args.join(" "));
+  process.exit(2);
+}
+`,
+    );
+    chmodSync(fakeGhPath, 0o755);
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/ci-run-timings.mjs",
+          "--trend-hours",
+          "24",
+          "--compare-hours",
+          "12",
+          "--detail-runs",
+          "2",
+          "--json",
+          "--output",
+          reportPath,
+        ],
+        {
+          cwd: repositoryRoot,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FIXTURE_NOW_MS: String(fixtureNowMs),
+            FIXTURE_RETRY_MARKER: retryMarkerPath,
+            OPENCLAW_GH_BIN: fakeGhPath,
+          },
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      const report = JSON.parse(result.stdout);
+      expect(JSON.parse(readFileSync(reportPath, "utf8"))).toEqual(report);
+      expect(report.apiRequests).toEqual({ jobs: 3, runList: 1, total: 4 });
+      expect(report.sampling).toEqual({
+        detailedSuccessfulRuns: 2,
+        eligibleSuccessfulRuns: 3,
+      });
+      expect(report.cohorts.comparison.outcomes).toMatchObject({
+        cancelled: 1,
+        cancellationRate: 0.25,
+        nonCancelledPassRate: 2 / 3,
+        success: 2,
+        timedOut: 1,
+        total: 4,
+      });
+      expect(report.cohorts.prior.runMetrics.successfulWallSeconds.p50).toBeNull();
+      expect(report.cohorts.prior.runMetrics.workflowAdmissionSeconds.p50).toBeNull();
+      expect(report.cohorts.prior.samples.detailedSuccessfulRuns).toBe(1);
+      expect(report.cohorts.prior.jobMetrics.executionSeconds.count).toBe(2);
+      expect(report.cohorts.comparison.jobMetrics.runnerQueueSeconds).toMatchObject({
+        count: 2,
+        max: 10,
+        p95: 10,
+      });
+      expect(report.cohorts.comparison.jobMetrics.dependencyGatedSeconds.p95).toBe(50);
+      expect(report.cohorts.comparison.runMetrics.workflowAdmissionSeconds.p95).toBe(10);
+      expect(report.cohorts.comparison.criticalOwners).toEqual([
+        { name: "checks-node-compact-large-1", runs: 1 },
+      ]);
+      expect(
+        report.jobs.find((job: { name: string }) => job.name === "checks-node-compact-large-1"),
+      ).toMatchObject({
+        comparison: { executionSeconds: { count: 1 } },
+        prior: { executionSeconds: { count: 1 } },
+      });
+      expect(report.runs[0].jobTimings.map((job: { name: string }) => job.name)).toEqual([
+        "preflight",
+        "checks-node-compact-large-1",
+      ]);
+    } finally {
+      rmSync(fixtureDir, { force: true, recursive: true });
+    }
   });
 });

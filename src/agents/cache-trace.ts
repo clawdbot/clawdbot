@@ -4,6 +4,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
+import { stableStringify } from "@openclaw/normalization-core";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
@@ -12,7 +13,6 @@ import { safeJsonStringify } from "../utils/safe-json.js";
 import { redactAgentDiagnosticPayload } from "./diagnostic-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import type { AgentMessage, StreamFn } from "./runtime/index.js";
-import { stableStringify } from "./stable-stringify.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
 // Payloads are redacted before JSONL output while stable digests preserve
@@ -40,24 +40,28 @@ type CacheTraceEvent = {
   modelId?: string;
   modelApi?: string | null;
   workspaceDir?: string;
-  prompt?: string;
+  prompt?: unknown;
   system?: unknown;
-  options?: Record<string, unknown>;
-  model?: Record<string, unknown>;
-  messages?: AgentMessage[];
+  options?: unknown;
+  model?: unknown;
+  messages?: unknown;
   messageCount?: number;
   messageRoles?: Array<string | undefined>;
   messageFingerprints?: string[];
   messagesDigest?: string;
   systemDigest?: string;
-  note?: string;
-  error?: string;
+  note?: unknown;
+  error?: unknown;
+};
+
+type CacheTracePayload = Partial<Omit<CacheTraceEvent, "messages">> & {
+  messages?: AgentMessage[];
 };
 
 type CacheTrace = {
   enabled: true;
   filePath: string;
-  recordStage: (stage: CacheTraceStage, payload?: Partial<CacheTraceEvent>) => void;
+  recordStage: (stage: CacheTraceStage, payload?: CacheTracePayload) => void;
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
 };
 
@@ -91,15 +95,14 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const config = params.cfg?.diagnostics?.cacheTrace;
   const envEnabled = parseBooleanValue(env.OPENCLAW_CACHE_TRACE);
   const enabled = envEnabled ?? config?.enabled ?? false;
-  const fileOverride = config?.filePath?.trim() || env.OPENCLAW_CACHE_TRACE_FILE?.trim();
+  const fileOverride = env.OPENCLAW_CACHE_TRACE_FILE?.trim();
   const filePath = fileOverride
     ? resolveUserPath(fileOverride)
     : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
 
-  const includeMessages =
-    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
-  const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
-  const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
+  const includeMessages = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES);
+  const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT);
+  const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM);
 
   return {
     enabled,
@@ -119,7 +122,7 @@ function digest(value: unknown): string {
   return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
-export function summarizeMessages(messages: AgentMessage[]): {
+function summarizeMessages(messages: AgentMessage[]): {
   messageCount: number;
   messageRoles: Array<string | undefined>;
   messageFingerprints: string[];

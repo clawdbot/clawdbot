@@ -11,11 +11,6 @@ const mocks = vi.hoisted(() => ({
   detectBinary: vi.fn(),
   isContainerEnvironment: vi.fn(),
   resolveBrewExecutable: vi.fn(),
-  resolveNodeManagerOptions: vi.fn(() => [
-    { value: "npm", label: "npm" },
-    { value: "pnpm", label: "pnpm" },
-    { value: "bun", label: "bun" },
-  ]),
 }));
 
 // Module under test imports these at module scope.
@@ -35,19 +30,9 @@ vi.mock("../infra/brew.js", () => ({
 }));
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: mocks.detectBinary,
-  resolveNodeManagerOptions: mocks.resolveNodeManagerOptions,
 }));
 
-import { setupSkills, testing } from "./onboard-skills.js";
-
-describe("skill onboarding text bounds", () => {
-  it("keeps install failures and hints UTF-16 well-formed", () => {
-    expect(testing.summarizeInstallFailure(`${"x".repeat(138)}🚀tail`)).toBe(`${"x".repeat(138)}…`);
-    expect(testing.formatSkillHint({ description: `${"x".repeat(88)}🚀tail`, install: [] })).toBe(
-      `${"x".repeat(88)}…`,
-    );
-  });
-});
+import { setupSkills } from "./onboard-skills.js";
 
 function createBundledSkill(params: {
   name: string;
@@ -210,6 +195,36 @@ describe("setupSkills", () => {
     mocks.resolveInstallerKindReadiness.mockResolvedValue({ ready: true });
   });
 
+  it("bounds skill hints and install failures through the onboarding flow", async () => {
+    const hintPrefix = "x".repeat(88);
+    const failurePrefix = "y".repeat(138);
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "node-helper",
+        description: `${hintPrefix}🚀tail`,
+        bins: ["node-helper"],
+        installLabel: "",
+        installKind: "node",
+      }),
+    ]);
+    mocks.installSkill.mockResolvedValueOnce({
+      ok: false,
+      message: `Install failed: ${failurePrefix}🚀tail`,
+      stdout: "",
+      stderr: "",
+      code: 1,
+    });
+    const stop = vi.fn();
+    const { prompter } = createPrompter({ multiselect: ["node-helper"] });
+    vi.mocked(prompter.progress).mockReturnValue({ update: vi.fn(), stop });
+
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    const options = vi.mocked(prompter.multiselect).mock.calls[0]?.[0].options ?? [];
+    expect(options.find((option) => option.value === "node-helper")?.hint).toBe(`${hintPrefix}…`);
+    expect(stop).toHaveBeenCalledWith(expect.stringContaining(`${failurePrefix}…`));
+  });
+
   it("hides brew-only installs in Linux containers when brew is missing", async () => {
     await withPlatform("linux", async () => {
       mockMissingBrewStatus([
@@ -251,7 +266,7 @@ describe("setupSkills", () => {
       const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
       await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
-      expect(prompter.multiselect).not.toHaveBeenCalled();
+      expect(prompter.multiselect).toHaveBeenCalled();
       expect(mocks.installSkill).toHaveBeenCalledWith(
         expect.objectContaining({ skillName: "video-frames", installId: "brew" }),
       );
@@ -260,7 +275,7 @@ describe("setupSkills", () => {
     });
   });
 
-  it("auto-installs ready bundled skill dependencies without running workspace skill recipes", async () => {
+  it("lets the user skip ready bundled dependencies without offering workspace recipes", async () => {
     mockMissingBrewStatus([
       createWorkspaceSkill({
         name: "repo-helper",
@@ -277,20 +292,25 @@ describe("setupSkills", () => {
       }),
     ]);
 
-    const { prompter, notes } = createPrompter({});
+    const { prompter } = createPrompter({});
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
-    expect(prompter.multiselect).not.toHaveBeenCalled();
-    expect(mocks.installSkill).toHaveBeenCalledTimes(1);
-    expect(mocks.installSkill).toHaveBeenCalledWith(
-      expect.objectContaining({ skillName: "node-helper", installId: "node" }),
+    expect(prompter.multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({ value: "__skip__" }),
+          expect.objectContaining({ value: "node-helper" }),
+        ]),
+      }),
     );
-    const installNote = notes.find((n) => n.message.includes("node-helper"));
-    expect(installNote?.message).toContain("node-helper");
-    expect(installNote?.message).not.toContain("repo-helper");
+    const options = vi.mocked(prompter.multiselect).mock.calls[0]?.[0].options ?? [];
+    expect(options).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: "repo-helper" })]),
+    );
+    expect(mocks.installSkill).not.toHaveBeenCalled();
   });
 
-  it("uses the requested node manager for node-backed auto installs", async () => {
+  it("installs explicitly selected dependencies when Skip for now is also selected", async () => {
     mockMissingBrewStatus([
       createBundledSkill({
         name: "node-helper",
@@ -301,7 +321,133 @@ describe("setupSkills", () => {
       }),
     ]);
 
-    const { prompter } = createPrompter({});
+    const { prompter } = createPrompter({ multiselect: ["__skip__", "node-helper"] });
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(mocks.installSkill).toHaveBeenCalledOnce();
+    expect(mocks.installSkill).toHaveBeenCalledWith(
+      expect.objectContaining({ skillName: "node-helper", installId: "node" }),
+    );
+  });
+
+  it("offers unavailable bundled dependencies and explains selected prerequisites afterward", async () => {
+    await withPlatform("linux", async () => {
+      mockMissingBrewStatus([
+        createWorkspaceSkill({
+          name: "repo-helper",
+          description: "Workspace helper",
+          bins: ["repo-helper"],
+          installLabel: "Install repo-helper",
+          installKind: "node",
+        }),
+        createBundledSkill({
+          name: "node-helper",
+          description: "Node helper",
+          bins: ["node-helper"],
+          installLabel: "Install node-helper",
+          installKind: "node",
+        }),
+        createBundledSkill({
+          name: "nano-pdf",
+          description: "PDF helper",
+          bins: ["nano-pdf"],
+          installLabel: "Install nano-pdf (uv)",
+          installKind: "uv",
+        }),
+      ]);
+      mocks.resolveInstallerKindReadiness.mockImplementation(async (kind: string) =>
+        kind === "uv" ? { ready: false, reason: "uv" } : { ready: true },
+      );
+
+      const { prompter, notes } = createPrompter({ multiselect: ["nano-pdf"] });
+      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+      const options = vi.mocked(prompter.multiselect).mock.calls[0]?.[0].options ?? [];
+      expect(options).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ value: "__skip__" }),
+          expect.objectContaining({ value: "node-helper" }),
+          expect.objectContaining({ value: "nano-pdf" }),
+        ]),
+      );
+      expect(options).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ value: "repo-helper" })]),
+      );
+      expect(mocks.installSkill).not.toHaveBeenCalled();
+      expect(notes.find((note) => note.title === "Manual skill prerequisites")?.message).toContain(
+        "uv: nano-pdf",
+      );
+      const manualNoteCall = vi
+        .mocked(prompter.note)
+        .mock.calls.findIndex(([, title]) => title === "Manual skill prerequisites");
+      expect(vi.mocked(prompter.note).mock.invocationCallOrder[manualNoteCall]).toBeGreaterThan(
+        vi.mocked(prompter.multiselect).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    });
+  });
+
+  it("installs only the bundled dependencies selected by the user", async () => {
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "node-helper",
+        description: "Node helper",
+        bins: ["node-helper"],
+        installLabel: "Install node-helper",
+        installKind: "node",
+      }),
+      createBundledSkill({
+        name: "other-helper",
+        description: "Other helper",
+        bins: ["other-helper"],
+        installLabel: "Install other-helper",
+        installKind: "node",
+      }),
+    ]);
+
+    const { prompter } = createPrompter({ multiselect: ["node-helper"] });
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(mocks.installSkill).toHaveBeenCalledTimes(1);
+    expect(mocks.installSkill).toHaveBeenCalledWith(
+      expect.objectContaining({ skillName: "node-helper", installId: "node" }),
+    );
+  });
+
+  it("rechecks persistent-effect authority immediately before each dependency install", async () => {
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "node-helper",
+        description: "Node helper",
+        bins: ["node-helper"],
+        installLabel: "Install node-helper",
+        installKind: "node",
+      }),
+    ]);
+    const beforePersistentEffect = vi.fn(async () => {});
+
+    const { prompter } = createPrompter({ multiselect: ["node-helper"] });
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter, {
+      beforePersistentEffect,
+    });
+
+    expect(beforePersistentEffect).toHaveBeenCalledOnce();
+    expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.installSkill.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("uses the requested node manager for selected node-backed installs", async () => {
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "node-helper",
+        description: "Node helper",
+        bins: ["node-helper"],
+        installLabel: "Install node-helper",
+        installKind: "node",
+      }),
+    ]);
+
+    const { prompter } = createPrompter({ multiselect: ["node-helper"] });
     const next = await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter, {
       nodeManager: "pnpm",
     });
@@ -320,7 +466,7 @@ describe("setupSkills", () => {
     );
   });
 
-  it("recommends Homebrew and skips brew-backed deps when brew is missing", async () => {
+  it("does not show Homebrew guidance when a missing brew dependency is not selected", async () => {
     if (!supportsHomebrewPrompt) {
       return;
     }
@@ -356,12 +502,14 @@ describe("setupSkills", () => {
       ].join("\n"),
     });
 
-    const brewNote = notes.find((n) => n.title === "Homebrew recommended");
-    expect(brewNote).toBeDefined();
-    expect(prompter.multiselect).not.toHaveBeenCalled();
+    expect(prompter.multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.arrayContaining([expect.objectContaining({ value: "video-frames" })]),
+      }),
+    );
     expect(mocks.installSkill).not.toHaveBeenCalled();
-    const manualNote = notes.find((n) => n.title === "Manual skill prerequisites");
-    expect(manualNote?.message).toContain("Homebrew: video-frames");
+    expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
+    expect(notes.find((n) => n.title === "Manual skill prerequisites")).toBeUndefined();
   });
 
   it("does not run brew-backed installs when brew is missing", async () => {
@@ -418,7 +566,9 @@ describe("setupSkills", () => {
         kind === "go" || kind === "uv" ? { ready: false, reason: kind } : { ready: true },
       );
 
-      const { prompter, notes } = createPrompter({});
+      const { prompter, notes } = createPrompter({
+        multiselect: ["blogwatcher", "nano-pdf", "mcporter"],
+      });
       await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
       expect(mocks.installSkill).toHaveBeenCalledTimes(1);
@@ -452,7 +602,7 @@ describe("setupSkills", () => {
         skipReason: "go",
       });
 
-      const { prompter, notes } = createPrompter({});
+      const { prompter, notes } = createPrompter({ multiselect: ["blogwatcher"] });
       await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
       expect(mocks.installSkill).toHaveBeenCalledTimes(1);
@@ -494,7 +644,7 @@ describe("setupSkills", () => {
 
       const brewNote = notes.find((n) => n.title === "Homebrew recommended");
       expect(brewNote).toBeUndefined();
-      expect(prompter.multiselect).not.toHaveBeenCalled();
+      expect(prompter.multiselect).toHaveBeenCalled();
       expect(mocks.detectBinary).not.toHaveBeenCalledWith("brew");
     });
   });

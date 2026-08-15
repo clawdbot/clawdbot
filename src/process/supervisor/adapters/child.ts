@@ -8,6 +8,11 @@ import {
 } from "../../../plugin-sdk/windows-spawn.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
+import {
+  addSecretInputStdio,
+  type SpawnStdioEntry,
+  writeSecretInputToChild,
+} from "../../spawn-secret-input.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import {
   buildWindowsCmdExeCommandLine,
@@ -15,11 +20,11 @@ import {
   resolveTrustedWindowsCmdExe,
   resolveWindowsCommandShim,
 } from "../../windows-command.js";
-import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
+import type { ManagedRunStdin, SpawnProcessAdapter, SpawnSecretInput } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
-const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+const FORCED_WINDOWS_CLOSE_SETTLE_MS = 250;
 const WINDOWS_PACKAGE_MANAGER_SHIMS = ["npm", "pnpm", "yarn", "npx"] as const;
 
 function resolveChildInvocation(params: {
@@ -65,7 +70,13 @@ function resolveChildInvocation(params: {
   };
 }
 
-export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
+type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
+type WorkerChildAdapter = ChildAdapter & {
+  closeStartGate?: () => void;
+  openStartGate?: () => Promise<void>;
+};
+
+const WORKER_START_MESSAGE = { type: "openclaw-worker-start-v1" } as const;
 
 function isServiceManagedRuntime(): boolean {
   return Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
@@ -73,57 +84,91 @@ function isServiceManagedRuntime(): boolean {
 
 export async function createChildAdapter(params: {
   argv: string[];
+  /** Own a separately signalable tree whose private IPC channel gates worker startup. */
+  ownedWorker?: true;
+  /** Preserve the supplied environment exactly by skipping environment-mutating spawn wrappers. */
+  exactEnv?: true;
+  onWorkerMessage?: (message: unknown) => void;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
-}): Promise<ChildAdapter> {
+  secretInput?: SpawnSecretInput;
+}): Promise<WorkerChildAdapter> {
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const invocation = resolveChildInvocation({
     argv: params.argv,
     env: baseEnv,
     windowsVerbatimArguments: params.windowsVerbatimArguments,
   });
-  const preparedSpawn = prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, {
-    env: baseEnv,
-  });
+  const preparedSpawn = params.exactEnv
+    ? { command: invocation.command, args: invocation.args, env: baseEnv, wrapped: false }
+    : prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, { env: baseEnv });
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
-  // In service-managed mode keep children attached so systemd/launchd can
-  // stop the full process tree reliably. Outside service mode preserve the
-  // existing POSIX detached behavior.
-  const useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
+  // A detached POSIX child is still a descendant in the service cgroup/job, but
+  // owns a process group that can be killed without touching the node host.
+  const useDetached =
+    process.platform !== "win32" &&
+    (params.ownedWorker !== undefined || !isServiceManagedRuntime());
+
+  const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
+  addSecretInputStdio(stdio, params.secretInput);
+  if (params.ownedWorker !== undefined) {
+    stdio.push("ipc");
+  }
 
   const options: SpawnOptions = {
     cwd: params.cwd,
     env: preparedSpawn.env,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio,
     detached: useDetached,
     windowsHide: true,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   };
-  if (stdinMode === "inherit") {
-    options.stdio = ["inherit", "pipe", "pipe"];
-  } else {
-    options.stdio = ["pipe", "pipe", "pipe"];
-  }
 
   const spawned = await spawnWithFallback({
     argv: [preparedSpawn.command, ...preparedSpawn.args],
     options,
-    fallbacks: useDetached
-      ? [
-          {
-            label: "no-detach",
-            options: { detached: false },
-          },
-        ]
-      : [],
+    fallbacks:
+      useDetached && params.ownedWorker === undefined
+        ? [
+            {
+              label: "no-detach",
+              options: { detached: false },
+            },
+          ]
+        : [],
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
+  if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
+    spawned.child.kill("SIGKILL");
+    throw new Error("worker lifecycle IPC channel was not created");
+  }
+  if (params.onWorkerMessage) {
+    child.on("message", (message) => {
+      try {
+        params.onWorkerMessage?.(message);
+      } catch {
+        // Worker diagnostics cannot change child supervision.
+      }
+    });
+  }
+  const disconnectWorkerIpc = () => {
+    if (!child.connected) {
+      return;
+    }
+    try {
+      child.disconnect();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ERR_IPC_DISCONNECTED") {
+        throw error;
+      }
+    }
+  };
   // Pipe errors can arrive before output subscribers attach. Close remains
   // responsible for decoder flush and Windows drain completion.
   const ignoreOutputStreamError = () => {};
@@ -252,8 +297,11 @@ export async function createChildAdapter(params: {
   let rejectWait: ((reason?: unknown) => void) | null = null;
   let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | null = null;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
+  let forcedWindowsCloseTimer: NodeJS.Timeout | null = null;
+  let hardKillRequested = false;
+  let windowsTreeKillCompleted = false;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-  let windowsCloseFallbackTimer: NodeJS.Timeout | null = null;
+  let childCloseState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let stdoutDrained = child.stdout == null;
   let stderrDrained = child.stderr == null;
 
@@ -265,12 +313,12 @@ export async function createChildAdapter(params: {
     forceKillWaitFallbackTimer = null;
   };
 
-  const clearWindowsCloseFallbackTimer = () => {
-    if (!windowsCloseFallbackTimer) {
+  const clearForcedWindowsCloseTimer = () => {
+    if (!forcedWindowsCloseTimer) {
       return;
     }
-    clearTimeout(windowsCloseFallbackTimer);
-    windowsCloseFallbackTimer = null;
+    clearTimeout(forcedWindowsCloseTimer);
+    forcedWindowsCloseTimer = null;
   };
 
   const settleWait = (value: { code: number | null; signal: NodeJS.Signals | null }) => {
@@ -278,7 +326,7 @@ export async function createChildAdapter(params: {
       return;
     }
     clearForceKillWaitFallback();
-    clearWindowsCloseFallbackTimer();
+    clearForcedWindowsCloseTimer();
     waitResult = value;
     if (resolveWait) {
       const resolve = resolveWait;
@@ -293,7 +341,7 @@ export async function createChildAdapter(params: {
       return;
     }
     clearForceKillWaitFallback();
-    clearWindowsCloseFallbackTimer();
+    clearForcedWindowsCloseTimer();
     waitError = error;
     if (rejectWait) {
       const reject = rejectWait;
@@ -325,9 +373,32 @@ export async function createChildAdapter(params: {
     };
   };
 
+  const scheduleForcedWindowsCloseSettlement = () => {
+    if (
+      process.platform !== "win32" ||
+      !hardKillRequested ||
+      !windowsTreeKillCompleted ||
+      childExitState == null ||
+      forcedWindowsCloseTimer
+    ) {
+      return;
+    }
+    const exitState = childExitState;
+    forcedWindowsCloseTimer = setTimeout(() => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      settleWait(resolveObservedExitState(exitState));
+    }, FORCED_WINDOWS_CLOSE_SETTLE_MS);
+    forcedWindowsCloseTimer.unref?.();
+  };
+
+  const isWindowsHardKillSettlementBlocked = () =>
+    process.platform === "win32" && hardKillRequested && !windowsTreeKillCompleted;
+
   const maybeSettleAfterWindowsExit = () => {
     if (
       process.platform !== "win32" ||
+      isWindowsHardKillSettlementBlocked() ||
       childExitState == null ||
       !stdoutDrained ||
       !stderrDrained
@@ -335,17 +406,6 @@ export async function createChildAdapter(params: {
       return;
     }
     settleWait(resolveObservedExitState(childExitState));
-  };
-
-  const scheduleWindowsCloseFallback = () => {
-    if (process.platform !== "win32") {
-      return;
-    }
-    clearWindowsCloseFallbackTimer();
-    windowsCloseFallbackTimer = setTimeout(() => {
-      maybeSettleAfterWindowsExit();
-    }, WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS);
-    windowsCloseFallbackTimer.unref?.();
   };
 
   child.stdout?.once("end", () => {
@@ -370,11 +430,26 @@ export async function createChildAdapter(params: {
   });
   child.once("exit", (code, signal) => {
     childExitState = { code, signal };
-    scheduleWindowsCloseFallback();
+    scheduleForcedWindowsCloseSettlement();
+    maybeSettleAfterWindowsExit();
   });
   child.once("close", (code, signal) => {
-    settleWait(resolveObservedExitState({ code, signal }));
+    childCloseState = { code, signal };
+    childExitState ??= childCloseState;
+    if (isWindowsHardKillSettlementBlocked()) {
+      return;
+    }
+    settleWait(resolveObservedExitState(childCloseState));
   });
+
+  if (params.secretInput) {
+    try {
+      await writeSecretInputToChild(spawned.child, params.secretInput);
+    } catch (error) {
+      spawned.child.kill("SIGKILL");
+      throw error;
+    }
+  }
 
   const wait = async () => {
     if (waitResult) {
@@ -388,19 +463,6 @@ export async function createChildAdapter(params: {
         (resolve, reject) => {
           resolveWait = resolve;
           rejectWait = reject;
-          if (waitResult) {
-            const settled = waitResult;
-            resolveWait = null;
-            rejectWait = null;
-            resolve(settled);
-            return;
-          }
-          if (waitError !== undefined) {
-            const error = waitError;
-            resolveWait = null;
-            rejectWait = null;
-            reject(toErrorObject(error, "Non-Error rejection"));
-          }
         },
       );
     }
@@ -416,19 +478,40 @@ export async function createChildAdapter(params: {
   const signalProcessTreeForChild = (pid: number, signal: "SIGTERM" | "SIGKILL") => {
     signalProcessTree(pid, signal, { detached: childIsDetached });
   };
+  const signalProcessTreeForChildAndWait = (pid: number, signal: "SIGTERM" | "SIGKILL") =>
+    new Promise<void>((resolve) => {
+      signalProcessTree(pid, signal, { detached: childIsDetached, onComplete: resolve });
+    });
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
+      hardKillRequested = true;
+      scheduleForcedWindowsCloseSettlement();
       if (pid) {
-        // Pass through whether the child is actually detached. Without this,
-        // `signalProcessTree` group-kills via `-pid` and takes out the gateway's
-        // own process group along with the child. (#71662)
-        signalProcessTreeForChild(pid, "SIGKILL");
-      }
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // ignore kill errors
+        // Let the tree owner traverse the live root before directly killing it.
+        // On Windows, killing the root first can make `taskkill /T` lose the
+        // descendant relationship. (#71662)
+        void signalProcessTreeForChildAndWait(pid, "SIGKILL").then(() => {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // ignore kill errors
+          }
+          windowsTreeKillCompleted = true;
+          if (childCloseState) {
+            settleWait(resolveObservedExitState(childCloseState));
+            return;
+          }
+          maybeSettleAfterWindowsExit();
+          scheduleForcedWindowsCloseSettlement();
+        });
+      } else {
+        windowsTreeKillCompleted = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // ignore kill errors
+        }
       }
       scheduleForceKillWaitFallback("SIGKILL");
       return;
@@ -446,17 +529,52 @@ export async function createChildAdapter(params: {
 
   const dispose = () => {
     clearForceKillWaitFallback();
-    clearWindowsCloseFallbackTimer();
+    clearForcedWindowsCloseTimer();
+    if (params.ownedWorker !== undefined) {
+      disconnectWorkerIpc();
+    }
     child.removeAllListeners();
   };
+
+  const closeStartGate = params.ownedWorker ? disconnectWorkerIpc : undefined;
+
+  let startGateOpened = false;
+  const openStartGate = params.ownedWorker
+    ? async () => {
+        if (startGateOpened) {
+          return;
+        }
+        startGateOpened = true;
+        await new Promise<void>((resolve, reject) => {
+          if (!child.connected) {
+            reject(new Error("worker lifecycle IPC channel closed before startup"));
+            return;
+          }
+          try {
+            child.send(WORKER_START_MESSAGE, (error) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              resolve();
+            });
+          } catch (error) {
+            reject(toErrorObject(error, "worker lifecycle IPC send failed"));
+          }
+        });
+      }
+    : undefined;
 
   return {
     pid: child.pid ?? undefined,
     stdin,
+    oomScoreWrapperSelected: preparedSpawn.wrapped,
     onStdout,
     onStderr,
     wait,
     kill,
     dispose,
+    closeStartGate,
+    openStartGate,
   };
 }

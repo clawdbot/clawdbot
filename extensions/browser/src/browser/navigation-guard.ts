@@ -81,7 +81,7 @@ export function withBrowserNavigationPolicy(
 }
 
 /** Return true when strict policy requires redirect-chain inspection. */
-export function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
+function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
   return ssrfPolicy?.dangerouslyAllowPrivateNetwork === false;
 }
 
@@ -107,15 +107,11 @@ function isIpLiteralHostname(hostname: string): boolean {
 
 function isExplicitlyAllowedBrowserHostname(hostname: string, ssrfPolicy?: SsrFPolicy): boolean {
   const normalizedHostname = normalizeHostname(hostname);
-  const exactMatches = ssrfPolicy?.allowedHostnames ?? [];
-  if (exactMatches.some((value) => normalizeHostname(value) === normalizedHostname)) {
-    return true;
-  }
-  const hostnameAllowlist = (ssrfPolicy?.hostnameAllowlist ?? [])
+  const allowedHostnames = (ssrfPolicy?.allowedHostnames ?? [])
     .map((pattern) => normalizeHostname(pattern))
     .filter(Boolean);
-  return hostnameAllowlist.length > 0
-    ? matchesHostnameAllowlist(normalizedHostname, hostnameAllowlist)
+  return allowedHostnames.length > 0
+    ? matchesHostnameAllowlist(normalizedHostname, allowedHostnames)
     : false;
 }
 

@@ -7,26 +7,29 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../gateway/test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { withTimeout } from "../utils/with-timeout.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
-import { createExecTool } from "./bash-tools.exec.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_PORT",
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
   "OPENCLAW_SKIP_CRON",
@@ -39,21 +42,6 @@ const GATEWAY_CONNECT_TIMEOUT_MS = 120_000;
 const EXEC_APPROVAL_E2E_TIMEOUT_MS = 180_000;
 
 type Cleanup = () => Promise<void> | void;
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), timeoutMs);
-    timeout.unref();
-  });
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
 
 describe("gateway-hosted exec approvals", () => {
   const cleanup: Cleanup[] = [];
@@ -80,7 +68,7 @@ describe("gateway-hosted exec approvals", () => {
       const workspaceDir = path.join(tempHome, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
 
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const token = "exec-approval-e2e-token";
       const configPath = path.join(stateDir, "openclaw.json");
       await fs.mkdir(stateDir, { recursive: true });
@@ -137,6 +125,7 @@ describe("gateway-hosted exec approvals", () => {
         clientDisplayName: "approval operator",
         mode: GATEWAY_CLIENT_MODES.TEST,
         scopes: [ADMIN_SCOPE],
+        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
         requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
         timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
       });
@@ -163,7 +152,7 @@ describe("gateway-hosted exec approvals", () => {
       const pending = await tool.execute("exec-approval-e2e", {
         command: "printf 'smoke\\n'",
         workdir: workspaceDir,
-        timeout: 5,
+        timeoutSeconds: 5,
       });
 
       expect(pending.details.status).toBe("approval-pending");
@@ -177,7 +166,9 @@ describe("gateway-hosted exec approvals", () => {
         { timeoutMs: 10_000 },
       );
 
-      const outcome = await withTimeout(outcomePromise, 15_000, "approved exec outcome");
+      const outcome = await withTimeout(outcomePromise, 15_000, {
+        message: "timed out waiting for approved exec outcome",
+      });
       expect(outcome.status).toBe("completed");
       expect(outcome.exitCode).toBe(0);
       expect(outcome.aggregated).toBe("smoke");

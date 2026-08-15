@@ -4,18 +4,17 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
+import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
 import {
-  OMITTED_ASSISTANT_REASONING_TEXT,
   assessLastAssistantMessage,
   dropReasoningFromHistory,
   dropThinkingBlocks,
-  isAssistantMessageWithContent,
   stripInvalidThinkingSignatures,
-  stripStaleThinkingSignaturesForCompactionReplay,
   wrapAnthropicStreamWithRecovery,
 } from "./thinking.js";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
   // Single-assistant fixture exercises the "latest assistant turn" path where
@@ -59,21 +58,6 @@ describe("thinking-free history contract", () => {
       expect(result).toBe(messages);
     },
   );
-});
-
-describe("isAssistantMessageWithContent", () => {
-  it("accepts assistant messages with array content and rejects others", () => {
-    const assistant = castAgentMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "ok" }],
-    });
-    const user = castAgentMessage({ role: "user", content: "hi" });
-    const malformed = castAgentMessage({ role: "assistant", content: "not-array" });
-
-    expect(isAssistantMessageWithContent(assistant)).toBe(true);
-    expect(isAssistantMessageWithContent(user)).toBe(false);
-    expect(isAssistantMessageWithContent(malformed)).toBe(false);
-  });
 });
 
 describe("dropThinkingBlocks", () => {
@@ -1094,7 +1078,7 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     expect(stripStaleThinkingSignaturesForCompactionReplay(messages)).toBe(messages);
   });
 
-  it("strips thinking signatures from assistant messages at or before the compaction timestamp", () => {
+  it("strips thinking signatures from assistant messages before the compaction timestamp", () => {
     const compactionSummary = castAgentMessage({
       role: "compactionSummary",
       summary: "summary",
@@ -1292,4 +1276,26 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     // Same millisecond as compaction: treated as post-compaction; signature preserved
     expect(result).toBe(messages);
   });
+
+  it("parses numeric-looking compaction strings as dates before numeric message timestamps", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "compactionSummary",
+        summary: "s",
+        tokensBefore: 0,
+        timestamp: "2026",
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "old", thinkingSignature: "stale_sig" }],
+        timestamp: 1_000_000,
+      }),
+    ];
+
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
+    expect((result[1] as AssistantMessage).content).toEqual([
+      { type: "thinking", thinking: "old" },
+    ]);
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

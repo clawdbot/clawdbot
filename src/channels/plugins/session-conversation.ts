@@ -16,13 +16,13 @@ import {
   type ParsedThreadSessionSuffix,
   type RawSessionConversationRef,
 } from "../../sessions/session-key-utils.js";
-import { normalizeChannelId as normalizeChatChannelId } from "../registry.js";
+import { normalizeChatChannelId } from "../registry.js";
 import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
 
 /**
  * Normalized conversation id details for one channel raw id.
  */
-export type ResolvedSessionConversation = {
+type ResolvedSessionConversation = {
   id: string;
   threadId: string | undefined;
   baseConversationId: string;
@@ -32,7 +32,7 @@ export type ResolvedSessionConversation = {
 /**
  * Parsed session-key conversation reference with parent/thread metadata.
  */
-export type ResolvedSessionConversationRef = {
+type ResolvedSessionConversationRef = {
   channel: string;
   kind: "group" | "channel";
   rawId: string;

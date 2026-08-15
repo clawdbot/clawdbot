@@ -1,7 +1,6 @@
 // npm publish plan tests validate package publish planning rules.
 import { describe, expect, it } from "vitest";
 import {
-  collectReleaseVersionFloorErrors,
   fetchNpmRegistryPackumentWithRetry,
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
@@ -187,23 +186,6 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
     expect(result).toEqual({ status: 404, ok: false, packument: null });
     expect(fetchCalls).toBe(1);
     expect(cancelCalls).toBe(1);
-  });
-});
-
-describe("collectReleaseVersionFloorErrors", () => {
-  it("blocks June 2026 stable and beta release trains below the published beta floor", () => {
-    expect(collectReleaseVersionFloorErrors("2026.6.4")).toEqual([
-      'June 2026 stable and beta release trains must use patch 5 or higher because 2026.6.5-beta.1 is already published; found "2026.6.4".',
-    ]);
-    expect(collectReleaseVersionFloorErrors("2026.6.4-beta.1")).toEqual([
-      'June 2026 stable and beta release trains must use patch 5 or higher because 2026.6.5-beta.1 is already published; found "2026.6.4-beta.1".',
-    ]);
-  });
-
-  it("keeps alpha compatibility and patch-floor release trains valid during the transition", () => {
-    expect(collectReleaseVersionFloorErrors("2026.6.4-alpha.1")).toEqual([]);
-    expect(collectReleaseVersionFloorErrors("2026.6.5-beta.2")).toEqual([]);
-    expect(collectReleaseVersionFloorErrors("2026.7.1")).toEqual([]);
   });
 });
 

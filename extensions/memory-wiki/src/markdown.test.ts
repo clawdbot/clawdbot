@@ -1,16 +1,30 @@
 // Memory Wiki tests cover markdown plugin behavior.
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createWikiPageFilename,
+  extractHumanNotesBlock,
   parseWikiMarkdown,
-  extractWikiLinks,
+  preserveHumanNotesBlock,
   renderWikiMarkdown,
   scanWikiPageSummary,
   slugifyWikiSegment,
   toWikiPageSummary,
   WIKI_RAW_SOURCE_MARKER,
 } from "./markdown.js";
+
+function scanWikiLinkTargets(markdown: string, relativePath: string): string[] {
+  const result = scanWikiPageSummary({
+    absolutePath: path.join("/tmp/wiki", relativePath),
+    relativePath,
+    raw: markdown,
+  });
+  if (result.status !== "valid") {
+    throw new Error(`Expected valid wiki page scan, got ${result.status}`);
+  }
+  return result.page.linkTargets;
+}
 
 describe("slugifyWikiSegment", () => {
   it("preserves Unicode letters and numbers in wiki slugs", () => {
@@ -50,6 +64,112 @@ describe("slugifyWikiSegment", () => {
       Buffer.byteLength(`.${fileName}.00000000-0000-4000-8000-000000000000.fallback.tmp`),
     ).toBeLessThanOrEqual(255);
     expect(createWikiPageFilename(stem)).toBe(fileName);
+  });
+});
+
+describe("human Notes blocks", () => {
+  const startMarker = "<!-- openclaw:human:start -->";
+  const endMarker = "<!-- openclaw:human:end -->";
+  const rendered = ["# Source", "", "## Notes", startMarker, endMarker, ""].join("\n");
+
+  it("extracts and preserves complete human Notes blocks", () => {
+    const existing = rendered.replace(
+      `${startMarker}\n${endMarker}`,
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+
+    expect(extractHumanNotesBlock(existing)).toBe(
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
+    expect(extractHumanNotesBlock(rendered)).toBeNull();
+  });
+
+  it("leaves pages without human Notes markers unchanged", () => {
+    const existing = "# Source\n\nGenerated content only.\n";
+
+    expect(extractHumanNotesBlock(existing)).toBeNull();
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(rendered);
+    expect(preserveHumanNotesBlock(existing, rendered)).toBe(existing);
+  });
+
+  it.each([
+    {
+      name: "closing",
+      lines: [startMarker, "Durable human annotation"],
+      missingMarker: endMarker,
+    },
+    {
+      name: "opening",
+      lines: ["Durable human annotation", endMarker],
+      missingMarker: startMarker,
+    },
+  ])(
+    "rejects a missing $name marker before extracting or replacing Notes",
+    ({ lines, missingMarker }) => {
+      const malformed = ["# Source", "", "## Notes", ...lines, ""].join("\n");
+      const expectedError = `Memory Wiki human Notes are missing ${missingMarker}; restore the missing marker before updating or removing this page`;
+
+      expect(() => extractHumanNotesBlock(malformed)).toThrow(expectedError);
+      expect(() => preserveHumanNotesBlock(rendered, malformed)).toThrow(expectedError);
+      expect(() => preserveHumanNotesBlock(malformed, rendered)).toThrow(expectedError);
+    },
+  );
+
+  it.each([startMarker, endMarker])(
+    "ignores a standalone marker inside fenced source content",
+    (marker) => {
+      const existing = ["# Source", "", "## Content", "```text", marker, "```", ""].join("\n");
+
+      expect(extractHumanNotesBlock(existing)).toBeNull();
+      expect(preserveHumanNotesBlock(rendered, existing)).toBe(rendered);
+    },
+  );
+
+  it("preserves marker comments embedded in complete human Notes", () => {
+    const notes = [
+      "Before copied markers",
+      startMarker,
+      "Between copied markers",
+      endMarker,
+      "After copied markers",
+    ].join("\n");
+    const existing = rendered.replace(
+      `${startMarker}\n${endMarker}`,
+      `${startMarker}\n${notes}\n${endMarker}`,
+    );
+
+    expect(extractHumanNotesBlock(existing)).toBe(`${startMarker}\n${notes}\n${endMarker}`);
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
+  });
+
+  it("ignores source-body marker pairs when extracting and preserving actual Notes", () => {
+    const sourceWithMarkers = [
+      "# Source",
+      "",
+      "## Content",
+      "```text",
+      startMarker,
+      "Generated source annotation",
+      endMarker,
+      "```",
+      "",
+      "## Notes",
+      startMarker,
+      "Durable human annotation",
+      endMarker,
+      "",
+    ].join("\n");
+
+    expect(extractHumanNotesBlock(sourceWithMarkers)).toBe(
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+    expect(preserveHumanNotesBlock(rendered, sourceWithMarkers)).toBe(
+      rendered.replace(
+        `${startMarker}\n${endMarker}`,
+        `${startMarker}\nDurable human annotation\n${endMarker}`,
+      ),
+    );
   });
 });
 
@@ -506,9 +626,12 @@ describe("toWikiPageSummary", () => {
   });
 });
 
-describe("extractWikiLinks", () => {
+describe("scanWikiPageSummary linkTargets", () => {
   it("extracts real wikilinks from prose", () => {
-    const links = extractWikiLinks("See [[Alpha]] and [[Beta]] for details.", "entities/test.md");
+    const links = scanWikiLinkTargets(
+      "See [[Alpha]] and [[Beta]] for details.",
+      "entities/test.md",
+    );
     expect(links).toEqual(["Alpha", "Beta"]);
   });
 
@@ -526,13 +649,13 @@ describe("extractWikiLinks", () => {
       "val x: Future[Option[User]] = handle(req)",
       "```",
     ].join("\n");
-    const links = extractWikiLinks(markdown, "entities/test.md");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
     // Only the real wikilink — none from fenced code blocks.
     expect(links).toEqual(["RealPage"]);
   });
 
   it("does not extract [[…]] inside inline code spans (#97945)", () => {
-    const links = extractWikiLinks(
+    const links = scanWikiLinkTargets(
       'See [[RealPage]].  Never `[[ -z "$str" ]]` extract this.',
       "entities/test.md",
     );
@@ -549,7 +672,7 @@ describe("extractWikiLinks", () => {
       "",
       "Actual link: [[ActualPage]]",
     ].join("\n");
-    const links = extractWikiLinks(markdown, "entities/test.md");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
     expect(links).toEqual(["ActualPage"]);
   });
 
@@ -563,7 +686,7 @@ describe("extractWikiLinks", () => {
       "",
       "Valid: [[ValidTarget]]",
     ].join("\n");
-    const links = extractWikiLinks(markdown, "entities/test.md");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
     expect(links).toEqual(["ValidTarget"]);
   });
 
@@ -580,7 +703,7 @@ describe("extractWikiLinks", () => {
       "",
       "Prose: [[RealTarget]]",
     ].join("\n");
-    const links = extractWikiLinks(markdown, "entities/test.md");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
     expect(links).toEqual(["RealTarget"]);
   });
 
@@ -598,7 +721,7 @@ describe("extractWikiLinks", () => {
       "",
       "After fence: [[RealPage]]",
     ].join("\n");
-    const links = extractWikiLinks(markdown, "entities/test.md");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
     expect(links).toEqual(["RealPage"]);
   });
 
@@ -634,6 +757,6 @@ describe("extractWikiLinks", () => {
       expected: ["RealPage"],
     },
   ])("handles $name without hiding prose links", ({ markdown, expected }) => {
-    expect(extractWikiLinks(markdown, "entities/test.md")).toEqual(expected);
+    expect(scanWikiLinkTargets(markdown, "entities/test.md")).toEqual(expected);
   });
 });

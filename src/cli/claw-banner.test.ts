@@ -32,12 +32,26 @@ async function runStatic() {
     .filter((row) => row.length > 0);
 }
 
+const EXPECTED_MASCOT = [
+  " •●●:.        .:●●•",
+  ":●●●●:        :●●●●:",
+  ".●●●●:.:•●●•:.:●●●●.",
+  " .●●●: •●●●●• :●●●.",
+  " ..:••●●●●●●●●••:..",
+  ".::••••●●●●●●••••::.",
+  " . .:  •●●●●•  :. .",
+  "    .  :●●●●:  .",
+  "      .●●●●●●.",
+  "       :••••:",
+] as const;
+
 describe("printClawBanner", () => {
   it("prints the static banner when not animatable", async () => {
     const { runtime, log } = runtimeStub();
     await printClawBanner(runtime, { columns: 120, isTty: false, env: {} });
     const output = stripAnsi(String(log.mock.calls[0]?.[0]));
-    expect(output.split("\n")[0]).toBe("▄███▄     ▄███▄");
+    const rows = output.split("\n").filter((row) => row.length > 0);
+    expect(rows.map((row) => row.slice(0, 20).trimEnd())).toEqual(EXPECTED_MASCOT);
     expect(output).toContain("█▀▀▀█ █▀▀▀█ █▀▀▀▀ █▄  █");
   });
 
@@ -62,6 +76,15 @@ describe("printClawBanner", () => {
     expect(chunks).toContain("\x1b[?25h");
     const frames = chunks.filter((chunk) => chunk.includes("\x1b[K"));
     expect(frames.length).toBeGreaterThan(10);
+    expect(
+      frames.some((frame) => {
+        const [first = "", second = ""] = stripAnsi(frame).split("\n");
+        return (
+          first.slice(0, 20).trimEnd() === "•●•.:.        .:.•●•" &&
+          second.slice(0, 20).trimEnd() === ":●●●•:        :•●●●:"
+        );
+      }),
+    ).toBe(true);
     const finalRows = stripAnsi(frames[frames.length - 1] ?? "")
       .split("\n")
       .filter((row) => row.length > 0);
@@ -85,6 +108,41 @@ describe("printClawBanner", () => {
     });
     expect(during).toBe(before + 1);
     expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+
+  it("settles on the static frame when parallel work finishes first", async () => {
+    const staticRows = await runStatic();
+    const chunks: string[] = [];
+    const beforeSigint = process.listenerCount("SIGINT");
+    let settle!: () => void;
+    const settleWhen = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const { runtime } = runtimeStub();
+    const banner = printClawBanner(runtime, {
+      columns: 120,
+      isTty: true,
+      rich: true,
+      env: {},
+      rng: () => 0.99,
+      settleWhen,
+      sleep: () => new Promise<void>(() => {}),
+      write: (chunk) => chunks.push(chunk),
+    });
+
+    expect(chunks[0]).toBe("\x1b[?25l");
+    expect(process.listenerCount("SIGINT")).toBe(beforeSigint + 1);
+    settle();
+    await expect(banner).resolves.toBe("settled");
+
+    const frames = chunks.filter((chunk) => chunk.includes("\x1b[K"));
+    const finalRows = stripAnsi(frames.at(-1) ?? "")
+      .split("\n")
+      .filter((row) => row.length > 0);
+    expect(finalRows).toEqual(staticRows);
+    expect(chunks.at(-2)).toBe("\x1b[?25h");
+    expect(chunks.at(-1)).toBe("\n");
+    expect(process.listenerCount("SIGINT")).toBe(beforeSigint);
   });
 
   it("varies snips and shimmer passes with the rng", async () => {

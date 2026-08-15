@@ -3,6 +3,7 @@
  * or whether OpenClaw must keep exec/process on a configured node host.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
 import { getSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 
@@ -16,12 +17,6 @@ type ExecHostOverride = {
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
-const DEFAULT_AGENT_ID = "main";
-const VALID_AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
-const INVALID_AGENT_ID_CHARS_PATTERN = /[^a-z0-9_-]+/g;
-const LEADING_DASH_PATTERN = /^-+/;
-const TRAILING_DASH_PATTERN = /-+$/;
-
 /** Effective execution-host policy for the Codex app-server native tool surface. */
 export type CodexNativeExecutionPolicy = {
   nativeToolSurfaceAllowed: boolean;
@@ -30,6 +25,17 @@ export type CodexNativeExecutionPolicy = {
   node?: string;
   blockReason?: string;
 };
+
+/** Projects node execution ownership into the runtime tool factory options. */
+export function resolveCodexNodeExecToolOverrides(
+  policy: CodexNativeExecutionPolicy,
+): { host: "node"; node?: string } | undefined {
+  if (policy.effectiveExecHost !== "node") {
+    return undefined;
+  }
+  const node = policy.node?.trim();
+  return { host: "node", ...(node ? { node } : {}) };
+}
 
 /** Resolves node/gateway/sandbox execution ownership from overrides, session, agent, and config. */
 export function resolveCodexNativeExecutionPolicy(params: {
@@ -186,25 +192,7 @@ function resolveDefaultPolicyAgentId(agents: AgentEntry[]): string {
 
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {
   const normalized = normalizeAgentId(value);
-  return normalized === DEFAULT_AGENT_ID && !(value ?? "").trim() ? undefined : normalized;
-}
-
-function normalizeAgentId(value?: string | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return DEFAULT_AGENT_ID;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (VALID_AGENT_ID_PATTERN.test(trimmed)) {
-    return normalized;
-  }
-  return (
-    normalized
-      .replace(INVALID_AGENT_ID_CHARS_PATTERN, "-")
-      .replace(LEADING_DASH_PATTERN, "")
-      .replace(TRAILING_DASH_PATTERN, "")
-      .slice(0, 64) || DEFAULT_AGENT_ID
-  );
+  return normalized === "main" && !(value ?? "").trim() ? undefined : normalized;
 }
 
 function normalizeExecTarget(value?: string | null): ExecTarget | undefined {

@@ -21,7 +21,9 @@ const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
   vi.fn(() => ({ entry: undefined, key: undefined })),
 );
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
-const stopSubagentsForRequesterMock = vi.hoisted(() => vi.fn(() => ({ stopped: 0 })));
+const stopSubagentsForRequesterMock = vi.hoisted(() =>
+  vi.fn(async () => ({ stopped: 0, failed: 0 })),
+);
 const abortSessionRunTargetWithOutcomeMock = vi.hoisted(() =>
   vi.fn(() => ({ active: false, aborted: false })),
 );
@@ -221,8 +223,26 @@ describe("handleStopCommand target fallback", () => {
       shouldContinue: false,
       reply: { text: "Agent reply is already finalizing and can no longer be aborted." },
     });
-    expect(formatAbortReplyTextMock).toHaveBeenCalledWith(0, "finalizing");
+    expect(formatAbortReplyTextMock).toHaveBeenCalledWith(0, "finalizing", 0);
     expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces child stop failures in the stop reply", async () => {
+    const params = buildStopParams();
+    stopSubagentsForRequesterMock.mockResolvedValueOnce({ stopped: 0, failed: 1 });
+    formatAbortReplyTextMock.mockReturnValueOnce(
+      "⚙️ Agent was aborted. One sub-agent could not be stopped. Retry /stop.",
+    );
+
+    const result = await handleStopCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Agent was aborted. One sub-agent could not be stopped. Retry /stop.",
+      },
+    });
+    expect(formatAbortReplyTextMock).toHaveBeenCalledWith(0, undefined, 1);
   });
 
   it("rejects native stop commands from non-owner senders when the plugin enforces owner-only commands", async () => {

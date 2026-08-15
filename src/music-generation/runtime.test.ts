@@ -1,13 +1,11 @@
 // Tests music generation runtime dispatch and provider fallback behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  generateMusic,
-  listRuntimeMusicGenerationProviders,
-  type GenerateMusicParams,
-  type MusicGenerationRuntimeDeps,
-} from "./runtime.js";
+import type { GenerateMusicParams } from "./runtime-types.js";
+import { generateMusic, listRuntimeMusicGenerationProviders } from "./runtime.js";
 import type { MusicGenerationProvider } from "./types.js";
+
+type MusicGenerationRuntimeDeps = NonNullable<Parameters<typeof generateMusic>[1]>;
 
 let providers: MusicGenerationProvider[] = [];
 let listedConfigs: Array<OpenClawConfig | undefined> = [];
@@ -24,7 +22,35 @@ const runtimeDeps: MusicGenerationRuntimeDeps = {
 };
 
 function runGenerateMusic(params: GenerateMusicParams) {
-  return generateMusic(params, runtimeDeps);
+  const defaults = params.cfg.agents?.defaults as
+    | (NonNullable<OpenClawConfig["agents"]>["defaults"] & {
+        musicGenerationModel?: unknown;
+      })
+    | undefined;
+  const cfg =
+    defaults?.musicGenerationModel !== undefined && defaults.mediaModels?.music === undefined
+      ? {
+          ...params.cfg,
+          agents: {
+            ...params.cfg.agents,
+            defaults: {
+              ...defaults,
+              mediaModels: { ...defaults.mediaModels, music: defaults.musicGenerationModel },
+            },
+          },
+        }
+      : params.cfg;
+  return generateMusic({ ...params, cfg }, runtimeDeps);
+}
+
+function createBufferedMusicProvider(id: string, buffers: Buffer[]): MusicGenerationProvider {
+  return {
+    id,
+    capabilities: {},
+    generateMusic: async () => ({
+      tracks: buffers.map((buffer) => ({ buffer, mimeType: "audio/mpeg" })),
+    }),
+  };
 }
 
 describe("music-generation runtime", () => {
@@ -192,6 +218,63 @@ describe("music-generation runtime", () => {
         error: "Google music generation response missing audio data",
       },
     ]);
+  });
+
+  it("falls through when a music provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedMusicProvider("empty", [Buffer.from("partial"), Buffer.alloc(0)]),
+      createBufferedMusicProvider("valid", [Buffer.from("mp3-bytes")]),
+    ];
+
+    const result = await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            mediaModels: {
+              music: { primary: "empty/track-v1", fallbacks: ["valid/track-v2"] },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "play a synth line",
+    });
+
+    expect(result.provider).toBe("valid");
+    expect(result.tracks[0]?.buffer).toEqual(Buffer.from("mp3-bytes"));
+    expect(result.attempts).toEqual([
+      {
+        provider: "empty",
+        model: "track-v1",
+        error: "Music generation provider returned an empty track buffer at index 1.",
+      },
+    ]);
+  });
+
+  it("fails visibly when every music provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedMusicProvider("empty-primary", [Buffer.alloc(0)]),
+      createBufferedMusicProvider("empty-fallback", [Buffer.alloc(0)]),
+    ];
+
+    await expect(
+      runGenerateMusic({
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                music: {
+                  primary: "empty-primary/track-v1",
+                  fallbacks: ["empty-fallback/track-v2"],
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "play a synth line",
+      }),
+    ).rejects.toThrow(
+      "All music generation models failed (2): empty-primary/track-v1: Music generation provider returned an empty track buffer at index 0. | empty-fallback/track-v2: Music generation provider returned an empty track buffer at index 0.",
+    );
   });
 
   it("lists runtime music-generation providers through the provider registry", () => {

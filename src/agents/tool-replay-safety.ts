@@ -1,7 +1,7 @@
 /**
  * Defines the narrow set of tool instances that blind attempt retries may repeat.
  */
-import { normalizeToolName } from "./tool-policy-shared.js";
+import { normalizeToolPolicyName } from "./tool-policy-shared.js";
 
 const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
   "read",
@@ -18,6 +18,7 @@ const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
   "sessions_history",
   "sessions_search",
   "agents_list",
+  "conversations_list",
   "get_goal",
   "update_plan",
   "tool_search",
@@ -36,7 +37,7 @@ export function isAgentToolReplaySafe(
   if (options?.declaredReplaySafe?.(tool) === false) {
     return false;
   }
-  return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolName(tool.name ?? ""));
+  return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolPolicyName(tool.name ?? ""));
 }
 
 /**
@@ -52,7 +53,7 @@ export function isAgentToolRestartSafe(
   if (declaredReplaySafe !== undefined) {
     return declaredReplaySafe;
   }
-  return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolName(tool.name ?? ""));
+  return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolPolicyName(tool.name ?? ""));
 }
 
 /**
@@ -65,7 +66,7 @@ export function collectReplaySafeToolNames(
 ): Set<string> {
   const toolsByName = new Map<string, Array<{ name?: string }>>();
   for (const tool of tools) {
-    const name = normalizeToolName(tool.name ?? "");
+    const name = normalizeToolPolicyName(tool.name ?? "");
     if (!name) {
       continue;
     }
@@ -82,9 +83,4 @@ export function collectReplaySafeToolNames(
     }
   }
   return replaySafeNames;
-}
-
-/** Test/fixture helper for constructing metadata for audited core tool names. */
-export function isCoreToolNameReplaySafe(toolName: string): boolean {
-  return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolName(toolName));
 }

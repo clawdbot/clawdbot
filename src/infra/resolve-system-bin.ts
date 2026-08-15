@@ -1,6 +1,7 @@
 // Resolves trusted system binaries from platform-managed directories.
 import fs from "node:fs";
 import path from "node:path";
+import { pruneMapToMaxSize } from "./map-size.js";
 import { getWindowsInstallRoots, getWindowsProgramFilesRoots } from "./windows-install-roots.js";
 
 /**
@@ -31,8 +32,14 @@ const WIN_PATHEXT = [".exe", ".cmd", ".bat", ".com"] as const;
 const WINDOWS_PROGRAM_FILES_TOOL_DIR_PREFIXES = ["ImageMagick-", "GraphicsMagick-"] as const;
 const WINDOWS_PROGRAM_FILES_TOOL_DIRS = ["ImageMagick", "GraphicsMagick"] as const;
 
+const RESOLVED_BIN_CACHE_LIMIT = 512;
 const resolvedCacheStrict = new Map<string, string>();
 const resolvedCacheStandard = new Map<string, string>();
+
+function cacheResolvedSystemBin(cache: Map<string, string>, name: string, candidate: string): void {
+  cache.set(name, candidate);
+  pruneMapToMaxSize(cache, RESOLVED_BIN_CACHE_LIMIT);
+}
 
 function defaultIsExecutable(filePath: string): boolean {
   try {
@@ -64,7 +71,7 @@ function collectWindowsProgramFilesToolDirs(programFilesRoot: string): string[] 
   return dirs;
 }
 
-let isExecutableFn: (filePath: string) => boolean = defaultIsExecutable;
+const isExecutableFn: (filePath: string) => boolean = defaultIsExecutable;
 
 /**
  * Build the trusted-dir list for Windows. Only system-managed directories
@@ -172,6 +179,10 @@ export function resolveSystemBin(
   if (!hasExtra) {
     const cached = cache.get(name);
     if (cached !== undefined) {
+      // Trusted-directory probes hit the filesystem repeatedly; keep active binaries ahead of
+      // colder entries when the shared insertion-order pruning helper enforces the bound.
+      cache.delete(name);
+      cache.set(name, cached);
       return cached;
     }
   }
@@ -186,7 +197,7 @@ export function resolveSystemBin(
         const candidate = path.win32.join(dir, name + ext);
         if (isExecutableFn(candidate)) {
           if (!hasExtra) {
-            cache.set(name, candidate);
+            cacheResolvedSystemBin(cache, name, candidate);
           }
           return candidate;
         }
@@ -195,7 +206,7 @@ export function resolveSystemBin(
       const candidate = path.join(dir, name);
       if (isExecutableFn(candidate)) {
         if (!hasExtra) {
-          cache.set(name, candidate);
+          cacheResolvedSystemBin(cache, name, candidate);
         }
         return candidate;
       }
@@ -203,18 +214,4 @@ export function resolveSystemBin(
   }
 
   return null;
-}
-
-/** Visible for tests: the computed trusted directories. */
-export function getTrustedDirsForTest(trust: SystemBinTrust = "strict"): readonly string[] {
-  return getTrustedDirs(trust);
-}
-
-/** Reset cache and optionally override the executable-check function (for tests). */
-export function resetResolveSystemBin(overrideIsExecutable?: (p: string) => boolean): void {
-  resolvedCacheStrict.clear();
-  resolvedCacheStandard.clear();
-  trustedDirsStrict = null;
-  trustedDirsStandard = null;
-  isExecutableFn = overrideIsExecutable ?? defaultIsExecutable;
 }

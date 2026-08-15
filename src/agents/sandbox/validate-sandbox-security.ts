@@ -320,7 +320,7 @@ function formatBindBlockedError(params: { bind: string; reason: BlockedBindReaso
  * Includes a symlink/realpath pass via existing ancestors so non-existent leaf
  * paths cannot bypass source-root and blocked-path checks.
  */
-export function validateBindMounts(
+function validateBindMounts(
   binds: string[] | undefined,
   options?: ValidateBindMountsOptions,
 ): void {
@@ -397,7 +397,7 @@ export function validateNetworkMode(
   }
 }
 
-export function validateSeccompProfile(profile: string | undefined): void {
+function validateSeccompProfile(profile: string | undefined): void {
   if (profile && BLOCKED_SECCOMP_PROFILES.has(normalizeOptionalLowercaseString(profile) ?? "")) {
     throw new Error(
       `Sandbox security: seccomp profile "${profile}" is blocked. ` +
@@ -407,7 +407,7 @@ export function validateSeccompProfile(profile: string | undefined): void {
   }
 }
 
-export function validateApparmorProfile(profile: string | undefined): void {
+function validateApparmorProfile(profile: string | undefined): void {
   if (profile && BLOCKED_APPARMOR_PROFILES.has(normalizeOptionalLowercaseString(profile) ?? "")) {
     throw new Error(
       `Sandbox security: apparmor profile "${profile}" is blocked. ` +

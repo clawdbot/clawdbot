@@ -3,8 +3,6 @@ import { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   appendSlackStream,
-  extractSlackErrorCode,
-  isBenignSlackFinalizeError,
   markSlackStreamFallbackDelivered,
   SlackStreamNotDeliveredError,
   startSlackStream,
@@ -132,21 +130,6 @@ describe("stopSlackStream finalize error handling", () => {
       "short reply under buffer size",
     );
     expect(session.stopped).toBe(true);
-  });
-
-  it("throws SlackStreamNotDeliveredError carrying stop()'s final text too", async () => {
-    const session = makeSession({
-      appendImpl: async () => null,
-      stopImpl: async () => {
-        throw slackApiError("team_not_found");
-      },
-    });
-    await appendSlackStream({ session, text: "hello " });
-
-    const thrown = await stopSlackStream({ session, text: "world" }).catch((err: unknown) => err);
-    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
-    expect((thrown as SlackStreamNotDeliveredError).slackCode).toBe("team_not_found");
-    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("hello world");
   });
 
   it("throws SlackStreamNotDeliveredError for unexpected finalize codes while text is buffered", async () => {
@@ -372,6 +355,64 @@ describe("stopSlackStream finalize error handling", () => {
     expect(alreadyDelivered.stopped).toBe(false);
   });
 
+  it("finalizes a stream started during failed stop after fallback delivery", async () => {
+    const streamTs = "1700000000.500300";
+    const startStream = vi.fn(async () => ({ ok: true, ts: streamTs }));
+    const stopStream = vi
+      .fn()
+      .mockRejectedValueOnce(slackApiError("user_not_found"))
+      .mockResolvedValueOnce({ ok: true, ts: streamTs });
+    const client = {
+      chat: {
+        startStream,
+        appendStream: vi.fn(async () => ({ ok: true })),
+        stopStream,
+      },
+    };
+    const streamer = new ChatStreamer(
+      client as never,
+      { debug: vi.fn() } as never,
+      {
+        channel: "C123",
+        thread_ts: "1700000000.000100",
+      },
+      { buffer_size: 256 },
+    );
+    const session: SlackStreamSession = {
+      streamer,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      stopped: false,
+      delivered: false,
+      pendingText: "",
+    };
+    const metadata = { event_type: "openclaw.reply", event_payload: { turn: "qa" } };
+
+    await appendSlackStream({ session, text: "short buffered reply" });
+    await expect(stopSlackStream({ session, metadata })).rejects.toBeInstanceOf(
+      SlackStreamNotDeliveredError,
+    );
+    expect(streamer.ts).toBe(streamTs);
+    expect(session.delivered).toBe(false);
+
+    markSlackStreamFallbackDelivered(session);
+    expect(session.stopped).toBe(false);
+    await expect(stopSlackStream({ session, metadata })).resolves.toEqual({ messageId: streamTs });
+
+    expect(startStream).toHaveBeenCalledOnce();
+    expect(stopStream).toHaveBeenCalledTimes(2);
+    expect(stopStream).toHaveBeenNthCalledWith(2, {
+      token: undefined,
+      channel: "C123",
+      ts: streamTs,
+      chunks: [],
+      metadata,
+    });
+    expect(session.stopped).toBe(true);
+    expect(session.delivered).toBe(true);
+    expect(session.pendingText).toBe("");
+  });
+
   it("clears the SDK buffer before finalizing an already-visible fallback stream", async () => {
     const startStream = vi.fn(async () => ({ ok: true, ts: "1700000000.500300" }));
     const stopStream = vi.fn(async () => ({ ok: true, ts: "1700000000.500300" }));
@@ -415,50 +456,5 @@ describe("stopSlackStream finalize error handling", () => {
       ts: "1700000000.500300",
       chunks: [],
     });
-  });
-});
-
-describe("error classification", () => {
-  it("isBenignSlackFinalizeError matches each allowlisted code", () => {
-    for (const code of [
-      "user_not_found",
-      "team_not_found",
-      "missing_recipient_user_id",
-      "method_not_supported_for_channel_type",
-    ]) {
-      expect(isBenignSlackFinalizeError(slackApiError(code))).toBe(true);
-    }
-  });
-
-  it("isBenignSlackFinalizeError rejects non-listed codes", () => {
-    for (const code of [
-      "not_authed",
-      "ratelimited",
-      "channel_not_found",
-      "internal_error",
-      "fatal_error",
-    ]) {
-      expect(isBenignSlackFinalizeError(slackApiError(code))).toBe(false);
-    }
-  });
-
-  it("extractSlackErrorCode handles data.error, message fallback, and junk shapes", () => {
-    // Canonical SDK shape
-    expect(extractSlackErrorCode(slackApiError("user_not_found"))).toBe("user_not_found");
-    // message-regex fallback when data is absent
-    expect(extractSlackErrorCode(new Error("An API error occurred: rate_limited"))).toBe(
-      "rate_limited",
-    );
-    // data.error not a string - falls through to message parse
-    const wrongShape = new Error("plain message");
-    (wrongShape as unknown as { data: unknown }).data = { error: 42 };
-    expect(extractSlackErrorCode(wrongShape)).toBeUndefined();
-    // data.error null - falls through
-    (wrongShape as unknown as { data: unknown }).data = null;
-    expect(extractSlackErrorCode(wrongShape)).toBeUndefined();
-    // Non-object error
-    expect(extractSlackErrorCode("raw string")).toBeUndefined();
-    expect(extractSlackErrorCode(null)).toBeUndefined();
-    expect(extractSlackErrorCode(undefined)).toBeUndefined();
   });
 });

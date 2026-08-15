@@ -1,5 +1,6 @@
 // Resolves the LAN host OpenClaw should advertise to nearby devices.
 import { isRfc1918Ipv4Address } from "@openclaw/net-policy/ip";
+import { normalizeLowercaseStringOrEmpty as normalizeInterfaceName } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
 import {
   listExternalInterfaceAddresses,
@@ -10,32 +11,31 @@ import {
 const DEFAULT_ROUTE_HINT_TIMEOUT_MS = 3_000;
 const DEFAULT_ROUTE_HINT_OUTPUT_BYTES = 16 * 1024;
 const WINDOWS_DEFAULT_ROUTE_COMMAND =
-  "Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
-  "Select-Object -Property InterfaceAlias,InterfaceIndex,NextHop,RouteMetric,InterfaceMetric,DestinationPrefix | " +
-  "ConvertTo-Json -Compress";
+  "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
+  "Select-Object -Property InterfaceAlias,RouteMetric,InterfaceMetric | ConvertTo-Json -Compress";
 
-export type AdvertisedLanHostCandidate = {
+type AdvertisedLanHostCandidate = {
   interfaceName: string;
   address: string;
   order: number;
 };
 
-export type AdvertisedLanRouteHint = {
+type AdvertisedLanRouteHint = {
   interfaceName: string;
 };
 
-export type AdvertisedLanHostCommandResult = {
+type AdvertisedLanHostCommandResult = {
   code: number | null;
   stdout: string;
   stderr?: string;
 };
 
-export type AdvertisedLanHostCommandRunner = (
+type AdvertisedLanHostCommandRunner = (
   argv: string[],
   opts: { timeoutMs: number; maxOutputBytes?: number },
 ) => Promise<AdvertisedLanHostCommandResult>;
 
-export type ResolveAdvertisedLanHostOptions = {
+type ResolveAdvertisedLanHostOptions = {
   networkInterfaces?: () => NetworkInterfacesSnapshot;
   runCommandWithTimeout?: AdvertisedLanHostCommandRunner;
   platform?: NodeJS.Platform;
@@ -56,10 +56,6 @@ type RankedWindowsRouteRow = {
   order: number;
 };
 
-function normalizeInterfaceName(name: unknown): string {
-  return typeof name === "string" ? name.trim().toLowerCase() : "";
-}
-
 function normalizeMetric(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -71,7 +67,7 @@ function normalizeMetric(value: unknown): number {
   return 0;
 }
 
-export function listAdvertisedLanHostCandidates(
+function listAdvertisedLanHostCandidates(
   snapshot: NetworkInterfacesSnapshot | undefined,
 ): AdvertisedLanHostCandidate[] {
   return listExternalInterfaceAddresses(snapshot, "IPv4")
@@ -83,7 +79,7 @@ export function listAdvertisedLanHostCandidates(
     }));
 }
 
-export function selectAdvertisedLanHost(
+function selectAdvertisedLanHost(
   candidates: AdvertisedLanHostCandidate[],
   routeHints: AdvertisedLanRouteHint[] = [],
 ): string | null {
@@ -107,7 +103,7 @@ export function selectAdvertisedLanHost(
   return candidates[0]?.address ?? null;
 }
 
-export function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
+function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
   const trimmed = stdout.trim();
   if (!trimmed) {
     return [];
@@ -150,12 +146,12 @@ export function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRout
   return rankedRows.map((row) => ({ interfaceName: row.interfaceName }));
 }
 
-export function parseMacOsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
+function parseMacOsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
   const match = /^\s*interface:\s*(\S+)/m.exec(stdout);
   return match?.[1] ? [{ interfaceName: match[1] }] : [];
 }
 
-export function parseLinuxDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
+function parseLinuxDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[] {
   const hints: AdvertisedLanRouteHint[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.startsWith("default ")) {
@@ -190,44 +186,33 @@ async function resolveDefaultRouteHints(params: {
   runCommandWithTimeout: AdvertisedLanHostCommandRunner;
   timeoutMs: number;
 }): Promise<AdvertisedLanRouteHint[]> {
+  let argv: string[];
+  let parse: typeof parseWindowsDefaultRouteHints;
   if (params.platform === "win32") {
-    const stdout = await runRouteHintCommand(
-      params.runCommandWithTimeout,
-      [
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        WINDOWS_DEFAULT_ROUTE_COMMAND,
-      ],
-      params.timeoutMs,
-    );
-    return stdout ? parseWindowsDefaultRouteHints(stdout) : [];
+    argv = [
+      "powershell.exe",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      WINDOWS_DEFAULT_ROUTE_COMMAND,
+    ];
+    parse = parseWindowsDefaultRouteHints;
+  } else if (params.platform === "darwin") {
+    argv = ["route", "-n", "get", "default"];
+    parse = parseMacOsDefaultRouteHints;
+  } else if (params.platform === "linux") {
+    argv = ["ip", "-4", "route", "show", "default"];
+    parse = parseLinuxDefaultRouteHints;
+  } else {
+    return [];
   }
 
-  if (params.platform === "darwin") {
-    const stdout = await runRouteHintCommand(
-      params.runCommandWithTimeout,
-      ["route", "-n", "get", "default"],
-      params.timeoutMs,
-    );
-    return stdout ? parseMacOsDefaultRouteHints(stdout) : [];
-  }
-
-  if (params.platform === "linux") {
-    const stdout = await runRouteHintCommand(
-      params.runCommandWithTimeout,
-      ["ip", "-4", "route", "show", "default"],
-      params.timeoutMs,
-    );
-    return stdout ? parseLinuxDefaultRouteHints(stdout) : [];
-  }
-
-  return [];
+  const stdout = await runRouteHintCommand(params.runCommandWithTimeout, argv, params.timeoutMs);
+  return stdout ? parse(stdout) : [];
 }
 
-export async function resolveAdvertisedLanHost(
+export async function resolveAdvertisedLanHostCore(
   options: ResolveAdvertisedLanHostOptions = {},
 ): Promise<string | null> {
   const candidates = listAdvertisedLanHostCandidates(

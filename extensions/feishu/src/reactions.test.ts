@@ -29,6 +29,7 @@ import { listReactionsFeishu } from "./reactions.js";
 describe("listReactionsFeishu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    listMock.mockReset();
   });
 
   it("reads the SDK's nested operator ownership fields", async () => {
@@ -108,5 +109,125 @@ describe("listReactionsFeishu", () => {
         operatorId: "tenant-1",
       },
     ]);
+  });
+
+  it("drains every reaction page while retaining the requested emoji filter", async () => {
+    listMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [
+            {
+              reaction_id: "r-first",
+              reaction_type: { emoji_type: "HEART" },
+              operator: { operator_type: "user", operator_id: "ou_user" },
+            },
+          ],
+          has_more: true,
+          page_token: "page-2",
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [
+            {
+              reaction_id: "r-bot",
+              reaction_type: { emoji_type: "HEART" },
+              operator: { operator_type: "app", operator_id: "cli_main" },
+            },
+          ],
+          has_more: false,
+        },
+      });
+
+    const reactions = await listReactionsFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_message",
+      emojiType: "HEART",
+    });
+
+    expect(reactions.map((reaction) => reaction.reactionId)).toEqual(["r-first", "r-bot"]);
+    expect(listMock).toHaveBeenNthCalledWith(1, {
+      path: { message_id: "om_message" },
+      params: { reaction_type: "HEART" },
+    });
+    expect(listMock).toHaveBeenNthCalledWith(2, {
+      path: { message_id: "om_message" },
+      params: { reaction_type: "HEART", page_token: "page-2" },
+    });
+  });
+
+  it("rejects a continuation response without its required page token", async () => {
+    listMock.mockResolvedValue({
+      code: 0,
+      data: { items: [], has_more: true },
+    });
+
+    await expect(
+      listReactionsFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_message" }),
+    ).rejects.toThrow(/page token/i);
+    expect(listMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects repeated reaction page tokens", async () => {
+    listMock.mockResolvedValue({
+      code: 0,
+      data: { items: [], has_more: true, page_token: "same-page" },
+    });
+
+    await expect(
+      listReactionsFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_message" }),
+    ).rejects.toThrow(/repeated page token/i);
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("propagates API failures from continuation pages", async () => {
+    listMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { items: [], has_more: true, page_token: "page-2" },
+      })
+      .mockResolvedValueOnce({ code: 9999, msg: "continuation unavailable" });
+
+    await expect(
+      listReactionsFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_message" }),
+    ).rejects.toThrow("Feishu list reactions failed: continuation unavailable");
+  });
+
+  it("drains valid reaction lists beyond 100 pages", async () => {
+    let nextPage = 0;
+    listMock.mockImplementation(async () => {
+      nextPage += 1;
+      const hasMore = nextPage < 101;
+      return {
+        code: 0,
+        data: {
+          items: hasMore
+            ? []
+            : [
+                {
+                  reaction_id: "r-last-page",
+                  reaction_type: { emoji_type: "HEART" },
+                  operator: { operator_type: "app", operator_id: "cli_main" },
+                },
+              ],
+          has_more: hasMore,
+          page_token: hasMore ? `page-${nextPage}` : undefined,
+        },
+      };
+    });
+
+    await expect(
+      listReactionsFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_message" }),
+    ).resolves.toEqual([
+      {
+        reactionId: "r-last-page",
+        emojiType: "HEART",
+        operatorType: "app",
+        operatorId: "cli_main",
+      },
+    ]);
+    expect(listMock).toHaveBeenCalledTimes(101);
   });
 });

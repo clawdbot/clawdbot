@@ -1,5 +1,6 @@
 // Plugin/channel activation config merge helpers.
 // Carries activation enablement into runtime config without copying stale state.
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
@@ -9,9 +10,6 @@ import { isRecord } from "../utils.js";
 // Activation config carries only operator-controlled enable/allow surfaces into
 // runtime config. Other runtime fields stay canonical to avoid stale activation
 // state overriding live config reloads.
-function hasOwnValue(record: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(record, key);
-}
 
 function mergeChannelActivationSections(params: {
   runtimeConfig: OpenClawConfig;
@@ -28,7 +26,7 @@ function mergeChannelActivationSections(params: {
   let nextChannels: Record<string, unknown> | undefined;
 
   for (const [channelId, activationChannel] of Object.entries(activationChannels)) {
-    if (!isRecord(activationChannel) || !hasOwnValue(activationChannel, "enabled")) {
+    if (!isRecord(activationChannel) || !Object.hasOwn(activationChannel, "enabled")) {
       continue;
     }
     const runtimeChannel = runtimeChannels[channelId];
@@ -73,7 +71,7 @@ function mergePluginActivationSections(params: {
     const runtimeEntries = isRecord(runtimePlugins.entries) ? runtimePlugins.entries : {};
     let nextEntries: Record<string, unknown> | undefined;
     for (const [pluginId, activationEntry] of Object.entries(activationEntries)) {
-      if (!isRecord(activationEntry) || !hasOwnValue(activationEntry, "enabled")) {
+      if (!isRecord(activationEntry) || !Object.hasOwn(activationEntry, "enabled")) {
         continue;
       }
       const runtimeEntry = runtimeEntries[pluginId];
@@ -125,6 +123,7 @@ export function resolveGatewayStartupPluginActivationConfig(params: {
   env: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
   discovery?: PluginDiscoveryResult;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): OpenClawConfig {
   return mergeActivationSectionsIntoRuntimeConfig({
     runtimeConfig: params.runtimeConfig,
@@ -133,6 +132,32 @@ export function resolveGatewayStartupPluginActivationConfig(params: {
       env: params.env,
       ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
       discovery: params.discovery,
+      ambientEnvTriggers: params.ambientEnvTriggers,
     }).config,
   });
+}
+
+/** Re-derives source-owned plugin activation and carries it into one reload candidate. */
+export function resolveGatewayReloadPluginActivationCandidate(params: {
+  runtimeConfig: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  manifestRegistry?: PluginManifestRegistry;
+  discovery?: PluginDiscoveryResult;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+}): { runtimeConfig: OpenClawConfig; compareConfig: OpenClawConfig } {
+  const activationConfig = applyPluginAutoEnable({
+    config: params.sourceConfig,
+    env: params.env,
+    ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+    discovery: params.discovery,
+    ambientEnvTriggers: params.ambientEnvTriggers,
+  }).config;
+  return {
+    runtimeConfig: mergeActivationSectionsIntoRuntimeConfig({
+      runtimeConfig: params.runtimeConfig,
+      activationConfig,
+    }),
+    compareConfig: activationConfig,
+  };
 }

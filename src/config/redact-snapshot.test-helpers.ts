@@ -1,8 +1,9 @@
 // Provides assertions for redacted snapshot tests.
 import { expect } from "vitest";
 import { restoreRedactedValues as restoreRedactedValues_orig } from "./redact-snapshot.js";
-import type { ConfigUiHints } from "./schema.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
+
+type ConfigUiHints = NonNullable<Parameters<typeof restoreRedactedValues_orig>[2]>;
 
 /** Complete snapshot shape used by redaction tests. */
 export type TestSnapshot<TConfig extends Record<string, unknown>> = ConfigFileSnapshot & {

@@ -311,6 +311,18 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(normalized.payload.mediaUrls).toEqual(["./report.pdf"]);
   });
 
+  it("keeps parsed media when an explicit media list is empty", () => {
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "MEDIA: ./report.pdf", mediaUrls: [] },
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+    });
+
+    expect(normalized.payload.text).toBeUndefined();
+    expect(normalized.payload.mediaUrl).toBe("./report.pdf");
+    expect(normalized.payload.mediaUrls).toEqual([]);
+  });
+
   it("leaves media-looking text alone when media directive parsing is disabled", () => {
     const normalized = normalizeReplyPayloadDirectives({
       payload: { text: "Result\nMEDIA: ./image.png" },
@@ -407,7 +419,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       applyReplyToMode: (payload) => payload,
       normalizeMediaPaths: async (payload) => ({
         ...payload,
-        text: "⚠️ Media failed.",
+        text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
         mediaUrl: absPath,
         mediaUrls: [absPath],
       }),

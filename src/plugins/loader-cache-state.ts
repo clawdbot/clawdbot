@@ -2,7 +2,7 @@
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 /** Error thrown when one plugin registry cache key attempts nested loading. */
-export class PluginLoadReentryError extends Error {
+class PluginLoadReentryError extends Error {
   readonly cacheKey: string;
 
   constructor(cacheKey: string) {
@@ -20,14 +20,6 @@ export class PluginLoaderCacheState<T> {
 
   constructor(defaultMaxEntries: number) {
     this.#registryCache = new PluginLruCache<T>(defaultMaxEntries);
-  }
-
-  get maxEntries(): number {
-    return this.#registryCache.maxEntries;
-  }
-
-  setMaxEntriesForTest(value?: number): void {
-    this.#registryCache.setMaxEntriesForTest(value);
   }
 
   clear(): void {

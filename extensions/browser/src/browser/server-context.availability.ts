@@ -3,7 +3,10 @@
  * launch/restart, Chrome MCP attach, and profile stop handling.
  */
 import fs from "node:fs";
-import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
+import {
+  assertChromeMcpCdpTransportAllowed,
+  resolveCdpReachabilityPolicy,
+} from "./cdp-reachability-policy.js";
 import {
   CHROME_MCP_ATTACH_READY_POLL_MS,
   CHROME_MCP_ATTACH_READY_WINDOW_MS,
@@ -12,9 +15,8 @@ import {
 } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
+import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import {
-  diagnoseChromeCdp,
-  formatChromeCdpDiagnostic,
   isChromeCdpOwnedByPid,
   isChromeCdpReady,
   isChromeReachable,
@@ -191,6 +193,7 @@ export function createProfileAvailability({
       // countChromeMcpTabs creates the session if needed — no separate availability call required.
       // Status probes opt into ephemeral so they reuse a cached attach session if one exists,
       // but do not seed a new persistent session as a side effect of read-only status calls.
+      assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
       const { countChromeMcpTabs } = await getChromeMcpModule();
       const callOptions: { timeoutMs?: number; ephemeral?: boolean; signal?: AbortSignal } = {};
       if (timeoutMs != null) {
@@ -216,6 +219,7 @@ export function createProfileAvailability({
 
   const isTransportAvailable = async (timeoutMs?: number, signal?: AbortSignal) => {
     if (capabilities.usesChromeMcp) {
+      assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
       const { ensureChromeMcpAvailable } = await getChromeMcpModule();
       await ensureChromeMcpAvailable(profile.name, profile, {
         ephemeral: true,
@@ -438,6 +442,7 @@ export function createProfileAvailability({
           `Browser user data directory not found for profile "${profile.name}": ${profile.userDataDir}`,
         );
       }
+      assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
       const { ensureChromeMcpAvailable } = await getChromeMcpModule();
       await ensureChromeMcpAvailable(profile.name, profile, { signal });
       await waitForChromeMcpReadyAfterAttach(signal);

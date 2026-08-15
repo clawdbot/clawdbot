@@ -7,21 +7,23 @@ import * as chromeModule from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import * as navigationGuardModule from "./navigation-guard.js";
+import { pwAi } from "./pw-ai.js";
 import {
-  BlockedBrowserTargetError,
-  classifyBrowserDocumentNavigationRequest,
-  closePlaywrightBrowserConnection,
-  createPageViaPlaywright,
-  forceDisconnectPlaywrightForTarget,
-  getPageForTargetId,
   gotoPageWithNavigationGuard,
-  listPagesViaPlaywright,
   wasBrowserNavigationSourcePreservedAfterPolicyDenial,
   withPageNavigationRequestGuard,
 } from "./pw-session.js";
 
+const {
+  closePlaywrightBrowserConnection,
+  createPageViaPlaywright,
+  forceDisconnectPlaywrightForTarget,
+  getPageForTargetId,
+  listPagesViaPlaywright,
+} = pwAi;
+
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
-const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
 
 const PROXY_ENV_KEYS = [
   "ALL_PROXY",
@@ -113,7 +115,7 @@ function installBrowserMocks() {
   } as unknown as import("playwright-core").Browser;
 
   connectOverCdpSpy.mockResolvedValue(browser);
-  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+  getChromeWebSocketEndpointSpy.mockResolvedValue(null);
 
   const getBrowserDisconnectedHandler = () =>
     browserOn.mock.calls.find((call) => call[0] === "disconnected")?.[1] as
@@ -212,7 +214,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.unstubAllEnvs();
   connectOverCdpSpy.mockClear();
-  getChromeWebSocketUrlSpy.mockClear();
+  getChromeWebSocketEndpointSpy.mockClear();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
@@ -244,6 +246,9 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
   it("blocks hostname navigation when strict SSRF policy is configured", async () => {
     const { pageGoto } = installBrowserMocks();
+    getChromeWebSocketEndpointSpy.mockResolvedValue({
+      url: "ws://127.0.0.1:18792/devtools/browser/ROOT",
+    });
 
     await expect(
       createPageViaPlaywright({
@@ -528,12 +533,12 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "TARGET_1",
       }),
-    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
+    ).rejects.toThrow("Browser target is unavailable after SSRF policy blocked its navigation.");
     await expect(
       getPageForTargetId({
         cdpUrl: "http://127.0.0.1:18792",
       }),
-    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
+    ).rejects.toThrow("Browser target is unavailable after SSRF policy blocked its navigation.");
     expect(pageClose).toHaveBeenCalledTimes(1);
   });
 
@@ -559,7 +564,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "TARGET_1",
       }),
-    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
+    ).rejects.toThrow("Browser target is unavailable after SSRF policy blocked its navigation.");
   });
 
   it("preserves blocked-target quarantine across transport disconnects", async () => {
@@ -584,7 +589,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "TARGET_1",
       }),
-    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
+    ).rejects.toThrow("Browser target is unavailable after SSRF policy blocked its navigation.");
   });
 
   it("keeps blocked tabs inaccessible when target lookup fails", async () => {
@@ -604,7 +609,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       getPageForTargetId({
         cdpUrl: "http://127.0.0.1:18792",
       }),
-    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
+    ).rejects.toThrow("Browser target is unavailable after SSRF policy blocked its navigation.");
   });
 
   it("does not fall back to another tab when explicit target lookup misses", async () => {
@@ -688,7 +693,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       getPageForTargetId({
         cdpUrl: "http://127.0.0.1:18792",
       }),
-    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
+    ).rejects.toThrow("Browser target is unavailable after SSRF policy blocked its navigation.");
   });
 
   it("falls back to caller targetId quarantine when target lookup fails", async () => {
@@ -737,58 +742,78 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "TARGET_1",
       }),
-    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
+    ).rejects.toThrow("Browser target is unavailable after SSRF policy blocked its navigation.");
+  });
+});
+
+describe("pw-session guarded browser navigation route cleanup", () => {
+  function navigate(page: import("playwright-core").Page) {
+    return gotoPageWithNavigationGuard({
+      cdpUrl: "http://127.0.0.1:18792",
+      page,
+      url: "https://93.184.216.34/start",
+      timeoutMs: 1000,
+    });
+  }
+
+  it("rolls back its exact navigation route when Playwright setup rejects", async () => {
+    const { getRouteHandler, page, pageGoto, pageRoute, pageUnroute } = installBrowserMocks();
+    const installRoute = pageRoute.getMockImplementation();
+    const setupError = new Error("navigation route setup failed");
+    pageRoute.mockImplementationOnce(async (...args) => {
+      await installRoute?.(...args);
+      throw setupError;
+    });
+
+    await expect(navigate(page)).rejects.toBe(setupError);
+
+    expect(pageUnroute).toHaveBeenCalledWith("**", pageRoute.mock.calls[0]?.[1]);
+    expect(getRouteHandler()).toBeNull();
+    expect(pageGoto).not.toHaveBeenCalled();
+  });
+
+  it("surfaces navigation route cleanup failure while the page remains open", async () => {
+    const { page, pageUnroute } = installBrowserMocks();
+    Object.assign(page, { isClosed: () => false });
+    const cleanupError = new Error("navigation route cleanup failed");
+    pageUnroute.mockRejectedValueOnce(cleanupError);
+
+    await expect(navigate(page)).rejects.toBe(cleanupError);
+  });
+
+  it("preserves the original navigation failure when route cleanup also fails", async () => {
+    const { page, pageGoto, pageUnroute } = installBrowserMocks();
+    Object.assign(page, { isClosed: () => false });
+    const navigationError = new Error("browser navigation failed");
+    pageGoto.mockRejectedValueOnce(navigationError);
+    pageUnroute.mockRejectedValueOnce(new Error("navigation route cleanup failed"));
+
+    await expect(navigate(page)).rejects.toBe(navigationError);
+  });
+
+  it("ignores navigation route cleanup failure after the page closes", async () => {
+    const { page, pageUnroute } = installBrowserMocks();
+    Object.assign(page, { isClosed: () => true });
+    pageUnroute.mockRejectedValueOnce(new Error("Target page has been closed"));
+
+    await expect(navigate(page)).resolves.toBeNull();
+  });
+
+  it("preserves blocked-page quarantine when navigation route cleanup fails", async () => {
+    const { getRouteHandler, mainFrame, page, pageClose, pageGoto, pageUnroute } =
+      installBrowserMocks();
+    Object.assign(page, { isClosed: () => false });
+    mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });
+    pageUnroute.mockRejectedValueOnce(new Error("navigation route cleanup failed"));
+
+    await expect(navigate(page)).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    expect(pageClose).toHaveBeenCalledOnce();
   });
 });
 
 describe("pw-session selected-page interaction request guard", () => {
   const strictPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
-
-  it("classifies top-level, subframe, non-document, and unresolved-frame requests", () => {
-    const { mainFrame, page } = installBrowserMocks();
-    const request = (overrides: Partial<MockRequest>): MockRequest => ({
-      frame: () => mainFrame,
-      isNavigationRequest: () => false,
-      resourceType: () => "document",
-      url: () => "https://example.com",
-      ...overrides,
-    });
-
-    expect(classifyBrowserDocumentNavigationRequest(page, request({}) as never)).toBe("top-level");
-    expect(
-      classifyBrowserDocumentNavigationRequest(
-        page,
-        request({ frame: () => ({}), isNavigationRequest: () => true }) as never,
-      ),
-    ).toBe("subframe");
-    expect(
-      classifyBrowserDocumentNavigationRequest(
-        page,
-        request({ resourceType: () => "image" }) as never,
-      ),
-    ).toBeNull();
-    expect(
-      classifyBrowserDocumentNavigationRequest(
-        page,
-        request({
-          frame: () => {
-            throw new Error("frame detached");
-          },
-        }) as never,
-      ),
-    ).toBe("top-level");
-    expect(
-      classifyBrowserDocumentNavigationRequest(
-        page,
-        request({
-          frame: () => {
-            throw new Error("frame detached");
-          },
-          resourceType: () => "image",
-        }) as never,
-      ),
-    ).toBe("subframe");
-  });
 
   it("preserves policy-free callers without installing a route", async () => {
     const { page, pageRoute, pageUnroute } = installBrowserMocks();
@@ -1264,3 +1289,4 @@ describe("pw-session selected-page interaction request guard", () => {
     ).rejects.toBe(cleanupError);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

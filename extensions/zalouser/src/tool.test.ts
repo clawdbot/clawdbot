@@ -1,7 +1,7 @@
 // Zalouser tests cover tool plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
-import { createZalouserTool, executeZalouserTool } from "./tool.js";
+import { createZalouserTool } from "./tool.js";
 import {
   checkZaloAuthenticated,
   getZaloUserInfo,
@@ -34,6 +34,13 @@ const mockListGroups = vi.mocked(listZaloGroupsMatching);
 function extractDetails(result: { content?: Array<{ type: string; text?: string }> }): unknown {
   const text = result.content?.[0]?.text ?? "{}";
   return JSON.parse(text) as unknown;
+}
+
+async function executeZalouserTool(
+  toolCallId: string,
+  params: Parameters<ReturnType<typeof createZalouserTool>["execute"]>[1],
+) {
+  return await createZalouserTool().execute(toolCallId, params);
 }
 
 describe("executeZalouserTool", () => {

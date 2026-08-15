@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  execGhApiRead,
+  execGhJson,
+  execGhRead,
   execPlainGh,
   plainGhEnv,
   PLAIN_GH_SYSTEM_CANDIDATES,
@@ -35,6 +38,7 @@ printf 'FORCE_COLOR=%s\\n' "\${FORCE_COLOR-}"
 printf 'CLICOLOR=%s\\n' "\${CLICOLOR-}"
 printf 'CLICOLOR_FORCE=%s\\n' "\${CLICOLOR_FORCE-}"
 printf 'COLORTERM_SET=%s\\n' "\${COLORTERM+x}"
+printf 'OPENCLAW_GH_BIN_SET=%s\\n' "\${OPENCLAW_GH_BIN+x}"
 `,
   );
   chmodSync(ghPath, 0o755);
@@ -95,6 +99,74 @@ describe("plain gh helpers", () => {
     });
     expect(plainGhEnv({ COLORTERM: "truecolor" })).not.toHaveProperty("COLORTERM");
     expect(plainGhEnv({ GH_FORCE_TTY: "120" })).not.toHaveProperty("GH_FORCE_TTY");
+  });
+
+  it("routes explicit GET reads through the PATH shim", () => {
+    const ghPath = makeFakeGh();
+    const output = execGhApiRead("repos/openclaw/openclaw/pulls/1", {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_GH_BIN: "/identity-sensitive/plain-gh",
+        PATH: `${path.dirname(ghPath)}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    });
+
+    expect(output).toContain("argv=api repos/openclaw/openclaw/pulls/1 --method GET");
+    expect(output).toContain("OPENCLAW_GH_BIN_SET=");
+  });
+
+  it("shares bounded PATH-shim reads and JSON parsing", () => {
+    const calls: unknown[][] = [];
+    const execFileSyncImpl = (...args: unknown[]) => {
+      calls.push(args);
+      return '{"ok":true}';
+    };
+
+    expect(
+      execGhJson(
+        ["api", "repos/openclaw/openclaw"],
+        {
+          killSignal: "SIGKILL",
+          stdio: ["ignore", "pipe", "inherit"],
+          timeout: 60_000,
+        },
+        { execFileSyncImpl },
+      ),
+    ).toEqual({ ok: true });
+    expect(calls).toEqual([
+      [
+        "gh",
+        ["api", "repos/openclaw/openclaw"],
+        expect.objectContaining({
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          maxBuffer: 32 * 1024 * 1024,
+          stdio: ["ignore", "pipe", "inherit"],
+          timeout: 60_000,
+        }),
+      ],
+    ]);
+    expect(
+      execGhRead(
+        ["api", "rate_limit"],
+        { encoding: "utf8" },
+        { execFileSyncImpl: () => " result " },
+      ),
+    ).toBe(" result ");
+
+    const failure = new Error("gh read failed");
+    expect(() =>
+      execGhRead(
+        ["api", "rate_limit"],
+        {},
+        {
+          execFileSyncImpl: () => {
+            throw failure;
+          },
+        },
+      ),
+    ).toThrow(failure);
   });
 
   it("runs the shell helper with color disabled", () => {

@@ -79,7 +79,7 @@ function resolveZalouserSendTarget(params: ToolParams, context?: ZalouserToolCon
   };
 }
 
-export async function executeZalouserTool(
+async function executeZalouserTool(
   _toolCallId: string,
   params: ToolParams,
   _signal?: AbortSignal,

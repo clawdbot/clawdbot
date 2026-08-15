@@ -8,15 +8,7 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
-  DEFAULT_LIVE_VIDEO_MODELS,
-  canRunBufferBackedImageToVideoLiveLane,
-  canRunBufferBackedVideoToVideoLiveLane,
-  collectProviderApiKeys,
-  encodePngRgba,
-  fillPixel,
-  getShellEnvAppliedKeys,
   isAuthErrorMessage,
   isBillingErrorMessage,
   isLiveProfileKeyModeEnabled,
@@ -26,6 +18,15 @@ import {
   isServerErrorMessage,
   isTimeoutErrorMessage,
   isTruthyEnvValue,
+  readLiveTestConfig,
+} from "openclaw/plugin-sdk/test-live";
+import { collectProviderApiKeys, getShellEnvAppliedKeys } from "openclaw/plugin-sdk/test-live-auth";
+import {
+  DEFAULT_LIVE_VIDEO_MODELS,
+  canRunBufferBackedImageToVideoLiveLane,
+  canRunBufferBackedVideoToVideoLiveLane,
+  encodePngRgba,
+  fillPixel,
   normalizeVideoGenerationDuration,
   parseCsvFilter,
   parseProviderModelMap,
@@ -34,14 +35,14 @@ import {
   resolveConfiguredLiveVideoModels,
   resolveLiveVideoAuthStore,
   resolveLiveVideoResolution,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-generation";
 import type {
   GeneratedVideoAsset,
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
   VideoGenerationProvider,
   VideoGenerationRequest,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-generation";
 import { describe, expect, it } from "vitest";
 import alibabaPlugin from "./alibaba/index.js";
 import byteplusPlugin from "./byteplus/index.js";
@@ -400,7 +401,7 @@ function resolveLiveSmokeDurationSeconds(params: {
 }
 
 async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<void> {
-  const cfg = withPluginsEnabled(getRuntimeConfig());
+  const cfg = withPluginsEnabled(await readLiveTestConfig());
   const configuredModels = resolveConfiguredLiveVideoModels(cfg);
   const agentDir = resolveDefaultAgentDir(cfg as never);
   const attempted: string[] = [];

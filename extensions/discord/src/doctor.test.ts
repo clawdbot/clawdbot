@@ -21,6 +21,74 @@ function getDiscordCompatibilityNormalizer(): NonNullable<
 }
 
 describe("discord doctor", () => {
+  it("promotes shipped nested DM access at root and account scope", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            dm: { enabled: false, policy: "allowlist", allowFrom: ["123"] },
+            accounts: {
+              work: {
+                dm: { groupEnabled: true, policy: "open", allowFrom: ["*"] },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      dm: { enabled: false },
+      dmPolicy: "allowlist",
+      allowFrom: ["123"],
+      accounts: {
+        work: {
+          dm: { groupEnabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+  });
+
+  it("strips retired gateway, queue, and retry tuning at root and account scope", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            gatewayInfoTimeoutMs: 1,
+            gatewayReadyTimeoutMs: 2,
+            gatewayRuntimeReadyTimeoutMs: 3,
+            eventQueue: { listenerTimeout: 4 },
+            retry: { attempts: 5 },
+            voice: {
+              realtime: {
+                providers: {
+                  custom: { retry: { attempts: 9 }, eventQueue: { maxConcurrency: 2 } },
+                },
+              },
+            },
+            accounts: {
+              work: { eventQueue: { maxConcurrency: 6 }, retry: { attempts: 7 } },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      voice: {
+        realtime: {
+          providers: { custom: { retry: { attempts: 9 }, eventQueue: { maxConcurrency: 2 } } },
+        },
+      },
+      accounts: { work: {} },
+    });
+    expect(result.changes).toContain("Removed retired Discord tuning knobs.");
+  });
+
   it("normalizes legacy discord streaming aliases for runtime config", () => {
     const normalize = getDiscordCompatibilityNormalizer();
 
@@ -64,9 +132,16 @@ describe("discord doctor", () => {
         work: {
           streaming: {
             mode: "off",
+            chunkMode: "newline",
             block: {
+              enabled: true,
               coalesce: {
                 idleMs: 250,
+              },
+            },
+            preview: {
+              chunk: {
+                minChars: 120,
               },
             },
           },
@@ -80,13 +155,14 @@ describe("discord doctor", () => {
       "Moved channels.discord.draftChunk → channels.discord.streaming.preview.chunk.",
       "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
       "Moved channels.discord.accounts.work.blockStreamingCoalesce → channels.discord.accounts.work.streaming.block.coalesce.",
+      "Copied flat channels.discord delivery keys into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 
-  it("pins progress mode when migrating delivery-only aliases", () => {
+  it("keeps delivery-only aliases mode-free and preserves explicit legacy progress", () => {
     const normalize = getDiscordCompatibilityNormalizer();
 
-    const result = normalize({
+    const deliveryOnly = normalize({
       cfg: {
         channels: {
           discord: { blockStreaming: true },
@@ -94,17 +170,33 @@ describe("discord doctor", () => {
       } as never,
     });
 
-    const migrated = result.config.channels?.discord as Record<string, unknown>;
-    expect(migrated).toEqual({
+    const deliveryOnlyMigrated = deliveryOnly.config.channels?.discord as Record<string, unknown>;
+    expect(deliveryOnlyMigrated).toEqual({
+      streaming: { block: { enabled: true } },
+    });
+    expect(resolveDiscordPreviewStreamMode(deliveryOnlyMigrated)).toBe("off");
+    expect(deliveryOnly.changes).toEqual([
+      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
+    ]);
+
+    const explicitProgress = normalize({
+      cfg: {
+        channels: {
+          discord: { streamMode: "progress", blockStreaming: true },
+        },
+      } as never,
+    });
+    const explicitProgressMigrated = explicitProgress.config.channels?.discord as Record<
+      string,
+      unknown
+    >;
+    expect(explicitProgressMigrated).toEqual({
       streaming: { mode: "progress", block: { enabled: true } },
     });
-    // Effective preview-mode parity: `streaming` absent resolved to progress
-    // before migration, so the migrated object must keep progress instead of
-    // falling to the object-without-mode default (off).
-    expect(resolveDiscordPreviewStreamMode(migrated)).toBe(resolveDiscordPreviewStreamMode({}));
-    expect(result.changes).toEqual([
+    expect(resolveDiscordPreviewStreamMode(explicitProgressMigrated)).toBe("progress");
+    expect(explicitProgress.changes).toEqual([
+      "Moved channels.discord.streamMode → channels.discord.streaming.mode (progress).",
       "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
-      "Set channels.discord.streaming.mode (progress) to keep the previous default while migrating flat streaming keys.",
     ]);
   });
 
@@ -537,7 +629,9 @@ describe("discord doctor", () => {
 
     const result = maybeRepairDiscordNumericIds(cfg, "openclaw doctor --fix");
     expect(result.config.channels?.discord?.allowFrom).toEqual(["123"]);
-    expect(result.config.channels?.discord?.dm?.allowFrom).toEqual(["99"]);
+    expect(
+      (result.config.channels?.discord?.dm as { allowFrom?: string[] } | undefined)?.allowFrom,
+    ).toEqual(["99"]);
     expect(result.config.channels?.discord?.guilds?.main?.users).toEqual(["111"]);
     expect(result.config.channels?.discord?.guilds?.main?.roles).toEqual(["222"]);
     expect(result.changes).not.toHaveLength(0);

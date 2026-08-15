@@ -1,7 +1,7 @@
 /** Tests block streaming behavior for auto-reply output delivery. */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.test-support.js";
 import { loadGetReplyModuleForTest } from "./reply/get-reply.test-loader.js";
 import { createMockTypingController } from "./reply/reply.test-helpers.js";
 import type { MsgContext } from "./templating.js";

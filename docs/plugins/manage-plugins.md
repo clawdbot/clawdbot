@@ -46,7 +46,10 @@ removed, only disabled.
 Catalog and search access require `operator.read`. Install, enable, disable,
 remove, and MCP server changes require `operator.admin`. A ClawHub install is
 performed by the Gateway and preserves its trust, integrity, and plugin-install
-policy checks.
+policy checks. Enabling an installed plugin as an administrator also records
+that explicit trust by adding the selected plugin to an existing restrictive
+`plugins.allow` list. An explicit `plugins.deny` entry remains authoritative and
+must be removed before enabling the plugin.
 
 Installing or removing plugin code requires a Gateway restart. Enablement
 changes can be applied without a restart when the installed plugin and current
@@ -123,12 +126,28 @@ openclaw plugins install --link ./my-plugin
 Bare package specs install from npm during the launch cutover, unless the
 name matches a bundled or official plugin id, in which case OpenClaw uses
 that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or
-`npm-pack:` for deterministic source selection.
+`npm-pack:` for deterministic source selection. OpenClaw's bundled and official
+catalog packages are trusted alongside ClawHub packages. New arbitrary npm,
+git, local path/archive, `npm-pack:`, or marketplace sources require
+`--force` in noninteractive installs after you review
+and trust the source.
 
-Use `--force` only to overwrite an existing install target from a different
-source. For routine upgrades of a tracked npm, ClawHub, or hook-pack install,
-use `openclaw plugins update` instead; `--force` is not supported with
-`--link`.
+`--force` confirms a non-ClawHub source without prompting and overwrites an
+existing install target when needed. For routine upgrades of a tracked npm,
+ClawHub, or hook-pack install, use `openclaw plugins update` instead. With
+`--link`, `--force` only confirms the source; the linked directory is not
+copied or overwritten.
+
+If a newly installed plugin requires configuration that is not present yet,
+OpenClaw records the install but leaves the plugin disabled. Configure
+`plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an
+existing config entry is present but invalid, install fails without rewriting it.
+
+A plugin package can expose multiple child entries. Installation tracks that
+package once, enables each ready child entry, and preserves any child that you
+explicitly disabled. Runtime policy remains child-addressable through
+`plugins.entries.<child-id>`, allow/deny lists, channel config, exact child load
+paths, and the `memory` and `contextEngine` slots.
 
 ## Restart and inspect
 
@@ -158,14 +177,26 @@ openclaw plugins update <plugin-id> --dry-run
 
 Passing a plugin id reuses its tracked install spec: stored dist-tags
 (`@beta`) and exact pinned versions carry over to later `update <plugin-id>`
-runs.
+runs. For a multi-entry package, any child id resolves to the one tracked
+package install, so all siblings update together. Removed or renamed children
+have their stale entries, allow/deny policy, exact load paths, channel config,
+and memory/context slot selections reconciled before the new package/index
+state commits; retained/new children and unrelated plugins are preserved.
+
+If OpenClaw cannot prove exactly one package owner and a complete child list,
+update and uninstall fail closed without changing package files, config, or the
+installed index. Run `openclaw plugins registry --refresh`, inspect
+`openclaw plugins doctor`, and use `openclaw doctor --fix` for repairable legacy
+index state. If the ambiguity remains, reinstall the package before retrying.
 
 `openclaw plugins update --all` is the bulk maintenance path. It still
 respects ordinary tracked install specs, but trusted official OpenClaw
 plugin records sync to the current official catalog target instead of
-staying pinned to a stale exact official package; when `update.channel` is
-`beta`, that sync prefers the beta release line. Use a targeted
-`update <plugin-id>` to keep an exact or tagged official spec untouched.
+staying pinned to a stale exact official package. The canonical channel
+resolver uses both `update.channel` and the installed core version, so an
+installed beta core with no configured channel keeps official plugins on the
+beta release line. Use a targeted `update <plugin-id>` to keep an exact or
+tagged official spec untouched.
 
 For npm installs, pass an explicit package spec to switch the tracked
 record:
@@ -189,11 +220,19 @@ openclaw plugins uninstall <plugin-id>
 openclaw plugins uninstall <plugin-id> --keep-files
 ```
 
-Uninstall removes the plugin's config entry, persisted plugin index record,
-allow/deny list entries, and linked `plugins.load.paths` entries when
-applicable. The managed install directory is removed unless you pass
-`--keep-files`. A running managed Gateway restarts automatically when the
+Uninstall removes the package's persisted install record and every owned child
+entry from plugin config, allow/deny lists, memory/context slots, exact linked
+`plugins.load.paths`, and channel config entries when applicable. You may address a multi-entry
+package by any child id; the preview names the package owner and all siblings
+that will be removed. The managed install directory is removed once unless you
+pass `--keep-files`. A running managed Gateway restarts automatically when the
 uninstall changes plugin source.
+
+If an installed Claw references the plugin, preview and uninstall print the
+affected Claw package names. Ordinary plugin uninstall can still proceed and
+may break those Claws; use `openclaw claws status` to review ownership first.
+Removing a Claw releases its plugin reference but retains the process-wide
+plugin by default.
 
 In Nix mode (`OPENCLAW_NIX_MODE=1`), plugin install, update, uninstall,
 enable, and disable are all disabled; manage those choices in the Nix source

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Finds a prior green Full Release Validation run for the exact target SHA.
-# Cross-SHA evidence reuse is intentionally left to the granular delta manifest,
-# which can require fresh package/install/provider closure per changed artifact.
+# Finds a prior green Full Release Validation run for the exact target SHA or
+# for its immediate product-equivalent predecessor. Cross-SHA reuse is limited
+# to a descendant whose complete tree delta is CHANGELOG.md; package/install
+# proof still runs against the release SHA after that changelog is committed.
 # Always exits 0 with reuse=true/false; callers fail open to a full validation.
 
 REPO="${GH_REPO:-}"
@@ -34,8 +35,9 @@ Scans recent successful Full Release Validation runs for an exact-target
 validation manifest whose recorded lane-selection inputs match --inputs-json
 and whose normalized strict-v3 evidence is accepted by the current trusted-main
 verifier identified by --workflow-sha. The historical producer workflow SHA
-remains independent. Writes reuse=true plus evidence_* outputs when found;
-reuse=false otherwise.
+remains independent. A descendant target may reuse product validation only
+when GitHub proves the entire delta is CHANGELOG.md. Writes reuse=true plus
+evidence_* outputs when found; reuse=false otherwise.
 EOF
 }
 
@@ -163,7 +165,7 @@ fi
 
 # Exact-target reuse still requires internally consistent version stamps
 # (for example package.json must agree with the macOS plist).
-if ! (cd "$REPO_DIR" && node "$PREFLIGHT" --macos-versions-only >&2); then
+if ! (cd "$REPO_DIR" && env -u NODE_OPTIONS node "$PREFLIGHT" --macos-versions-only >&2); then
   no_reuse "target version metadata is inconsistent"
 fi
 
@@ -189,9 +191,27 @@ for ((index = 0; index < run_count; index += 1)); do
       --validate-run "$run_id" \
       --repo "$REPO" \
       --trusted-workflow-ref main \
+      --verifier-source-sha "$VERIFIER_WORKFLOW_SHA" \
+      --verifier-source-file "$VALIDATOR" \
       --json
   )"; then
-    echo "[evidence-reuse] run ${run_id}: shared evidence validator rejected the run; skipping" >&2
+    validator_error="$(
+      jq -r '
+        if (.error | type) == "string" then
+          .error
+          | gsub("[\\r\\n\\t ]+"; " ")
+          | gsub("^ +| +$"; "")
+          | if length > 500 then .[0:497] + "..." else . end
+        else
+          empty
+        end
+      ' <<< "$validation_record" 2>/dev/null || true
+    )"
+    if [[ -n "$validator_error" ]]; then
+      echo "[evidence-reuse] run ${run_id}: shared evidence validator rejected the run: ${validator_error}; skipping" >&2
+    else
+      echo "[evidence-reuse] run ${run_id}: shared evidence validator rejected the run; skipping" >&2
+    fi
     continue
   fi
   if ! jq -e \
@@ -251,7 +271,17 @@ for ((index = 0; index < run_count; index += 1)); do
       and (.verifier.schemaVersion == 3)
       and (.verifier.sourceSha == $verifier_sha)
       and ([.children[].role] | sort) ==
-        ["normalCi", "pluginPrerelease", "productPerformance", "releaseChecks"]
+        (if (
+          .rerunGroup == "all"
+          and (
+            ((.validationInputs.npmTelegramPackageSpec // "") | length) > 0
+            or ((.validationInputs.releasePackageSpec // "") | length) > 0
+          )
+        ) then
+          ["normalCi", "npmTelegram", "pluginPrerelease", "productPerformance", "releaseChecks"]
+        else
+          ["normalCi", "pluginPrerelease", "productPerformance", "releaseChecks"]
+        end)
       and ([.children[].runId] | length == (unique | length))
       and ([.children[]
         | select(.role == "productPerformance")
@@ -287,20 +317,42 @@ for ((index = 0; index < run_count; index += 1)); do
   fi
 
   prior_sha="$(jq -r '.root.targetSha' <<< "$validation_record")"
+  evidence_policy="exact-target-full-validation-v1"
+  changed_paths="[]"
   if [[ "$prior_sha" != "$TARGET_SHA" ]]; then
-    echo "[evidence-reuse] run ${run_id}: target ${prior_sha} differs from ${TARGET_SHA}; cross-SHA reuse requires granular artifact evidence" >&2
-    continue
+    compare_json=""
+    if ! compare_json="$(
+      gh api "repos/${REPO}/compare/${prior_sha}...${TARGET_SHA}"
+    )"; then
+      echo "[evidence-reuse] run ${run_id}: could not compare ${prior_sha}...${TARGET_SHA}; skipping" >&2
+      continue
+    fi
+    if ! jq -e \
+      --arg prior_sha "$prior_sha" '
+        .status == "ahead"
+        and .merge_base_commit.sha == $prior_sha
+        and (.files | type == "array" and length == 1)
+        and .files[0].filename == "CHANGELOG.md"
+        and .files[0].status == "modified"
+        and ((.files[0].previous_filename // "") == "")
+      ' <<< "$compare_json" >/dev/null; then
+      echo "[evidence-reuse] run ${run_id}: target ${TARGET_SHA} is not a CHANGELOG.md-only descendant of ${prior_sha}; skipping" >&2
+      continue
+    fi
+    evidence_policy="changelog-only-release-v1"
+    changed_paths='["CHANGELOG.md"]'
   fi
 
   run_url="$(jq -r '.root.url' <<< "$validation_record")"
-  echo "[evidence-reuse] reusing exact-target run ${run_id} (${run_url}) for ${TARGET_SHA}" >&2
+  echo "[evidence-reuse] reusing ${evidence_policy} run ${run_id} (${run_url}) for ${TARGET_SHA}" >&2
   write_output reuse true
   write_output evidence_run_id "$run_id"
   write_output evidence_root_run_id "$run_id"
   write_output evidence_run_url "$run_url"
   write_output evidence_sha "$prior_sha"
-  write_output changed_path_count "0"
-  write_output changed_paths "[]"
+  write_output evidence_policy "$evidence_policy"
+  write_output changed_path_count "$(jq 'length' <<< "$changed_paths")"
+  write_output changed_paths "$changed_paths"
   write_output evidence_manifest "$(jq -c '.manifest' <<< "$validation_record")"
   exit 0
 done

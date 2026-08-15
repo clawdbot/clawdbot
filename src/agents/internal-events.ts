@@ -38,10 +38,11 @@ type AgentTaskCompletionInternalEvent = {
 
 type TaskCompletionPromptMode = "plain" | "protected";
 
+const MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS = 6_000;
+const TASK_COMPLETION_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
+
 /** Internal event variants that can be rendered into agent prompt context. */
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
-
-export { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END };
 
 function sanitizeSingleLineField(value: string, fallback: string): string {
   const sanitized = escapeInternalRuntimeContextDelimiters(value)
@@ -66,10 +67,14 @@ function sanitizeMediaDirectiveValue(value: string): string | null {
 }
 
 function formatChildResultDataBlock(value: string): string {
+  // The event retains the authoritative full result; only model-visible
+  // projections share this escaped-output budget.
   return (
     wrapPromptDataBlock({
       label: "Child result",
       text: value,
+      maxEscapedChars: MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS,
+      truncationMarker: TASK_COMPLETION_RESULT_TRUNCATION_NOTICE,
     }) || "Child result: (no output)"
   );
 }
@@ -156,6 +161,33 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
     "This context is runtime-generated, not user-authored. Keep internal details private.",
     "",
     blocks.join("\n\n---\n\n"),
+    INTERNAL_RUNTIME_CONTEXT_END,
+  ].join("\n");
+}
+
+/** Build a protected follow-up that can retry only media proven missing from a partial send. */
+export function formatGeneratedMediaDeliveryRetryForPrompt(mediaUrls: string[]): string {
+  const mediaDirectiveLines = Array.from(
+    new Set(
+      mediaUrls.map(sanitizeMediaDirectiveValue).filter((value): value is string => value !== null),
+    ),
+  ).map((mediaUrl) => `MEDIA:${mediaUrl}`);
+  if (mediaDirectiveLines.length === 0) {
+    return "";
+  }
+  return [
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    "OpenClaw runtime context (internal):",
+    "This context is runtime-generated, not user-authored. Keep internal details private.",
+    "",
+    "[Generated media delivery retry]",
+    "A previous agent turn delivered only part of this generated-media result.",
+    "",
+    "Generated media still missing:",
+    ...mediaDirectiveLines,
+    "",
+    "Action:",
+    "Deliver only the generated media listed above. Do not resend any other attachment.",
     INTERNAL_RUNTIME_CONTEXT_END,
   ].join("\n");
 }

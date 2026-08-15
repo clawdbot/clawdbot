@@ -77,6 +77,9 @@ func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, fi
 	}
 
 	output := updatedFront + translatedBody
+	if !sameI18NProtocolMarkers(string(content), output) {
+		return false, "", fmt.Errorf("protocol token leaked in final output: __OC_I18N_")
+	}
 	return false, outputPath, os.WriteFile(outputPath, []byte(output), 0o644)
 }
 

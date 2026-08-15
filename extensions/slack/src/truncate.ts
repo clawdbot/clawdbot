@@ -14,3 +14,33 @@ export function truncateSlackText(value: string, max: number): string {
   }
   return `${sliceUtf16Safe(trimmed, 0, max - 1)}…`;
 }
+
+export function countSlackTextUtf8Bytes(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+/** Truncate Slack text without splitting a code point or exceeding a UTF-8 byte limit. */
+export function truncateSlackTextByUtf8Bytes(value: string, maxBytes: number): string {
+  const trimmed = value.trim();
+  if (maxBytes <= 0) {
+    return "";
+  }
+  if (countSlackTextUtf8Bytes(trimmed) <= maxBytes) {
+    return trimmed;
+  }
+
+  const suffix = "…";
+  const suffixBytes = countSlackTextUtf8Bytes(suffix);
+  const prefixBudget = maxBytes >= suffixBytes ? maxBytes - suffixBytes : maxBytes;
+  let prefix = "";
+  let prefixBytes = 0;
+  for (const character of trimmed) {
+    const characterBytes = countSlackTextUtf8Bytes(character);
+    if (prefixBytes + characterBytes > prefixBudget) {
+      break;
+    }
+    prefix += character;
+    prefixBytes += characterBytes;
+  }
+  return maxBytes >= suffixBytes ? `${prefix}${suffix}` : prefix;
+}

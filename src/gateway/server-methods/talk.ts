@@ -8,18 +8,14 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
+  missingScopeErrorShape,
   type TalkSpeakParams,
   validateTalkCatalogParams,
   validateTalkConfigParams,
   validateTalkModeParams,
   validateTalkSpeakParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  withSpeakerSelectionCompat,
-  withSpeakerSelectionFallbackCompat,
-} from "../../../packages/speech-core/speaker.js";
-import { getVoiceProviderConfig } from "../../../packages/speech-core/voice-models.js";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
@@ -35,23 +31,34 @@ import type {
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { resolveProviderRawConfig } from "../../plugin-sdk/provider-selection-runtime.js";
 import { canonicalizeRealtimeTranscriptionProviderId } from "../../realtime-transcription/provider-registry.js";
+import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
   listRealtimeVoiceProviders,
 } from "../../talk/provider-registry.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
+import {
+  isRealtimeVoiceProviderConfigured,
+  resolveConfiguredRealtimeVoiceProvider,
+  resolveRealtimeVoiceProviderCapabilities,
+} from "../../talk/provider-resolver.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
 import {
+  withSpeakerSelectionCompat,
+  withSpeakerSelectionFallbackCompat,
+} from "../../tts/speaker.js";
+import { CODE_HEAVY_SPOKEN_FALLBACK, isCodeHeavySpeechText } from "../../tts/speech-text.js";
+import {
   getResolvedSpeechProviderConfig,
   resolveTtsConfig,
   synthesizeSpeech,
   type TtsDirectiveOverrides,
 } from "../../tts/tts.js";
-import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
+import { getVoiceProviderConfig } from "../../tts/voice-models.js";
+import { ADMIN_SCOPE, READ_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import { resolveConfiguredSecretInputString } from "../resolve-configured-secret-input-string.js";
 import { formatForLog } from "../ws-log.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
@@ -65,6 +72,7 @@ import {
   resolveConfiguredRealtimeTranscriptionProvider,
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type TalkSpeakReason =
   | "talk_unconfigured"
@@ -188,7 +196,7 @@ function buildTalkTtsConfig(
   }
 
   const baseTts = withTalkBaseTtsSpeakerSelectionCompat(
-    asOptionalRecord(config.messages?.tts) ?? {},
+    asOptionalRecord(config.tts) ?? {},
   ) as TtsConfig;
   const providerConfig = withSpeakerSelectionFallbackCompat(resolved.config);
   const resolvedProviderConfig =
@@ -213,10 +221,7 @@ function buildTalkTtsConfig(
     providerConfig,
     cfg: {
       ...config,
-      messages: {
-        ...config.messages,
-        tts: talkTts,
-      },
+      tts: talkTts,
     },
   };
 }
@@ -238,6 +243,15 @@ function buildTalkCatalog(config: OpenClawConfig) {
   );
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   const realtimeConfig = buildTalkRealtimeConfig(config);
+  const realtimeSurface =
+    realtimeConfig.transport === "gateway-relay" ? "gateway-relay" : "browser-session";
+  // Mirror talk.client.create's resolution inputs (agent scope + top-level model
+  // override) so catalog readiness matches what session creation will actually do;
+  // diverging here previously reported GPT-Live over OAuth as unconfigured.
+  const realtimeAgentId = resolveTalkSessionAgentId(config);
+  const realtimeModelOverride = realtimeConfig.model
+    ? { providerConfigOverrides: { model: realtimeConfig.model } }
+    : {};
   const realtimeSelection = resolveCatalogProviderSelection(
     canonicalizeRealtimeVoiceProviderId(realtimeConfig.provider, config),
     () =>
@@ -245,7 +259,10 @@ function buildTalkCatalog(config: OpenClawConfig) {
         cfg: config,
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
+        ...realtimeModelOverride,
+        agentId: realtimeAgentId,
         defaultModel: realtimeConfig.model,
+        surface: realtimeSurface,
       }).provider.id,
   );
   const activeRealtimeProvider = realtimeSelection.activeProvider;
@@ -335,28 +352,49 @@ function buildTalkCatalog(config: OpenClawConfig) {
           configuredProviderId:
             provider.id === activeRealtimeProvider ? realtimeConfig.provider : undefined,
         });
-        const rawConfigWithModel =
-          realtimeConfig.model && rawConfig.model === undefined
-            ? { ...rawConfig, model: realtimeConfig.model }
-            : rawConfig;
+        // Top-level talk.realtime.model overrides provider-level config, matching
+        // talk.client.create's providerConfigOverrides precedence at session time.
+        const rawConfigWithModel = realtimeConfig.model
+          ? { ...rawConfig, model: realtimeConfig.model }
+          : rawConfig;
         const providerConfig =
           provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
           rawConfigWithModel;
-        const capabilities = provider.capabilities;
+        const capabilities = resolveRealtimeVoiceProviderCapabilities({
+          provider,
+          providerConfig,
+          cfg: config,
+          surface: realtimeSurface,
+        });
         const entry: Record<string, unknown> = {
           id: provider.id,
           label: provider.label,
           configured: configuredOrFalse(() =>
-            provider.isConfigured({ cfg: config, providerConfig }),
+            isRealtimeVoiceProviderConfigured({
+              provider,
+              cfg: config,
+              providerConfig,
+              agentId: realtimeAgentId,
+              surface: realtimeSurface,
+            }),
           ),
           modes: ["realtime"],
-          brains: capabilities?.supportsToolCalls === false ? ["none"] : ["agent-consult"],
+          brains:
+            capabilities?.supportsToolCalls === false && capabilities.handlesAgentConsult !== true
+              ? ["none"]
+              : ["agent-consult"],
           supportsBrowserSession: Boolean(
             capabilities?.supportsBrowserSession ?? provider.createBrowserSession,
           ),
         };
         if (provider.defaultModel) {
           entry.defaultModel = provider.defaultModel;
+        }
+        if (provider.models?.length) {
+          entry.models = [...provider.models];
+        }
+        if (provider.voices?.length) {
+          entry.voices = [...provider.voices];
         }
         if (provider.aliases?.length) {
           entry.aliases = [...provider.aliases];
@@ -459,6 +497,8 @@ async function resolveTalkResponseFromConfig(params: {
   sourceConfig: OpenClawConfig;
   runtimeConfig: OpenClawConfig;
 }): Promise<TalkConfigResponse | undefined> {
+  // Normalize once at the Gateway boundary. Legacy flat provider fields belong to doctor
+  // migration and must not leak into steady-state response construction.
   const normalizedTalk = normalizeTalkSection(params.sourceConfig.talk);
   const configuredPayload = normalizedTalk ? buildTalkConfigResponse(normalizedTalk) : undefined;
   // Resolve provider selection from materialized config, but project provider-owned fields from
@@ -513,10 +553,10 @@ async function resolveTalkResponseFromConfig(params: {
 
   const speechProvider = getSpeechProvider(provider, params.runtimeConfig);
   const sourceBaseTts = withTalkBaseTtsSpeakerSelectionCompat(
-    asOptionalRecord(params.sourceConfig.messages?.tts) ?? {},
+    asOptionalRecord(params.sourceConfig.tts) ?? {},
   );
   const runtimeBaseTts = withTalkBaseTtsSpeakerSelectionCompat(
-    asOptionalRecord(params.runtimeConfig.messages?.tts) ?? {},
+    asOptionalRecord(params.runtimeConfig.tts) ?? {},
   );
   const sourceProviderConfig = withSpeakerSelectionFallbackCompat(sourceResolved?.config);
   const runtimeProviderConfig = withSpeakerSelectionFallbackCompat(runtimeResolved?.config);
@@ -691,34 +731,27 @@ export const talkHandlers: GatewayRequestHandlers = {
   ...talkClientHandlers,
   "talk.catalog": async ({ params, respond, context }) => {
     const catalogParams = params ?? {};
-    if (!validateTalkCatalogParams(catalogParams)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.catalog params: ${formatValidationErrors(validateTalkCatalogParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(catalogParams, validateTalkCatalogParams, "talk.catalog", respond)) {
       return;
     }
 
     try {
       respond(true, buildTalkCatalog(context.getRuntimeConfig()), undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
-  },
-  "talk.config": async ({ params, respond, client, context }) => {
-    if (!validateTalkConfigParams(params)) {
       respond(
         false,
         undefined,
         errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.config params: ${formatValidationErrors(validateTalkConfigParams.errors)}`,
+          err instanceof AgentSelectionRequiredError
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          formatForLog(err),
         ),
       );
+    }
+  },
+  "talk.config": async ({ params, respond, client, context }) => {
+    if (!assertValidParams(params, validateTalkConfigParams, "talk.config", respond)) {
       return;
     }
 
@@ -727,7 +760,10 @@ export const talkHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${TALK_SECRETS_SCOPE}`),
+        missingScopeErrorShape({
+          missingScope: TALK_SECRETS_SCOPE,
+          requiredScopes: [READ_SCOPE, TALK_SECRETS_SCOPE],
+        }),
       );
       return;
     }
@@ -758,15 +794,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     respond(true, { config: configPayload }, undefined);
   },
   "talk.speak": async ({ params, respond, context }) => {
-    if (!validateTalkSpeakParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.speak params: ${formatValidationErrors(validateTalkSpeakParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkSpeakParams, "talk.speak", respond)) {
       return;
     }
 
@@ -807,8 +835,9 @@ export const talkHandlers: GatewayRequestHandlers = {
         runtimeConfig,
         typedParams,
       );
+      const speechText = isCodeHeavySpeechText(text) ? CODE_HEAVY_SPOKEN_FALLBACK : text;
       const result = await synthesizeSpeech({
-        text,
+        text: speechText,
         cfg: setup.cfg,
         overrides,
         disableFallback: true,
@@ -854,8 +883,8 @@ export const talkHandlers: GatewayRequestHandlers = {
       respond(false, undefined, talkSpeakError("synthesis_failed", formatForLog(err)));
     }
   },
-  "talk.mode": ({ params, respond, context, client, isWebchatConnect }) => {
-    if (client && isWebchatConnect(client.connect) && !context.hasConnectedTalkNode()) {
+  "talk.mode": async ({ params, respond, context, client, isWebchatConnect }) => {
+    if (client && isWebchatConnect(client.connect) && !(await context.hasConnectedTalkNode())) {
       respond(
         false,
         undefined,
@@ -863,15 +892,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!validateTalkModeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.mode params: ${formatValidationErrors(validateTalkModeParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkModeParams, "talk.mode", respond)) {
       return;
     }
     const payload = {
@@ -883,3 +904,4 @@ export const talkHandlers: GatewayRequestHandlers = {
     respond(true, payload, undefined);
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

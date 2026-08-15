@@ -14,7 +14,7 @@ import {
 import type { GatewayStatusProbedTarget } from "./probe-run.js";
 
 /** Warning emitted when gateway status finds degraded or surprising probe state. */
-export type GatewayStatusWarning = {
+type GatewayStatusWarning = {
   code: string;
   message: string;
   details?: string[];
@@ -51,23 +51,6 @@ function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTar
     return true;
   }
   return new Set(identityKeys).size > 1;
-}
-
-function readModelPricingDegradedDetail(health: unknown): string | null {
-  if (!health || typeof health !== "object") {
-    return null;
-  }
-  const modelPricing = (health as { modelPricing?: unknown }).modelPricing;
-  if (!modelPricing || typeof modelPricing !== "object") {
-    return null;
-  }
-  const record = modelPricing as { state?: unknown; detail?: unknown };
-  if (record.state !== "degraded") {
-    return null;
-  }
-  return typeof record.detail === "string" && record.detail.trim()
-    ? record.detail.trim()
-    : "pricing bootstrap or refresh failed";
 }
 
 /** Chooses the reachable target that best represents the user's requested gateway. */
@@ -159,17 +142,6 @@ export function buildGatewayStatusWarnings(params: {
       targetIds: [result.target.id],
     });
   }
-  for (const result of reachable) {
-    const detail = readModelPricingDegradedDetail(result.probe.health);
-    if (!detail) {
-      continue;
-    }
-    warnings.push({
-      code: "model_pricing_degraded",
-      message: `Model pricing warning: optional pricing refresh degraded: ${detail}`,
-      targetIds: [result.target.id],
-    });
-  }
   return warnings;
 }
 
@@ -218,6 +190,7 @@ export function writeGatewayStatusJson(params: {
         close: entry.probe.close,
       },
       auth: entry.probe.auth,
+      server: entry.probe.server,
       self: entry.self,
       config: entry.configSummary,
       health: entry.probe.health,

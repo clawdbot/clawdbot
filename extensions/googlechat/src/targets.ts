@@ -36,9 +36,7 @@ export function isGoogleChatSpaceTarget(value: string): boolean {
   return normalizeLowercaseStringOrEmpty(value).startsWith("spaces/");
 }
 
-export function resolveGoogleChatSpaceChatType(
-  space: GoogleChatSpace,
-): "direct" | "group" | undefined {
+function resolveGoogleChatSpaceChatType(space: GoogleChatSpace): "direct" | "group" | undefined {
   const spaceType = (space.spaceType ?? "").toUpperCase();
   // The current field wins when both current and deprecated fields are present.
   if (spaceType === "DIRECT_MESSAGE") {

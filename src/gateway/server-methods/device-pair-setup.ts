@@ -6,12 +6,24 @@ import {
   ErrorCodes,
   errorShape,
   validateDevicePairSetupCodeParams,
+  validateDevicePairSetupStatusParams,
+  type DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readDevicePairSetupCompletion } from "../../infra/device-bootstrap.js";
+import { registerDevicePairingJoinCode } from "../../infra/device-pairing-join-code.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
-import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "../../pairing/setup-code.js";
+import {
+  decodePairingSetupCode,
+  encodePairingSetupCode,
+  resolvePairingSetupFromConfig,
+} from "../../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../shared/device-bootstrap-profile.js";
+import {
+  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../../shared/device-bootstrap-profile.js";
+import { isLoopbackHost } from "../net.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -21,10 +33,28 @@ import { assertValidParams } from "./validation.js";
 // that case we omit the QR (the client can still render one from setupCode)
 // rather than return a response that violates the protocol schema.
 const MAX_QR_DATA_URL_LENGTH = 16_384;
+type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 
 function readConfiguredDevicePairPublicUrl(config: OpenClawConfig): string | undefined {
   const value = config.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveDevicePairingJoinBaseUrl(payload: PairingSetupPayload): URL {
+  for (const candidate of payload.urls ?? [payload.url]) {
+    const parsed = new URL(candidate);
+    if (parsed.protocol === "wss:") {
+      parsed.protocol = "https:";
+      return parsed;
+    }
+    if (parsed.protocol === "ws:" && isLoopbackHost(parsed.hostname)) {
+      parsed.protocol = "http:";
+      return parsed;
+    }
+  }
+  throw new Error(
+    "Join URLs require a TLS gateway endpoint, except for loopback. Use the setup code directly for plaintext LAN pairing.",
+  );
 }
 
 /** Gateway handler for producing a device-pairing setup code + connect QR. */
@@ -41,6 +71,18 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      if (
+        params.joinUrl === true &&
+        params.bootstrapProfile !== undefined &&
+        params.bootstrapProfile !== "node"
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Join URLs require bootstrapProfile=node."),
+        );
+        return;
+      }
       const config = context.getRuntimeConfig();
       const requestPublicUrl = typeof params.publicUrl === "string" ? params.publicUrl : undefined;
       const configuredPublicUrl =
@@ -50,8 +92,14 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         env: process.env,
         publicUrl,
         preferRemoteUrl: params.preferRemoteUrl === true,
-        ...(params.bootstrapProfile === "node"
-          ? { bootstrapProfile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE }
+        localTlsFingerprint: context.gatewayTlsFingerprint,
+        ...(params.joinUrl === true || params.bootstrapProfile
+          ? {
+              bootstrapProfile:
+                params.joinUrl === true || params.bootstrapProfile === "node"
+                  ? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
+                  : PAIRING_SETUP_BOOTSTRAP_PROFILE,
+            }
           : {}),
         // Lets Tailscale serve/funnel URLs resolve, mirroring the `openclaw qr` CLI.
         runCommandWithTimeout: async (argv, runOpts) =>
@@ -62,6 +110,19 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         return;
       }
       const setupCode = encodePairingSetupCode(resolved.payload);
+      let joinUrl: string | undefined;
+      if (params.joinUrl === true) {
+        const parsedJoinUrl = resolveDevicePairingJoinBaseUrl(resolved.payload);
+        const shortcode = registerDevicePairingJoinCode({
+          payload: resolved.payload,
+          expiresAtMs: resolved.expiresAtMs,
+        });
+        const basePath = parsedJoinUrl.pathname.replace(/\/+$/u, "");
+        parsedJoinUrl.pathname = `${basePath}/j/${shortcode}`;
+        parsedJoinUrl.search = "";
+        parsedJoinUrl.hash = "";
+        joinUrl = parsedJoinUrl.toString();
+      }
       // QR is on by default; callers that only need the code can opt out.
       const includeQr = params.includeQr !== false;
       // QR rendering is optional output; keep the usable setup code if encoding fails.
@@ -73,16 +134,57 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
       respond(
         true,
         {
+          setupId: resolved.setupId,
+          expiresAtMs: resolved.expiresAtMs,
           setupCode,
+          ...(joinUrl ? { joinUrl } : {}),
           ...(qrDataUrl ? { qrDataUrl } : {}),
           gatewayUrl: resolved.payload.url,
           ...(resolved.payload.urls ? { gatewayUrls: resolved.payload.urls } : {}),
           // Label only — never the raw gateway token/password.
           auth: resolved.authLabel,
           urlSource: requestPublicUrl ? "request.publicUrl" : resolved.urlSource,
+          access: resolved.access,
+          ...(resolved.accessDowngraded ? { accessDowngraded: true } : {}),
         },
         undefined,
       );
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  // Recovery path for the best-effort device.pair.setup.completed broadcast: a
+  // client that missed the frame must not present a redeemed setup as expired.
+  "device.pair.setupStatus": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateDevicePairSetupStatusParams,
+        "device.pair.setupStatus",
+        respond,
+      )
+    ) {
+      return;
+    }
+    try {
+      const completion = await readDevicePairSetupCompletion({ setupId: params.setupId });
+      // Retention bookkeeping stays server-side; the wire shape matches the
+      // corresponding success or delivery-uncertain broadcast.
+      const result: DevicePairSetupStatusResult = completion
+        ? (() => {
+            const payload = {
+              setupId: completion.setupId,
+              deviceId: completion.deviceId,
+              ...(completion.deviceName ? { deviceName: completion.deviceName } : {}),
+              access: completion.access,
+              ts: completion.completedAtMs,
+            };
+            return completion.deliveryState === "confirmed"
+              ? { completion: payload }
+              : { deliveryUncertain: payload };
+          })()
+        : {};
+      respond(true, result, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }

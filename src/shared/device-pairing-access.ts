@@ -16,7 +16,7 @@ export type PendingDeviceApprovalKind =
   | "scope-upgrade"
   | "re-approval";
 
-export type PendingDeviceApprovalState = {
+type PendingDeviceApprovalState = {
   kind: PendingDeviceApprovalKind;
   /** Access requested by the pending pairing attempt. */
   requested: DevicePairingAccessSummary;

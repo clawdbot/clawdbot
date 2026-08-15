@@ -8,6 +8,7 @@ import {
   stripInternalRuntimeContext,
 } from "../agents/internal-runtime-context.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   isSessionTranscriptLeafControl,
@@ -16,8 +17,26 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
+import {
+  repairCanonicalSessionKeys,
+  type CanonicalSessionKeyRepairReport,
+} from "./doctor-session-canonical-keys.js";
+import {
+  repairCanonicalSessionDeliveryStates,
+  type SessionDeliveryStateRepairReport,
+} from "./doctor-session-delivery-state.js";
+import {
+  repairReservedIncognitoSessionKeys,
+  type ReservedIncognitoKeyRepairReport,
+} from "./doctor-session-incognito-key-repair.js";
+import {
+  DoctorSqliteMaintenanceLockUnavailableError,
+  withDoctorSqliteMaintenanceLock,
+} from "./doctor-sqlite-maintenance-lock.js";
+import { isLegacyCodexProviderId } from "./doctor/shared/codex-route-model-ref.js";
 
 const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
 
@@ -39,7 +58,7 @@ type TranscriptRepairResult = {
   reason?: string;
 };
 
-export type SessionTranscriptHealthIssue = TranscriptRepairResult & {
+type SessionTranscriptHealthIssue = TranscriptRepairResult & {
   broken: true;
 };
 
@@ -50,7 +69,6 @@ type ActiveTranscriptPath = {
   appendParentId: string | null;
 };
 
-const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
 const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
@@ -99,7 +117,7 @@ function normalizeLegacyOpenAICodexTranscriptMetadata(entries: TranscriptEntry[]
       continue;
     }
     let touched = false;
-    if (message.provider === LEGACY_OPENAI_CODEX_PROVIDER_ID) {
+    if (isLegacyCodexProviderId(message.provider)) {
       message.provider = OPENAI_PROVIDER_ID;
       touched = true;
     }
@@ -278,7 +296,7 @@ async function writeTranscriptEntries(params: {
 }
 
 /** Repairs one transcript file by keeping the active branch and backing up the original file. */
-export async function repairBrokenSessionTranscriptFile(params: {
+async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
   shouldRepair: boolean;
 }): Promise<TranscriptRepairResult> {
@@ -432,6 +450,7 @@ export function sessionTranscriptIssueToRepairEffect(
 
 /** Scans session transcript files and reports or repairs legacy/broken transcript state. */
 export async function noteSessionTranscriptHealth(params?: {
+  cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   sessionSqlite?: boolean;
   shouldRepair?: boolean;
@@ -483,6 +502,7 @@ export async function noteSessionTranscriptHealth(params?: {
 
   if (params?.sessionDirs === undefined || params.sessionSqlite === true) {
     await noteSessionSqliteMigrationHealth({
+      cfg: params?.cfg,
       env: params?.env ?? process.env,
       shouldRepair,
     });
@@ -490,17 +510,121 @@ export async function noteSessionTranscriptHealth(params?: {
 }
 
 async function noteSessionSqliteMigrationHealth(params: {
+  cfg?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
 }): Promise<void> {
   // Public doctor owns the operator-facing SQLite import; the targeted
   // --session-sqlite subcommand remains the diagnostic/proof surface.
   const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
-  const report = await runDoctorSessionSqlite({
-    allAgents: true,
-    env: params.env,
-    mode: params.shouldRepair ? "import" : "dry-run",
-  });
+  let reservedKeyReport: ReservedIncognitoKeyRepairReport = { found: 0, repaired: 0 };
+  let deliveryReport: SessionDeliveryStateRepairReport = {
+    found: 0,
+    repaired: 0,
+    scannedStores: 0,
+  };
+  let canonicalKeyReport: CanonicalSessionKeyRepairReport = {
+    archivedTranscriptDirectories: [],
+    foundGroups: 0,
+    repairBatches: 0,
+    removedRows: 0,
+    repairedGroups: 0,
+    scannedStores: 0,
+  };
+  let legacyMainSessionResult:
+    | Awaited<
+        ReturnType<
+          typeof import("../config/sessions/legacy-main-session-migration.js").migrateLegacyMainSessionKeys
+        >
+      >
+    | undefined;
+  const runSessionSqlite = async () => {
+    const report = await runDoctorSessionSqlite({
+      allAgents: true,
+      ...(params.cfg ? { cfg: params.cfg } : {}),
+      env: params.env,
+      mode: params.shouldRepair ? "import" : "dry-run",
+    });
+    const { migrateLegacyMainSessionKeys } =
+      await import("../config/sessions/legacy-main-session-migration.js");
+    legacyMainSessionResult = await migrateLegacyMainSessionKeys({
+      cfg: params.cfg ?? {},
+      env: params.env,
+      mode: params.shouldRepair ? "doctor-fix" : "detect",
+    });
+    canonicalKeyReport = await repairCanonicalSessionKeys({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
+    // Import may create the first durable SQLite row for a colliding legacy key.
+    reservedKeyReport = repairReservedIncognitoSessionKeys({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
+    deliveryReport = repairCanonicalSessionDeliveryStates({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
+    return report;
+  };
+  let report: Awaited<ReturnType<typeof runSessionSqlite>>;
+  try {
+    report = params.shouldRepair
+      ? await withDoctorSqliteMaintenanceLock({
+          env: params.env,
+          operation: "session SQLite import",
+          run: runSessionSqlite,
+        })
+      : await runSessionSqlite();
+  } catch (error) {
+    if (!(error instanceof DoctorSqliteMaintenanceLockUnavailableError)) {
+      throw error;
+    }
+    note(
+      `- Skipped: Gateway or another SQLite maintenance command owns the state directory. Stop the Gateway, then run "${formatCliCommand("openclaw doctor --fix", params.env)}" for session-store maintenance.`,
+      "Session SQLite",
+    );
+    return;
+  }
+  if (reservedKeyReport.found > 0) {
+    note(
+      params.shouldRepair
+        ? `- Renamed ${reservedKeyReport.repaired} durable session key(s) that collided with the reserved incognito namespace.`
+        : `- Found ${reservedKeyReport.found} durable session key(s) that collide with the reserved incognito namespace. Run "openclaw doctor --fix" to rename them.`,
+      "Session SQLite",
+    );
+  }
+  if (canonicalKeyReport.foundGroups > 0) {
+    note(
+      params.shouldRepair
+        ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s) in ${canonicalKeyReport.repairBatches} transaction batch(es), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
+        : `- Found ${canonicalKeyReport.foundGroups} non-canonical or duplicate session-key group(s). Run "openclaw doctor --fix" to preserve their history and canonicalize the rows.`,
+      "Session SQLite",
+    );
+  }
+  if (deliveryReport.found > 0) {
+    note(
+      params.shouldRepair
+        ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
+        : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
+      "Session SQLite",
+    );
+  }
+  if (
+    legacyMainSessionResult &&
+    (legacyMainSessionResult.changes.length > 0 || legacyMainSessionResult.warnings.length > 0)
+  ) {
+    note(
+      [
+        ...legacyMainSessionResult.changes.map((change) => `- ${change}`),
+        ...legacyMainSessionResult.warnings.map((warning) => `- ${warning}`),
+      ].join("\n"),
+      "Legacy main sessions",
+    );
+  }
   if (
     report.totals.legacyEntries === 0 &&
     report.totals.unreferencedJsonlFiles === 0 &&

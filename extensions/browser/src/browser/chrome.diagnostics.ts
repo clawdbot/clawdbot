@@ -6,8 +6,8 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
  * and formats status output for browser doctor/status flows.
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { CHROME_REACHABILITY_TIMEOUT_MS, CHROME_WS_READY_TIMEOUT_MS } from "./cdp-timeouts.js";
 import {
@@ -20,13 +20,14 @@ import {
   openCdpWebSocket,
   redactCdpUrl,
   scopeCdpPolicyToConfiguredEndpoint,
-  stripCdpUrlCredentials,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
+type ChromeCdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
+
 /** Machine-readable failure codes for Chrome CDP diagnostics. */
-export type ChromeCdpDiagnosticCode =
+type ChromeCdpDiagnosticCode =
   | "ssrf_blocked"
   | "http_unreachable"
   | "http_status_failed"
@@ -97,7 +98,7 @@ function failureDiagnostic(params: {
 }
 
 /** Read and validate Chrome's /json/version endpoint. */
-export async function readChromeVersion(
+async function readChromeVersion(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
@@ -127,7 +128,7 @@ export async function readChromeVersion(
   }
 }
 
-/** Preserve authenticated providers that expose only Playwright's trailing-slash route. */
+/** Preserve providers that expose only Playwright's trailing-slash route. */
 export async function readChromeVersionWithCredentialFallback(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
@@ -135,10 +136,7 @@ export async function readChromeVersionWithCredentialFallback(
 ): Promise<ChromeVersion> {
   try {
     const primaryVersion = await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
-    if (
-      normalizeOptionalString(primaryVersion.webSocketDebuggerUrl) ||
-      stripCdpUrlCredentials(cdpUrl) === cdpUrl
-    ) {
+    if (normalizeOptionalString(primaryVersion.webSocketDebuggerUrl)) {
       return primaryVersion;
     }
     try {
@@ -147,9 +145,6 @@ export async function readChromeVersionWithCredentialFallback(
       return primaryVersion;
     }
   } catch (primaryError) {
-    if (stripCdpUrlCredentials(cdpUrl) === cdpUrl) {
-      throw primaryError;
-    }
     try {
       return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy, "/json/version/");
     } catch {
@@ -191,10 +186,12 @@ function chromeVersionFromCdpResult(result: unknown): ChromeVersion | undefined 
 async function diagnoseCdpHealthCommand(
   wsUrl: string,
   timeoutMs = CHROME_WS_READY_TIMEOUT_MS,
+  lookup?: ChromeCdpEndpointPin["lookup"],
 ): Promise<CdpHealthDiagnostic> {
   return await new Promise<CdpHealthDiagnostic>((resolve) => {
     const ws = openCdpWebSocket(wsUrl, {
       handshakeTimeoutMs: timeoutMs,
+      lookup,
     });
     let settled = false;
     let opened = false;
@@ -229,20 +226,12 @@ async function diagnoseCdpHealthCommand(
       settled = true;
       clearTimeout(timer);
       ws.off("message", onMessage);
-      try {
-        ws.close();
-      } catch {
-        // ignore
-      }
+      ws.close();
       resolve(value);
     };
     const timer = setTimeout(
       () => {
-        try {
-          ws.terminate();
-        } catch {
-          // ignore
-        }
+        ws.terminate();
         finish({
           ok: false,
           code: opened ? "websocket_health_command_timeout" : "websocket_handshake_failed",
@@ -351,9 +340,14 @@ async function diagnoseCdpWebSocketEndpoint(params: {
   wsUrl: string;
   startedAt: number;
   handshakeTimeoutMs: number;
+  lookup?: ChromeCdpEndpointPin["lookup"];
   version?: ChromeVersion;
 }): Promise<ChromeCdpDiagnostic> {
-  const health = await diagnoseCdpHealthCommand(params.wsUrl, params.handshakeTimeoutMs);
+  const health = await diagnoseCdpHealthCommand(
+    params.wsUrl,
+    params.handshakeTimeoutMs,
+    params.lookup,
+  );
   if (!health.ok) {
     return failureDiagnostic({
       cdpUrl: params.cdpUrl,
@@ -381,8 +375,9 @@ export async function diagnoseChromeCdp(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<ChromeCdpDiagnostic> {
   const startedAt = Date.now();
+  let configuredPin: ChromeCdpEndpointPin | undefined;
   try {
-    await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
+    configuredPin = await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
   } catch (err) {
     return failureDiagnostic({
       cdpUrl,
@@ -399,6 +394,7 @@ export async function diagnoseChromeCdp(
       wsUrl: cdpUrl,
       startedAt,
       handshakeTimeoutMs,
+      lookup: configuredPin?.lookup,
     });
   }
 
@@ -419,6 +415,7 @@ export async function diagnoseChromeCdp(
         wsUrl: cdpUrl,
         startedAt,
         handshakeTimeoutMs,
+        lookup: configuredPin?.lookup,
       });
     }
     const classified = classifyChromeVersionError(err);
@@ -438,6 +435,7 @@ export async function diagnoseChromeCdp(
         wsUrl: cdpUrl,
         startedAt,
         handshakeTimeoutMs,
+        lookup: configuredPin?.lookup,
         version,
       });
     }
@@ -449,8 +447,9 @@ export async function diagnoseChromeCdp(
     });
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, discoveryUrl);
+  let discoveredPin: ChromeCdpEndpointPin | undefined;
   try {
-    await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
+    discoveredPin = await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
       source: "discovered",
       configuredUrl: cdpUrl,
     });
@@ -464,10 +463,14 @@ export async function diagnoseChromeCdp(
     });
   }
 
-  const health = await diagnoseCdpHealthCommand(wsUrl, handshakeTimeoutMs);
+  const health = await diagnoseCdpHealthCommand(wsUrl, handshakeTimeoutMs, discoveredPin?.lookup);
   if (!health.ok) {
     if (isWebSocketUrl(cdpUrl) && wsUrl !== cdpUrl) {
-      const directHealth = await diagnoseCdpHealthCommand(cdpUrl, handshakeTimeoutMs);
+      const directHealth = await diagnoseCdpHealthCommand(
+        cdpUrl,
+        handshakeTimeoutMs,
+        configuredPin?.lookup,
+      );
       if (directHealth.ok) {
         return {
           ok: true,

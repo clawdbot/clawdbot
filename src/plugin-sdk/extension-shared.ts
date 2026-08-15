@@ -5,9 +5,9 @@ import type { z } from "zod";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveActiveManagedProxyTlsOptions } from "../infra/net/proxy/managed-proxy-undici.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import { createDeferred as createSharedDeferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
-import { createLoggerBackedRuntime } from "./runtime-logger.js";
+import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 
@@ -151,7 +151,7 @@ export function coerceStatusIssueAccountId(value: unknown): string | undefined {
 
 /** Creates a promise with externally controlled resolve/reject hooks for async handoff code. */
 export function createDeferred<T>() {
-  return createSharedDeferred<T>();
+  return createDeferredCore<T>();
 }
 
 const DEFAULT_PACKAGE_JSON_VERSION_CANDIDATES = [

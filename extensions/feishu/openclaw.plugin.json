@@ -1,5 +1,8 @@
 {
   "id": "feishu",
+  "doctorContract": {
+    "configRepair": true
+  },
   "name": "Feishu/Lark",
   "description": "OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).",
   "activation": {
@@ -110,14 +113,6 @@
       ]
     }
   },
-  "channelEnvVars": {
-    "feishu": [
-      "FEISHU_APP_ID",
-      "FEISHU_APP_SECRET",
-      "FEISHU_VERIFICATION_TOKEN",
-      "FEISHU_ENCRYPT_KEY"
-    ]
-  },
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
@@ -129,7 +124,7 @@
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["env", "file", "exec"]
+            "enum": ["env", "file", "exec", "store"]
           },
           "provider": { "type": "string" },
           "id": { "type": "string" }
@@ -138,6 +133,37 @@
       },
       "secretInput": {
         "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
+      },
+      "streaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["off", "partial"],
+            "description": "\"partial\" (default) enables streaming-card replies; \"off\" sends one final message."
+          },
+          "chunkMode": {
+            "type": "string",
+            "enum": ["length", "newline"]
+          },
+          "block": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "coalesce": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "minChars": { "type": "integer", "minimum": 1 },
+                  "maxChars": { "type": "integer", "minimum": 1 },
+                  "idleMs": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        }
       },
       "account": {
         "type": "object",
@@ -169,12 +195,13 @@
             "type": "string",
             "enum": ["auto", "raw", "card"]
           },
-          "streaming": { "type": "boolean" },
-          "blockStreaming": { "type": "boolean" },
+          "streaming": { "$ref": "#/$defs/streaming" },
           "replyInThread": {
             "type": "string",
             "enum": ["disabled", "enabled"]
           },
+          "allowBots": { "type": "boolean" },
+          "vcAutoJoin": { "type": "boolean" },
           "typingIndicator": { "type": "boolean" }
         }
       }
@@ -206,12 +233,13 @@
         "type": "string",
         "enum": ["auto", "raw", "card"]
       },
-      "streaming": { "type": "boolean" },
-      "blockStreaming": { "type": "boolean" },
+      "streaming": { "$ref": "#/$defs/streaming" },
       "replyInThread": {
         "type": "string",
         "enum": ["disabled", "enabled"]
       },
+      "allowBots": { "type": "boolean" },
+      "vcAutoJoin": { "type": "boolean" },
       "typingIndicator": { "type": "boolean" },
       "accounts": {
         "type": "object",

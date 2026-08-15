@@ -3,20 +3,18 @@ import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
-import {
+import { pwAi } from "./pw-ai.js";
+
+const {
   closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection,
   focusPageByTargetIdViaPlaywright,
   getPageForTargetId,
   listPagesViaPlaywright,
-  rememberRoleRefsForTarget,
-  restoreRoleRefsForTarget,
-  ensurePageState,
-  setCdpConnectRetryDelayMsForTests,
-} from "./pw-session.js";
+} = pwAi;
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
-const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
 
 type MockPageSpec = {
   targetId?: string;
@@ -109,14 +107,13 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
 function installBrowser(pages: MockPageSpec[]): BrowserMockBundle {
   const bundle = makeBrowser(pages);
   connectOverCdpSpy.mockResolvedValue(bundle.browser);
-  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+  getChromeWebSocketEndpointSpy.mockResolvedValue(null);
   return bundle;
 }
 
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
-  getChromeWebSocketUrlSpy.mockReset();
-  setCdpConnectRetryDelayMsForTests();
+  getChromeWebSocketEndpointSpy.mockReset();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
@@ -182,58 +179,6 @@ describe("pw-session getPageForTargetId", () => {
     expect(resolved).toBe(pages[1]);
   });
 
-  it("binds a resolved replacement page to target-cache invalidation", async () => {
-    const cdpUrl = "http://127.0.0.1:18792";
-    const targetId = "TARGET_REPLACED";
-    rememberRoleRefsForTarget({
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "button", name: "Old document" } },
-    });
-    const { pages, pageHandlers } = installBrowser([{ targetId }]);
-    const page = await getPageForTargetId({ cdpUrl, targetId });
-    const navigationHandler = pageHandlers[0]?.get("framenavigated")?.[0];
-    navigationHandler?.(page.mainFrame());
-    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
-
-    expect(navigationHandler).toBeTypeOf("function");
-    expect(ensurePageState(page).roleRefs).toBeUndefined();
-    expect(page).toBe(pages[0]);
-  });
-
-  it("invalidates target refs when navigation races target lookup", async () => {
-    const cdpUrl = "http://127.0.0.1:18792";
-    const targetId = "TARGET_RACE";
-    rememberRoleRefsForTarget({
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "button", name: "Old document" } },
-    });
-    installBrowser([{ targetId, navigateDuringTargetLookup: true }]);
-
-    const page = await getPageForTargetId({ cdpUrl, targetId });
-    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
-
-    expect(ensurePageState(page).roleRefs).toBeUndefined();
-  });
-
-  it("invalidates page-wide aria refs when subframe navigation races target lookup", async () => {
-    const cdpUrl = "http://127.0.0.1:18792";
-    const targetId = "TARGET_ARIA_RACE";
-    rememberRoleRefsForTarget({
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "button", name: "Old embedded document" } },
-      mode: "aria",
-    });
-    installBrowser([{ targetId, subframeNavigationDuringTargetLookup: true }]);
-
-    const page = await getPageForTargetId({ cdpUrl, targetId });
-    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
-
-    expect(ensurePageState(page).roleRefs).toBeUndefined();
-  });
-
   it("focuses and closes only the exact target when URLs are identical", async () => {
     const { pageActions } = installBrowser([
       { targetId: "TARGET_A", url: "https://same.example" },
@@ -282,7 +227,7 @@ describe("pw-session getPageForTargetId", () => {
     const fresh = makeBrowser([{ targetId: "TARGET_OK", url: "https://fresh.example" }]);
 
     connectOverCdpSpy.mockResolvedValueOnce(stale.browser).mockResolvedValueOnce(fresh.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    getChromeWebSocketEndpointSpy.mockResolvedValue(null);
 
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
 
@@ -304,7 +249,7 @@ describe("pw-session getPageForTargetId", () => {
     ]);
 
     connectOverCdpSpy.mockResolvedValueOnce(stale.browser).mockResolvedValueOnce(fresh.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    getChromeWebSocketEndpointSpy.mockResolvedValue(null);
 
     await getPageForTargetId({ cdpUrl: "http://127.0.0.1:9333" });
 
@@ -325,7 +270,7 @@ describe("pw-session getPageForTargetId", () => {
     connectOverCdpSpy
       .mockResolvedValueOnce(stale.browser)
       .mockResolvedValueOnce(stillBroken.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    getChromeWebSocketEndpointSpy.mockResolvedValue(null);
 
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9444" });
 
@@ -337,9 +282,8 @@ describe("pw-session getPageForTargetId", () => {
   });
 
   it("does not add an extra top-level retry for non-recoverable connect failures", async () => {
-    setCdpConnectRetryDelayMsForTests(0);
     connectOverCdpSpy.mockRejectedValue(new Error("connectOverCDP exploded"));
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    getChromeWebSocketEndpointSpy.mockResolvedValue(null);
 
     await expect(getPageForTargetId({ cdpUrl: "http://127.0.0.1:9555" })).rejects.toThrow(
       "connectOverCDP exploded",

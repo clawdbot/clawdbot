@@ -1,14 +1,14 @@
 {
   "id": "deepinfra",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["deepinfra"],
   "providerCatalogEntry": "./provider-discovery.ts",
-  "providerAuthEnvVars": {
-    "deepinfra": ["DEEPINFRA_API_KEY"]
-  },
   "providerEndpoints": [
     {
       "endpointClass": "deepinfra-native",
@@ -45,9 +45,131 @@
             "contextWindow": 1048576,
             "maxTokens": 1048576,
             "cost": {
-              "input": 0.1,
-              "output": 0.2,
-              "cacheRead": 0.02,
+              "input": 0.09,
+              "output": 0.18,
+              "cacheRead": 0.018,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "deepseek-ai/DeepSeek-V4-Pro",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "cost": {
+              "input": 1.3,
+              "output": 2.6,
+              "cacheRead": 0.1,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "zai-org/GLM-5.2",
+            "name": "GLM-5.2",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "cost": {
+              "input": 0.93,
+              "output": 3,
+              "cacheRead": 0.18,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "stepfun-ai/Step-3.7-Flash",
+            "name": "Step 3.7 Flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.2,
+              "output": 1.15,
+              "cacheRead": 0.04,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "moonshotai/Kimi-K2.7-Code",
+            "name": "Kimi K2.7 Code",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.74,
+              "output": 3.5,
+              "cacheRead": 0.15,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "moonshotai/Kimi-K2.6",
+            "name": "Kimi K2.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.75,
+              "output": 3.5,
+              "cacheRead": 0.15,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B",
+            "name": "NVIDIA Nemotron 3 Ultra 550B A55B",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.5,
+              "output": 2.2,
+              "cacheRead": 0.1,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
+            "name": "NVIDIA Nemotron 3 Super 120B A12B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.085,
+              "output": 0.4,
+              "cacheRead": 0,
               "cacheWrite": 0
             },
             "compat": {
@@ -57,6 +179,8 @@
           {
             "id": "deepseek-ai/DeepSeek-V3.2",
             "name": "DeepSeek V3.2",
+            "status": "deprecated",
+            "replacedBy": "deepseek-ai/DeepSeek-V4-Pro",
             "reasoning": false,
             "input": ["text"],
             "contextWindow": 163840,
@@ -74,6 +198,8 @@
           {
             "id": "zai-org/GLM-5.1",
             "name": "GLM-5.1",
+            "status": "deprecated",
+            "replacedBy": "zai-org/GLM-5.2",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 202752,
@@ -85,13 +211,16 @@
               "cacheWrite": 0
             },
             "compat": {
-              "supportsUsageInStreaming": true
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
             }
           },
           {
             "id": "stepfun-ai/Step-3.5-Flash",
             "name": "Step 3.5 Flash",
-            "reasoning": false,
+            "status": "deprecated",
+            "replacedBy": "stepfun-ai/Step-3.7-Flash",
+            "reasoning": true,
             "input": ["text"],
             "contextWindow": 262144,
             "maxTokens": 262144,
@@ -106,25 +235,10 @@
             }
           },
           {
-            "id": "MiniMaxAI/MiniMax-M2.5",
-            "name": "MiniMax M2.5",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 196608,
-            "maxTokens": 196608,
-            "cost": {
-              "input": 0.15,
-              "output": 1.15,
-              "cacheRead": 0.03,
-              "cacheWrite": 0
-            },
-            "compat": {
-              "supportsUsageInStreaming": true
-            }
-          },
-          {
             "id": "moonshotai/Kimi-K2.5",
             "name": "Kimi K2.5",
+            "status": "deprecated",
+            "replacedBy": "moonshotai/Kimi-K2.6",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 262144,
@@ -133,40 +247,6 @@
               "input": 0.45,
               "output": 2.25,
               "cacheRead": 0.070000002,
-              "cacheWrite": 0
-            },
-            "compat": {
-              "supportsUsageInStreaming": true
-            }
-          },
-          {
-            "id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
-            "name": "NVIDIA Nemotron 3 Super 120B A12B",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 262144,
-            "maxTokens": 262144,
-            "cost": {
-              "input": 0.1,
-              "output": 0.5,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "compat": {
-              "supportsUsageInStreaming": true
-            }
-          },
-          {
-            "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-            "name": "Llama 3.3 70B Instruct Turbo",
-            "reasoning": false,
-            "input": ["text"],
-            "contextWindow": 131072,
-            "maxTokens": 131072,
-            "cost": {
-              "input": 0.1,
-              "output": 0.32,
-              "cacheRead": 0,
               "cacheWrite": 0
             },
             "compat": {
@@ -199,7 +279,7 @@
   ],
   "contracts": {
     "mediaUnderstandingProviders": ["deepinfra"],
-    "memoryEmbeddingProviders": ["deepinfra"],
+    "embeddingProviders": ["deepinfra"],
     "imageGenerationProviders": ["deepinfra"],
     "speechProviders": ["deepinfra"],
     "videoGenerationProviders": ["deepinfra"]

@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 /** Audio output formats currently understood by music generation providers. */
 export type MusicGenerationOutputFormat = "mp3" | "wav";
 
-/** In-memory audio asset returned from a music generation provider. */
+/** Non-empty in-memory audio asset returned from a music generation provider. */
 export type GeneratedMusicAsset = {
   buffer: Buffer;
   mimeType: string;

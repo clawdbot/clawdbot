@@ -8,11 +8,14 @@ import {
   type MessagePayloadObject,
   type TopLevelComponents,
 } from "./internal/discord.js";
+import { stripUndefinedFields } from "./internal/undefined-fields.js";
 
-export const SUPPRESS_EMBEDS_FLAG = MessageFlags.SuppressEmbeds;
+export { stripUndefinedFields };
+
+const SUPPRESS_EMBEDS_FLAG = MessageFlags.SuppressEmbeds;
 export const SUPPRESS_NOTIFICATIONS_FLAG = MessageFlags.SuppressNotifications;
 
-export type DiscordSendComponentFactory = (text: string) => TopLevelComponents[];
+type DiscordSendComponentFactory = (text: string) => TopLevelComponents[];
 export type DiscordSendComponents = TopLevelComponents[] | DiscordSendComponentFactory;
 export type DiscordSendEmbeds = Array<APIEmbed | Embed>;
 export type DiscordAllowedMentions = APIAllowedMentions;
@@ -51,7 +54,7 @@ export function resolveDiscordSendEmbeds(params: {
   return normalizeDiscordEmbeds(params.embeds);
 }
 
-export function buildDiscordMessagePayload(params: {
+function buildDiscordMessagePayload(params: {
   text: string;
   components?: TopLevelComponents[];
   embeds?: Embed[];
@@ -97,6 +100,13 @@ export function resolveDiscordMessageFlags(params: {
   return flags || undefined;
 }
 
+export function resolveDiscordSuppressEmbeds(params: {
+  configured?: boolean;
+  override?: boolean;
+}): boolean {
+  return params.override ?? params.configured ?? true;
+}
+
 type DiscordMessageRequestParams = {
   text: string;
   components?: TopLevelComponents[];
@@ -121,10 +131,6 @@ export function buildDiscordMessageRequest(params: DiscordMessageRequestParams) 
     nonce,
     enforce_nonce: nonce ? true : undefined,
   });
-}
-
-export function stripUndefinedFields<T extends object>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
 function hasV2Components(components?: TopLevelComponents[]): boolean {

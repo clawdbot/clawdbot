@@ -3,7 +3,7 @@ const validTimeZoneCache = new Map<string, boolean>();
 const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
 let hostTimeZone: string | undefined;
 
-export function isValidTimeZone(tz: string): boolean {
+function isValidTimeZone(tz: string): boolean {
   const cached = validTimeZoneCache.get(tz);
   if (cached !== undefined) {
     return cached;
@@ -84,12 +84,4 @@ export function formatTimestamp(date: Date, options?: FormatTimestampOptions): s
       return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${parts.offset}`;
   }
   throw new Error("Unsupported timestamp style");
-}
-
-/**
- * @deprecated Use formatTimestamp from "./timestamps.js" instead.
- * This function will be removed in a future version.
- */
-export function formatLocalIsoWithOffset(now: Date, timeZone?: string): string {
-  return formatTimestamp(now, { style: "long", timeZone });
 }

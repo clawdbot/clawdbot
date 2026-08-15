@@ -38,7 +38,7 @@ on:
         default: false
         type: boolean
       run_windows_ci:
-        description: "Run the focused Windows-native CI test shard after probing"
+        description: "Run the focused Windows CI shard and native Scheduled Task proof"
         required: false
         default: false
         type: boolean
@@ -59,7 +59,7 @@ jobs:
         shell: pwsh
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.target_ref || github.ref }}
           persist-credentials: false
@@ -155,7 +155,12 @@ jobs:
               $rootfs = "C:\wsl\ubuntu-noble-wsl.rootfs.tar.gz"
               $rootfsUrl = Resolve-UbuntuWslRootfsUrl
               New-Item -ItemType Directory -Force -Path @((Split-Path -Parent $rootfs), $wslRoot) | Out-Null
-              Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfs -UseBasicParsing
+              Invoke-WebRequest `
+                -Uri $rootfsUrl `
+                -OutFile $rootfs `
+                -UseBasicParsing `
+                -ConnectionTimeoutSeconds 15 `
+                -OperationTimeoutSeconds 120
               $import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")
               Write-Host $import.Text
               Write-Host "wsl_import_exit=$($import.Code)"
@@ -275,6 +280,166 @@ jobs:
           set -euo pipefail
           export PATH="$NODE_BIN:$PATH"
           pnpm test:windows:ci
+
+      - name: Preflight native Scheduled Task session
+        if: ${{ inputs.run_windows_ci }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          $sessionId = (Get-Process -Id $PID).SessionId
+          Write-Host "identity=$($identity.Name)"
+          Write-Host "session_id=$sessionId"
+          Write-Host "user_interactive=$([Environment]::UserInteractive)"
+          Write-Host "administrator=$isAdmin"
+          query user 2>&1 | Write-Host
+          if (-not [Environment]::UserInteractive) {
+            throw "Native Scheduled Task proof requires an interactive Windows runner session."
+          }
+          exit 0
+
+      - name: Run native Scheduled Task lifecycle proof
+        id: native_schtasks
+        if: ${{ inputs.run_windows_ci }}
+        timeout-minutes: 5
+        shell: bash
+        env:
+          CI_WINDOWS_SCHTASKS_PROOF_PATH: ${{ github.workspace }}\.artifacts\windows-schtasks\proof.json
+          CI_WINDOWS_SCHTASKS_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}
+          CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          if [[ ! "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Native Scheduled Task proof requires target_ref to be an exact 40-character commit SHA." >&2
+            exit 1
+          fi
+          CI_WINDOWS_SCHTASKS_HEAD="$(git rev-parse HEAD)"
+          if [[ "$CI_WINDOWS_SCHTASKS_HEAD" != "$EXPECTED_HEAD" ]]; then
+            echo "Checked out $CI_WINDOWS_SCHTASKS_HEAD, expected frozen target $EXPECTED_HEAD." >&2
+            exit 1
+          fi
+          export CI_WINDOWS_SCHTASKS_HEAD
+          mkdir -p .artifacts/windows-schtasks
+          pnpm test:windows:schtasks:integration
+
+      - name: Clean native Scheduled Task residue
+        id: native_cleanup
+        if: ${{ always() && inputs.run_windows_ci }}
+        shell: pwsh
+        env:
+          TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          TEST_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          $cleanupErrors = @()
+          $profile = "schtasks-int-$env:TEST_ID"
+          $taskName = "OpenClaw Gateway ($profile)"
+          $stateDir = Join-Path $env:USERPROFILE ".openclaw-$profile"
+          New-Item -ItemType Directory -Force -Path $env:TEST_ROOT | Out-Null
+          schtasks.exe /End /TN $taskName 2>$null
+          Start-Sleep -Milliseconds 200
+          $activePidPath = Join-Path $env:TEST_ROOT "active-pid.txt"
+          if (Test-Path -LiteralPath $activePidPath) {
+            try {
+              $probePid = 0
+              $activePid = (Get-Content -LiteralPath $activePidPath -Raw).Trim()
+              if (-not [int]::TryParse($activePid, [ref]$probePid) -or $probePid -le 1) {
+                throw "Invalid Scheduled Task active process id: $activePid"
+              }
+              $processQueryError = @()
+              $process = Get-CimInstance Win32_Process -Filter "ProcessId = $probePid" -ErrorAction SilentlyContinue -ErrorVariable processQueryError
+              if ($processQueryError.Count -gt 0) {
+                throw "Could not inspect Scheduled Task probe process $probePid."
+              }
+              if ($process) {
+                $probePath = Join-Path $env:TEST_ROOT "probe.cjs"
+                $eventsPath = Join-Path $env:TEST_ROOT "runs.txt"
+                if (
+                  $process.CommandLine -like "*$probePath*" -and
+                  $process.CommandLine -like "*$eventsPath*"
+                ) {
+                  taskkill.exe /F /T /PID $probePid 2>$null
+                  $deadline = [DateTime]::UtcNow.AddSeconds(30)
+                  do {
+                    Start-Sleep -Milliseconds 200
+                    $processQueryError = @()
+                    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $probePid" -ErrorAction SilentlyContinue -ErrorVariable processQueryError
+                    if ($processQueryError.Count -gt 0) {
+                      throw "Could not verify Scheduled Task probe process $probePid exited."
+                    }
+                  } while ($process -and [DateTime]::UtcNow -lt $deadline)
+                  if ($process) {
+                    throw "Scheduled Task probe process $probePid survived cleanup."
+                  }
+                } else {
+                  throw "Refusing to kill reused or unverifiable process id $probePid."
+                }
+              }
+            } catch {
+              $cleanupErrors += $_.Exception.Message
+            }
+          }
+          schtasks.exe /Delete /F /TN $taskName 2>$null
+          $deleteExit = $LASTEXITCODE
+          try {
+            $service = New-Object -ComObject "Schedule.Service"
+            $service.Connect()
+            $null = $service.GetFolder("\").GetTask($taskName)
+            $taskExists = $true
+          } catch {
+            $exception = $_.Exception
+            while ($null -ne $exception.InnerException) {
+              $exception = $exception.InnerException
+            }
+            if ($exception.HResult -eq -2147024894 -or $exception.HResult -eq -2147024893) {
+              $taskExists = $false
+            } else {
+              $cleanupErrors += "Could not verify Scheduled Task cleanup for $taskName (HRESULT $($exception.HResult))."
+              $taskExists = $null
+            }
+          }
+          if ($taskExists -eq $true) {
+            $cleanupErrors += "Scheduled Task cleanup left $taskName registered (delete exit $deleteExit)."
+          }
+          @(
+            "task_name=$taskName"
+            "delete_exit=$deleteExit"
+            "task_exists=$taskExists"
+            "proof_outcome=${{ steps.native_schtasks.outcome }}"
+            "cleanup_errors=$($cleanupErrors -join ' ')"
+          ) | Set-Content -LiteralPath (Join-Path $env:TEST_ROOT "cleanup-summary.txt")
+          if ($cleanupErrors.Count -gt 0) {
+            throw ($cleanupErrors -join " ")
+          }
+          exit 0
+
+      - name: Upload native Scheduled Task proof
+        id: native_proof_upload
+        if: ${{ always() && inputs.run_windows_ci }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-schtasks-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/windows-schtasks/proof.json
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\failure-diagnostics.json
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\cleanup-summary.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Remove retained native Scheduled Task evidence
+        if: ${{ always() && inputs.run_windows_ci && steps.native_cleanup.outcome == 'success' && steps.native_proof_upload.outcome == 'success' }}
+        shell: pwsh
+        env:
+          TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          TEST_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          $profile = "schtasks-int-$env:TEST_ID"
+          Remove-Item -LiteralPath (Join-Path $env:USERPROFILE ".openclaw-$profile") -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $env:TEST_ROOT -Recurse -Force -ErrorAction SilentlyContinue
 
       - name: Keep runner alive for SSH inspection
         if: ${{ always() && !cancelled() }}

@@ -1,13 +1,14 @@
 // Copilot plugin module implements workspace bootstrap behavior.
 import path from "node:path";
 import type {
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   EmbeddedContextFile,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveBootstrapContextForRun,
   resolveUserPath,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Filenames the Copilot SDK already loads natively from the working
 // directory / instructionDirectories (per
@@ -42,7 +43,7 @@ type CopilotWorkspaceBootstrapResult = {
 
 /**
  * Loads OpenClaw workspace bootstrap files (IDENTITY.md, SOUL.md,
- * HEARTBEAT.md, USER.md, TOOLS.md, BOOTSTRAP.md, MEMORY.md, ...) using
+ * HEARTBEAT.md, USER.md, BOOTSTRAP.md, MEMORY.md, ...) using
  * the shared core helper PI and codex both use, then renders them as a
  * single string suitable for `SessionConfig.systemMessage.content` on
  * the Copilot SDK.
@@ -61,7 +62,7 @@ type CopilotWorkspaceBootstrapResult = {
  * surfaces.
  */
 export async function resolveCopilotWorkspaceBootstrapContext(params: {
-  attempt: AgentHarnessAttemptParams;
+  attempt: AgentHarnessAttemptParamsV2;
   /**
    * Sandbox-aware working directory the SDK session will run in.
    * When this differs from the canonical `attempt.workspaceDir`
@@ -87,9 +88,10 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
     const bootstrapContext = await resolveBootstrapContextForRun({
       workspaceDir,
       config: attempt.config,
-      sessionKey: readNonEmptyString((attempt as { sessionKey?: unknown }).sessionKey),
-      sessionId: readNonEmptyString(attempt.sessionId),
-      agentId: readNonEmptyString(attempt.agentId),
+      sessionKey: readNonBlankString((attempt as { sessionKey?: unknown }).sessionKey),
+      sessionId: readNonBlankString(attempt.sessionId),
+      chatType: attempt.chatType,
+      agentId: readNonBlankString(attempt.agentId),
       warn: params.warn,
       contextMode: attempt.bootstrapContextMode,
       runKind: attempt.bootstrapContextRunKind,
@@ -130,11 +132,11 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
  * (`src/agents/pi-embedded-runner/run/attempt.ts:603`). Files whose
  * resolved relative path escapes the source workspace (parent
  * traversal or absolute) are left untouched so we never pretend a
- * file lives inside the sandbox when it does not. Exported for unit
- * tests; intentionally local to the Copilot extension (codex keeps
- * similar helpers extension-local rather than importing from PI).
+ * file lives inside the sandbox when it does not. Intentionally local
+ * to the Copilot extension (codex keeps similar helpers extension-local
+ * rather than importing from PI).
  */
-export function remapCopilotBootstrapContextFiles(params: {
+function remapCopilotBootstrapContextFiles(params: {
   files: EmbeddedContextFile[];
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
@@ -176,7 +178,7 @@ function isRelativePathInsideOrEqual(relativePath: string): boolean {
  * natively (see {@link COPILOT_NATIVE_PROJECT_DOC_BASENAMES}) are
  * dropped to avoid duplication with SDK-managed sections.
  */
-export function renderCopilotWorkspaceBootstrapInstructions(
+function renderCopilotWorkspaceBootstrapInstructions(
   contextFiles: EmbeddedContextFile[],
 ): string | undefined {
   const files = contextFiles
@@ -233,12 +235,8 @@ function getCopilotContextFileBasename(filePath: string): string {
   return normalizeCopilotContextFilePath(filePath).split("/").pop() ?? "";
 }
 
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
 function readResolvedWorkspacePath(value: unknown): string | undefined {
-  const raw = readNonEmptyString(value);
+  const raw = readNonBlankString(value);
   if (!raw) {
     return undefined;
   }
@@ -247,10 +245,3 @@ function readResolvedWorkspacePath(value: unknown): string | undefined {
   }
   return resolveUserPath(raw);
 }
-
-export const TESTING_EXPORTS = {
-  COPILOT_NATIVE_PROJECT_DOC_BASENAMES,
-  COPILOT_BOOTSTRAP_CONTEXT_ORDER,
-  compareCopilotContextFiles,
-  getCopilotContextFileBasename,
-};

@@ -3,13 +3,15 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { PluginLruCache } from "../plugins/plugin-cache-primitives.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   getCachedPluginSourceModuleLoader,
   type PluginModuleLoaderCache,
 } from "../plugins/plugin-module-loader-cache.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
-  loadBundledPluginPublicSurfaceModuleSync as loadBundledPluginPublicSurfaceModuleSyncLight,
+  loadBundledPluginPublicSurfaceModuleSyncCore as loadBundledPluginPublicSurfaceModuleSyncLight,
   loadFacadeModuleAtLocationSync as loadFacadeModuleAtLocationSyncShared,
   resetFacadeLoaderStateForTest,
   type FacadeModuleLocation,
@@ -25,20 +27,6 @@ export {
   listImportedBundledPluginFacadeIds,
 } from "./facade-loader.js";
 
-/** Create a lazy value/function proxy for one property of a facade module. */
-export function createLazyFacadeValue<TFacade extends object, K extends keyof TFacade>(
-  loadFacadeModule: () => TFacade,
-  key: K,
-): TFacade[K] {
-  return ((...args: unknown[]) => {
-    const value = loadFacadeModule()[key];
-    if (typeof value !== "function") {
-      return value;
-    }
-    return (value as (...innerArgs: unknown[]) => unknown)(...args);
-  }) as TFacade[K];
-}
-
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
     modulePath: fileURLToPath(import.meta.url),
@@ -46,6 +34,11 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
+const facadeModuleLocationCache = new PluginLruCache<FacadeModuleLocation>(128);
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  facadeModuleLocationCache.clear();
+});
 
 function createFacadeResolutionKey(params: {
   dirName: string;
@@ -97,7 +90,21 @@ function resolveFacadeModuleLocation(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  return resolveFacadeModuleLocationUncached(params);
+  // Custom environments may select different installed-plugin profiles, so
+  // their facade locations must not enter the process-wide gateway cache.
+  if (params.env !== undefined && params.env !== process.env) {
+    return resolveFacadeModuleLocationUncached(params);
+  }
+  const resolutionKey = createFacadeResolutionKey(params);
+  const cached = facadeModuleLocationCache.get(resolutionKey);
+  if (cached) {
+    return cached;
+  }
+  const location = resolveFacadeModuleLocationUncached(params);
+  if (location) {
+    facadeModuleLocationCache.set(resolutionKey, location);
+  }
+  return location;
 }
 
 type BundledPluginPublicSurfaceParams = {
@@ -282,6 +289,7 @@ export async function tryLoadActivatedBundledPluginPublicSurfaceModule<T extends
 /** Reset facade runtime caches and activation-check test overrides. */
 export function resetFacadeRuntimeStateForTest(): void {
   resetFacadeLoaderStateForTest();
+  facadeModuleLocationCache.clear();
   facadeActivationCheckRuntimeModule = undefined;
   facadeActivationCheckRuntimeLoaders.clear();
 }

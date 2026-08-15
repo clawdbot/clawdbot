@@ -1,14 +1,16 @@
 ---
 name: openclaw-changelog-update
-description: Regenerate OpenClaw release changelog sections from git history before beta or stable releases.
+description: Regenerate OpenClaw release changelog sections from git history before beta, stable, or extended-stable releases.
 ---
 
 # OpenClaw Changelog Update
 
-Use this for release changelog rewrites and GitHub release-note source text.
-This is mandatory before every beta, beta rerun, stable release, or stable
-rerun. Use it with `release-openclaw-maintainer`; this skill owns changelog
-content, ordering, grouping, and attribution discipline.
+Use this for changelog rewrites and GitHub release-note source text. For regular
+beta/stable, run it after the Code SHA passes Full Release Validation. For
+extended-stable, run it before final exact-head validation and tagging. Do not
+rerun it for tooling retries, resumed publication, or promotion.
+Use it with `release-openclaw-maintainer`; this skill owns changelog content,
+ordering, grouping, and attribution discipline.
 
 ## Goal
 
@@ -25,7 +27,8 @@ every human `Thanks @...` attribution.
   the target; a newer but divergent tag is not a valid history boundary. Use
   an explicit shipped/main-closeout SHA only when it is also reachable from the
   target.
-- Target ref: exact branch/SHA being released.
+- Target ref: the exact green Code SHA. The changelog commit created from this
+  input becomes the Release SHA.
 - Canonical main ref: current `origin/main`, fetched before verification. Release
   notes cite the original merged main PR when the same work is carried by a
   backport. A release-branch PR is used only while no forward-port exists on
@@ -33,10 +36,12 @@ every human `Thanks @...` attribution.
 
 ## Workflow
 
-1. Start on `main` before branching when possible:
+1. Confirm the release branch is at the fully validated Code SHA:
    - `git fetch --tags origin`
-   - `git pull --ff-only`
    - confirm clean `git status -sb`
+   - record `git rev-parse HEAD` as the Code SHA
+   - record the successful Full Release Validation run id and attempt
+   - stop if any product/version/backport change is still pending
 2. Audit history, including direct commits:
    - `git log --first-parent --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
    - `git log --first-parent --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
@@ -45,7 +50,7 @@ every human `Thanks @...` attribution.
    writing grouped prose:
 
    ```bash
-   node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+   node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
      --base <base-tag> \
      --target <target-ref> \
      --main-ref origin/main \
@@ -53,6 +58,10 @@ every human `Thanks @...` attribution.
      --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
      --write-ledger
    ```
+
+   Add repeatable `--release-provenance '<40sha> -> #PR[, #PR]'` inputs when
+   release commits cannot carry provenance metadata. These use the same exact
+   marker grammar and current-main validation as commit-body markers.
 
    The verifier automatically reuses public GitHub GraphQL responses from an
    exact base/target SHA snapshot under the worktree's git metadata. Iterative
@@ -64,11 +73,17 @@ every human `Thanks @...` attribution.
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility
      classification for PRs and direct commits
+   - schema version 3 is the required ephemeral manifest contract. Regenerate
+     older manifests; version 2 is not a supported downstream-reader boundary
    - for a historical backfill, add `--seed-ref <pre-backfill-ref>` once so
      contribution records from the prior changelog are retained even when an
      older merged commit omitted its PR number; the verifier excludes records
      for work reverted after the base tag, including beta work reverted before
      the stable release
+   - generated provenance reports in-range PRs separately from retained
+     seed-only PRs, then states the unique row total. A PR present in both
+     inventories counts as in-range; never describe the seed-inclusive total
+     as work merged in the current release range
    - add repeatable `--shipped-ref <prior-shipped-tag>` when the reachable main
      closeout differs from the shipped tag or later forward-port commits
      re-associate PRs that were already released. Each tag is a cumulative
@@ -145,6 +160,8 @@ every human `Thanks @...` attribution.
      PR references explicitly present in active commit subjects/bodies. It
      preserves author/co-author credit and any issue references in the original
      title
+   - the provenance arithmetic and unique total must match the rendered PR
+     rows exactly; candidate validation rejects malformed or forged counts
    - direct commits remain in the manifest with GitHub-resolved author,
      co-author, issue, and editorial-eligibility data. They inform grouped
      prose but are never rendered as a public `#### Direct commits` dump. Add
@@ -159,7 +176,7 @@ every human `Thanks @...` attribution.
      untyped title is not automatically editorial
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
-   - never thank bots, `@claude`, `@openclaw`, `@clawsweeper`, or `@steipete`
+   - never thank bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`
    - do not use GitHub's release contributor count as the source of truth; the
      changelog must carry the complete human credit set itself
 7. Sorting preference:
@@ -175,14 +192,15 @@ every human `Thanks @...` attribution.
 9. Check release-note side conditions:
    - inspect `src/plugins/compat/registry.ts`
    - inspect `src/commands/doctor/shared/deprecation-compat.ts`
-   - if any compatibility `removeAfter` is on/before release date, resolve it
-     or explicitly record the blocker before shipping
+   - if a deprecated compatibility record reaches `removeAfter`, remove it when
+     proven safe or move it to `removal-pending` and record the blocker; keep a
+     due `removal-pending` record only until its documented conditions are met
 10. Validate and ship:
 
 - after the manifest-driven rewrite, regenerate and verify the complete
   contribution record before committing:
   ```bash
-  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
     --base <base-tag> \
     --target <target-ref> \
     --main-ref origin/main \
@@ -210,7 +228,7 @@ every human `Thanks @...` attribution.
 - after the GitHub release or prerelease is published, verify every matching
   release page against the same source section:
   ```bash
-  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
     --base <base-tag> \
     --target <target-ref> \
     --version <YYYY.M.PATCH> \
@@ -220,7 +238,7 @@ every human `Thanks @...` attribution.
 - add one `--release-tag` for every beta and stable page in the train; a
   `### Release verification` tail is permitted, but any other body drift
   fails the check
-- `scripts/render-github-release-notes.mjs` is the canonical release-body
+- `scripts/render-github-release-notes.mts` is the canonical release-body
   renderer used by candidate validation, publish, and verification. When the
   complete `## YYYY.M.PATCH` section fits GitHub's 125,000-character limit and
   the renderer's matching 125,000-byte safety ceiling, the body must contain
@@ -240,8 +258,22 @@ every human `Thanks @...` attribution.
   generated checks are explicitly skipped
 - `git diff --check`
 - for docs/changelog-only changes, no broad tests are required
-- commit with `scripts/committer "docs(changelog): refresh YYYY.M.PATCH notes" CHANGELOG.md`
-- push, pull/rebase if needed, then branch/rebase release from latest `main`
+- stage `CHANGELOG.md` and commit with `git commit -m "docs(changelog): refresh YYYY.M.PATCH notes"`
+- record the new commit as the Release SHA and require
+  `git diff --name-only <code-sha>..<release-sha>` to print only
+  `CHANGELOG.md`
+- push the release branch without rebasing it onto moving `main`
+- dispatch SHA-pinned Full Release Validation for the Release SHA with evidence
+  reuse enabled. It must select `changelog-only-release-v1`; any other changed
+  path returns the release to the Code SHA validation loop
+
+## Extended-Stable Variant
+
+Extended-stable has one release commit and no GitHub Release body. After version
+prep and approved backports, regenerate `## YYYY.M.P` with the regular manifest
+and original-main-PR provenance rules. Land it by PR, then validate the final
+branch tip before tagging. Re-audit after a product backport; a tooling-only
+repair needs no changelog entry. Never rewrite a published tag or changelog.
 
 ## Quota / API Outage Rule
 

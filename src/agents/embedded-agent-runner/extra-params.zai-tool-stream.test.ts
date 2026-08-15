@@ -7,7 +7,7 @@ import type { Model, SimpleStreamOptions } from "../../llm/types.js";
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
 
 let runExtraParamsCase: typeof import("./extra-params.test-support.js").runExtraParamsCase;
-let extraParamsTesting: typeof import("./extra-params.js").testing;
+let extraParamsTesting: typeof import("./extra-params.test-support.js").testing;
 
 type ToolStreamCase = {
   applyProvider: string;
@@ -32,8 +32,8 @@ function runToolStreamCase(params: ToolStreamCase) {
 
 describe("extra-params: provider tool_stream support", () => {
   beforeEach(async () => {
-    ({ testing: extraParamsTesting } = await import("./extra-params.js"));
-    ({ runExtraParamsCase } = await import("./extra-params.test-support.js"));
+    ({ runExtraParamsCase, testing: extraParamsTesting } =
+      await import("./extra-params.test-support.js"));
     extraParamsTesting.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: (params) => {
         // Z.AI and xAI require streaming tool-call deltas unless config

@@ -16,17 +16,11 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 import {
-  registerSubCliByName as registerSubCliByNameCore,
-  registerSubCliCommands as registerSubCliCommandsCore,
+  registerSubCliByNameCore,
+  registerSubCliCommandsCore,
   type SubCliRegistrationContext,
 } from "./register.subclis-core.js";
-import {
-  getSubCliCommandsWithSubcommands,
-  getSubCliEntries as getSubCliEntryDescriptors,
-  type SubCliDescriptor,
-} from "./subcli-descriptors.js";
-
-export { getSubCliCommandsWithSubcommands };
+import { getSubCliEntriesCore as getSubCliEntryDescriptors } from "./subcli-descriptors.js";
 
 type SubCliRegistrar = (
   program: Command,
@@ -55,11 +49,6 @@ function resolveSubCliCommandGroups(
       await register(program, argv, context);
     },
   );
-}
-
-/** Return visible sub-CLI descriptors after private QA filtering. */
-export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return getSubCliEntryDescriptors();
 }
 
 /** Register one sub-CLI by name, including lazy command groups. */

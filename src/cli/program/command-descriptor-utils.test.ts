@@ -5,9 +5,6 @@ import {
   addCommandDescriptorsToProgram,
   collectUniqueCommandDescriptors,
   defineCommandDescriptorCatalog,
-  getCommandDescriptorNames,
-  getCommandsWithSubcommands,
-  getParentDefaultHelpCommands,
 } from "./command-descriptor-utils.js";
 
 describe("command-descriptor-utils", () => {
@@ -16,18 +13,6 @@ describe("command-descriptor-utils", () => {
     { name: "beta", description: "Beta", hasSubcommands: true },
     { name: "gamma", description: "Gamma", hasSubcommands: true, parentDefaultHelp: true },
   ] as const;
-
-  it("returns descriptor names in order", () => {
-    expect(getCommandDescriptorNames(descriptors)).toEqual(["alpha", "beta", "gamma"]);
-  });
-
-  it("returns commands with subcommands", () => {
-    expect(getCommandsWithSubcommands(descriptors)).toEqual(["beta", "gamma"]);
-  });
-
-  it("returns commands with parent default help", () => {
-    expect(getParentDefaultHelpCommands(descriptors)).toEqual(["gamma"]);
-  });
 
   it("collects unique descriptors across groups in order", () => {
     expect(
@@ -90,6 +75,18 @@ describe("command-descriptor-utils", () => {
     ]);
 
     expect(program.commands[0]?.description()).toBe("Open link now");
+  });
+
+  it("keeps hidden descriptors out of help", () => {
+    const program = new Command();
+    addCommandDescriptorsToProgram(program, [
+      { name: "visible", description: "Visible" },
+      { name: "retired", description: "Retired", hidden: true },
+    ]);
+
+    expect(program.commands.map((command) => command.name())).toContain("retired");
+    expect(program.helpInformation()).toContain("visible");
+    expect(program.helpInformation()).not.toContain("retired");
   });
 
   it("rejects unsafe descriptor command names before rendering", () => {

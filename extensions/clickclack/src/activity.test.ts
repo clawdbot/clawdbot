@@ -1,10 +1,12 @@
 // Tests for the durable ClickClack agent-activity publisher (coalescing rules).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createClickClackActivityPublisher, type ClickClackActivityClient } from "./activity.js";
+import { createClickClackActivityPublisher } from "./activity.js";
 import type { ClickClackMessage } from "./types.js";
 
+type ActivityClient = Parameters<typeof createClickClackActivityPublisher>[0]["client"];
+
 function createClientMock(): {
-  client: ClickClackActivityClient;
+  client: ActivityClient;
   createActivityMessage: ReturnType<typeof vi.fn>;
   updateMessageBody: ReturnType<typeof vi.fn>;
 } {
@@ -15,7 +17,7 @@ function createClientMock(): {
   });
   const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
   return {
-    client: { createActivityMessage, updateMessageBody } as ClickClackActivityClient,
+    client: { createActivityMessage, updateMessageBody } as ActivityClient,
     createActivityMessage,
     updateMessageBody,
   };
@@ -110,7 +112,7 @@ describe("createClickClackActivityPublisher", () => {
     expect(bodies).toEqual(["before tool", "after tool"]);
   });
 
-  it("dedupes lane-prefixed tool frames into one row and upgrades on longer bodies", async () => {
+  it("dedupes lane-prefixed command frames without exposing richer command text", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
     const publisher = createClickClackActivityPublisher({
       client,
@@ -143,8 +145,31 @@ describe("createClickClackActivityPublisher", () => {
       kind: "agent_tool",
       body: "🛠️ Exec",
     });
-    expect(updateMessageBody).toHaveBeenCalledTimes(1);
-    expect(updateMessageBody).toHaveBeenCalledWith("msg_1", "🛠️ ls -la");
+    expect(updateMessageBody).not.toHaveBeenCalled();
+  });
+
+  it("hides command metadata from item-only durable activity", async () => {
+    const { client, createActivityMessage } = createClientMock();
+    const publisher = createClickClackActivityPublisher({
+      client,
+      target: { channelId: "chn_1" },
+      turnId: "msg_turn",
+    });
+
+    publisher.onItemEvent({
+      itemId: "tool:toolu_1",
+      toolCallId: "toolu_1",
+      kind: "tool",
+      name: "server.exec",
+      meta: "echo private-sentinel",
+      commandBearing: true,
+    });
+    await publisher.finalize();
+
+    expect(createActivityMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "🧩 Server.exec", kind: "agent_tool" }),
+    );
+    expect(JSON.stringify(createActivityMessage.mock.calls)).not.toContain("private-sentinel");
   });
 
   it("posts the upgraded body directly when frames land before the first POST runs", async () => {
@@ -155,19 +180,19 @@ describe("createClickClackActivityPublisher", () => {
       turnId: "msg_turn",
     });
 
-    publisher.onItemEvent({ toolCallId: "toolu_1", kind: "tool", name: "exec" });
+    publisher.onItemEvent({ toolCallId: "toolu_1", kind: "tool", name: "read" });
     publisher.onItemEvent({
       toolCallId: "toolu_1",
       kind: "tool",
-      name: "exec",
-      progressText: "ls -la",
+      name: "read",
+      progressText: "Done",
     });
     await publisher.finalize();
 
     expect(createActivityMessage).toHaveBeenCalledTimes(1);
     expect(createActivityMessage.mock.calls[0]?.[0]).toMatchObject({
       kind: "agent_tool",
-      body: "🛠️ ls -la",
+      body: "📖 Read: Done",
     });
     expect(updateMessageBody).not.toHaveBeenCalled();
   });
@@ -253,7 +278,7 @@ describe("createClickClackActivityPublisher", () => {
     });
     const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
     const publisher = createClickClackActivityPublisher({
-      client: { createActivityMessage, updateMessageBody } as ClickClackActivityClient,
+      client: { createActivityMessage, updateMessageBody } as ActivityClient,
       target: { channelId: "chn_1" },
       turnId: "msg_turn",
       onError,

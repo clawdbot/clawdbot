@@ -5,20 +5,15 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import {
-  pinActivePluginHttpRouteRegistry,
-  releasePinnedPluginHttpRouteRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { resolveControlPlaneRateLimitKey } from "../control-plane-rate-limit.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
 import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shared.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
-import { createTestRegistry } from "./__tests__/test-utils.js";
+import { createGatewayTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
 
 const SECURE_HOOK_PATH = "/secure-hook";
@@ -85,11 +80,11 @@ function assertAdminHelperAllowed() {
 function createPluginRequestHandler(params: {
   routes: PluginHttpRoute[];
   log?: SubsystemLogger;
-  getRouteRegistry?: () => ReturnType<typeof createTestRegistry>;
+  getRouteRegistry?: () => ReturnType<typeof createGatewayTestRegistry>;
   getGatewayRequestContext?: () => GatewayRequestContext;
 }) {
   return createGatewayPluginRequestHandler({
-    registry: createTestRegistry({ httpRoutes: params.routes }),
+    registry: createGatewayTestRegistry({ httpRoutes: params.routes }),
     ...(params.getRouteRegistry ? { getRouteRegistry: params.getRouteRegistry } : {}),
     log: params.log ?? createMockLogger(),
     ...(params.getGatewayRequestContext
@@ -142,7 +137,6 @@ function expectMissingWriteScopeFailure(params: {
 
 describe("plugin HTTP route runtime scopes", () => {
   afterEach(() => {
-    releasePinnedPluginHttpRouteRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
@@ -249,65 +243,11 @@ describe("plugin HTTP route runtime scopes", () => {
     });
   });
 
-  it("threads resolved HTTP client IP into the shared control-plane rate identity", async () => {
-    const observed: Array<{ clientIp?: string; connId?: string; rateLimitKey: string }> = [];
-    const handler = createPluginRequestHandler({
-      routes: [
-        createRoute({
-          path: SECURE_HOOK_PATH,
-          auth: "gateway",
-          gatewayRuntimeScopeSurface: "trusted-operator",
-          gatewayMethodDispatchAllowed: true,
-          handler: async () => {
-            const client = getPluginRuntimeGatewayRequestScope()?.client;
-            observed.push({
-              ...(client?.clientIp ? { clientIp: client.clientIp } : {}),
-              ...(client?.connId ? { connId: client.connId } : {}),
-              rateLimitKey: resolveControlPlaneRateLimitKey(client ?? null),
-            });
-            return true;
-          },
-        }),
-      ],
-    });
-
-    for (const clientIp of ["203.0.113.10", "203.0.113.10", "203.0.113.11"]) {
-      const { handled, res } = await dispatchPluginRequest(handler, {
-        path: SECURE_HOOK_PATH,
-        authContext: {
-          gatewayAuthSatisfied: true,
-          gatewayRequestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
-          gatewayRequestClientIp: clientIp,
-        },
-      });
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
-    }
-
-    expect(observed).toEqual([
-      {
-        clientIp: "203.0.113.10",
-        connId: "plugin-http:203.0.113.10",
-        rateLimitKey: "unknown-device|203.0.113.10",
-      },
-      {
-        clientIp: "203.0.113.10",
-        connId: "plugin-http:203.0.113.10",
-        rateLimitKey: "unknown-device|203.0.113.10",
-      },
-      {
-        clientIp: "203.0.113.11",
-        connId: "plugin-http:203.0.113.11",
-        rateLimitKey: "unknown-device|203.0.113.11",
-      },
-    ]);
-  });
-
   it("uses server-local routes and gateway context when the active registry belongs to another gateway", async () => {
     const serverAContext = { label: "server-a" } as unknown as GatewayRequestContext;
     const serverBContext = { label: "server-b" } as unknown as GatewayRequestContext;
     const observed: Array<{ route: string; context?: GatewayRequestContext }> = [];
-    const serverARegistry = createTestRegistry({
+    const serverARegistry = createGatewayTestRegistry({
       httpRoutes: [
         createRoute({
           path: SECURE_HOOK_PATH,
@@ -320,7 +260,7 @@ describe("plugin HTTP route runtime scopes", () => {
         }),
       ],
     });
-    const serverBRegistry = createTestRegistry({
+    const serverBRegistry = createGatewayTestRegistry({
       httpRoutes: [
         createRoute({
           path: SECURE_HOOK_PATH,
@@ -335,7 +275,6 @@ describe("plugin HTTP route runtime scopes", () => {
     });
 
     setActivePluginRegistry(serverBRegistry);
-    pinActivePluginHttpRouteRegistry(serverBRegistry);
 
     const handlerA = createGatewayPluginRequestHandler({
       registry: serverARegistry,
@@ -479,7 +418,7 @@ describe("plugin HTTP route runtime scopes", () => {
     const observed: Array<{ route: "exact" | "prefix"; scopes: string[] }> = [];
     const log = createMockLogger();
     const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           createRoute({
             path: "/secure/admin-hook",
@@ -548,7 +487,7 @@ describe("plugin HTTP route runtime scopes", () => {
     async ({ auth, gatewayAuthSatisfied, gatewayRequestOperatorScopes, path, expectedScopes }) => {
       let observedScopes: string[] | undefined;
       const handler = createGatewayPluginRequestHandler({
-        registry: createTestRegistry({
+        registry: createGatewayTestRegistry({
           httpRoutes: [
             createRoute({
               path,

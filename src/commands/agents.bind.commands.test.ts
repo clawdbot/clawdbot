@@ -43,12 +43,14 @@ vi.mock("../plugins/plugin-registry.js", () => ({
 
 type BindingResolverTestPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> & {
   setup?: Pick<NonNullable<ChannelPlugin["setup"]>, "resolveBindingAccountId">;
+  setupContract?: Pick<NonNullable<ChannelPlugin["setupContract"]>, "resolveBindingAccountId">;
 };
 
 function createBindingResolverTestPlugin(params: {
   id: ChannelId;
   config: Partial<ChannelPlugin["config"]>;
   resolveBindingAccountId?: NonNullable<ChannelPlugin["setup"]>["resolveBindingAccountId"];
+  contractOnly?: boolean;
   forceAccountBinding?: boolean;
 }): BindingResolverTestPlugin {
   return {
@@ -68,7 +70,11 @@ function createBindingResolverTestPlugin(params: {
       ...params.config,
     },
     ...(params.resolveBindingAccountId
-      ? { setup: { resolveBindingAccountId: params.resolveBindingAccountId } }
+      ? {
+          [params.contractOnly ? "setupContract" : "setup"]: {
+            resolveBindingAccountId: params.resolveBindingAccountId,
+          },
+        }
       : {}),
   };
 }
@@ -91,6 +97,15 @@ vi.mock("../channels/plugins/bundled.js", () => {
         id: "matrix",
         config: { listAccountIds: () => [] },
         resolveBindingAccountId: ({ agentId }) => agentId.toLowerCase(),
+      }),
+    ],
+    [
+      "signal",
+      createBindingResolverTestPlugin({
+        id: "signal",
+        config: { listAccountIds: () => [] },
+        resolveBindingAccountId: ({ agentId }) => agentId.toLowerCase(),
+        contractOnly: true,
       }),
     ],
     [
@@ -166,6 +181,7 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindingsCommand({}, runtime);
 
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ skipPluginValidation: true });
     expect(runtime.log).toHaveBeenCalledWith(
       ["Routing bindings:", "- main <- matrix", "- ops <- telegram accountId=work"].join("\n"),
     );
@@ -199,6 +215,20 @@ describe("agents bind/unbind commands", () => {
     const writtenConfig = firstWrittenConfig();
     expect(writtenConfig?.bindings).toStrictEqual([
       { type: "route", agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
+    ]);
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("resolves account bindings from channel-owned setup contracts", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await agentsBindCommand({ bind: ["signal"] }, runtime);
+
+    expect(firstWrittenConfig().bindings).toStrictEqual([
+      { type: "route", agentId: "main", match: { channel: "signal", accountId: "main" } },
     ]);
     expect(runtime.exit).not.toHaveBeenCalled();
   });

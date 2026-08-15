@@ -1,16 +1,10 @@
-/**
- * Integration-style tests for the public Bash/process tool barrel.
- * Exercises exec and process behavior through the shared exported tool factory.
- */
+/** Integration tests for the public Bash/process tool barrel and shared tool factory. */
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  resetHeartbeatWakeStateForTests,
-  setHeartbeatWakeHandler,
-} from "../infra/heartbeat-wake.js";
+import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
 import {
   peekSystemEventEntries,
@@ -24,11 +18,11 @@ import {
   getFinishedSession,
   markBackgrounded,
   markExited,
-  resetProcessRegistryForTests,
   type ProcessSession,
 } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
-import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
+import { getBashShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: vi.fn(async () => []),
@@ -54,7 +48,7 @@ vi.mock("../infra/exec-approval-surface.js", () => ({
     !channel || channel === "internal" || channel === "tui",
 }));
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (context?: {
     channel?: string | null;
     to?: string | number | null;
@@ -81,7 +75,6 @@ vi.mock("../utils/delivery-context.js", () => ({
 }));
 
 vi.mock("./bash-tools.exec-approval-followup.js", () => ({
-  buildExecApprovalFollowupPrompt: (text: string) => text,
   sendExecApprovalFollowup: vi.fn(async () => false),
 }));
 
@@ -243,7 +236,7 @@ vi.mock("../process/supervisor/index.js", () => {
 const isWin = process.platform === "win32";
 const defaultShell = isWin
   ? undefined
-  : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
+  : process.env.OPENCLAW_TEST_SHELL || getBashShellConfig().shell;
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 4" : "sleep 0.004";
 const POLL_INTERVAL_MS = isWin ? 15 : 2;
@@ -410,17 +403,6 @@ function useCapturedEnv(keys: string[], afterCapture?: () => void) {
   });
 }
 
-async function waitForCompletion(sessionId: string) {
-  let status = PROCESS_STATUS_RUNNING;
-  await expect
-    .poll(async () => {
-      status = (await pollProcessSession({ tool: processTool, sessionId })).status;
-      return status;
-    }, BACKGROUND_POLL_OPTIONS)
-    .not.toBe(PROCESS_STATUS_RUNNING);
-  return status;
-}
-
 function requireSessionId(details: { sessionId?: string }): string {
   if (!details.sessionId) {
     throw new Error("expected sessionId in exec result details");
@@ -476,16 +458,11 @@ async function expectNotifyOnExitWake(tool: ExecToolInstance, expected: Record<s
 async function drainNotifyEvents(sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
   return await drainFormattedSystemEvents({
     cfg: notifyCfg,
+    agentId: "main",
     sessionKey,
     isMainSession: false,
     isNewSession: false,
   });
-}
-
-async function runBackgroundCommandToCompletion(tool: ExecToolInstance, command: string) {
-  const sessionId = await startBackgroundCommand(tool, command);
-  const status = await waitForCompletion(sessionId);
-  return { sessionId, status };
 }
 
 type ProcessLogWindow = { offset?: number; limit?: number };
@@ -658,10 +635,10 @@ const seedFinishedLogSession = (lines: string[]) => {
     startedAt: Date.now(),
     maxOutputChars: 100_000,
     pendingMaxOutputChars: 100_000,
-    pendingStdout: [],
-    pendingStderr: [],
+    pendingOutput: [],
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
+    pendingOutputDropped: false,
     totalOutputChars: 0,
     aggregated: "",
     tail: "",
@@ -698,8 +675,10 @@ const runLongLogExpectationCase = async ({
 const runNotifyNoopCase = async ({ label, defaults, expectNotification }: NotifyNoopCase) => {
   const tool = createNotifyOnExitExecTool(defaults);
 
-  const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
-  expect(status).toBe(PROCESS_STATUS_COMPLETED);
+  const sessionId = await startBackgroundCommand(tool, COMMAND_NOOP);
+  await expect
+    .poll(() => getFinishedSession(sessionId)?.status, BACKGROUND_POLL_OPTIONS)
+    .toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
   expectNotifyNoopEvents(events, expectNotification, sessionId, label);
 };
@@ -754,7 +733,7 @@ describe("exec tool backgrounding", () => {
       await expect
         .poll(async () => {
           const pollResult = await pollProcessSession({ tool: processTool, sessionId });
-          output = pollResult.output ?? "";
+          output += pollResult.output ?? "";
           return pollResult.status;
         }, BACKGROUND_POLL_OPTIONS)
         .toBe(PROCESS_STATUS_COMPLETED);
@@ -821,13 +800,25 @@ describe("exec exit codes", () => {
 describe("exec notifyOnExit", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 
-  beforeEach(() => {
-    resetHeartbeatWakeStateForTests();
-  });
+  async function drainPendingHeartbeatWakes(): Promise<void> {
+    const handler = vi.fn(async () => ({ status: "ran" as const, durationMs: 0 }));
+    const dispose = setHeartbeatWakeHandler(handler);
+    try {
+      requestHeartbeat({
+        source: "other",
+        intent: "immediate",
+        reason: "test-cleanup",
+        coalesceMs: 0,
+      });
+      await expect.poll(() => handler.mock.calls.length, NOTIFY_POLL_OPTIONS).toBeGreaterThan(0);
+    } finally {
+      dispose();
+    }
+  }
 
-  afterEach(() => {
-    resetHeartbeatWakeStateForTests();
-  });
+  beforeEach(drainPendingHeartbeatWakes);
+
+  afterEach(drainPendingHeartbeatWakes);
 
   it("enqueues a system event when a backgrounded exec exits", async () => {
     const tool = createNotifyOnExitExecTool();
@@ -846,6 +837,19 @@ describe("exec notifyOnExit", () => {
     expect(hasEvent).toBe(true);
     expect(queuedEvent).toBeDefined();
     expect(formatted).toBeUndefined();
+  });
+
+  it("consumes only the polled completion event", async () => {
+    const tool = createNotifyOnExitExecTool();
+    const unpolledSessionId = await startBackgroundCommand(tool, shellEcho("unpolled"));
+    await waitForNotifyEvent(unpolledSessionId);
+    const sessionId = await startBackgroundCommand(tool, shellEcho("polled"));
+    await waitForNotifyEvent(sessionId);
+    const poll = await pollProcessSession({ tool: processTool, sessionId });
+
+    expect(poll.status).toBe(PROCESS_STATUS_COMPLETED);
+    expect(hasNotifyEventForPrefix(sessionId.slice(0, 8))).toBe(false);
+    expect(hasNotifyEventForPrefix(unpolledSessionId.slice(0, 8))).toBe(true);
   });
 
   it("preserves the origin delivery context on background exec completion events", async () => {
@@ -876,14 +880,6 @@ describe("exec notifyOnExit", () => {
       intent: "event",
       reason: "exec-event",
       sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
-    });
-  });
-
-  it("keeps notifyOnExit heartbeat wake unscoped for non-agent session keys", async () => {
-    await expectNotifyOnExitWake(createNotifyOnExitExecTool({ sessionKey: "global" }), {
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
     });
   });
 
@@ -1078,12 +1074,12 @@ describe("exec backgrounded onUpdate suppression", () => {
       const abortController = new AbortController();
       const onUpdateSpy = vi.fn(() => abortController.abort());
       // Run a command that produces output over time.
-      const command = joinCommands([
-        shellEcho("before-abort"),
-        shortDelayCmd,
-        shellEcho("after-abort"),
-      ]);
-      await execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy);
+      const beforeAbort = shellEcho("before-abort");
+      const afterAbort = shellEcho("after-abort");
+      const command = joinCommands([beforeAbort, shortDelayCmd, afterAbort]);
+      await expect(
+        execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy),
+      ).rejects.toMatchObject({ name: "AbortError" });
       expect(onUpdateSpy).toHaveBeenCalledTimes(1);
       // Allow a tick for any straggling stdout data events.
       await waitOneTurn();

@@ -7,7 +7,6 @@ import {
   normalizeApnsEnvironment,
   resolveApnsAuthConfigFromEnv,
   shouldClearStoredApnsRegistration,
-  shouldInvalidateApnsRegistration,
 } from "./push-apns.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -111,15 +110,6 @@ describe("push APNs auth and helper coverage", () => {
         `failed reading OPENCLAW_APNS_PRIVATE_KEY_PATH (${missingPath})`,
       );
     }
-  });
-
-  it("invalidates only real bad-token APNs failures", () => {
-    expect(shouldInvalidateApnsRegistration({ status: 410, reason: "Unregistered" })).toBe(true);
-    expect(shouldInvalidateApnsRegistration({ status: 400, reason: " BadDeviceToken " })).toBe(
-      true,
-    );
-    expect(shouldInvalidateApnsRegistration({ status: 400, reason: "BadTopic" })).toBe(false);
-    expect(shouldInvalidateApnsRegistration({ status: 429, reason: "BadDeviceToken" })).toBe(false);
   });
 
   it("clears only direct registrations without an environment override mismatch", () => {

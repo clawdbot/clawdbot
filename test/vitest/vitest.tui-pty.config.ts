@@ -4,10 +4,14 @@ import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pa
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 
 const targetableIncludes = [
+  "src/tui/tui-pty-harness-assertion-test-support.test.ts",
   "src/tui/tui-pty-harness.e2e.test.ts",
   "src/tui/tui-pty-local.e2e.test.ts",
+  "src/tui/tui-reset-transition-pty.e2e.test.ts",
+  "tui/tui-pty-harness-assertion-test-support.test.ts",
   "tui/tui-pty-harness.e2e.test.ts",
   "tui/tui-pty-local.e2e.test.ts",
+  "tui/tui-reset-transition-pty.e2e.test.ts",
 ];
 
 function toTuiPtyIncludePatterns(patterns: string[] | null) {
@@ -21,6 +25,7 @@ function createTuiPtyVitestConfig(env?: Record<string, string | undefined>) {
   const includeLocal = configEnv.OPENCLAW_TUI_PTY_INCLUDE_LOCAL === "1";
   const include = [
     "tui/tui-pty-harness.e2e.test.ts",
+    "tui/tui-reset-transition-pty.e2e.test.ts",
     ...(includeLocal ? ["tui/tui-pty-local.e2e.test.ts"] : []),
   ];
   const includeFromEnv = toTuiPtyIncludePatterns(
@@ -40,6 +45,7 @@ function createTuiPtyVitestConfig(env?: Record<string, string | undefined>) {
       exclude,
       fileParallelism: false,
       maxWorkers: 1,
+      reporters: ["verbose", ...(configEnv.GITHUB_ACTIONS === "true" ? ["github-actions"] : [])],
       setupFiles: [
         ...new Set(
           [...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"].map(

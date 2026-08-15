@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { homedir as osHomedir } from "node:os";
 import { join, resolve } from "node:path";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Pure functional auth resolver for the copilot agent runtime.
@@ -47,10 +48,10 @@ import { join, resolve } from "node:path";
  *   5. `useLoggedInUser` (default)
  */
 
-export const COPILOT_TOKEN_PROFILE_ERROR =
+const COPILOT_TOKEN_PROFILE_ERROR =
   "[copilot-attempt] gitHubToken auth requires profileId+profileVersion (pool keying safety; per Q5/Q1 decisions)";
 
-export const COPILOT_DEFAULT_AGENT_ID = "copilot";
+const COPILOT_DEFAULT_AGENT_ID = "copilot";
 
 /** Resolved auth shape that the runtime / pool consumes. */
 interface ResolvedCopilotAuth {
@@ -149,18 +150,19 @@ export function resolveCopilotAuth(input: ResolveCopilotAuthInput): ResolvedCopi
 
   const agentId = sanitizeAgentId(input.agentId);
   const copilotHome = resolveCopilotHome({
-    explicit: readString(input.copilotHome),
-    agentDir: readString(input.agentDir),
-    workspaceDir: readString(input.workspaceDir),
+    explicit: readNonEmptyString(input.copilotHome),
+    agentDir: readNonEmptyString(input.agentDir),
+    workspaceDir: readNonEmptyString(input.workspaceDir),
     agentId,
     env,
     homeDir,
   });
 
-  const explicitToken = readString(input.auth?.gitHubToken);
-  const explicitProfileId = readString(input.auth?.profileId) ?? readString(input.authProfileId);
+  const explicitToken = readNonEmptyString(input.auth?.gitHubToken);
+  const explicitProfileId =
+    readNonEmptyString(input.auth?.profileId) ?? readNonEmptyString(input.authProfileId);
   const explicitProfileVersion =
-    readString(input.auth?.profileVersion) ?? readString(input.profileVersion);
+    readNonEmptyString(input.auth?.profileVersion) ?? readNonEmptyString(input.profileVersion);
 
   if (input.auth?.useLoggedInUser === true) {
     return {
@@ -192,9 +194,9 @@ export function resolveCopilotAuth(input: ResolveCopilotAuthInput): ResolvedCopi
   // We synthesise the pool-key version from the token fingerprint so
   // rotation busts the cache cleanly (matching the env-fallback
   // strategy). The contract does not carry a separate `profileVersion`.
-  const contractToken = readString(input.resolvedApiKey);
+  const contractToken = readNonEmptyString(input.resolvedApiKey);
   if (contractToken) {
-    const contractProfileId = readString(input.authProfileId);
+    const contractProfileId = readNonEmptyString(input.authProfileId);
     return {
       authMode: "gitHubToken",
       gitHubToken: contractToken,
@@ -236,7 +238,7 @@ export function resolveCopilotAuth(input: ResolveCopilotAuthInput): ResolvedCopi
  * (`COPILOT_DEFAULT_AGENT_ID`) rather than throwing - the harness's
  * job is to keep running with a safe default, not to validate config.
  */
-export function sanitizeAgentId(value: string | undefined | null): string {
+function sanitizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim().toLowerCase();
   if (!trimmed) {
     return COPILOT_DEFAULT_AGENT_ID;
@@ -268,7 +270,7 @@ function resolveCopilotHome(args: {
     return resolve(join(args.agentDir, "copilot"));
   }
 
-  const openClawHome = readString(args.env.OPENCLAW_HOME);
+  const openClawHome = readNonEmptyString(args.env.OPENCLAW_HOME);
   const rootHome = openClawHome ? resolve(openClawHome) : safeHomeDir(args.homeDir);
   // Per-agent isolation per proposal section 3.6:
   //   <openClawHome>/.openclaw/agents/<agentId>/copilot
@@ -301,10 +303,10 @@ function readEnvTokenFallback(
   // agentRuntime.id: "copilot" gets the token they configured rather
   // than silently falling through to the logged-in CLI user.
   const candidates: Array<{ name: string; value: string | undefined }> = [
-    { name: "OPENCLAW_GITHUB_TOKEN", value: readString(env.OPENCLAW_GITHUB_TOKEN) },
-    { name: "COPILOT_GITHUB_TOKEN", value: readString(env.COPILOT_GITHUB_TOKEN) },
-    { name: "GH_TOKEN", value: readString(env.GH_TOKEN) },
-    { name: "GITHUB_TOKEN", value: readString(env.GITHUB_TOKEN) },
+    { name: "OPENCLAW_GITHUB_TOKEN", value: readNonEmptyString(env.OPENCLAW_GITHUB_TOKEN) },
+    { name: "COPILOT_GITHUB_TOKEN", value: readNonEmptyString(env.COPILOT_GITHUB_TOKEN) },
+    { name: "GH_TOKEN", value: readNonEmptyString(env.GH_TOKEN) },
+    { name: "GITHUB_TOKEN", value: readNonEmptyString(env.GITHUB_TOKEN) },
   ];
   for (const { name, value } of candidates) {
     if (value) {
@@ -329,8 +331,4 @@ function readEnvTokenFallback(
 export function tokenFingerprint(token: string): string {
   const hex = createHash("sha256").update(token).digest("hex").slice(0, 12);
   return `sha256:${hex}`;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }

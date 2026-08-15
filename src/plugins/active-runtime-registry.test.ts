@@ -2,9 +2,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getLoadedRuntimePluginRegistry,
-  listLoadedRuntimePluginIdsAcrossSurfaces,
+  listLoadedRuntimePluginIds,
+  listRuntimePluginIdsFromRegistry,
+  registryMatchesManifestPluginIds,
 } from "./active-runtime-registry.js";
-import { testing, clearPluginLoaderCache } from "./loader.js";
+import { clearPluginLoaderCache } from "./loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -18,6 +20,18 @@ function createRegistryWithPlugin(pluginId: string): PluginRegistry {
   const registry = createEmptyPluginRegistry();
   registry.plugins.push({
     id: pluginId,
+    status: "loaded",
+  } as never);
+  return registry;
+}
+
+function createOwnedRegistryWithPlugin(pluginId: string, rootDir: string): PluginRegistry {
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push({
+    id: pluginId,
+    origin: "bundled",
+    rootDir,
+    source: `${rootDir}/index.js`,
     status: "loaded",
   } as never);
   return registry;
@@ -117,7 +131,8 @@ describe("getLoadedRuntimePluginRegistry", () => {
         requiredPluginIds: ["deferred"],
       }),
     ).toBeUndefined();
-    expect(listLoadedRuntimePluginIdsAcrossSurfaces()).not.toContain("deferred");
+    expect(listLoadedRuntimePluginIds()).not.toContain("deferred");
+    expect(listRuntimePluginIdsFromRegistry(deferredRegistry)).not.toContain("deferred");
   });
 
   it("accepts metadata-only bundle plugins as loaded runtimes", () => {
@@ -136,7 +151,8 @@ describe("getLoadedRuntimePluginRegistry", () => {
         requiredPluginIds: ["bundle"],
       }),
     ).toBe(bundleRegistry);
-    expect(listLoadedRuntimePluginIdsAcrossSurfaces()).toContain("bundle");
+    expect(listLoadedRuntimePluginIds()).toContain("bundle");
+    expect(listRuntimePluginIdsFromRegistry(bundleRegistry)).toContain("bundle");
   });
 
   it("does not reuse workspace-agnostic registries for workspace-specific requests", () => {
@@ -150,37 +166,41 @@ describe("getLoadedRuntimePluginRegistry", () => {
     ).toBeUndefined();
   });
 
-  it("validates full loader cache compatibility when load options are provided", () => {
-    const registry = createRegistryWithPlugin("demo");
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-        },
-      },
-      onlyPluginIds: ["demo"],
-      workspaceDir: "/tmp/ws",
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "default", "/tmp/ws");
+  it("reuses built bundled runtimes for the matching source manifest owner", () => {
+    const registry = createOwnedRegistryWithPlugin("demo", "/dist/extensions/demo");
 
     expect(
-      getLoadedRuntimePluginRegistry({
-        loadOptions,
-      }),
-    ).toBe(registry);
+      registryMatchesManifestPluginIds(
+        registry,
+        [
+          {
+            id: "demo",
+            origin: "bundled",
+            rootDir: "/extensions/demo",
+            source: "/extensions/demo/index.ts",
+          } as never,
+        ],
+        ["demo"],
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a request registry when a workspace selects another physical owner", () => {
+    const registry = createOwnedRegistryWithPlugin("demo", "/plugins/demo");
 
     expect(
-      getLoadedRuntimePluginRegistry({
-        loadOptions: {
-          ...loadOptions,
-          config: {
-            plugins: {
-              allow: ["other"],
-            },
-          },
-        },
-      }),
-    ).toBeUndefined();
+      registryMatchesManifestPluginIds(
+        registry,
+        [
+          {
+            id: "demo",
+            origin: "workspace",
+            rootDir: "/tmp/session-workspace/.openclaw/extensions/demo",
+            source: "/tmp/session-workspace/.openclaw/extensions/demo/index.js",
+          } as never,
+        ],
+        ["demo"],
+      ),
+    ).toBe(false);
   });
 });

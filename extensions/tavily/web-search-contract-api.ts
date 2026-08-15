@@ -17,14 +17,15 @@ export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
     createTool: (ctx) => ({
       description: TAVILY_GENERIC_SEARCH_DESCRIPTION,
       parameters: TAVILY_GENERIC_SEARCH_SCHEMA,
-      execute: async (args) => {
+      execute: async (args, executionContext) => {
+        executionContext?.signal?.throwIfAborted();
         const { createTavilyWebSearchProvider: createRuntimeProvider } =
           await loadTavilySearchProviderModule();
         const tool = createRuntimeProvider().createTool(ctx);
         if (!tool) {
           throw new Error("Tavily web_search provider did not create a runtime tool.");
         }
-        return await tool.execute(args);
+        return await tool.execute(args, executionContext);
       },
     }),
   };

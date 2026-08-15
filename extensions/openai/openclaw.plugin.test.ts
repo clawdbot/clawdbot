@@ -1,60 +1,13 @@
 // Openai tests cover openclaw.plugin plugin behavior.
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import {
+  OPENAI_GPT_55_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID,
+  OPENAI_GPT_56_VARIANT_MODEL_IDS,
+} from "./model-route-contract.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildOpenAISetupProvider } from "./setup-api.js";
-
-const manifest = JSON.parse(
-  readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
-) as {
-  mediaUnderstandingProviderMetadata?: Record<
-    string,
-    {
-      capabilities?: string[];
-      defaultModels?: Record<string, string>;
-      autoPriority?: Record<string, number>;
-    }
-  >;
-  providerAuthChoices?: Array<{
-    provider?: string;
-    method?: string;
-    choiceLabel?: string;
-    choiceHint?: string;
-    choiceId?: string;
-    deprecatedChoiceIds?: string[];
-    assistantVisibility?: string;
-    groupId?: string;
-    groupLabel?: string;
-    groupHint?: string;
-  }>;
-  setup?: {
-    providers?: Array<{ id: string }>;
-  };
-  modelCatalog?: {
-    suppressions?: Array<{
-      provider?: string;
-      model?: string;
-      when?: {
-        baseUrlHosts?: string[];
-        providerConfigApiIn?: string[];
-      };
-    }>;
-  };
-  providerEndpoints?: Array<{
-    endpointClass?: string;
-    hosts?: string[];
-    hostSuffixes?: string[];
-  }>;
-  providerAuthAliases?: Record<string, string>;
-  legacyPluginIds?: string[];
-};
-
-const packageJson = JSON.parse(
-  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
-) as {
-  dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-};
 
 function manifestComparableWizardFields(choice: {
   choiceId?: string;
@@ -107,23 +60,18 @@ function expectWizardFields(
 }
 
 describe("OpenAI plugin manifest", () => {
-  it("keeps runtime dependencies in the package manifest", () => {
-    expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
-    expect(packageJson.dependencies?.ws).toBe("8.21.0");
-  });
-
   it("exposes only current OpenAI login choices", () => {
     const openAiLogin = manifest.providerAuthChoices?.find(
       (choice) => choice.choiceId === "openai",
     );
 
-    expect(openAiLogin?.deprecatedChoiceIds).toBeUndefined();
+    expect(openAiLogin && "deprecatedChoiceIds" in openAiLogin).toBe(false);
   });
 
   it("routes setup through the OpenAI setup runtime", () => {
-    expect(manifest.legacyPluginIds).toBeUndefined();
+    expect("legacyPluginIds" in manifest).toBe(false);
     expect(manifest.setup?.providers?.map((provider) => provider.id)).toEqual(["openai"]);
-    expect(manifest.providerAuthAliases).toBeUndefined();
+    expect("providerAuthAliases" in manifest).toBe(false);
   });
 
   it("classifies ChatGPT backend traffic with the supported OpenAI endpoint class", () => {
@@ -148,6 +96,30 @@ describe("OpenAI plugin manifest", () => {
     expect(metadata?.defaultModels?.audio).toBe("gpt-4o-transcribe");
     expect(metadata?.autoPriority?.image).toBe(20);
     expect(metadata?.autoPriority?.audio).toBe(20);
+  });
+
+  it("keeps million-token OpenAI models on the ordinary runtime budget by default", () => {
+    const models = manifest.modelCatalog?.providers?.openai?.models ?? [];
+    for (const id of [
+      ...OPENAI_GPT_56_VARIANT_MODEL_IDS,
+      OPENAI_GPT_55_MODEL_ID,
+      OPENAI_GPT_55_PRO_MODEL_ID,
+    ]) {
+      expect(
+        models.find((model) => model.id === id),
+        id,
+      ).toMatchObject({
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      });
+    }
+  });
+
+  it("replaces deprecated GPT-5.5 models with canonical GPT-5.6 Sol", () => {
+    const models = manifest.modelCatalog?.providers?.openai?.models ?? [];
+    for (const id of [OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_55_PRO_MODEL_ID]) {
+      expect(models.find((model) => model.id === id)?.replacedBy, id).toBe("gpt-5.6-sol");
+    }
   });
 
   it("labels OpenAI API key and Codex auth choices without stale mixed OAuth wording", () => {
@@ -193,6 +165,24 @@ describe("OpenAI plugin manifest", () => {
     expect(sparkSuppression?.when).toEqual({
       baseUrlHosts: ["api.openai.com"],
     });
+  });
+
+  it("keeps the Azure transport alias and Spark suppression owned by the manifest", () => {
+    expect(manifest.modelCatalog?.aliases?.["azure-openai-responses"]).toEqual({
+      provider: "openai",
+      api: "azure-openai-responses",
+    });
+    const azureSparkSuppression = manifest.modelCatalog?.suppressions?.find(
+      (suppression) =>
+        suppression.provider === "azure-openai-responses" &&
+        suppression.model === "gpt-5.3-codex-spark",
+    );
+
+    expect(azureSparkSuppression).toMatchObject({
+      provider: "azure-openai-responses",
+      model: "gpt-5.3-codex-spark",
+    });
+    expect(azureSparkSuppression).not.toHaveProperty("when");
   });
 
   it("keeps auth choice copy aligned with provider wizard metadata", () => {

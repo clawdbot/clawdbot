@@ -1,816 +1,316 @@
 // Verifies plugin loader runtime registry behavior.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getCompactionProvider, registerCompactionProvider } from "./compaction-provider.js";
-import { getEmbeddingProvider, registerEmbeddingProvider } from "./embedding-providers.js";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import {
-  testing,
-  clearPluginLoaderCache,
+  loadInstalledPluginIndexInstallRecordsSync,
+  writePersistedInstalledPluginIndexInstallRecordsSync,
+} from "./installed-plugin-index-records.js";
+import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
+import {
   clearPluginRegistryLoadCache,
+  loadAndActivateRootPluginRegistry,
   loadOpenClawPlugins,
+  loadPluginRegistryHandle,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
-import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import {
-  getMemoryEmbeddingProvider,
+  makePluginLoaderTempDir,
+  resetPluginLoaderTestStateForTest,
+} from "./loader.test-fixtures.js";
+import {
+  getRegisteredMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
-import {
-  buildMemoryPromptSection,
-  getMemoryRuntime,
-  listMemoryCorpusSupplements,
-  registerMemoryCapability,
-  registerMemoryCorpusSupplement,
-  registerMemoryPromptSupplement,
-  resolveMemoryFlushPlan,
-} from "./memory-state.js";
-import type { PluginRecord } from "./registry-types.js";
+import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
-import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
 
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
 });
 
-function createLoadedPluginRecord(id: string): PluginRecord {
-  return {
-    id,
-    name: id,
-    source: "test",
-    origin: "workspace",
-    enabled: true,
-    status: "loaded",
-    toolNames: [],
-    hookNames: [],
-    channelIds: [],
-    cliBackendIds: [],
-    providerIds: [],
-    embeddingProviderIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    transcriptSourceProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
-    agentHarnessIds: [],
-    cliCommands: [],
-    services: [],
-    gatewayDiscoveryServiceIds: [],
-    commands: [],
-    httpRoutes: 0,
-    hookCount: 0,
-    configSchema: false,
-  };
-}
+it("keeps an empty scoped handle load from replacing the root registry", () => {
+  const root = loadAndActivateRootPluginRegistry({ cache: false, config: {} });
+  const handle = loadPluginRegistryHandle({ cache: false, config: {}, onlyPluginIds: [] });
 
-function requireMemoryRuntime() {
-  const runtime = getMemoryRuntime();
-  if (!runtime) {
-    throw new Error("expected memory runtime registration");
-  }
-  return runtime;
-}
+  expect(handle).not.toBe(root);
+  expect(getActivePluginRegistry()).toBe(root);
+});
 
 function requireMemoryEmbeddingProvider(providerId: string) {
-  const provider = getMemoryEmbeddingProvider(providerId);
+  const provider = getRegisteredMemoryEmbeddingProvider(providerId)?.adapter;
   if (!provider) {
     throw new Error(`expected ${providerId} memory embedding provider`);
   }
   return provider;
 }
 
-function makeOpenClawDevSourceRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-loader-dev-source-"));
-  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
-  fs.mkdirSync(path.join(root, "src"), { recursive: true });
-  fs.mkdirSync(path.join(root, "extensions"), { recursive: true });
-  return root;
+function setLoaderMetadataSnapshot(params: { pluginIds?: readonly string[] } = {}) {
+  const config: OpenClawConfig = {
+    plugins: {
+      allow: ["demo"],
+      slots: { memory: "none" },
+    },
+  };
+  const env = process.env;
+  const workspaceDir = makePluginLoaderTempDir();
+  const installRecords: Record<string, PluginInstallRecord> = {
+    demo: {
+      source: "npm",
+      spec: "demo@1.0.0",
+      installPath: "/tmp/plugins/demo",
+    },
+  };
+  const metadataSnapshot = createPluginMetadataSnapshot({
+    config,
+    manifestRegistry: { plugins: [], diagnostics: [] },
+    workspaceDir,
+  });
+  const snapshot = {
+    ...metadataSnapshot,
+    ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
+    index: {
+      ...metadataSnapshot.index,
+      installRecords,
+    },
+  };
+  setCurrentPluginMetadataSnapshot(snapshot, { config, env, workspaceDir });
+  return { config, env, installRecords, snapshot, workspaceDir };
 }
 
-describe("getCompatibleActivePluginRegistry", () => {
-  it("reuses the active registry only when the load context cache key matches", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
+describe("resolvePluginLoadCacheContext", () => {
+  it("partitions process-HOME catalog registration policy", () => {
+    const processHomeKey = resolvePluginLoadCacheContext({
+      allowProcessHomeSessionCatalogs: true,
+    }).cacheKey;
+    const isolatedKey = resolvePluginLoadCacheContext({
+      allowProcessHomeSessionCatalogs: false,
+    }).cacheKey;
+
+    expect(isolatedKey).not.toBe(processHomeKey);
+  });
+
+  it("partitions full and setup channel plugin load intent", () => {
+    const fullKey = resolvePluginLoadCacheContext({ config: {} }).cacheKey;
+    const setupKey = resolvePluginLoadCacheContext({
+      config: {},
+      channelPluginLoadIntent: "setup",
+    }).cacheKey;
+
+    expect(setupKey).not.toBe(fullKey);
+    expect(resolvePluginLoadCacheContext({ config: {} }).channelPluginLoadIntent).toBe("full");
+  });
+
+  it("keys concrete runtime bindings by identity", () => {
+    const firstNodes = {} as PluginRuntime["nodes"];
+    const firstSubagent = {} as PluginRuntime["subagent"];
+    const firstOptions = {
+      config: {},
       runtimeOptions: {
         allowGatewaySubagentBinding: true,
+        nodes: firstNodes,
+        subagent: firstSubagent,
       },
     };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+    const firstKey = resolvePluginLoadCacheContext(firstOptions).cacheKey;
 
-    expect(testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
+    expect(resolvePluginLoadCacheContext(firstOptions).cacheKey).toBe(firstKey);
     expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        workspaceDir: "/tmp/workspace-b",
-      }),
-    ).toBeUndefined();
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        onlyPluginIds: ["demo"],
-      }),
-    ).toBeUndefined();
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        onlyPluginIds: [],
-      }),
-    ).toBeUndefined();
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        runtimeOptions: undefined,
-      }),
-    ).toBe(registry);
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
+      resolvePluginLoadCacheContext({
+        ...firstOptions,
         runtimeOptions: {
-          subagent: {} as CreatePluginRuntimeOptions["subagent"],
+          ...firstOptions.runtimeOptions,
+          nodes: {} as PluginRuntime["nodes"],
+          subagent: {} as PluginRuntime["subagent"],
         },
-      }),
-    ).toBeUndefined();
+      }).cacheKey,
+    ).not.toBe(firstKey);
   });
 
-  it("does not treat a default-mode active registry as compatible with gateway binding", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "default");
+  it("reuses prepared install records from the compatible metadata generation", () => {
+    const { config, env, installRecords, snapshot, workspaceDir } = setLoaderMetadataSnapshot();
 
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      }),
-    ).toBeUndefined();
-  });
+    for (const options of [
+      { config, env, workspaceDir },
+      { config, workspaceDir },
+    ]) {
+      const context = resolvePluginLoadCacheContext(options);
 
-  it("reuses an active full registry for compatible tool-discovery loads", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "default");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        activate: false,
-        toolDiscovery: true,
-      }),
-    ).toBe(registry);
-  });
-
-  it("reuses an active wider registry for compatible scoped runtime loads", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(createLoadedPluginRecord("demo"), createLoadedPluginRecord("other"));
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo", "other"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        onlyPluginIds: ["demo"],
-      }),
-    ).toBe(registry);
-  });
-
-  it("does not reuse a wider registry for scoped loads when the load context changes", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(createLoadedPluginRecord("demo"), createLoadedPluginRecord("other"));
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo", "other"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        workspaceDir: "/tmp/workspace-b",
-        onlyPluginIds: ["demo"],
-      }),
-    ).toBeUndefined();
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        config: {
-          plugins: {
-            allow: ["demo"],
-            load: { paths: ["/tmp/changed.js"] },
-          },
-        },
-        onlyPluginIds: ["demo"],
-      }),
-    ).toBeUndefined();
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        onlyPluginIds: ["missing"],
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not reuse a default-mode active registry for gateway-bindable tool discovery", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey, "default");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        activate: false,
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-        toolDiscovery: true,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not embed activation secrets in the loader cache key", () => {
-    const { cacheKey } = testing.resolvePluginLoadCacheContext({
-      config: {
-        plugins: {
-          allow: ["telegram"],
-        },
-      },
-      activationSourceConfig: {
-        plugins: {
-          allow: ["telegram"],
-        },
-        channels: {
-          telegram: {
-            enabled: true,
-            botToken: "secret-token",
-          },
-        },
-      },
-      autoEnabledReasons: {
-        telegram: ["telegram configured"],
-      },
-    });
-
-    expect(cacheKey).not.toContain("secret-token");
-    expect(cacheKey).not.toContain("botToken");
-    expect(cacheKey).not.toContain("telegram configured");
-  });
-
-  it("separates dev source root precedence in the loader cache key", () => {
-    const devSourceRoot = makeOpenClawDevSourceRoot();
-    try {
-      const baseOptions = {
-        config: {
-          plugins: {
-            allow: ["demo"],
-            load: { paths: ["/tmp/demo.js"] },
-          },
-        },
-        env: { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: undefined },
-      };
-
-      const base = testing.resolvePluginLoadCacheContext(baseOptions).cacheKey;
-      const dev = testing.resolvePluginLoadCacheContext({
-        ...baseOptions,
-        env: { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot },
-      }).cacheKey;
-
-      expect(dev).not.toBe(base);
-    } finally {
-      fs.rmSync(devSourceRoot, { recursive: true, force: true });
+      expect(context.installRecords).toEqual(installRecords);
+      expect(context.metadataSnapshot).toBe(snapshot);
     }
   });
 
-  it("separates raw env substitution mode in the loader cache key", () => {
-    const baseOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          entries: {
-            demo: { config: { apiKey: "${DEMO_KEY}" } },
-          },
-        },
+  it("loads a custom profile's install records instead of reusing the process snapshot", () => {
+    const profileEnv = { ...process.env, OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
+    const profileInstallRecords: Record<string, PluginInstallRecord> = {
+      demo: {
+        source: "npm",
+        spec: "demo@2.0.0",
+        installPath: "/tmp/plugins/profile-b/demo",
       },
     };
+    // Writing an installed index invalidates the current metadata generation,
+    // so prepare the custom profile before installing the process snapshot.
+    writePersistedInstalledPluginIndexInstallRecordsSync(profileInstallRecords, {
+      env: profileEnv,
+      candidates: [],
+    });
+    const { config, env, installRecords, workspaceDir } = setLoaderMetadataSnapshot();
 
-    const plain = testing.resolvePluginLoadCacheContext(baseOptions).cacheKey;
-    const resolving = testing.resolvePluginLoadCacheContext({
-      ...baseOptions,
-      resolveRawConfigEnvVars: true,
-    }).cacheKey;
-
-    expect(resolving).not.toBe(plain);
-  });
-
-  it("does not embed raw resolved plugin config env values in the loader cache key", () => {
-    const { cacheKey } = testing.resolvePluginLoadCacheContext({
-      config: {
-        plugins: {
-          allow: ["demo"],
-          entries: {
-            demo: { config: { apiKey: "${DEMO_KEY}" } },
-          },
-        },
-      },
-      env: { ...process.env, DEMO_KEY: "resolved-demo-secret" },
-      resolveRawConfigEnvVars: true,
+    expect(resolvePluginLoadCacheContext({ config, env, workspaceDir }).installRecords).toEqual(
+      installRecords,
+    );
+    const profileContext = resolvePluginLoadCacheContext({
+      config,
+      env: profileEnv,
+      workspaceDir,
     });
 
-    expect(cacheKey).not.toContain("resolved-demo-secret");
-    expect(cacheKey).not.toContain("apiKey");
+    expect(profileContext.installRecords).toEqual(profileInstallRecords);
+    expect(profileContext.metadataSnapshot).toBeUndefined();
   });
 
-  it("falls back to the current active runtime when no compatibility-shaping inputs are supplied", () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry, "startup-registry");
-
-    expect(testing.getCompatibleActivePluginRegistry()).toBe(registry);
-  });
-
-  it("does not reuse the active registry when core gateway method names differ", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      coreGatewayHandlers: {
-        "sessions.get": () => undefined,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
-    expect(testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        coreGatewayHandlers: {
-          "sessions.get": () => undefined,
-          "sessions.list": () => undefined,
-        },
-      }),
-    ).toBeUndefined();
-  });
-
-  it("reuses a scoped gateway-bindable registry for a matching default-mode tool scope", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    const startupOptions = {
-      config: {
-        plugins: {
-          allow: ["acpx", "telegram"],
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config: startupOptions.config,
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram"],
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      }),
-    ).toBe(registry);
-  });
-
-  it("reuses a scoped gateway-bindable registry for a matching snapshot-mode tool scope", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    const startupOptions = {
-      config: {
-        plugins: {
-          allow: ["acpx", "telegram"],
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config: startupOptions.config,
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram"],
-        activate: false,
-      }),
-    ).toBe(registry);
-  });
-
-  it("does not reuse a scoped registry when the requested tool scope needs another plugin", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    const startupOptions = {
-      config: {
-        plugins: {
-          allow: ["acpx", "telegram", "tavily"],
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config: startupOptions.config,
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram", "tavily"],
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not treat an unscoped request as compatible with the scoped startup registry", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    const startupOptions = {
-      config: {
-        plugins: {
-          allow: ["acpx", "telegram", "tavily"],
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config: startupOptions.config,
-        workspaceDir: "/tmp/workspace-a",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not reuse a scoped gateway-bindable registry for an explicit subagent request", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    const startupOptions = {
-      config: {
-        plugins: {
-          allow: ["acpx", "telegram"],
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
-
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config: startupOptions.config,
-        workspaceDir: "/tmp/workspace-a",
-        runtimeOptions: {
-          subagent: {} as CreatePluginRuntimeOptions["subagent"],
-        },
-      }),
-    ).toBeUndefined();
-  });
-
-  it("reuses a scoped startup registry when only the request omits gateway methods", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    registry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
-    const config = {
+  it("does not reuse metadata when the activation source adds plugin load paths", () => {
+    const { config, env, workspaceDir } = setLoaderMetadataSnapshot();
+    const activationSourceConfig: OpenClawConfig = {
       plugins: {
-        allow: ["acpx", "telegram"],
+        ...config.plugins,
+        load: { paths: ["/plugins/activation-source-only"] },
       },
     };
-    const startupOptions = {
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
 
-    expect(
-      testing.getCompatibleActivePluginRegistry({
-        config,
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram"],
-      }),
-    ).toBe(registry);
+    const context = resolvePluginLoadCacheContext({
+      activationSourceConfig,
+      config,
+      env,
+      workspaceDir,
+    });
+
+    expect(context.normalized.loadPaths).toContain("/plugins/activation-source-only");
+    expect(context.metadataSnapshot).toBeUndefined();
   });
 
-  it("reuses a scoped gateway startup registry when dispatch omits built artifact preference", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "acpx" } as (typeof registry.plugins)[number],
-      { id: "telegram" } as (typeof registry.plugins)[number],
-    );
-    registry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
-    const config = {
-      plugins: {
-        allow: ["acpx", "telegram"],
-      },
-    };
-    const startupOptions = {
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp/workspace-a",
-      onlyPluginIds: ["acpx", "telegram"],
-      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-      preferBuiltPluginArtifacts: true,
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
-    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+  it("reuses an exact matching scoped metadata generation", () => {
+    const { config, env, installRecords, workspaceDir } = setLoaderMetadataSnapshot({
+      pluginIds: ["demo"],
+    });
 
     expect(
-      testing.getCompatibleActivePluginRegistry({
+      resolvePluginLoadCacheContext({
         config,
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram"],
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      }),
-    ).toBe(registry);
+        env,
+        workspaceDir,
+        onlyPluginIds: ["demo"],
+      }).installRecords,
+    ).toEqual(installRecords);
+  });
+
+  it("prefers explicitly supplied install records over the current metadata generation", () => {
+    const { config, env, workspaceDir } = setLoaderMetadataSnapshot();
+    const installRecords: Record<string, PluginInstallRecord> = {
+      explicit: {
+        source: "npm",
+        spec: "explicit@2.0.0",
+      },
+    };
 
     expect(
-      testing.getCompatibleActivePluginRegistry({
+      resolvePluginLoadCacheContext({ config, env, workspaceDir, installRecords }).installRecords,
+    ).toEqual(installRecords);
+  });
+
+  it("does not reuse install records for a different workspace", () => {
+    const { config, env } = setLoaderMetadataSnapshot();
+
+    expect(
+      resolvePluginLoadCacheContext({ config, env, workspaceDir: makePluginLoaderTempDir() })
+        .installRecords,
+    ).toEqual(loadInstalledPluginIndexInstallRecordsSync({ env }));
+  });
+
+  it("does not reuse install records for a different plugin policy", () => {
+    const { env, workspaceDir } = setLoaderMetadataSnapshot();
+
+    expect(
+      resolvePluginLoadCacheContext({
         config: {
           plugins: {
-            allow: ["acpx", "telegram"],
-            load: { paths: ["/tmp/changed.js"] },
+            allow: ["other"],
+            slots: { memory: "none" },
           },
         },
-        workspaceDir: "/tmp/workspace-a",
-        onlyPluginIds: ["acpx", "telegram"],
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      }),
-    ).toBeUndefined();
+        env,
+        workspaceDir,
+      }).installRecords,
+    ).toEqual(loadInstalledPluginIndexInstallRecordsSync({ env }));
+  });
+
+  it("does not reuse install records for an unrelated explicit manifest registry", () => {
+    const { config, env, workspaceDir } = setLoaderMetadataSnapshot();
+
+    expect(
+      resolvePluginLoadCacheContext({
+        config,
+        env,
+        workspaceDir,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }).installRecords,
+    ).toEqual(loadInstalledPluginIndexInstallRecordsSync({ env }));
+  });
+
+  it("does not reuse scoped metadata for a different plugin scope", () => {
+    const { config, env, workspaceDir } = setLoaderMetadataSnapshot({ pluginIds: ["demo"] });
+
+    expect(
+      resolvePluginLoadCacheContext({
+        config,
+        env,
+        workspaceDir,
+        onlyPluginIds: ["other"],
+      }).installRecords,
+    ).toEqual(loadInstalledPluginIndexInstallRecordsSync({ env }));
+  });
+
+  it("does not reuse metadata while resolving raw config environment variables", () => {
+    const { config, env, workspaceDir } = setLoaderMetadataSnapshot();
+
+    expect(
+      resolvePluginLoadCacheContext({
+        config,
+        env,
+        workspaceDir,
+        resolveRawConfigEnvVars: true,
+      }).installRecords,
+    ).toEqual(loadInstalledPluginIndexInstallRecordsSync({ env }));
+  });
+
+  it("invalidates prepared install records at the plugin metadata lifecycle boundary", () => {
+    const { config, env, installRecords, workspaceDir } = setLoaderMetadataSnapshot();
+
+    expect(resolvePluginLoadCacheContext({ config, env, workspaceDir }).installRecords).toEqual(
+      installRecords,
+    );
+
+    clearPluginMetadataLifecycleCaches();
+
+    expect(resolvePluginLoadCacheContext({ config, env, workspaceDir }).installRecords).toEqual(
+      loadInstalledPluginIndexInstallRecordsSync({ env }),
+    );
   });
 });
 
 describe("resolveRuntimePluginRegistry", () => {
-  it("reuses the compatible active registry before attempting a fresh load", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
-    expect(resolveRuntimePluginRegistry(loadOptions)).toBe(registry);
-  });
-
   it("falls back to the current active runtime when no explicit load context is provided", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry, "startup-registry");
 
     expect(resolveRuntimePluginRegistry()).toBe(registry);
-  });
-
-  it("does not treat an explicit empty plugin scope as the active runtime", () => {
-    const registry = createEmptyPluginRegistry();
-    const loadOptions = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          load: { paths: ["/tmp/demo.js"] },
-        },
-      },
-      workspaceDir: "/tmp/workspace-a",
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey);
-
-    const scopedEmpty = resolveRuntimePluginRegistry({ ...loadOptions, onlyPluginIds: [] });
-    expect(scopedEmpty).not.toBe(registry);
-    expect(scopedEmpty?.plugins).toStrictEqual([]);
-  });
-
-  it("keeps the full workspace registry warm when scoped cron registries churn", () => {
-    testing.setMaxPluginRegistryCacheEntriesForTest(2);
-    try {
-      const loadOptions = {
-        config: {
-          plugins: {
-            allow: ["alpha", "bravo", "charlie"],
-          },
-        },
-        workspaceDir: "/tmp/workspace-a",
-      };
-      const fullRegistry = loadOpenClawPlugins(loadOptions);
-
-      loadOpenClawPlugins({ ...loadOptions, onlyPluginIds: ["alpha"] });
-      loadOpenClawPlugins({ ...loadOptions, onlyPluginIds: ["bravo"] });
-
-      expect(resolveRuntimePluginRegistry(loadOptions)).toBe(fullRegistry);
-    } finally {
-      testing.setMaxPluginRegistryCacheEntriesForTest();
-    }
-  });
-});
-
-describe("clearPluginLoaderCache", () => {
-  it("resets registered memory plugin registries", () => {
-    registerEmbeddingProvider({
-      id: "stale-embedding",
-      create: async () => ({ provider: null }),
-    });
-    registerMemoryEmbeddingProvider({
-      id: "stale",
-      create: async () => ({ provider: null }),
-    });
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [],
-      get: async () => null,
-    });
-    registerMemoryPromptSupplement("memory-wiki", () => ["stale wiki supplement"]);
-    registerMemoryCapability("memory-core", {
-      promptBuilder: () => ["stale memory section"],
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 2,
-        reserveTokensFloor: 3,
-        prompt: "stale",
-        systemPrompt: "stale",
-        relativePath: "memory/stale.md",
-      }),
-      runtime: {
-        async getMemorySearchManager() {
-          return { manager: null };
-        },
-        resolveMemoryBackendConfig() {
-          return { backend: "builtin" as const };
-        },
-      },
-    });
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
-      "stale memory section",
-      "stale wiki supplement",
-    ]);
-    expect(listMemoryCorpusSupplements()).toHaveLength(1);
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/stale.md");
-    expect(
-      requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
-    ).toEqual({ backend: "builtin" });
-    expect(getEmbeddingProvider("stale-embedding")?.id).toBe("stale-embedding");
-    expect(requireMemoryEmbeddingProvider("stale").id).toBe("stale");
-
-    clearPluginLoaderCache();
-
-    expect(getEmbeddingProvider("stale-embedding")).toBeUndefined();
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
-    expect(listMemoryCorpusSupplements()).toStrictEqual([]);
-    expect(resolveMemoryFlushPlan({})).toBeNull();
-    expect(getMemoryRuntime()).toBeUndefined();
-    expect(getMemoryEmbeddingProvider("stale")).toBeUndefined();
-  });
-});
-
-describe("loadOpenClawPlugins active runtime clearing", () => {
-  it("clears plugin-owned global providers before activating a new registry", () => {
-    registerEmbeddingProvider({
-      id: "stale-embedding",
-      create: async () => ({ provider: null }),
-    });
-    registerCompactionProvider({
-      id: "stale-compaction",
-      label: "Stale Compaction",
-      summarize: async () => "stale",
-    });
-    registerMemoryEmbeddingProvider({
-      id: "stale-memory",
-      create: async () => ({ provider: null }),
-    });
-
-    loadOpenClawPlugins({ onlyPluginIds: [] });
-
-    expect(getEmbeddingProvider("stale-embedding")).toBeUndefined();
-    expect(getCompactionProvider("stale-compaction")).toBeUndefined();
-    expect(getMemoryEmbeddingProvider("stale-memory")).toBeUndefined();
   });
 });
 

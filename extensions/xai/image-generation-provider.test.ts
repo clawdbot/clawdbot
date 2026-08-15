@@ -2,6 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildXaiImageGenerationProvider } from "./image-generation-provider.js";
 
+type GenerateImageParams = Parameters<
+  ReturnType<typeof buildXaiImageGenerationProvider>["generateImage"]
+>[0];
+
 const {
   resolveApiKeyForProviderMock,
   isProviderApiKeyConfiguredMock,
@@ -68,12 +72,19 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
-  normalizeOptionalString: (v: unknown) => (typeof v === "string" ? v.trim() : undefined),
-  normalizeOptionalLowercaseString: (v: unknown) =>
-    typeof v === "string" ? v.trim().toLowerCase() : undefined,
-  readStringValue: (v: unknown) => (typeof v === "string" ? v.trim() : undefined),
-}));
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => {
+  const normalizeMockOptionalString = (value: unknown) =>
+    typeof value === "string" ? value.trim() : undefined;
+  const normalizeMockOptionalLowercaseString = (value: unknown) =>
+    typeof value === "string" ? value.trim().toLowerCase() : undefined;
+  const readMockStringValue = (value: unknown) =>
+    typeof value === "string" ? value.trim() : undefined;
+  return {
+    normalizeOptionalString: normalizeMockOptionalString,
+    normalizeOptionalLowercaseString: normalizeMockOptionalLowercaseString,
+    readStringValue: readMockStringValue,
+  };
+});
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -170,11 +181,12 @@ describe("xai image generation provider", () => {
           providers: {
             xai: {
               baseUrl: "https://custom.x.ai/v1",
+              models: [],
             },
           },
         },
       },
-    } as any);
+    } as GenerateImageParams);
 
     const authParams = (
       resolveApiKeyForProviderMock.mock.calls as unknown as Array<[unknown]>
@@ -232,7 +244,7 @@ describe("xai image generation provider", () => {
         },
       ],
       cfg: {},
-    } as any);
+    } as GenerateImageParams);
 
     const request = requirePostJsonCall();
     expect(request.url).toContain("/images/edits");
@@ -259,7 +271,7 @@ describe("xai image generation provider", () => {
       model: "grok-imagine-image",
       prompt: "ua check",
       cfg: {},
-    } as any);
+    } as GenerateImageParams);
 
     const request = requirePostJsonCall();
     expect(request.headers?.get("user-agent")).toBe("openclaw/2026.3.22");
@@ -292,7 +304,7 @@ describe("xai image generation provider", () => {
         { buffer: Buffer.from("third"), mimeType: "image/webp" },
       ],
       cfg: {},
-    } as any);
+    } as GenerateImageParams);
 
     const request = requirePostJsonCall();
     expect(request.url).toContain("/images/edits");
@@ -319,7 +331,7 @@ describe("xai image generation provider", () => {
           mimeType: "image/png",
         })),
         cfg: {},
-      } as any),
+      } as GenerateImageParams),
     ).rejects.toThrow("xAI image editing supports up to 3 reference images");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });

@@ -6,11 +6,29 @@ completion. No OpenClaw application code is involved — inside this repo the
 workspace link resolves to the package's built `dist`, the same artifact npm
 consumers install, so `pnpm build` must have run first.
 
+Choose a provider and replace its placeholder with a real API key.
+
+POSIX shell commands (the Ollama command also works in PowerShell):
+
 ```sh
-ANTHROPIC_API_KEY=sk-ant-... node index.mjs "Say hello"
-OPENAI_API_KEY=sk-... node index.mjs --provider openai "Say hello"
+ANTHROPIC_API_KEY=example-anthropic-key-not-real node index.mjs "Say hello"
+OPENAI_API_KEY=example-openai-key-not-real node index.mjs --provider openai "Say hello"
 # keyless, against a local Ollama server (OLLAMA_MODEL overrides the model id)
 node index.mjs --provider ollama "Say hello"
+```
+
+PowerShell (assignments remain in this session until removed or the shell closes):
+
+```powershell
+$env:ANTHROPIC_API_KEY = "example-anthropic-key-not-real"
+node index.mjs "Say hello"
+
+$env:OPENAI_API_KEY = "example-openai-key-not-real"
+node index.mjs --provider openai "Say hello"
+
+# Clear the session-scoped keys.
+$env:ANTHROPIC_API_KEY = $null
+$env:OPENAI_API_KEY = $null
 ```
 
 Text deltas stream to stdout; stop reason and token usage go to stderr.

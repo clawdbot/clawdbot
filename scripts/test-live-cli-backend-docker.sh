@@ -22,9 +22,6 @@ CLI_PROVIDER="${CLI_MODEL%%/*}"
 CLI_DISABLE_MCP_CONFIG="${OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG:-}"
 CLI_AUTH_MODE="${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}"
 CLI_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS 180)"
-TEMP_DIRS=()
-DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
-DOCKER_HOME_MOUNT=()
 DOCKER_EXTRA_ENV_FILES=()
 DOCKER_AUTH_PRESTAGED=0
 DOCKER_TRUSTED_HARNESS_CONTAINER_DIR="/trusted-harness"
@@ -84,39 +81,10 @@ export OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE="${OPENCLAW_LIVE_CLI_BACKEND
 export OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE:-0}"
 export OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE:-0}"
 
-cleanup_temp_dirs() {
-  if ((${#TEMP_DIRS[@]} > 0)); then
-    rm -rf "${TEMP_DIRS[@]}"
-  fi
-}
-trap cleanup_temp_dirs EXIT
-
-if [[ -n "${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-}" ]]; then
-  CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR}"
-elif openclaw_live_is_ci; then
-  CLI_TOOLS_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cli-tools.XXXXXX")"
-  TEMP_DIRS+=("$CLI_TOOLS_DIR")
-else
-  CLI_TOOLS_DIR="$HOME/.cache/openclaw/docker-cli-tools"
-fi
-if [[ -n "${OPENCLAW_DOCKER_CACHE_HOME_DIR:-}" ]]; then
-  CACHE_HOME_DIR="${OPENCLAW_DOCKER_CACHE_HOME_DIR}"
-elif openclaw_live_is_ci; then
-  CACHE_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cache.XXXXXX")"
-  TEMP_DIRS+=("$CACHE_HOME_DIR")
-else
-  CACHE_HOME_DIR="$HOME/.cache/openclaw/docker-cache"
-fi
-
-openclaw_live_prepare_bind_dir_for_container_user "$CLI_TOOLS_DIR"
-openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"
-if openclaw_live_uses_managed_bind_dirs; then
-  DOCKER_USER="$(id -u):$(id -g)"
-  DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
-  TEMP_DIRS+=("$DOCKER_HOME_DIR")
-  openclaw_live_prepare_bind_dir_for_container_user "$DOCKER_HOME_DIR"
-  DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
-fi
+openclaw_live_init_temp_dirs
+openclaw_live_init_cli_tools_dir
+openclaw_live_init_cache_home_dir
+openclaw_live_init_managed_home
 
 if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; then
   CLAUDE_CREDS_FILE="$HOME/.claude/.credentials.json"
@@ -168,38 +136,9 @@ if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; 
   export OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE:-0}"
 fi
 
-PROFILE_MOUNT=()
-PROFILE_STATUS="none"
-if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
-  if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
-    openclaw_live_stage_profile_into_home "$DOCKER_HOME_DIR" "$PROFILE_FILE"
-  else
-    PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
-  fi
-  PROFILE_STATUS="$PROFILE_FILE"
-fi
+openclaw_live_init_profile_mount
 
-AUTH_DIRS=()
-AUTH_FILES=()
-if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
-  while IFS= read -r auth_dir; do
-    [[ -n "$auth_dir" ]] || continue
-    AUTH_DIRS+=("$auth_dir")
-  done < <(openclaw_live_collect_auth_dirs)
-  while IFS= read -r auth_file; do
-    [[ -n "$auth_file" ]] || continue
-    AUTH_FILES+=("$auth_file")
-  done < <(openclaw_live_collect_auth_files)
-else
-  while IFS= read -r auth_dir; do
-    [[ -n "$auth_dir" ]] || continue
-    AUTH_DIRS+=("$auth_dir")
-  done < <(openclaw_live_collect_auth_dirs_from_csv "$CLI_PROVIDER")
-  while IFS= read -r auth_file; do
-    [[ -n "$auth_file" ]] || continue
-    AUTH_FILES+=("$auth_file")
-  done < <(openclaw_live_collect_auth_files_from_csv "$CLI_PROVIDER")
-fi
+openclaw_live_collect_auth_for_providers "$CLI_PROVIDER"
 if [[ "${CLAUDE_SUBSCRIPTION_AUTH_SOURCE:-}" == "env-token" ]]; then
   retained_auth_files=()
   for auth_file in "${AUTH_FILES[@]}"; do
@@ -210,39 +149,7 @@ if [[ "${CLAUDE_SUBSCRIPTION_AUTH_SOURCE:-}" == "env-token" ]]; then
   done
   AUTH_FILES=("${retained_auth_files[@]}")
 fi
-AUTH_DIRS_CSV=""
-if ((${#AUTH_DIRS[@]} > 0)); then
-  AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
-fi
-AUTH_FILES_CSV=""
-if ((${#AUTH_FILES[@]} > 0)); then
-  AUTH_FILES_CSV="$(openclaw_live_join_csv "${AUTH_FILES[@]}")"
-fi
-
-if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
-  openclaw_live_stage_auth_into_home "$DOCKER_HOME_DIR" "${AUTH_DIRS[@]}" --files "${AUTH_FILES[@]}"
-  DOCKER_AUTH_PRESTAGED=1
-fi
-
-EXTERNAL_AUTH_MOUNTS=()
-if ((${#AUTH_DIRS[@]} > 0)); then
-  for auth_dir in "${AUTH_DIRS[@]}"; do
-    auth_dir="$(openclaw_live_validate_relative_home_path "$auth_dir")"
-    host_path="$HOME/$auth_dir"
-    if [[ -d "$host_path" ]]; then
-      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
-    fi
-  done
-fi
-if ((${#AUTH_FILES[@]} > 0)); then
-  for auth_file in "${AUTH_FILES[@]}"; do
-    auth_file="$(openclaw_live_validate_relative_home_path "$auth_file")"
-    host_path="$HOME/$auth_file"
-    if [[ -f "$host_path" ]]; then
-      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth-files/"$auth_file":ro)
-    fi
-  done
-fi
+openclaw_live_finalize_auth_mounts
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
@@ -257,46 +164,14 @@ mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CA
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 run_setup_command() {
-  local timeout_value="${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:?missing live CLI backend setup timeout seconds}s"
-  local timeout_bin=""
-  if command -v timeout >/dev/null 2>&1; then
-    timeout_bin="timeout"
-  elif command -v gtimeout >/dev/null 2>&1; then
-    timeout_bin="gtimeout"
-  else
-    echo "timeout command not found; cannot bound live CLI backend setup after ${timeout_value}" >&2
-    return 127
-  fi
-  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
-    "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
-  else
-    "$timeout_bin" "$timeout_value" "$@"
-  fi
+  openclaw_live_run_setup_command \
+    "${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:?missing live CLI backend setup timeout seconds}" \
+    "live CLI backend setup" \
+    "$@"
 }
-if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" != "1" ]; then
-  IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
-  IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
-  if ((${#auth_dirs[@]} > 0)); then
-    for auth_dir in "${auth_dirs[@]}"; do
-      [ -n "$auth_dir" ] || continue
-      if [ -d "/host-auth/$auth_dir" ]; then
-        mkdir -p "$HOME/$auth_dir"
-        cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
-        chmod -R u+rwX "$HOME/$auth_dir" || true
-      fi
-    done
-  fi
-  if ((${#auth_files[@]} > 0)); then
-    for auth_file in "${auth_files[@]}"; do
-      [ -n "$auth_file" ] || continue
-      if [ -f "/host-auth-files/$auth_file" ]; then
-        mkdir -p "$(dirname "$HOME/$auth_file")"
-        cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
-        chmod u+rw "$HOME/$auth_file" || true
-      fi
-    done
-  fi
-fi
+trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
+source "$trusted_scripts_dir/lib/live-docker-stage.sh"
+openclaw_live_stage_mounted_auth
 provider="${OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER:-claude-cli}"
 default_command="${OPENCLAW_DOCKER_CLI_BACKEND_COMMAND_DEFAULT:-}"
 docker_package="${OPENCLAW_DOCKER_CLI_BACKEND_NPM_PACKAGE:-}"
@@ -412,8 +287,6 @@ WRAP
   fi
 fi
 tmp_dir="$(mktemp -d)"
-trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
-source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_source_tree "$tmp_dir"
 # Use a writable node_modules overlay in the temp repo. Vite writes bundled
 # config artifacts under the nearest node_modules/.vite-temp path, and the
@@ -423,7 +296,7 @@ openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
-node scripts/test-live.mjs -- src/gateway/gateway-cli-backend.live.test.ts
+node --import tsx scripts/test-live.mts -- src/gateway/gateway-cli-backend.live.test.ts
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"

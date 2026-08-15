@@ -6,7 +6,9 @@ import fs from "node:fs/promises";
  */
 import os from "node:os";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   onInternalDiagnosticEvent,
@@ -18,12 +20,26 @@ import {
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
 import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
-import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
-import { PluginApprovalResolutions } from "../plugins/hook-before-tool-call-result.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticArgumentChurnObservation,
+  markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+} from "../logging/diagnostic-run-activity.js";
+import {
+  getDiagnosticSessionState,
+  resetDiagnosticSessionStateForTest,
+} from "../logging/diagnostic-session-state.js";
+import {
+  PluginApprovalResolutions,
+  type PluginApprovalResolution,
+} from "../plugins/hook-before-tool-call-result.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createHookRunner, type HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -33,9 +49,12 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
+import { createWriteTool } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
+
+const CRITICAL_THRESHOLD = 20;
+const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
@@ -53,10 +72,10 @@ vi.mock("./tools/gateway.js", () => ({
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
 
-function setGlobalHookRunnerForTest(hookRunner: unknown): void {
+function setGlobalHookRunnerForTest(hookRunner: HookRunner | null): void {
   const hookRunnerGlobalState = globalThis as Record<
     symbol,
-    { hookRunner: unknown; registry?: unknown } | undefined
+    { hookRunner: HookRunner | null; registry?: unknown } | undefined
   >;
   if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
     hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
@@ -67,27 +86,47 @@ function setGlobalHookRunnerForTest(hookRunner: unknown): void {
   hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
 }
 
-function getGlobalHookRunnerForTest(): unknown {
+function getGlobalHookRunnerForTest(): HookRunner | null {
   const hookRunnerGlobalState = globalThis as Record<
     symbol,
-    { hookRunner: unknown; registry?: unknown } | undefined
+    { hookRunner: HookRunner | null; registry?: unknown } | undefined
   >;
   return hookRunnerGlobalState[hookRunnerGlobalStateKey]?.hookRunner ?? null;
 }
 
+type TestHookRunner = HookRunner & {
+  hasHooks: ReturnType<typeof vi.fn<HookRunner["hasHooks"]>>;
+  runBeforeToolCall: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>;
+};
+
+function createTestHookRunner(): TestHookRunner {
+  return {
+    ...createHookRunner(createEmptyPluginRegistry()),
+    hasHooks: vi.fn<HookRunner["hasHooks"]>(),
+    runBeforeToolCall: vi.fn<HookRunner["runBeforeToolCall"]>(),
+  };
+}
+
+function createStableNoProgressWriteResult() {
+  return {
+    content: [{ type: "text" as const, text: "write made no changes" }],
+    details: { ok: true, changed: false },
+  };
+}
+
+function asAgentTool(tool: { name: string; execute: ReturnType<typeof vi.fn> }): AnyAgentTool {
+  return tool as unknown as AnyAgentTool;
+}
+
 afterEach(() => {
+  resetDiagnosticRunActivityForTest();
   setGlobalHookRunnerForTest(null);
   mockGetGlobalHookRunner.mockReset();
-  mockGetGlobalHookRunner.mockImplementation(
-    () => getGlobalHookRunnerForTest() as ReturnType<typeof getGlobalHookRunner>,
-  );
+  mockGetGlobalHookRunner.mockImplementation(() => getGlobalHookRunnerForTest());
 });
 
 describe("before_tool_call loop detection behavior", () => {
-  let hookRunner: {
-    hasHooks: ReturnType<typeof vi.fn>;
-    runBeforeToolCall: ReturnType<typeof vi.fn>;
-  };
+  let hookRunner: TestHookRunner;
   const enabledLoopDetectionContext = {
     agentId: "main",
     sessionKey: "main",
@@ -103,18 +142,17 @@ describe("before_tool_call loop detection behavior", () => {
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
-    hookRunner = {
-      hasHooks: vi.fn(),
-      runBeforeToolCall: vi.fn(),
-    };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+    hookRunner = createTestHookRunner();
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner);
     hookRunner.hasHooks.mockReturnValue(false);
   });
 
   function createWrappedTool(
     name: string,
     execute: ReturnType<typeof vi.fn>,
-    loopDetectionContext = enabledLoopDetectionContext,
+    loopDetectionContext: Parameters<
+      typeof wrapToolWithBeforeToolCallHook
+    >[1] = enabledLoopDetectionContext,
   ) {
     return wrapToolWithBeforeToolCallHook(
       { name, execute } as unknown as AnyAgentTool,
@@ -243,13 +281,16 @@ describe("before_tool_call loop detection behavior", () => {
     }
   }
 
-  function createGenericReadRepeatFixture() {
+  function createGenericReadRepeatFixture(
+    loopDetectionContext?: Parameters<typeof createWrappedTool>[2],
+  ) {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],
       details: { ok: true },
     });
     return {
-      tool: createWrappedTool("read", execute),
+      tool: createWrappedTool("read", execute, loopDetectionContext),
+      execute,
       params: { path: "/tmp/file" },
     };
   }
@@ -268,7 +309,7 @@ describe("before_tool_call loop detection behavior", () => {
   function expectCriticalLoopEvent(
     loopEvent: DiagnosticToolLoopEvent | undefined,
     params: {
-      detector: "ping_pong" | "known_poll_no_progress";
+      detector: "ping_pong" | "known_poll_no_progress" | "global_circuit_breaker";
       toolName: string;
       count?: number;
     },
@@ -305,12 +346,7 @@ describe("before_tool_call loop detection behavior", () => {
     return result;
   }
 
-  function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    if (typeof value !== "object" || value === null) {
-      throw new Error(`${label} was not an object`);
-    }
-    return value as Record<string, unknown>;
-  }
+  const requireRecord = createRequireRecord("object", "label-not-object");
 
   function requireArray(value: unknown, label: string): unknown[] {
     expect(Array.isArray(value)).toBe(true);
@@ -374,7 +410,7 @@ describe("before_tool_call loop detection behavior", () => {
       content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
       details: { status: "running", aggregated: "steady" },
     });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "process", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "process", execute }), {
       ...disabledLoopDetectionContext,
     });
     const params = { action: "poll", sessionId: "sess-off" };
@@ -382,6 +418,47 @@ describe("before_tool_call loop detection behavior", () => {
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
+  });
+
+  it("does not activate reconciled churn when loop detection is unconfigured", async () => {
+    const sessionId = "write-churn-unconfigured-session";
+    const sessionKey = "main";
+    const runId = "write-churn-unconfigured-run";
+    const progressReasonsDuringExecution: Array<string | undefined> = [];
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
+      const targetPath =
+        typeof params === "object" && params !== null && "path" in params
+          ? String(params.path)
+          : "unknown";
+      progressReasonsDuringExecution.push(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+      );
+      return {
+        content: [{ type: "text", text: `wrote ${targetPath}` }],
+        details: { ok: true, path: targetPath },
+      };
+    });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    const tool = createWrappedTool("write", execute, {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      runId,
+    });
+    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+      await expectUnblockedToolExecution(tool, `write-churn-unconfigured-${index}`, {
+        path: paths[index % paths.length] ?? "/tmp/a.md",
+        content: "same content",
+      });
+    }
+    await expectUnblockedToolExecution(tool, "write-churn-unconfigured-next", {
+      path: "/tmp/a.md",
+      content: "same content",
+    });
+
+    expect(progressReasonsDuringExecution.at(-1)).not.toBe("tool_loop:argument_churn");
   });
 
   it("does not block known poll loops when output progresses", async () => {
@@ -418,17 +495,443 @@ describe("before_tool_call loop detection behavior", () => {
     expectToolLoopBlockedResult(result, "identical outcomes");
   });
 
+  it("blocks changing-argument terminal exec failures and escalates vetoes", async () => {
+    const output = "Traceback: missing package\n\n(Command exited with code 1)";
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: output }],
+      details: { status: "completed", exitCode: 1, aggregated: output },
+    });
+    const tool = createWrappedTool("exec", execute);
+
+    await withToolLoopEvents(async (emitted) => {
+      for (let index = 0; index <= GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const result = await tool.execute(
+          `exec-semantic-${index}`,
+          { command: `python job-${index}.py` },
+          undefined,
+          undefined,
+        );
+        if (index >= CRITICAL_THRESHOLD) {
+          expectToolLoopBlockedResult(
+            result,
+            index === GLOBAL_CIRCUIT_BREAKER_THRESHOLD
+              ? "global circuit breaker"
+              : "identical outcomes",
+          );
+        }
+      }
+
+      expect(execute).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+      expect(emitted.find((event) => event.detector === "generic_repeat")).toMatchObject({
+        level: "critical",
+        action: "block",
+        count: CRITICAL_THRESHOLD,
+        toolName: "exec",
+      });
+      expect(emitted.at(-1)).toMatchObject({
+        detector: "global_circuit_breaker",
+        level: "critical",
+        action: "block",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+        toolName: "exec",
+      });
+    });
+  });
+
+  it("warns on non-strict same-tool argument churn while preserving tool execution", async () => {
+    const execute = vi.fn().mockImplementation(async (toolCallId: string, _params: unknown) => {
+      const progressed = toolCallId === "write-churn-progress";
+      return progressed
+        ? {
+            content: [{ type: "text", text: "write updated content" }],
+            details: { ok: true, changed: true, revision: 2 },
+          }
+        : createStableNoProgressWriteResult();
+    });
+    const sessionId = "write-churn-session";
+    const runId = "write-churn-run";
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
+    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+      const targetPath = paths[index % paths.length] ?? "/tmp/a.md";
+      await expectUnblockedToolExecution(tool, `write-churn-${index}`, {
+        path: targetPath,
+        content: "same content",
+      });
+    }
+
+    await withToolLoopEvents(async (emitted) => {
+      await expectUnblockedToolExecution(tool, "write-churn-warning", {
+        path: "/tmp/a.md",
+        content: "same content",
+      });
+      expect(emitted.at(-1)).toMatchObject({
+        type: "tool.loop",
+        level: "warning",
+        action: "warn",
+        detector: "argument_churn",
+        toolName: "write",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionKey: "main" }).lastProgressReason).toBe(
+      "tool_loop:argument_churn",
+    );
+
+    await expectUnblockedToolExecution(tool, "write-churn-progress", {
+      path: "/tmp/a.md",
+      content: "same content",
+    });
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionKey: "main" }).lastProgressReason,
+    ).not.toBe("tool_loop:argument_churn");
+
+    await expectUnblockedToolExecution(tool, "write-churn-escape", {
+      path: "/tmp/c.md",
+      content: "same content",
+    });
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionKey: "main" }).lastProgressReason,
+    ).not.toBe("tool_loop:argument_churn");
+    expect(execute).toHaveBeenCalledTimes(GLOBAL_CIRCUIT_BREAKER_THRESHOLD + 3);
+  });
+
+  it("detects alternating-path churn from the production write result contract", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-churn-"));
+    const sessionId = "production-write-churn-session";
+    const sessionKey = "main";
+    const runId = "production-write-churn-run";
+    const content = "same content";
+    const paths = ["a.md", "b.md", "a.md", "a.md", "b.md"];
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    const tool = wrapToolWithBeforeToolCallHook(
+      createWriteTool(tmpDir) as unknown as AnyAgentTool,
+      {
+        ...enabledLoopDetectionContext,
+        sessionId,
+        sessionKey,
+        runId,
+      },
+    );
+
+    try {
+      await withToolLoopEvents(async (emitted) => {
+        for (let index = 0; index < 16; index += 1) {
+          await expectUnblockedToolExecution(tool, `production-write-churn-${index}`, {
+            path: paths[index % paths.length]!,
+            content,
+          });
+        }
+        expect(emitted.some((event) => event.detector === "argument_churn")).toBe(true);
+      });
+      const history = getDiagnosticSessionState({ sessionId, sessionKey }).toolCallHistory;
+      expect(history?.[0]?.resultHash).toBeTypeOf("string");
+      expect(history?.[0]?.resultHash).not.toBe(history?.[1]?.resultHash);
+      const noProgressHashes = (history ?? [])
+        .filter((record) => record.noProgress)
+        .map((record) => record.resultHash);
+      expect(noProgressHashes.length).toBeGreaterThanOrEqual(6);
+      expect(new Set(noProgressHashes).size).toBe(1);
+      expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
+        lastProgressReason: "tool_loop:argument_churn",
+      });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("suspends churn liveness while a before-tool policy is pending", async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-07-27T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const sessionId = "write-churn-policy-wait-session";
+    const sessionKey = "main";
+    const runId = "write-churn-policy-wait-run";
+    const activityDuringExecution: ReturnType<typeof getDiagnosticSessionActivitySnapshot>[] = [];
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
+      activityDuringExecution.push(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }));
+      return createStableNoProgressWriteResult();
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      sessionKey,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+      await expectUnblockedToolExecution(tool, `write-churn-policy-wait-${index}`, {
+        path: paths[index % paths.length] ?? "/tmp/a.md",
+        content: "same content",
+      });
+    }
+    await expectUnblockedToolExecution(tool, "write-churn-policy-wait-warning", {
+      path: "/tmp/a.md",
+      content: "same content",
+    });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason).toBe(
+      "tool_loop:argument_churn",
+    );
+
+    let resolvePolicy:
+      | ((value: Awaited<ReturnType<HookRunner["runBeforeToolCall"]>>) => void)
+      | undefined;
+    const policyPending = new Promise<Awaited<ReturnType<HookRunner["runBeforeToolCall"]>>>(
+      (resolve) => {
+        resolvePolicy = resolve;
+      },
+    );
+    let markPolicyEntered!: () => void;
+    const policyEntered = new Promise<void>((resolve) => {
+      markPolicyEntered = resolve;
+    });
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockImplementation(() => {
+      markPolicyEntered();
+      return policyPending;
+    });
+
+    vi.setSystemTime(startedAt + 4 * 60_000);
+    const pendingExecution = tool.execute(
+      "write-churn-policy-wait-next",
+      { path: "/tmp/b.md", content: "same content" },
+      undefined,
+      undefined,
+    );
+    await policyEntered;
+    vi.setSystemTime(startedAt + 6 * 60_000);
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
+      lastProgressAgeMs: 0,
+      lastProgressReason: "tool_policy:pending",
+    });
+
+    resolvePolicy?.({});
+    await pendingExecution;
+    expect(activityDuringExecution.at(-1)).toMatchObject({
+      lastProgressAgeMs: 6 * 60_000,
+      lastProgressReason: "tool_loop:argument_churn",
+    });
+  });
+
+  it("releases churn suspension when a before-tool policy fails", async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-07-27T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const sessionId = "write-churn-policy-failure-session";
+    const sessionKey = "main";
+    const runId = "write-churn-policy-failure-run";
+
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    markDiagnosticArgumentChurnObservation({
+      sessionId,
+      sessionKey,
+      runId,
+      active: true,
+    });
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockRejectedValue(new Error("policy failed"));
+
+    vi.setSystemTime(startedAt + 6 * 60_000);
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "write",
+        params: { path: "/tmp/a.md", content: "same content" },
+        toolCallId: "write-churn-policy-failure",
+        ctx: {
+          ...enabledLoopDetectionContext,
+          sessionId,
+          sessionKey,
+          runId,
+        },
+      }),
+    ).resolves.toMatchObject({
+      blocked: true,
+      kind: "failure",
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
+      lastProgressAgeMs: 6 * 60_000,
+      lastProgressReason: "tool_loop:argument_churn",
+    });
+  });
+
+  it("clears churn liveness before executing params rewritten to a novel variant", async () => {
+    const sessionId = "write-churn-rewrite-session";
+    const sessionKey = "main";
+    const runId = "write-churn-rewrite-run";
+    const progressReasonsDuringExecution: Array<string | undefined> = [];
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
+      progressReasonsDuringExecution.push(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+      );
+      return createStableNoProgressWriteResult();
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      sessionKey,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+      const targetPath = paths[index % paths.length] ?? "/tmp/a.md";
+      await expectUnblockedToolExecution(tool, `write-churn-rewrite-${index}`, {
+        path: targetPath,
+        content: "same content",
+      });
+    }
+
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      params: { path: "/tmp/c.md", content: "same content" },
+    });
+    await expectUnblockedToolExecution(tool, "write-churn-rewrite-warning", {
+      path: "/tmp/a.md",
+      content: "same content",
+    });
+
+    expect(execute).toHaveBeenLastCalledWith(
+      "write-churn-rewrite-warning",
+      { path: "/tmp/c.md", content: "same content" },
+      undefined,
+      undefined,
+    );
+    expect(progressReasonsDuringExecution.at(-1)).not.toBe("tool_loop:argument_churn");
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+    ).not.toBe("tool_loop:argument_churn");
+  });
+
+  it("does not activate reconciled churn below the warning threshold", async () => {
+    const sessionId = "write-churn-below-threshold-session";
+    const sessionKey = "main";
+    const runId = "write-churn-below-threshold-run";
+    const progressReasonsDuringExecution: Array<string | undefined> = [];
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
+      progressReasonsDuringExecution.push(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+      );
+      return createStableNoProgressWriteResult();
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      sessionKey,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md"];
+
+    for (const [index, targetPath] of paths.entries()) {
+      await expectUnblockedToolExecution(tool, `write-churn-below-threshold-${index}`, {
+        path: targetPath,
+        content: "same content",
+      });
+    }
+    await expectUnblockedToolExecution(tool, "write-churn-below-threshold-next", {
+      path: "/tmp/a.md",
+      content: "same content",
+    });
+
+    expect(progressReasonsDuringExecution.at(-1)).not.toBe("tool_loop:argument_churn");
+  });
+
+  it("does not reconcile argument churn across run ids", async () => {
+    const sessionId = "write-churn-cross-run-session";
+    const sessionKey = "main";
+    const oldRunId = "write-churn-old-run";
+    const newRunId = "write-churn-new-run";
+    const progressReasonsDuringExecution: Array<string | undefined> = [];
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
+      progressReasonsDuringExecution.push(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+      );
+      return createStableNoProgressWriteResult();
+    });
+    const oldRunTool = createWrappedTool("write", execute, {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      sessionKey,
+      runId: oldRunId,
+    });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: oldRunId });
+    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+    for (let index = 0; index < 10; index += 1) {
+      await expectUnblockedToolExecution(oldRunTool, `write-churn-old-run-${index}`, {
+        path: paths[index % paths.length] ?? "/tmp/a.md",
+        content: "same content",
+      });
+    }
+
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: newRunId });
+    const newRunTool = createWrappedTool("write", execute, {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      sessionKey,
+      runId: newRunId,
+    });
+    await expectUnblockedToolExecution(newRunTool, "write-churn-new-run-first", {
+      path: "/tmp/a.md",
+      content: "same content",
+    });
+
+    expect(progressReasonsDuringExecution.at(-1)).not.toBe("tool_loop:argument_churn");
+  });
+
+  it("allows a two-pass same-tool batch through the wrapped tool runtime", async () => {
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
+      const targetPath =
+        typeof params === "object" && params !== null && "path" in params
+          ? String(params.path)
+          : "unknown";
+      return {
+        content: [{ type: "text", text: `wrote ${targetPath}` }],
+        details: { ok: true, path: targetPath },
+      };
+    });
+    const tool = createWrappedTool("write", execute);
+    const paths = Array.from({ length: 15 }, (_, index) => `/tmp/batch-${index}.md`);
+
+    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+      const targetPath = paths[index % paths.length]!;
+      await expectUnblockedToolExecution(tool, `write-batch-${index}`, {
+        path: targetPath,
+        content: "same content",
+      });
+    }
+
+    await expectUnblockedToolExecution(tool, "write-batch-next", {
+      path: "/tmp/batch-next.md",
+      content: "same content",
+    });
+    expect(execute).toHaveBeenCalledTimes(GLOBAL_CIRCUIT_BREAKER_THRESHOLD + 1);
+  });
+
   it("does not carry loop history across run ids", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],
       details: { ok: true },
     });
     const params = { path: "/tmp/file" };
-    const firstRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const firstRunTool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       ...enabledLoopDetectionContext,
       runId: "heartbeat-1",
     });
-    const secondRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const secondRunTool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       ...enabledLoopDetectionContext,
       runId: "heartbeat-2",
     });
@@ -453,6 +956,42 @@ describe("before_tool_call loop detection behavior", () => {
         ["warning", 10],
         ["critical", 20],
       ]);
+    });
+  });
+
+  it("escalates repeated critical vetoes to the global circuit breaker", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const runId = "codex-native-global-breaker";
+      const { tool, params, execute } = createGenericReadRepeatFixture({
+        ...enabledLoopDetectionContext,
+        runId,
+      });
+
+      for (let i = 0; i <= GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const toolCallId = `read-global-${i}`;
+        const nativeOutcome = await runBeforeToolCallHook({
+          toolName: "read",
+          params,
+          toolCallId,
+          ctx: {
+            agentId: enabledLoopDetectionContext.agentId,
+            sessionKey: enabledLoopDetectionContext.sessionKey,
+            runId,
+          },
+        });
+        expect(nativeOutcome.blocked).toBe(false);
+        await tool.execute(toolCallId, params, undefined, undefined);
+      }
+
+      expect(execute).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+      expect(emitted.at(-1)).toMatchObject({
+        type: "tool.loop",
+        level: "critical",
+        action: "block",
+        detector: "global_circuit_breaker",
+        count: 30,
+        toolName: "read",
+      });
     });
   });
 
@@ -553,7 +1092,7 @@ describe("before_tool_call loop detection behavior", () => {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "ok" }],
     });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "bash", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "bash", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       sessionId: "session-id",
@@ -666,6 +1205,7 @@ describe("before_tool_call loop detection behavior", () => {
         agentId: "main",
         sessionKey: "session-key",
         runId: "run-1",
+        loopDetection: { enabled: true },
       },
     );
 
@@ -786,6 +1326,33 @@ describe("before_tool_call loop detection behavior", () => {
     mockCallGateway.mockReset();
   });
 
+  it("returns a structured denial without an approval request in deny mode", async () => {
+    const onResolution = vi.fn();
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
+    hookRunner.runBeforeToolCall.mockResolvedValueOnce({
+      requireApproval: { title: "Approve", description: "Approval required", onResolution },
+    });
+    const mockCallGateway = vi.mocked(callGatewayTool);
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const tool = wrapToolWithBeforeToolCallHook(
+      { name: "exec", execute } as unknown as AnyAgentTool,
+      { agentId: "main", sessionKey: "session-key", runId: "run-1" },
+      { approvalMode: "deny" },
+    );
+
+    const result = await tool.execute("tool-call-deny", { command: "private" });
+
+    expect(result.details).toEqual({
+      status: "blocked",
+      deniedReason: "plugin-approval",
+      reason: "approval_required",
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(mockCallGateway).not.toHaveBeenCalled();
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.DENY);
+    mockCallGateway.mockReset();
+  });
+
   it.each([
     {
       label: "failure",
@@ -828,7 +1395,7 @@ describe("before_tool_call loop detection behavior", () => {
       content: [{ type: "text", text: "tool failed" }],
       details,
     });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "exec", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       runId: "run-1",
@@ -877,7 +1444,7 @@ describe("before_tool_call loop detection behavior", () => {
     const skillBaseDir = path.join(workspaceDir, ".agents", "skills", "demo-skill");
     const skillFilePath = path.join(skillBaseDir, "SKILL.md");
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "skill" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       sessionId: "session-id",
@@ -929,6 +1496,15 @@ describe("before_tool_call loop detection behavior", () => {
       expect(JSON.stringify(emitted)).not.toContain("SKILL.md");
       expect(JSON.stringify(emitted)).not.toContain(skillBaseDir);
       expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
+      expect(consumeRunSkillUsage("run-1")).toEqual([
+        {
+          name: "demo-skill",
+          source: "workspace",
+          activation: "read",
+          skillFile: skillFilePath,
+        },
+      ]);
+      expect(consumeRunSkillUsage("run-1")).toEqual([]);
     });
   });
 
@@ -936,7 +1512,7 @@ describe("before_tool_call loop detection behavior", () => {
     const skillBaseDir = path.join(os.homedir(), ".openclaw", "skills", "home-skill");
     const skillFilePath = path.join(skillBaseDir, "SKILL.md");
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "skill" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       workspaceDir: "/tmp/openclaw-workspace",
@@ -981,7 +1557,7 @@ describe("before_tool_call loop detection behavior", () => {
   it("emits skill usage diagnostics for node skill locators", async () => {
     const locator = "node://node-1/skills/remote-skill/SKILL.md";
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "skill" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       skillsSnapshot: {
@@ -1018,7 +1594,7 @@ describe("before_tool_call loop detection behavior", () => {
     const readPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
     const skillFile = "/agent-workspace/skills/demo/SKILL.md";
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "skill" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       workspaceDir,
@@ -1058,7 +1634,7 @@ describe("before_tool_call loop detection behavior", () => {
     const workspaceDir = path.join("/tmp", "openclaw-skill-unused-param");
     const skillBaseDir = path.join(workspaceDir, ".agents", "skills", "demo-skill");
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "readme" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       workspaceDir,
@@ -1101,7 +1677,7 @@ describe("before_tool_call loop detection behavior", () => {
     const skillBaseDir = path.join("/tmp", "openclaw-skill-command", "skills", "matrix-profile");
     const skillFilePath = path.join(skillBaseDir, "SKILL.md");
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "sent" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "message", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "message", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       sessionId: "session-id",
@@ -1147,7 +1723,7 @@ describe("before_tool_call loop detection behavior", () => {
     const execute = vi
       .fn()
       .mockRejectedValue(new Error("failed with key sk-1234567890abcdef1234567890abcdef"));
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       loopDetection: { enabled: false },
@@ -1180,7 +1756,7 @@ describe("before_tool_call loop detection behavior", () => {
       abortController.abort();
       throw new Error("tool stopped with run");
     });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       loopDetection: { enabled: false },
@@ -1212,7 +1788,7 @@ describe("before_tool_call loop detection behavior", () => {
       abortController.abort(Object.assign(new Error("timed out"), { name: "TimeoutError" }));
       throw new Error("tool stopped with timeout");
     });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       loopDetection: { enabled: false },
@@ -1238,7 +1814,7 @@ describe("before_tool_call loop detection behavior", () => {
       .mockRejectedValue(
         Object.assign(new Error("tool deadline elapsed"), { name: "TimeoutError" }),
       );
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       loopDetection: { enabled: false },
@@ -1266,7 +1842,7 @@ describe("before_tool_call loop detection behavior", () => {
       blockReason: "blocked by policy",
     });
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "nope" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       loopDetection: { enabled: false },
@@ -1303,7 +1879,7 @@ describe("before_tool_call loop detection behavior", () => {
       blockReason: "blocked by policy",
     });
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "nope" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       loopDetection: { enabled: false },
@@ -1362,7 +1938,7 @@ describe("before_tool_call loop detection behavior", () => {
       },
     );
     const execute = vi.fn().mockRejectedValue(hostileError);
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       loopDetection: { enabled: false },
@@ -1394,7 +1970,7 @@ describe("before_tool_call loop detection behavior", () => {
       status: 429,
     });
     const execute = vi.fn().mockRejectedValue(error);
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       loopDetection: { enabled: false },
@@ -1416,7 +1992,7 @@ describe("before_tool_call loop detection behavior", () => {
 
   it("summarizes hostile object params without enumerating keys", async () => {
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "bash", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "bash", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       loopDetection: { enabled: false },
@@ -1445,18 +2021,10 @@ describe("before_tool_call loop detection behavior", () => {
 });
 
 describe("before_tool_call requireApproval handling", () => {
-  let hookRunner: {
-    hasHooks: ReturnType<typeof vi.fn>;
-    runBeforeToolCall: ReturnType<typeof vi.fn>;
-  };
+  let hookRunner: TestHookRunner;
   const mockCallGateway = vi.mocked(callGatewayTool);
 
-  function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    if (typeof value !== "object" || value === null) {
-      throw new Error(`${label} was not an object`);
-    }
-    return value as Record<string, unknown>;
-  }
+  const requireRecord = createRequireRecord("object", "label-not-object");
 
   function requireHookCall(
     index: number,
@@ -1508,11 +2076,9 @@ describe("before_tool_call requireApproval handling", () => {
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
-    hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "before_tool_call"),
-      runBeforeToolCall: vi.fn(),
-    };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+    hookRunner = createTestHookRunner();
+    hookRunner.hasHooks.mockImplementation((hookName) => hookName === "before_tool_call");
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner);
     // Keep the global singleton aligned as a fallback in case another setup path
     // preloads hook-runner-global before this test's module reset/mocks take effect.
     setGlobalHookRunnerForTest(hookRunner);
@@ -1522,7 +2088,7 @@ describe("before_tool_call requireApproval handling", () => {
 
   async function runAbortDuringApprovalWait(options?: {
     abortReason?: unknown;
-    onResolution?: ReturnType<typeof vi.fn>;
+    onResolution?: (decision: PluginApprovalResolution) => void | Promise<void>;
   }) {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
@@ -2610,6 +3176,80 @@ describe("before_tool_call requireApproval handling", () => {
     expect(requestParams.turnSourceAccountId).toBeUndefined();
     expect(requestParams.turnSourceThreadId).toBeUndefined();
   });
+
+  it.each([
+    {
+      label: "cron",
+      trigger: "cron",
+      reason: "Plugin approval unavailable: cron runs have no approval-capable initiating surface.",
+    },
+    {
+      label: "heartbeat hook",
+      trigger: "heartbeat",
+      reason:
+        "Plugin approval unavailable: heartbeat runs have no approval-capable initiating surface.",
+    },
+    {
+      label: "non-interactive CLI",
+      trigger: "user",
+      reason:
+        "Plugin approval unavailable: non-interactive CLI runs have no approval-capable initiating surface.",
+    },
+  ])("fails fast when a $label run requires plugin approval", async ({ trigger, reason }) => {
+    const onResolution = vi.fn();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Unattended approval",
+        description: "Command needs review",
+        onResolution,
+      },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "gh run view 1" },
+      ctx: { agentId: "main", sessionKey: "main", trigger },
+    });
+
+    expect(result).toEqual({
+      blocked: true,
+      kind: "failure",
+      disposition: "failed",
+      deniedReason: "plugin-approval-unavailable",
+      reason,
+      params: { command: "gh run view 1" },
+    });
+    expect(mockCallGateway).not.toHaveBeenCalled();
+    expect(onResolution).toHaveBeenCalledWith("cancelled");
+  });
+
+  it("keeps waiting when an interactive approval surface is bound", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Interactive approval",
+        description: "CLI command needs review",
+      },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "interactive-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "interactive-id", decision: "allow-once" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "gh run view 1" },
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        trigger: "user",
+        approvalReviewerDeviceId: "device-tui-reviewer",
+      },
+    });
+
+    expect(result).toMatchObject({ blocked: false, approvalResolution: "allow-once" });
+    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
 });
 
 describe("before_tool_call tool content private-data capture", () => {
@@ -2643,27 +3283,22 @@ describe("before_tool_call tool content private-data capture", () => {
     }
   }
 
-  function configWithToolContent(
-    fields: { toolInputs?: boolean; toolOutputs?: boolean } = {
-      toolInputs: true,
-      toolOutputs: true,
-    },
-  ) {
+  function configWithToolContent(): OpenClawConfig {
     return {
       diagnostics: {
         enabled: true,
         otel: {
           enabled: true,
           traces: true,
-          captureContent: { enabled: true, ...fields },
+          captureContent: true,
         },
       },
-    } as unknown as import("../config/types.openclaw.js").OpenClawConfig;
+    };
   }
 
   it("attaches tool input/output to private data when opted in", async () => {
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "file body" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       runId: "run-1",
@@ -2688,7 +3323,7 @@ describe("before_tool_call tool content private-data capture", () => {
 
   it("omits tool content from private data when capture is not configured", async () => {
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       runId: "run-1",
@@ -2705,15 +3340,15 @@ describe("before_tool_call tool content private-data capture", () => {
     });
   });
 
-  it("captures only opted-in fields and clones away from live params", async () => {
+  it("clones captured content away from live params", async () => {
     const liveParams = { path: "/etc/secret" };
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "out" }] });
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       runId: "run-1",
       loopDetection: { enabled: false },
-      config: configWithToolContent({ toolInputs: true, toolOutputs: false }),
+      config: configWithToolContent(),
     });
 
     await withTrustedToolEvents(async (emitted, flush) => {
@@ -2722,7 +3357,9 @@ describe("before_tool_call tool content private-data capture", () => {
 
       const completed = emitted.find((e) => e.event.type === "tool.execution.completed");
       expect(completed?.privateData.toolContent?.toolInput).toEqual({ path: "/etc/secret" });
-      expect(completed?.privateData.toolContent?.toolOutput).toBeUndefined();
+      expect(completed?.privateData.toolContent?.toolOutput).toEqual({
+        content: [{ type: "text", text: "out" }],
+      });
       // Captured snapshot is a clone, not the live params object.
       expect(completed?.privateData.toolContent?.toolInput).not.toBe(liveParams);
     });
@@ -2730,7 +3367,7 @@ describe("before_tool_call tool content private-data capture", () => {
 
   it("attaches tool input but not output on execution errors", async () => {
     const execute = vi.fn().mockRejectedValue(new Error("boom"));
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
       agentId: "main",
       sessionKey: "session-key",
       runId: "run-1",
@@ -2750,3 +3387,4 @@ describe("before_tool_call tool content private-data capture", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

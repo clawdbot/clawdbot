@@ -6,10 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolveSecretRefString } from "./resolve.js";
+import { withSecureTestNodeExecPath } from "./test-node-command.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
-  loadPluginManifestRegistry: vi.fn(() => {
+  loadPluginManifestRegistryCore: vi.fn(() => {
     throw new Error("unexpected manifest registry rediscovery");
   }),
 }));
@@ -19,7 +20,7 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore: mocks.loadPluginManifestRegistryCore,
 }));
 
 function createPluginManagedSecretProviderFixture(): {
@@ -86,23 +87,25 @@ function createPluginManagedSecretProviderFixture(): {
 describe("resolveSecretRefString manifest registry reuse", () => {
   afterEach(() => {
     mocks.getCurrentPluginMetadataSnapshot.mockReset();
-    mocks.loadPluginManifestRegistry.mockClear();
+    mocks.loadPluginManifestRegistryCore.mockClear();
   });
 
   it("uses an explicit manifest registry without rediscovering plugin manifests", async () => {
     const { config, manifestRegistry, rootDir } = createPluginManagedSecretProviderFixture();
     try {
-      await expect(
-        resolveSecretRefString(
-          { source: "exec", provider: "vault", id: "providers/openrouter/apiKey" },
-          {
-            config,
-            manifestRegistry,
-          },
-        ),
-      ).resolves.toBe("value:providers/openrouter/apiKey");
+      await withSecureTestNodeExecPath(async () => {
+        await expect(
+          resolveSecretRefString(
+            { source: "exec", provider: "vault", id: "providers/openrouter/apiKey" },
+            {
+              config,
+              manifestRegistry,
+            },
+          ),
+        ).resolves.toBe("value:providers/openrouter/apiKey");
+      });
       expect(mocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
-      expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+      expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
@@ -113,21 +116,23 @@ describe("resolveSecretRefString manifest registry reuse", () => {
     const env = { HOME: rootDir } as NodeJS.ProcessEnv;
     mocks.getCurrentPluginMetadataSnapshot.mockReturnValue({ manifestRegistry });
     try {
-      await expect(
-        resolveSecretRefString(
-          { source: "exec", provider: "vault", id: "providers/openrouter/apiKey" },
-          {
-            config,
-            env,
-          },
-        ),
-      ).resolves.toBe("value:providers/openrouter/apiKey");
+      await withSecureTestNodeExecPath(async () => {
+        await expect(
+          resolveSecretRefString(
+            { source: "exec", provider: "vault", id: "providers/openrouter/apiKey" },
+            {
+              config,
+              env,
+            },
+          ),
+        ).resolves.toBe("value:providers/openrouter/apiKey");
+      });
       expect(mocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
         config,
         env,
         allowWorkspaceScopedSnapshot: true,
       });
-      expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+      expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }

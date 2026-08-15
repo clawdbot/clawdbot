@@ -8,14 +8,25 @@ import {
 
 describe("resolveCronExecutionRetryHint", () => {
   it("matches classified transient errors", () => {
-    expect(resolveCronExecutionRetryHint("HTTP 529", ["overloaded"])).toEqual({
+    expect(resolveCronExecutionRetryHint({ error: "HTTP 529", retryOn: ["overloaded"] })).toEqual({
       retryable: true,
       category: "overloaded",
     });
-    expect(resolveCronExecutionRetryHint("429 rate limit exceeded", ["rate_limit"])).toEqual({
-      retryable: true,
-      category: "rate_limit",
-    });
+    expect(
+      resolveCronExecutionRetryHint({
+        error: "429 rate limit exceeded",
+        retryOn: ["rate_limit"],
+      }),
+    ).toEqual({ retryable: true, category: "rate_limit" });
+  });
+
+  it("does not let transient error text override a permanent provider classification", () => {
+    expect(
+      resolveCronExecutionRetryHint({
+        error: "HTTP 429: all available credits have been exhausted",
+        classifiedReason: "billing",
+      }),
+    ).toEqual({ retryable: false });
   });
 
   it("treats common network error codes as network when retryOn only includes network", () => {
@@ -28,22 +39,26 @@ describe("resolveCronExecutionRetryHint", () => {
       "ENETUNREACH",
       "EPIPE",
     ]) {
-      expect(resolveCronExecutionRetryHint(`temporary DNS failure: ${code}`, ["network"])).toEqual({
-        retryable: true,
-        category: "network",
-      });
+      expect(
+        resolveCronExecutionRetryHint({
+          error: `temporary DNS failure: ${code}`,
+          retryOn: ["network"],
+        }),
+      ).toEqual({ retryable: true, category: "network" });
     }
   });
 
   it("does not retry permanent errors", () => {
-    expect(resolveCronExecutionRetryHint("invalid API key", ["network"])).toEqual({
+    expect(
+      resolveCronExecutionRetryHint({ error: "invalid API key", retryOn: ["network"] }),
+    ).toEqual({
       retryable: false,
     });
   });
 
   it("classifies cron pre-execution watchdog failures as timeout retries", () => {
     for (const message of [setupTimeoutErrorMessage(), preExecutionTimeoutErrorMessage()]) {
-      expect(resolveCronExecutionRetryHint(message, ["timeout"])).toEqual({
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["timeout"] })).toEqual({
         retryable: true,
         category: "timeout",
       });
@@ -60,7 +75,7 @@ describe("resolveCronExecutionRetryHint", () => {
       "error 500 got 0",
       "process exited with code 500",
     ]) {
-      expect(resolveCronExecutionRetryHint(message, ["server_error"])).toEqual({
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["server_error"] })).toEqual({
         retryable: false,
       });
     }
@@ -77,10 +92,93 @@ describe("resolveCronExecutionRetryHint", () => {
       "503",
       "500",
     ]) {
-      expect(resolveCronExecutionRetryHint(message, ["server_error"])).toEqual({
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["server_error"] })).toEqual({
         retryable: true,
         category: "server_error",
       });
     }
+  });
+
+  it("does not classify incidental 429 numbers or provider names as rate limits", () => {
+    for (const message of [
+      "context limit 1429 exceeded",
+      "process exited with 429 lines of output",
+      "assertion failed: expected 429 got 0",
+      "error 429 got 0",
+      "process exited with code 429",
+      "API error: 4291",
+      "APIError: 4291",
+      "HTTP/2 4291",
+      "requested URL returned error: 4291",
+      "ENOENT: no such file '/etc/cloudflare.toml'",
+      "Cloudflare API token is invalid",
+    ]) {
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["rate_limit"] })).toEqual({
+        retryable: false,
+      });
+    }
+  });
+
+  it("classifies genuine HTTP and provider API rate limits", () => {
+    for (const message of [
+      "HTTP 429 Too Many Requests",
+      "HTTP/2 429",
+      "HTTP/1.1 429",
+      "received status 429 from upstream",
+      "response code: 429",
+      "statusCode: 429",
+      "status_code=429",
+      "responseCode: 429",
+      "API error: 429",
+      "APIError: 429",
+      "api_error: 429",
+      "curl: (22) The requested URL returned error: 429",
+      "URL returned error: 429",
+      "Provider API error (429): Quota exceeded [code=quota_exceeded]",
+      "429 rate limit exceeded",
+      "429: quota exceeded",
+      "429: quota exhausted",
+      '{"error":{"type":"rate_limit_error"}}',
+      "rate_limit_exceeded",
+      "rate_limit_reached",
+      "resource has been exhausted",
+      "429",
+    ]) {
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["rate_limit"] })).toEqual({
+        retryable: true,
+        category: "rate_limit",
+      });
+    }
+  });
+
+  it("classifies session lifecycle claim conflicts as transient regardless of retryOn (#106875)", () => {
+    for (const message of [
+      'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      'Error: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      'Error: Session "agent:main:cron:job-1" was deleted while starting work. Retry.',
+    ]) {
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["network"] })).toEqual({
+        retryable: true,
+      });
+    }
+  });
+
+  it("does not retry lifecycle claim conflicts after execution starts (#108428)", () => {
+    expect(
+      resolveCronExecutionRetryHint({
+        error:
+          'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+        retryOn: ["network"],
+        executionStarted: true,
+      }),
+    ).toEqual({ retryable: false });
+  });
+
+  it("does not classify archived-session work-start errors as transient", () => {
+    expect(
+      resolveCronExecutionRetryHint({
+        error: 'Error: Session "agent:main:main" is archived. Restore it before starting new work.',
+      }),
+    ).toEqual({ retryable: false });
   });
 });

@@ -1,10 +1,13 @@
 // CLI backend live probe helpers run cron/MCP/image probes through the gateway
 // CLI backend and poll for externally visible live results.
 import { randomUUID } from "node:crypto";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord as asLoopbackSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
+import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { readResponseWithLimit } from "../infra/http-body.js";
 import { sleep } from "../utils/sleep.js";
 import type { GatewayClient } from "./client.js";
 import {
@@ -20,7 +23,7 @@ import {
   runOpenClawCliJson,
   type CronListJob,
 } from "./live-agent-probes.js";
-import { getActiveMcpLoopbackRuntime } from "./mcp-http.js";
+import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 // CI Docker live lanes can see repeated cancelled cron tool calls before a job
@@ -124,12 +127,6 @@ function parsePositiveInt(value: string | undefined, fallback: number, name: str
   return parsed;
 }
 
-function asLoopbackSchemaRecord(schema: unknown): Record<string, unknown> | null {
-  return schema && typeof schema === "object" && !Array.isArray(schema)
-    ? (schema as Record<string, unknown>)
-    : null;
-}
-
 function assertLoopbackObjectSchemasHaveProperties(params: {
   tools: LoopbackToolListEntry[];
   expectedSchemaProbeToolName?: string;
@@ -221,7 +218,10 @@ async function callLoopbackJsonRpc(params: {
       body: JSON.stringify(params.body),
       signal: controller.signal,
     });
-    text = await readBoundedResponseText(response, maxBodyBytes);
+    const responseBody = await readResponseWithLimit(response, maxBodyBytes, {
+      onOverflow: () => new Error(`mcp loopback response body exceeded ${maxBodyBytes} bytes`),
+    });
+    text = responseBody.toString("utf8");
   } finally {
     clearTimeout(timer);
   }
@@ -239,28 +239,6 @@ async function callLoopbackJsonRpc(params: {
     throw new Error(`mcp loopback json-rpc error: ${parsed.error.message}`);
   }
   return parsed;
-}
-
-async function readBoundedResponseText(response: Response, byteLimit: number): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return "";
-  }
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    totalBytes += value.byteLength;
-    if (totalBytes > byteLimit) {
-      await reader.cancel();
-      throw new Error(`mcp loopback response body exceeded ${byteLimit} bytes`);
-    }
-    chunks.push(Buffer.from(value));
-  }
-  return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
 export async function verifyCliCronMcpLoopbackPreflight(params: {
@@ -316,10 +294,10 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     .filter(Boolean);
   logCliCronProbe("loopback-preflight:tools", {
     toolCount: toolNames.length,
-    cronVisible: toolNames.includes("cron"),
+    cronVisible: toolNames.includes(AUTOMATIONS_TOOL_NAME),
   });
-  if (!toolNames.includes("cron")) {
-    throw new Error("mcp loopback tools/list did not expose cron");
+  if (!toolNames.includes(AUTOMATIONS_TOOL_NAME)) {
+    throw new Error(`mcp loopback tools/list did not expose ${AUTOMATIONS_TOOL_NAME}`);
   }
 
   const toolCall = await callLoopbackJsonRpc({
@@ -332,7 +310,7 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
       id: "cron-add",
       method: "tools/call",
       params: {
-        name: "cron",
+        name: AUTOMATIONS_TOOL_NAME,
         arguments: JSON.parse(cronProbe.argsJson) as Record<string, unknown>,
       },
     },

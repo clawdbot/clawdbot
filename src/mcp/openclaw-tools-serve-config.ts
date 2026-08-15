@@ -7,17 +7,19 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { CrestodianToolOptions } from "../agents/tools/crestodian-tool.js";
+import type { SystemAgentToolOptions } from "../agents/tools/system-agent-tool.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import type { BundleMcpConfig } from "../plugins/bundle-mcp.js";
 
 export const OPENCLAW_TOOLS_MCP_TOOLS_ENV = "OPENCLAW_TOOLS_MCP_TOOLS";
-export const OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV = "OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE";
-export const OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV =
-  "OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED";
-export const OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV = "OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL";
+export const OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV =
+  "OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE";
+export const OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV =
+  "OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED";
+export const OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV =
+  "OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL";
 
-export const OPENCLAW_TOOLS_MCP_TOOL_IDS = ["cron", "crestodian"] as const;
+const OPENCLAW_TOOLS_MCP_TOOL_IDS = ["cron", "openclaw"] as const;
 export type OpenClawToolsMcpToolId = (typeof OPENCLAW_TOOLS_MCP_TOOL_IDS)[number];
 
 function isOpenClawToolsMcpToolId(value: string): value is OpenClawToolsMcpToolId {
@@ -45,33 +47,33 @@ export function resolveOpenClawToolsMcpToolSelection(
   return selection;
 }
 
-/** Parse the Crestodian surface for served crestodian tools; defaults to cli. */
-export function resolveOpenClawToolsMcpCrestodianSurface(
+/** Parse the OpenClaw surface for served openclaw tools; defaults to cli. */
+export function resolveOpenClawToolsMcpSystemAgentSurface(
   env: NodeJS.ProcessEnv = process.env,
-): CrestodianToolOptions["surface"] {
-  const raw = env[OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV]?.trim();
+): SystemAgentToolOptions["surface"] {
+  const raw = env[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]?.trim();
   if (!raw || raw === "cli") {
     return "cli";
   }
   if (raw === "gateway") {
     return "gateway";
   }
-  throw new Error(`${OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV} must be "cli" or "gateway"`);
+  throw new Error(`${OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV} must be "cli" or "gateway"`);
 }
 
 /**
- * Reconstruct per-turn approval state for the served crestodian tool. The
+ * Reconstruct per-turn approval state for the served openclaw tool. The
  * stdio server runs out of process, so the host passes the armed bit and the
  * pending proposal hash through env; the host mirrors transitions back from
- * tool events (see mirrorCrestodianProposalFromToolEvents in agent-turn.ts).
+ * tool events (see mirrorSystemAgentProposalFromToolEvents in agent-turn.ts).
  */
-export function resolveOpenClawToolsMcpCrestodianApproval(env: NodeJS.ProcessEnv = process.env): {
+export function resolveOpenClawToolsMcpSystemAgentApproval(env: NodeJS.ProcessEnv = process.env): {
   approvalArmed: boolean;
   proposalRef: { current?: string };
 } {
-  const pendingProposal = env[OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV]?.trim();
+  const pendingProposal = env[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV]?.trim();
   return {
-    approvalArmed: env[OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV]?.trim() === "1",
+    approvalArmed: env[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV]?.trim() === "1",
     proposalRef: pendingProposal ? { current: pendingProposal } : {},
   };
 }
@@ -112,13 +114,13 @@ function resolveOpenClawToolsServeCommand(): { command: string; args: string[] }
 }
 
 /**
- * Crestodian CLI-harness runs get exactly one MCP server: this stdio entry
- * serving the ring-zero crestodian tool. The server keeps the "openclaw" name
+ * OpenClaw CLI-harness runs get exactly one MCP server: this stdio entry
+ * serving the ring-zero openclaw tool. The server keeps the "openclaw" name
  * so backend tool pre-approvals (e.g. Claude's --allowedTools mcp__openclaw__*)
  * apply without per-backend argument surgery.
  */
-export function buildCrestodianToolsMcpServerConfig(
-  options: CrestodianToolOptions,
+export function buildSystemAgentToolsMcpServerConfig(
+  options: SystemAgentToolOptions,
 ): BundleMcpConfig {
   const entry = resolveOpenClawToolsServeCommand();
   const pendingProposal = options.proposalRef?.current;
@@ -128,15 +130,15 @@ export function buildCrestodianToolsMcpServerConfig(
         command: entry.command,
         args: entry.args,
         env: {
-          [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "crestodian" satisfies OpenClawToolsMcpToolId,
-          [OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV]: options.surface,
+          [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "openclaw" satisfies OpenClawToolsMcpToolId,
+          [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: options.surface,
           // Per-turn approval state travels with the per-run MCP config; the
           // host mirrors proposal transitions back from tool events.
           ...(options.approvalArmed === true
-            ? { [OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV]: "1" }
+            ? { [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV]: "1" }
             : {}),
           ...(pendingProposal
-            ? { [OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV]: pendingProposal }
+            ? { [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV]: pendingProposal }
             : {}),
         },
       },

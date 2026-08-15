@@ -3,8 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TelegramInboundBodyResult } from "./bot-message-context.body.js";
-import { resetTopicNameCacheForTest } from "./topic-name-cache.js";
+import { resetTelegramTopicNameCacheForTest as resetTopicNameCacheForTest } from "./runtime.test-support.js";
+
+type ResolveTelegramInboundBody =
+  typeof import("./bot-message-context.body.js").resolveTelegramInboundBody;
+type TelegramInboundBodyResult = NonNullable<Awaited<ReturnType<ResolveTelegramInboundBody>>>;
 
 type SessionRuntimeModule = typeof import("./bot-message-context.session.runtime.js");
 type RecordInboundSessionFn = SessionRuntimeModule["recordInboundSession"];
@@ -24,7 +27,6 @@ const { inboundBodyResult, recordInboundSessionMock, resolveStorePathMock } = vi
       explicitlyMentionedBot: false,
       effectiveWasMentioned: true,
       requireMention: false,
-      shouldSkip: false,
     },
     canDetectMention: false,
     shouldBypassMention: false,
@@ -35,7 +37,7 @@ const { inboundBodyResult, recordInboundSessionMock, resolveStorePathMock } = vi
   return {
     inboundBodyResult: { value: createInboundBodyResult(), reset: createInboundBodyResult },
     recordInboundSessionMock: vi.fn<RecordInboundSessionFn>(async () => undefined),
-    resolveStorePathMock: vi.fn<ResolveStorePathFn>(() => "/tmp/openclaw-session-store.json"),
+    resolveStorePathMock: vi.fn<ResolveStorePathFn>(),
   };
 });
 
@@ -61,18 +63,24 @@ const { buildTelegramMessageContextForTest } =
 const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
   await import("openclaw/plugin-sdk/runtime-config-snapshot");
 
-beforeEach(() => {
+let defaultSessionStoreRoot = "";
+
+beforeEach(async () => {
+  defaultSessionStoreRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-telegram-message-context-"),
+  );
   clearRuntimeConfigSnapshot();
   resetTopicNameCacheForTest();
   inboundBodyResult.value = inboundBodyResult.reset();
+  resolveStorePathMock.mockReturnValue(path.join(defaultSessionStoreRoot, "sessions.json"));
 });
 
-afterEach(() => {
+afterEach(async () => {
   clearRuntimeConfigSnapshot();
   resetTopicNameCacheForTest();
   recordInboundSessionMock.mockClear();
   resolveStorePathMock.mockReset();
-  resolveStorePathMock.mockReturnValue("/tmp/openclaw-session-store.json");
+  await fs.rm(defaultSessionStoreRoot, { recursive: true, force: true });
 });
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
@@ -80,7 +88,7 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
     message: Record<string, unknown>,
     params?: Pick<
       Parameters<typeof buildTelegramMessageContextForTest>[0],
-      "cfg" | "me" | "resolveTelegramGroupConfig"
+      "cfg" | "me" | "resolveTelegramGroupConfig" | "sendChatActionHandler"
     >,
   ) =>
     await buildTelegramMessageContextForTest({
@@ -122,7 +130,7 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
   });
 
-  it("does not use configured DM topics without bot topic capability", async () => {
+  it("does not use configured bot-private topics without bot topic capability", async () => {
     const ctx = await buildContext(
       {
         ...dmThreadMessage,
@@ -141,7 +149,7 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:support:main");
   });
 
-  it("uses configured DM topic routing once bot topic capability is present", async () => {
+  it("uses configured bot-private topic routing once bot topic capability is present", async () => {
     const ctx = await buildContext(
       {
         ...dmThreadMessage,
@@ -176,11 +184,18 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
 });
 
 describe("buildTelegramMessageContext group sessions without forum", () => {
-  const buildContext = async (message: Record<string, unknown>) =>
+  const buildContext = async (
+    message: Record<string, unknown>,
+    params?: Pick<
+      Parameters<typeof buildTelegramMessageContextForTest>[0],
+      "sendChatActionHandler"
+    >,
+  ) =>
     await buildTelegramMessageContextForTest({
       message,
       options: { forceWasMentioned: true },
       resolveGroupActivation: () => true,
+      ...params,
     });
 
   it("ignores message_thread_id for regular groups (not forums)", async () => {
@@ -204,6 +219,45 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
     expect(ctx.ctxPayload.MessageThreadId).toBeUndefined();
   });
 
+  it("round-trips channel Direct Messages topics with their distinct target marker", async () => {
+    const sendChatAction = vi.fn(async () => undefined);
+    const ctx = await buildContext(
+      {
+        message_id: 8,
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Channel Direct Messages",
+          is_direct_messages: true,
+        },
+        date: 1700000007,
+        text: "@bot hello",
+        message_thread_id: 999,
+        direct_messages_topic: {
+          topic_id: 77,
+          user: { id: 700, is_bot: false, first_name: "Subscriber" },
+        },
+        from: { id: 700, first_name: "Subscriber" },
+      },
+      {
+        sendChatActionHandler: {
+          sendChatAction,
+          isSuspended: () => false,
+          reset: () => {},
+        },
+      },
+    );
+
+    expect(ctx?.ctxPayload.MessageThreadId).toBe(77);
+    expect(ctx?.ctxPayload.OriginatingTo).toBe("telegram:-1001234567890:direct-topic:77");
+    expect(ctx?.ctxPayload.SessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:77");
+    expect(ctx?.turn.record.updateLastRoute).toMatchObject({
+      to: "telegram:-1001234567890:direct-topic:77",
+      threadId: "77",
+    });
+    expect(sendChatAction).not.toHaveBeenCalled();
+  });
+
   it("carries the body-layer inbound event kind instead of restamping from copied mention booleans", async () => {
     inboundBodyResult.value = {
       ...inboundBodyResult.reset(),
@@ -216,7 +270,6 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
         mentionSource: "explicit_bot",
         effectiveWasMentioned: true,
         requireMention: false,
-        shouldSkip: false,
       },
     };
 

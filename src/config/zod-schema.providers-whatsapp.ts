@@ -1,34 +1,18 @@
 // Defines WhatsApp provider schema fragments for config parsing.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
+import { buildGroupEntrySchema } from "../channels/plugins/config-schema.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
-import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
-  ChannelHealthMonitorSchema,
-  ChannelHeartbeatVisibilitySchema,
-} from "./zod-schema.channels.js";
-import {
-  ChannelDeliveryStreamingConfigSchema,
-  ContextVisibilityModeSchema,
-  DmConfigSchema,
-  DmPolicySchema,
-  GroupPolicySchema,
-  MarkdownConfigSchema,
-  MentionPatternsPolicySchema,
-  ReplyToModeSchema,
-} from "./zod-schema.core.js";
+  ChannelSendReadReceiptsSchema,
+  buildChannelReactionShape,
+  buildCommonChannelAccountShape,
+} from "./zod-schema.channel-messaging-common.js";
+import { ChannelDeliveryStreamingConfigSchema } from "./zod-schema.core.js";
 
-const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
-
-const WhatsAppGroupEntrySchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    systemPrompt: z.string().optional(),
-  })
-  .strict()
-  .optional();
+const WhatsAppGroupEntrySchema = buildGroupEntrySchema(undefined, {
+  omit: ["skills", "enabled", "allowFrom"],
+}).optional();
 
 const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).optional();
 
@@ -41,15 +25,6 @@ const WhatsAppDirectEntrySchema = z
 
 const WhatsAppDirectSchema = z.record(z.string(), WhatsAppDirectEntrySchema).optional();
 
-const WhatsAppAckReactionSchema = z
-  .object({
-    emoji: z.string().optional(),
-    direct: z.boolean().optional().default(true),
-    group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
-  })
-  .strict()
-  .optional();
-
 const WhatsAppPluginHooksSchema = z
   .object({
     messageReceived: z.boolean().optional(),
@@ -57,54 +32,23 @@ const WhatsAppPluginHooksSchema = z
   .strict()
   .optional();
 
-function stripDeprecatedWhatsAppNoopKeys(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  if (!Object.hasOwn(value, "exposeErrorText")) {
-    return value;
-  }
-  const next = { ...(value as Record<string, unknown>) };
-  delete next.exposeErrorText;
-  return next;
-}
-
 function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
   return {
-    enabled: z.boolean().optional(),
-    capabilities: z.array(z.string()).optional(),
-    markdown: MarkdownConfigSchema,
-    configWrites: z.boolean().optional(),
-    sendReadReceipts: z.boolean().optional(),
-    messagePrefix: z.string().optional(),
-    responsePrefix: z.string().optional(),
-    dmPolicy: params.useDefaults
-      ? DmPolicySchema.optional().default("pairing")
-      : DmPolicySchema.optional(),
+    ...buildCommonChannelAccountShape({
+      useDefaults: params.useDefaults,
+      omit: ["name"],
+      allowFrom: z.array(z.string()).optional(),
+      groupAllowFrom: z.array(z.string()).optional(),
+      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
+      mediaMaxMb: z.number().int().positive().optional(),
+    }),
+    sendReadReceipts: ChannelSendReadReceiptsSchema,
     selfChatMode: z.boolean().optional(),
-    allowFrom: z.array(z.string()).optional(),
-    defaultTo: z.string().optional(),
-    groupAllowFrom: z.array(z.string()).optional(),
-    groupPolicy: params.useDefaults
-      ? GroupPolicySchema.optional().default("allowlist")
-      : GroupPolicySchema.optional(),
-    mentionPatterns: MentionPatternsPolicySchema.optional(),
-    contextVisibility: ContextVisibilityModeSchema.optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
     groups: WhatsAppGroupsSchema,
     direct: WhatsAppDirectSchema,
-    ackReaction: WhatsAppAckReactionSchema,
-    reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
-    debounceMs: params.useDefaults
-      ? z.number().int().nonnegative().optional().default(0)
-      : z.number().int().nonnegative().optional(),
-    replyToMode: ReplyToModeSchema.optional(),
-    heartbeat: ChannelHeartbeatVisibilitySchema,
-    healthMonitor: ChannelHealthMonitorSchema,
+    ...buildChannelReactionShape({
+      reactionLevels: ["off", "ack", "minimal", "extensive"],
+    }),
     pluginHooks: WhatsAppPluginHooksSchema,
   };
 }
@@ -155,17 +99,13 @@ const WhatsAppAccountObjectSchema = z
   .object({
     ...buildWhatsAppCommonShape({ useDefaults: false }),
     name: z.string().optional(),
-    enabled: z.boolean().optional(),
     /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
     authDir: z.string().optional(),
     mediaMaxMb: z.number().int().positive().optional(),
   })
   .strict();
 
-export const WhatsAppAccountSchema = z.preprocess(
-  stripDeprecatedWhatsAppNoopKeys,
-  WhatsAppAccountObjectSchema,
-);
+const WhatsAppAccountSchema = WhatsAppAccountObjectSchema;
 
 const WhatsAppConfigObjectSchema = z
   .object({
@@ -234,7 +174,4 @@ const WhatsAppConfigObjectSchema = z
     }
   });
 
-export const WhatsAppConfigSchema = z.preprocess(
-  stripDeprecatedWhatsAppNoopKeys,
-  WhatsAppConfigObjectSchema,
-);
+export const WhatsAppConfigSchema = WhatsAppConfigObjectSchema;

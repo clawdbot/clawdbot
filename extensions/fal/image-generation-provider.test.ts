@@ -1,4 +1,6 @@
 // Fal tests cover image generation provider plugin behavior.
+import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generation";
+import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,15 +8,30 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-import {
-  setFalFetchGuardForTesting,
-  buildFalImageGenerationProvider,
-} from "./image-generation-provider.js";
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
 
-function expectFalJsonPost(params: { call: number; url: string; body: Record<string, unknown> }) {
-  const request = fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0];
+import { buildFalImageGenerationProvider } from "./image-generation-provider.js";
+
+const falApiKey = { apiKey: "fal-test-key", source: "env", mode: "api-key" } as const;
+
+function releasedJson(payload: unknown, release = vi.fn(async () => {})) {
+  return { response: Response.json(payload), release };
+}
+
+function releasedImage(data: BodyInit, release = vi.fn(async () => {})) {
+  return {
+    response: new Response(data, { status: 200, headers: { "content-type": "image/png" } }),
+    release,
+  };
+}
+
+function expectFalJsonPost(params: { url: string; body: Record<string, unknown> }) {
+  const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
   if (!request) {
-    throw new Error(`expected fal fetch request #${params.call}`);
+    throw new Error("expected fal fetch request #1");
   }
   expect(request.url).toBe(params.url);
   expect(request.auditContext).toBe("fal-image-generate");
@@ -36,19 +53,46 @@ function expectFalDownload(params: { call: number; url: string; timeoutMs?: numb
 }
 
 describe("fal image-generation provider", () => {
+  let provider: ReturnType<typeof buildFalImageGenerationProvider>;
+
+  function sourceImage(buffer: string, mimeType = "image/png", fileName?: string) {
+    return { buffer: Buffer.from(buffer), mimeType, ...(fileName ? { fileName } : {}) };
+  }
+
+  function generateFalImage(
+    fileName: string,
+    imageData: string,
+    request: Omit<ImageGenerationRequest, "provider" | "model" | "cfg"> &
+      Partial<Pick<ImageGenerationRequest, "model" | "cfg">>,
+  ) {
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(
+        releasedJson({ images: [{ url: `https://v3.fal.media/files/example/${fileName}` }] }),
+      )
+      .mockResolvedValueOnce(releasedImage(Buffer.from(imageData)));
+    return provider.generateImage({
+      provider: "fal",
+      model: "fal-ai/flux/dev",
+      cfg: {},
+      ...request,
+    });
+  }
+
   beforeEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
     vi.clearAllMocks();
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue(falApiKey);
+    provider = buildFalImageGenerationProvider();
   });
 
   afterEach(() => {
-    setFalFetchGuardForTesting(null);
+    fetchWithSsrFGuardMock.mockReset();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   it("publishes model-specific Grok and Nano Banana 2 Lite geometry", () => {
-    const geometry = buildFalImageGenerationProvider().capabilities.geometry;
-    const edit = buildFalImageGenerationProvider().capabilities.edit;
+    const { geometry, edit } = provider.capabilities;
     const grokRatios = geometry?.aspectRatiosByModel?.["xai/grok-imagine-image"];
     const grokResolutions = geometry?.resolutionsByModel?.["xai/grok-imagine-image"];
     const nanoResolutions = geometry?.resolutionsByModel?.["google/nano-banana-2-lite"];
@@ -75,19 +119,128 @@ describe("fal image-generation provider", () => {
     );
   });
 
+  it.each([
+    {
+      model: "krea/v2/medium/text-to-image",
+      supported: "2.35:1",
+      unsupported: "21:9",
+    },
+    {
+      model: "krea/v2/large/text-to-image",
+      supported: "2.35:1",
+      unsupported: "21:9",
+    },
+    {
+      model: "fal-ai/nano-banana-2",
+      supported: "21:9",
+      unsupported: "2.35:1",
+    },
+    {
+      model: "fal-ai/nano-banana-2/edit",
+      supported: "21:9",
+      unsupported: "2.35:1",
+    },
+  ])(
+    "publishes the native aspect-ratio contract for $model",
+    ({ model, supported, unsupported }) => {
+      const aspectRatios = provider.capabilities.geometry?.aspectRatiosByModel?.[model];
+
+      expect(aspectRatios).toContain(supported);
+      expect(aspectRatios).not.toContain(unsupported);
+    },
+  );
+
+  it.each([
+    {
+      model: "krea/v2/medium/text-to-image",
+      requested: "21:9",
+      applied: "2.35:1",
+      mode: "generate",
+    },
+    {
+      model: "krea/v2/large/text-to-image",
+      requested: "21:9",
+      applied: "2.35:1",
+      mode: "style",
+    },
+    {
+      model: "fal-ai/nano-banana-2",
+      requested: "2.35:1",
+      applied: "21:9",
+      mode: "generate",
+    },
+    {
+      model: "fal-ai/nano-banana-2/edit",
+      requested: "2.35:1",
+      applied: "21:9",
+      mode: "edit",
+    },
+  ])("normalizes unsupported $model geometry before provider submission", async (testCase) => {
+    const image = sourceImage("reference");
+    const inputImages = testCase.mode === "generate" ? undefined : [image];
+    try {
+      fetchWithSsrFGuardMock
+        .mockResolvedValueOnce(releasedJson({ images: [{ url: "https://v3.fal.media/out.png" }] }))
+        .mockResolvedValueOnce(releasedImage(Buffer.from("png-data")));
+
+      const result = await generateImage(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                mediaModels: { image: { primary: `fal/${testCase.model}` } },
+              },
+            },
+          },
+          prompt: "preserve the closest native image shape",
+          aspectRatio: testCase.requested,
+          ...(inputImages ? { inputImages } : {}),
+        },
+        {
+          getProvider: () => provider,
+          listProviders: () => [provider],
+        },
+      );
+
+      expect(result.normalization?.aspectRatio).toEqual({
+        requested: testCase.requested,
+        applied: testCase.applied,
+      });
+      expectFalJsonPost({
+        url: `https://fal.run/${testCase.model}`,
+        body: {
+          prompt: "preserve the closest native image shape",
+          aspect_ratio: testCase.applied,
+          ...(testCase.mode === "style"
+            ? {
+                creativity: "medium",
+                image_style_references: [
+                  { image_url: `data:image/png;base64,${image.buffer.toString("base64")}` },
+                ],
+              }
+            : testCase.mode === "edit"
+              ? {
+                  num_images: 1,
+                  output_format: "png",
+                  image_urls: [`data:image/png;base64,${image.buffer.toString("base64")}`],
+                }
+              : testCase.model.startsWith("krea/")
+                ? { creativity: "medium" }
+                : { num_images: 1, output_format: "png" }),
+        },
+      });
+    } finally {
+      fetchWithSsrFGuardMock.mockReset();
+    }
+  });
+
   it("generates image buffers from the fal sync API", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     const releaseRequest = vi.fn(async () => {});
     const releaseDownload = vi.fn(async () => {});
     fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
+      .mockResolvedValueOnce(
+        releasedJson(
+          {
             images: [
               {
                 url: "https://v3.fal.media/files/example/generated.png",
@@ -95,23 +248,12 @@ describe("fal image-generation provider", () => {
               },
             ],
             prompt: "draw a cat",
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
           },
+          releaseRequest,
         ),
-        release: releaseRequest,
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("png-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: releaseDownload,
-      });
+      )
+      .mockResolvedValueOnce(releasedImage(Buffer.from("png-data"), releaseDownload));
 
-    const provider = buildFalImageGenerationProvider();
     const result = await provider.generateImage({
       provider: "fal",
       model: "fal-ai/flux/dev",
@@ -123,7 +265,6 @@ describe("fal image-generation provider", () => {
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/fal-ai/flux/dev",
       body: {
         prompt: "draw a cat",
@@ -151,50 +292,27 @@ describe("fal image-generation provider", () => {
   it("shares an explicit operation deadline across generated image downloads", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T00:00:00Z"));
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockImplementation(async () => {
+    vi.mocked(providerAuth.resolveApiKeyForProvider).mockImplementation(async () => {
       vi.advanceTimersByTime(5_000);
-      return {
-        apiKey: "fal-test-key",
-        source: "env",
-        mode: "api-key",
-      };
+      return falApiKey;
     });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockImplementationOnce(async () => {
         vi.advanceTimersByTime(10_000);
-        return {
-          response: new Response(
-            JSON.stringify({
-              images: [
-                { url: "https://v3.fal.media/files/example/first.png" },
-                { url: "https://v3.fal.media/files/example/second.png" },
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-          release: vi.fn(async () => {}),
-        };
+        return releasedJson({
+          images: [
+            { url: "https://v3.fal.media/files/example/first.png" },
+            { url: "https://v3.fal.media/files/example/second.png" },
+          ],
+        });
       })
       .mockImplementationOnce(async () => {
         vi.advanceTimersByTime(20_000);
-        return {
-          response: new Response(Buffer.from("first"), {
-            status: 200,
-            headers: { "content-type": "image/png" },
-          }),
-          release: vi.fn(async () => {}),
-        };
+        return releasedImage(Buffer.from("first"));
       })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("second"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+      .mockResolvedValueOnce(releasedImage(Buffer.from("second")));
 
-    const result = await buildFalImageGenerationProvider().generateImage({
+    const result = await provider.generateImage({
       provider: "fal",
       model: "fal-ai/flux/dev",
       prompt: "draw two cats",
@@ -218,34 +336,21 @@ describe("fal image-generation provider", () => {
   });
 
   it("releases a timed-out generated image download", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     const releaseDownload = vi.fn(async () => {});
     fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/slow.png" }],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
+      .mockResolvedValueOnce(
+        releasedJson({ images: [{ url: "https://v3.fal.media/files/example/slow.png" }] }),
+      )
+      .mockResolvedValueOnce(
+        releasedImage(
           new ReadableStream({
             start(controller) {
               controller.error(new DOMException("timed out", "TimeoutError"));
             },
           }),
-          { status: 200, headers: { "content-type": "image/png" } },
+          releaseDownload,
         ),
-        release: releaseDownload,
-      });
+      );
 
     await expect(
       buildFalImageGenerationProvider().generateImage({
@@ -259,34 +364,12 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects generated image downloads that exceed the configured media cap", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/generated.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("too-large"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+      .mockResolvedValueOnce(
+        releasedJson({ images: [{ url: "https://v3.fal.media/files/example/generated.png" }] }),
+      )
+      .mockResolvedValueOnce(releasedImage(Buffer.from("too-large")));
 
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -298,24 +381,10 @@ describe("fal image-generation provider", () => {
   });
 
   it("wraps wrong-shape successful fal image responses", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({ images: { url: "https://example.test/image.png" } }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-      release: vi.fn(async () => {}),
-    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      releasedJson({ images: { url: "https://example.test/image.png" } }),
+    );
 
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -327,51 +396,13 @@ describe("fal image-generation provider", () => {
   });
 
   it("uses image-to-image endpoint and data-uri input for edits", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
-      model: "fal-ai/flux/dev",
+    await generateFalImage("edited.png", "edited-data", {
       prompt: "turn this into a noir poster",
-      cfg: {},
       resolution: "2K",
-      inputImages: [
-        {
-          buffer: Buffer.from("source-image"),
-          mimeType: "image/jpeg",
-          fileName: "source.jpg",
-        },
-      ],
+      inputImages: [sourceImage("source-image", "image/jpeg", "source.jpg")],
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/fal-ai/flux/dev/image-to-image",
       body: {
         prompt: "turn this into a noir poster",
@@ -384,48 +415,14 @@ describe("fal image-generation provider", () => {
   });
 
   it("routes GPT Image 2 edits through /edit with image_urls", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/gpt-edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("gpt-edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("gpt-edited.png", "gpt-edited-data", {
       model: "openai/gpt-image-2",
       prompt: "combine these references",
-      cfg: {},
       aspectRatio: "16:9",
-      inputImages: [
-        { buffer: Buffer.from("first"), mimeType: "image/png" },
-        { buffer: Buffer.from("second"), mimeType: "image/jpeg" },
-      ],
+      inputImages: [sourceImage("first"), sourceImage("second", "image/jpeg")],
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/openai/gpt-image-2/edit",
       body: {
         prompt: "combine these references",
@@ -441,49 +438,15 @@ describe("fal image-generation provider", () => {
   });
 
   it("allows GPT Image 2 edits up to 10 reference images", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/gpt-edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("gpt-edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    const inputImages = Array.from({ length: 10 }, (_, index) => sourceImage(`ref-${index + 1}`));
 
-    const inputImages = Array.from({ length: 10 }, (_, index) => ({
-      buffer: Buffer.from(`ref-${index + 1}`),
-      mimeType: "image/png",
-    }));
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("gpt-edited.png", "gpt-edited-data", {
       model: "openai/gpt-image-2",
       prompt: "combine all references",
-      cfg: {},
       inputImages,
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/openai/gpt-image-2/edit",
       body: {
         prompt: "combine all references",
@@ -497,14 +460,6 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects GPT Image 2 edits above 10 reference images", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -521,45 +476,14 @@ describe("fal image-generation provider", () => {
   });
 
   it("routes Nano Banana 2 text generation with native resolution", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/nb2-wide.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("nb2-wide-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("nb2-wide.png", "nb2-wide-data", {
       model: "fal-ai/nano-banana-2",
       prompt: "ultrawide banana test",
-      cfg: {},
       aspectRatio: "4:1",
       resolution: "2K",
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/fal-ai/nano-banana-2",
       body: {
         prompt: "ultrawide banana test",
@@ -572,44 +496,13 @@ describe("fal image-generation provider", () => {
   });
 
   it("does not synthesize Nano Banana 2 aspect ratio from resolution alone", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/nb2-auto.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("nb2-auto-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("nb2-auto.png", "nb2-auto-data", {
       model: "fal-ai/nano-banana-2",
       prompt: "auto aspect banana test",
-      cfg: {},
       resolution: "2K",
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/fal-ai/nano-banana-2",
       body: {
         prompt: "auto aspect banana test",
@@ -624,49 +517,15 @@ describe("fal image-generation provider", () => {
     { model: "fal-ai/nano-banana", resolution: undefined },
     { model: "fal-ai/nano-banana-2", resolution: "2K" as const },
   ])("routes $model edits through /edit with model geometry", async ({ model, resolution }) => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/nb2-edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("nb2-edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("nb2-edited.png", "nb2-edited-data", {
       model,
       prompt: "blend these references",
-      cfg: {},
       aspectRatio: "9:16",
       ...(resolution ? { resolution } : {}),
-      inputImages: [
-        { buffer: Buffer.from("first"), mimeType: "image/png" },
-        { buffer: Buffer.from("second"), mimeType: "image/png" },
-      ],
+      inputImages: [sourceImage("first"), sourceImage("second")],
     });
 
     expectFalJsonPost({
-      call: 1,
       url: `https://fal.run/${model}/edit`,
       body: {
         prompt: "blend these references",
@@ -694,14 +553,6 @@ describe("fal image-generation provider", () => {
       error: "fal Nano Banana 2 supports at most 14 reference images",
     },
   ])("rejects $model edits above its reference limit", async ({ model, inputCount, error }) => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -718,14 +569,6 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects Krea-only aspect ratios for Nano Banana 2", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -739,48 +582,14 @@ describe("fal image-generation provider", () => {
   });
 
   it("routes Nano Banana 2 Lite edits through /edit with image_urls", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/nb2-lite-edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("nb2-lite-edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("nb2-lite-edited.png", "nb2-lite-edited-data", {
       model: "google/nano-banana-2-lite",
       prompt: "drive the man down the coastline",
-      cfg: {},
       aspectRatio: "3:2",
-      inputImages: [
-        { buffer: Buffer.from("first"), mimeType: "image/png" },
-        { buffer: Buffer.from("second"), mimeType: "image/png" },
-      ],
+      inputImages: [sourceImage("first"), sourceImage("second")],
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/google/nano-banana-2-lite/edit",
       body: {
         prompt: "drive the man down the coastline",
@@ -796,14 +605,6 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects Krea-only aspect ratios for Nano Banana 2 Lite", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -819,14 +620,6 @@ describe("fal image-generation provider", () => {
   it.each(["1K", "2K", "4K"] as const)(
     "rejects %s resolution overrides for Nano Banana 2 Lite",
     async (resolution) => {
-      vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-        apiKey: "fal-test-key",
-        source: "env",
-        mode: "api-key",
-      });
-      setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-
-      const provider = buildFalImageGenerationProvider();
       await expect(
         provider.generateImage({
           provider: "fal",
@@ -843,14 +636,6 @@ describe("fal image-generation provider", () => {
   );
 
   it("rejects Nano Banana 2 Lite edits above 14 reference images", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -893,91 +678,29 @@ describe("fal image-generation provider", () => {
       },
     },
   ])("keeps $label text-to-image on its base endpoint", async (testCase) => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/generated.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("generated-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("generated.png", "generated-data", {
       model: testCase.model,
       prompt: "generate without references",
-      cfg: {},
       aspectRatio: testCase.aspectRatio,
       resolution: testCase.resolution,
     });
 
     expectFalJsonPost({
-      call: 1,
       url: `https://fal.run/${testCase.model}`,
       body: testCase.expectedBody,
     });
   });
 
   it("routes Grok Imagine edits through /edit with lowercase resolution", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/grok-edited.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("grok-edited-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("grok-edited.png", "grok-edited-data", {
       model: "xai/grok-imagine-image",
       prompt: "make it more realistic",
-      cfg: {},
       aspectRatio: "16:9",
       resolution: "2K",
       inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/jpeg" }],
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/xai/grok-imagine-image/edit",
       body: {
         prompt: "make it more realistic",
@@ -991,14 +714,6 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects 4K resolution for Grok Imagine edits", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -1014,14 +729,6 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects Nano Banana ratios for Grok Imagine", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -1035,14 +742,6 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects Grok Imagine edits above 3 reference images", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -1059,44 +758,13 @@ describe("fal image-generation provider", () => {
   });
 
   it("preserves an explicit Grok Imagine /quality/edit model path", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/grok-explicit.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("grok-explicit-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("grok-explicit.png", "grok-explicit-data", {
       model: "xai/grok-imagine-image/quality/edit",
       prompt: "explicit edit endpoint",
-      cfg: {},
       inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/png" }],
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/xai/grok-imagine-image/quality/edit",
       body: {
         prompt: "explicit edit endpoint",
@@ -1108,44 +776,13 @@ describe("fal image-generation provider", () => {
   });
 
   it("preserves exact custom Fal edit endpoints", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/custom-edit.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("custom-edit-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("custom-edit.png", "custom-edit-data", {
       model: "fal-ai/custom/edit",
       prompt: "edit through custom endpoint",
-      cfg: {},
       inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/fal-ai/custom/edit",
       body: {
         prompt: "edit through custom endpoint",
@@ -1157,44 +794,12 @@ describe("fal image-generation provider", () => {
   });
 
   it("maps aspect ratio for text generation without forcing a square default", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/wide.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("wide-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
-      model: "fal-ai/flux/dev",
+    await generateFalImage("wide.png", "wide-data", {
       prompt: "wide cinematic shot",
-      cfg: {},
       aspectRatio: "16:9",
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/fal-ai/flux/dev",
       body: {
         prompt: "wide cinematic shot",
@@ -1206,45 +811,13 @@ describe("fal image-generation provider", () => {
   });
 
   it("combines resolution and aspect ratio for text generation", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/portrait.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("portrait-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
-      model: "fal-ai/flux/dev",
+    await generateFalImage("portrait.png", "portrait-data", {
       prompt: "portrait poster",
-      cfg: {},
       resolution: "2K",
       aspectRatio: "9:16",
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/fal-ai/flux/dev",
       body: {
         prompt: "portrait poster",
@@ -1256,39 +829,9 @@ describe("fal image-generation provider", () => {
   });
 
   it("uses Krea 2 native aspect-ratio and creativity payload schema", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/krea.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("krea-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "fal",
+    const result = await generateFalImage("krea.png", "krea-data", {
       model: "krea/v2/medium/text-to-image",
       prompt: "expressive risograph poster",
-      cfg: {},
       aspectRatio: "9:16",
       providerOptions: {
         fal: {
@@ -1298,7 +841,6 @@ describe("fal image-generation provider", () => {
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/krea/v2/medium/text-to-image",
       body: {
         prompt: "expressive risograph poster",
@@ -1310,48 +852,14 @@ describe("fal image-generation provider", () => {
   });
 
   it("passes reference images to Krea 2 as style references without edit suffix", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/krea-style.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("krea-style-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("krea-style.png", "krea-style-data", {
       model: "krea/v2/large/text-to-image",
       prompt: "portrait with the same palette and texture",
-      cfg: {},
       size: "1024x1536",
-      inputImages: [
-        { buffer: Buffer.from("style-a"), mimeType: "image/png" },
-        { buffer: Buffer.from("style-b"), mimeType: "image/jpeg" },
-      ],
+      inputImages: [sourceImage("style-a"), sourceImage("style-b", "image/jpeg")],
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/krea/v2/large/text-to-image",
       body: {
         prompt: "portrait with the same palette and texture",
@@ -1366,44 +874,13 @@ describe("fal image-generation provider", () => {
   });
 
   it("maps Krea 2 size hints to the closest native aspect ratio", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/krea-sized.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("krea-sized-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
-
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
+    await generateFalImage("krea-sized.png", "krea-sized-data", {
       model: "krea/v2/medium/text-to-image",
       prompt: "portrait poster",
-      cfg: {},
       size: "1024x1536",
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "https://fal.run/krea/v2/medium/text-to-image",
       body: {
         prompt: "portrait poster",
@@ -1414,13 +891,6 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects Krea 2 resolution hints instead of dropping them", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -1443,13 +913,6 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects multi-image count for Krea 2 single-image endpoints", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -1462,13 +925,6 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects output format overrides for Krea 2", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -1481,13 +937,6 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects multi-image for Flux edit", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -1503,13 +952,6 @@ describe("fal image-generation provider", () => {
   });
 
   it("rejects aspect ratio for Flux edit", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -1523,29 +965,15 @@ describe("fal image-generation provider", () => {
   });
 
   it("blocks private-network image download URLs through the SSRF guard", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     const blocked = new Error("Blocked: resolves to private/internal/special-use IP address");
     fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
+      .mockResolvedValueOnce(
+        releasedJson({
+          images: [{ url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/" }],
+        }),
+      )
       .mockRejectedValueOnce(blocked);
 
-    const provider = buildFalImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "fal",
@@ -1562,34 +990,12 @@ describe("fal image-generation provider", () => {
   });
 
   it("does not auto-whitelist trusted private relay hosts from a configured baseUrl", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "http://media.relay.internal/files/generated.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("png-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+      .mockResolvedValueOnce(
+        releasedJson({ images: [{ url: "http://media.relay.internal/files/generated.png" }] }),
+      )
+      .mockResolvedValueOnce(releasedImage(Buffer.from("png-data")));
 
-    const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
       provider: "fal",
       model: "fal-ai/flux/dev",
@@ -1607,7 +1013,6 @@ describe("fal image-generation provider", () => {
     });
 
     expectFalJsonPost({
-      call: 1,
       url: "http://relay.internal:8080/fal-ai/flux/dev",
       body: {
         prompt: "draw a cat",

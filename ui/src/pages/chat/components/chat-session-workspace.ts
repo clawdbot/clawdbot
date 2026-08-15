@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import {
@@ -5,7 +6,11 @@ import {
   type GatewayBrowserClient,
   type GatewayHelloOk,
 } from "../../../api/gateway.ts";
-import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import type {
+  ArtifactDownloadResult,
+  SessionWorkspaceGetResult,
+  SessionWorkspaceListResult,
+} from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import {
   normalizeChatWorkspaceDock,
@@ -15,8 +20,13 @@ import {
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../../../components/panel-toggle-contract.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { formatByteSize } from "../../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import {
   scopedAgentParamsForSession,
@@ -28,7 +38,6 @@ import {
   resolveAgentIdFromSessionKey,
   normalizeAgentId,
 } from "../../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
 import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
@@ -42,11 +51,8 @@ export type SessionWorkspaceProps = {
   /** Pane too narrow for a side rail: presentation forces the bottom dock
    * (the persisted dock preference still applies once the pane widens). */
   narrowLayout: boolean;
-  dockDragging: boolean;
-  dockDragZone: ChatWorkspaceDock | null;
   onToggleCollapsed: () => void;
   onSetDock: (dock: ChatWorkspaceDock) => void;
-  onDockDragStart: (event: PointerEvent) => void;
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
   onCopyPath: (path: string) => void;
@@ -55,7 +61,8 @@ export type SessionWorkspaceProps = {
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
-  /** Opens the session diff panel; absent when the gateway lacks sessions.diff. */
+  onToggleCustodian?: () => void;
+  /** Opens the session diff panel; absent until a usable checkout is known. */
   onOpenDiff?: () => void;
 };
 
@@ -67,8 +74,6 @@ type SessionWorkspaceState = {
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
   collapsed: boolean;
   dock: ChatWorkspaceDock;
-  dockDragging: boolean;
-  dockDragZone: ChatWorkspaceDock | null;
   error: string | null;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
@@ -105,9 +110,8 @@ export type SessionWorkspaceHost = {
 };
 
 /** Agent owning the pane's current session: explicit key scope first, then the
- * assistant/default agent. Shared by the workspace and background-tasks rails
- * so both scope their gateway queries the same way. */
-export function paneSessionAgentId(state: SessionScopeHostWithKey): string {
+ * assistant/default agent. */
+function paneSessionAgentId(state: SessionScopeHostWithKey): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
   const activeAgentId =
     normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
@@ -152,8 +156,6 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
     // Dock preference is app-wide, seeded from the host's loaded settings;
     // per-session state just carries it forward.
     dock: current?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
-    dockDragging: false,
-    dockDragZone: null,
     error: null,
     list: null,
     loading: false,
@@ -185,7 +187,65 @@ function basenameForPath(filePath: string): string {
   return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
 }
 
-export function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
+const SESSION_FILE_IMAGE_MIME_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
+function formatMarkdownCodeSpan(value: string): string {
+  // Markdown finds block boundaries before inline spans, so filenames must
+  // stay on one logical line even when the Gateway returns hostile metadata.
+  const singleLineValue = value.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+  const longestBacktickRun = Math.max(
+    0,
+    ...(singleLineValue.match(/`+/g)?.map((run) => run.length) ?? []),
+  );
+  const delimiter = "`".repeat(longestBacktickRun + 1);
+  const hasBoundarySpaces = singleLineValue.startsWith(" ") && singleLineValue.endsWith(" ");
+  const isOnlySpaces = /^ +$/.test(singleLineValue);
+  const padding =
+    singleLineValue.startsWith("`") ||
+    singleLineValue.endsWith("`") ||
+    (hasBoundarySpaces && !isOnlySpaces)
+      ? " "
+      : "";
+  return `${delimiter}${padding}${singleLineValue}${padding}${delimiter}`;
+}
+
+function formatFileUpdatedAt(updatedAtMs: number | undefined): string | null {
+  if (typeof updatedAtMs !== "number") {
+    return null;
+  }
+  const updatedAt = new Date(updatedAtMs);
+  return Number.isNaN(updatedAt.getTime()) ? null : updatedAt.toISOString();
+}
+
+function unsupportedFileSidebarContent(
+  file: SessionWorkspaceGetResult["file"],
+  fallbackPath: string,
+): SidebarContent {
+  const filePath = file.workspacePath || file.path || fallbackPath;
+  const updatedAt = formatFileUpdatedAt(file.updatedAtMs);
+  const lines = [
+    "This file is not previewable inline.",
+    "",
+    `- Path: ${formatMarkdownCodeSpan(filePath)}`,
+    file.mimeType ? `- Type: ${formatMarkdownCodeSpan(file.mimeType)}` : null,
+    typeof file.size === "number" ? `- Size: ${file.size.toLocaleString()} bytes` : null,
+    updatedAt ? `- Updated: ${updatedAt}` : null,
+  ].filter((line): line is string => line !== null);
+  const content = lines.join("\n");
+  return {
+    kind: "markdown",
+    content,
+    rawText: content,
+  };
+}
+
+function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
   if (!root) {
     return filePath;
   }
@@ -212,19 +272,17 @@ function artifactSidebarContent(params: {
       rawText: url ?? null,
     };
   }
-  if (encoding === "base64" && data && mimeType === "application/json") {
-    const decoded = globalThis.atob(data);
+  if (
+    encoding === "base64" &&
+    data &&
+    (mimeType === "application/json" || mimeType.startsWith("text/"))
+  ) {
+    const bytes = Uint8Array.from(globalThis.atob(data), (char) => char.charCodeAt(0));
+    const decoded = new TextDecoder().decode(bytes);
+    const language = mimeType === "application/json" ? "json" : "";
     return {
       kind: "markdown",
-      content: `# ${title}\n\n\`\`\`json\n${decoded}\n\`\`\``,
-      rawText: decoded,
-    };
-  }
-  if (encoding === "base64" && data && mimeType.startsWith("text/")) {
-    const decoded = globalThis.atob(data);
-    return {
-      kind: "markdown",
-      content: `# ${title}\n\n\`\`\`\n${decoded}\n\`\`\``,
+      content: `# ${title}\n\n\`\`\`${language}\n${decoded}\n\`\`\``,
       rawText: decoded,
     };
   }
@@ -283,6 +341,7 @@ function loadWorkspace(
       current.list = {
         sessionKey,
         ...(files?.root ? { root: files.root } : {}),
+        ...(typeof files?.gitCheckout === "boolean" ? { gitCheckout: files.gitCheckout } : {}),
         files: fileItems,
         ...(files?.browser ? { browser: files.browser } : {}),
         artifacts: artifactItems,
@@ -307,12 +366,25 @@ function loadWorkspace(
         const reload = current.pendingReload;
         current.pendingReload = false;
         if (reload) {
-          loadWorkspace(state, current, true);
+          loadWorkspace(state, current);
         }
       }
       requestUpdate(state);
     }
   })();
+}
+
+/** Refresh workspace facts after a run, which may have created a git checkout. */
+export function refreshSessionWorkspace(state: SessionWorkspaceHost) {
+  const workspace = state.sessionWorkspaceState;
+  if (!workspace || workspace.sessionKey !== state.sessionKey) {
+    return;
+  }
+  if (workspace.loading) {
+    workspace.pendingReload = true;
+  } else {
+    loadWorkspace(state, workspace);
+  }
 }
 
 function beginOpenRequest(
@@ -399,10 +471,40 @@ function openFile(
       }),
     (result) => {
       const file = result.file;
-      if (!file || typeof file.content !== "string") {
+      if (!file) {
         return null;
       }
       const name = file.name || basenameForPath(path);
+      if (file.previewKind === "image") {
+        if (
+          file.contentEncoding !== "base64" ||
+          typeof file.content !== "string" ||
+          !file.mimeType ||
+          !SESSION_FILE_IMAGE_MIME_TYPES.has(file.mimeType)
+        ) {
+          return null;
+        }
+        return {
+          kind: "image",
+          title: name,
+          src: `data:${file.mimeType};base64,${file.content}`,
+          mimeType: file.mimeType,
+          rawText: file.workspacePath || file.path || path,
+        };
+      }
+      if (file.previewKind === "unsupported") {
+        return unsupportedFileSidebarContent(file, path);
+      }
+      // Missing previewKind is the pre-image-preview Gateway contract.
+      if (
+        (file.previewKind !== undefined && file.previewKind !== "text") ||
+        (file.previewKind === "text" &&
+          file.contentEncoding !== undefined &&
+          file.contentEncoding !== "utf8") ||
+        typeof file.content !== "string"
+      ) {
+        return null;
+      }
       const canEdit =
         typeof file.hash === "string" &&
         hasUniformLineEndings(file.content) &&
@@ -519,82 +621,12 @@ function setSessionWorkspaceDock(state: SessionWorkspaceHost, dock: ChatWorkspac
   const workspace = getWorkspaceState(state);
   if (workspace.dock !== dock) {
     workspace.dock = dock;
-    // Keep the host's settings snapshot in step so the next session's
-    // workspace state seeds from the same dock without a storage read.
     if (state.settings) {
       state.settings = { ...state.settings, chatWorkspaceDock: dock };
     }
     patchSettings({ chatWorkspaceDock: dock });
   }
   requestUpdate(state);
-}
-
-/** Drag the rail by its header to re-dock it inside the pane: the right and
- * bottom bands of .chat-workbench are drop zones (mirrors the terminal
- * panel's right/bottom dock). A small threshold keeps plain clicks intact. */
-function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: PointerEvent) {
-  if (event.button !== 0) {
-    return;
-  }
-  const grip = event.currentTarget;
-  if (!(grip instanceof HTMLElement)) {
-    return;
-  }
-  const workbench = grip.closest<HTMLElement>(".chat-workbench");
-  if (!workbench) {
-    return;
-  }
-  const workspace = getWorkspaceState(state);
-  const startX = event.clientX;
-  const startY = event.clientY;
-
-  const resolveZone = (x: number, y: number): ChatWorkspaceDock | null => {
-    const rect = workbench.getBoundingClientRect();
-    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-      return null;
-    }
-    if (y > rect.bottom - rect.height * 0.32) {
-      return "bottom";
-    }
-    return x > rect.right - rect.width * 0.3 ? "right" : null;
-  };
-
-  const handleMove = (move: PointerEvent) => {
-    if (!workspace.dockDragging) {
-      if (Math.hypot(move.clientX - startX, move.clientY - startY) < 5) {
-        return;
-      }
-      workspace.dockDragging = true;
-      workspace.dockDragZone = resolveZone(move.clientX, move.clientY);
-      requestUpdate(state);
-      return;
-    }
-    const zone = resolveZone(move.clientX, move.clientY);
-    if (zone !== workspace.dockDragZone) {
-      workspace.dockDragZone = zone;
-      requestUpdate(state);
-    }
-  };
-  const finish = (apply: boolean) => {
-    grip.removeEventListener("pointermove", handleMove);
-    grip.removeEventListener("pointerup", handleUp);
-    grip.removeEventListener("pointercancel", handleCancel);
-    const zone = workspace.dockDragZone;
-    workspace.dockDragging = false;
-    workspace.dockDragZone = null;
-    if (apply && zone) {
-      setSessionWorkspaceDock(state, zone);
-      return;
-    }
-    requestUpdate(state);
-  };
-  const handleUp = () => finish(true);
-  const handleCancel = () => finish(false);
-
-  grip.setPointerCapture(event.pointerId);
-  grip.addEventListener("pointermove", handleMove);
-  grip.addEventListener("pointerup", handleUp);
-  grip.addEventListener("pointercancel", handleCancel);
 }
 
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
@@ -646,7 +678,9 @@ export function createSessionWorkspaceProps(
   state.sessionWorkspaceDraftScope = options?.draftScope;
   const workspace = getWorkspaceState(state);
   if (
-    !workspace.collapsed &&
+    // The collapsed header still renders the diff action, so load its checkout
+    // capability eagerly instead of waiting for the file rail to open.
+    (!workspace.collapsed || isGatewayMethodAdvertised(state, "sessions.diff") === true) &&
     state.connected &&
     state.agentsList &&
     !workspace.loading &&
@@ -655,6 +689,11 @@ export function createSessionWorkspaceProps(
   ) {
     loadWorkspace(state, workspace);
   }
+  const canOpenDiff =
+    isGatewayMethodAdvertised(state, "sessions.diff") === true &&
+    Boolean(state.client) &&
+    workspace.list?.sessionKey === state.sessionKey &&
+    workspace.list.gitCheckout !== false;
   return {
     collapsed: workspace.collapsed,
     sessionKey: state.sessionKey,
@@ -664,11 +703,8 @@ export function createSessionWorkspaceProps(
     activeId: workspace.activeId,
     dock: workspace.dock,
     narrowLayout: options?.narrowLayout === true,
-    dockDragging: workspace.dockDragging,
-    dockDragZone: workspace.dockDragZone,
     onToggleCollapsed: () => toggleSessionWorkspace(state),
     onSetDock: (dock) => setSessionWorkspaceDock(state, dock),
-    onDockDragStart: (event) => startSessionWorkspaceDockDrag(state, event),
     onRefresh: () => loadWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceSearchTimer(workspace);
@@ -700,7 +736,7 @@ export function createSessionWorkspaceProps(
     onToggleTerminal: state.terminalAvailable
       ? () => {
           window.dispatchEvent(
-            new CustomEvent("openclaw:terminal-toggle", {
+            new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
               detail: { dock: "right", open: true },
             }),
           );
@@ -708,30 +744,55 @@ export function createSessionWorkspaceProps(
       : undefined,
     onToggleBrowser: state.browserPanelAvailable
       ? () => {
-          window.dispatchEvent(new CustomEvent("openclaw:browser-toggle", {}));
+          window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {}));
         }
       : undefined,
-    onOpenDiff:
-      isGatewayMethodAdvertised(state, "sessions.diff") === true && state.client
-        ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
-        : undefined,
+    onOpenDiff: canOpenDiff
+      ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
+      : undefined,
   };
 }
 
 /** Sidebar payload whose loader refetches sessions.diff for the pane's session. */
 function buildSessionDiffSidebarContent(state: SessionWorkspaceHost): SidebarContent {
   const sessionKey = state.sessionKey;
+  const canLoadFileText =
+    isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
   return {
     kind: "session-diff",
-    load: async () => {
+    load: async (scope) => {
       if (!state.client) {
         throw new Error(t("chat.sessionDiff.disconnected"));
       }
       return await state.client.request<SessionsDiffResult>("sessions.diff", {
         sessionKey,
         ...scopedAgentParamsForSession(state, sessionKey),
+        ...scope,
       });
     },
+    loadFileText: canLoadFileText
+      ? async (path) => {
+          try {
+            const result = await state.sessions.getFile(sessionKey, path, {
+              agentId: scopedAgentParamsForSession(state, sessionKey).agentId,
+            });
+            const file = result?.file;
+            if (
+              !file ||
+              (file.previewKind !== undefined && file.previewKind !== "text") ||
+              (file.contentEncoding !== undefined && file.contentEncoding !== "utf8") ||
+              typeof file.content !== "string"
+            ) {
+              return null;
+            }
+            return file.content;
+          } catch {
+            return null;
+          }
+        }
+      : undefined,
+    openFile: (path) => openFile(state, getWorkspaceState(state), path),
+    revealFile: (path) => revealSessionWorkspaceFile(state, path),
   };
 }
 
@@ -740,13 +801,12 @@ function formatWorkspaceFileSize(file: { size?: number }): string {
   if (typeof size !== "number" || !Number.isFinite(size) || size < 0) {
     return "";
   }
-  if (size >= 1024 * 1024) {
-    return `${(size / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB`;
-  }
-  if (size >= 1024) {
-    return `${(size / 1024).toFixed(1).replace(/\.0$/, "")} KB`;
-  }
-  return `${size} B`;
+  return formatByteSize(size, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: " ",
+    fractionDigits: (value, unit) => (unit === "byte" ? null : Math.round(value * 10) % 10 ? 1 : 0),
+  });
 }
 
 function renderWorkspaceArtifactSize(artifact: { sizeBytes?: number }): string {
@@ -770,7 +830,7 @@ function renderWorkspaceRailSection(
 
 /** Changed-file count shown on the collapsed-rail toggles (pane header /
  * floating opener); 0 until the workspace list has loaded. */
-export function sessionWorkspaceModifiedCount(
+function sessionWorkspaceModifiedCount(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): number {
   return sessionWorkspace?.list?.files.filter((file) => file.kind === "modified").length ?? 0;
@@ -809,8 +869,7 @@ export function renderSessionWorkspaceToggle(
   `;
 }
 
-/** Session diff button shown beside the workspace toggle; hidden when the
- * gateway does not advertise sessions.diff. */
+/** Session diff button shown beside the workspace toggle when available. */
 export function renderSessionDiffToggle(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): TemplateResult | typeof nothing {
@@ -826,7 +885,7 @@ export function renderSessionDiffToggle(
         aria-label=${label}
         @click=${sessionWorkspace.onOpenDiff}
       >
-        ${icons.gitBranch}
+        ${icons.diff}
       </button>
     </openclaw-tooltip>
   `;
@@ -848,7 +907,7 @@ export function renderSessionWorkspaceRail(
         <openclaw-tooltip .content=${t("terminal.toggle")}>
           <button
             type="button"
-            class="chat-workspace-rail__terminal"
+            class="rail-header__action chat-workspace-rail__terminal"
             aria-label=${t("terminal.toggle")}
             @click=${sessionWorkspace.onToggleTerminal}
           >
@@ -862,11 +921,25 @@ export function renderSessionWorkspaceRail(
         <openclaw-tooltip .content=${t("browser.toggle")}>
           <button
             type="button"
-            class="chat-workspace-rail__terminal"
+            class="rail-header__action chat-workspace-rail__terminal"
             aria-label=${t("browser.toggle")}
             @click=${sessionWorkspace.onToggleBrowser}
           >
             ${icons.globe}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const custodianButton = sessionWorkspace.onToggleCustodian
+    ? html`
+        <openclaw-tooltip .content=${t("custodian.panel.toggle")}>
+          <button
+            type="button"
+            class="rail-header__action chat-workspace-rail__terminal"
+            aria-label=${t("custodian.panel.toggle")}
+            @click=${sessionWorkspace.onToggleCustodian}
+          >
+            ${icons.lobster}
           </button>
         </openclaw-tooltip>
       `
@@ -876,11 +949,11 @@ export function renderSessionWorkspaceRail(
         <openclaw-tooltip .content=${t("chat.sessionDiff.show")}>
           <button
             type="button"
-            class="chat-workspace-rail__terminal chat-session-diff-toggle"
+            class="rail-header__action chat-workspace-rail__terminal chat-session-diff-toggle"
             aria-label=${t("chat.sessionDiff.show")}
             @click=${sessionWorkspace.onOpenDiff}
           >
-            ${icons.gitBranch}
+            ${icons.diff}
           </button>
         </openclaw-tooltip>
       `
@@ -1160,21 +1233,15 @@ export function renderSessionWorkspaceRail(
         `;
   return html`
     <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
-      <div class="chat-workspace-rail__header">
-        <!-- Grip: drag the rail onto the pane's right/bottom band to re-dock
-             it (chat-view renders the drop zones while dragging). -->
-        <div
-          class="chat-workspace-rail__title ${sessionWorkspace.narrowLayout
-            ? ""
-            : "chat-workspace-rail__grip"}"
-          title=${sessionWorkspace.narrowLayout ? nothing : t("chat.workspaceFiles.dragToDock")}
-          @pointerdown=${sessionWorkspace.narrowLayout ? nothing : sessionWorkspace.onDockDragStart}
-        >
-          <span class="chat-workspace-rail__eyebrow">${t("chat.workspaceFiles.workspace")}</span>
-          <strong>${t("chat.workspaceFiles.files")}</strong>
+      <div class="rail-header chat-workspace-rail__header">
+        <div class="rail-header__copy chat-workspace-rail__title">
+          <span class="rail-header__eyebrow chat-workspace-rail__eyebrow"
+            >${t("chat.workspaceFiles.workspace")}</span
+          >
+          <strong class="rail-header__title">${t("chat.workspaceFiles.files")}</strong>
         </div>
-        <div class="chat-workspace-rail__actions">
-          ${diffButton} ${terminalButton} ${browserButton}
+        <div class="rail-header__actions chat-workspace-rail__actions">
+          ${diffButton} ${terminalButton} ${browserButton} ${custodianButton}
           ${sessionWorkspace.narrowLayout
             ? nothing
             : html`
@@ -1184,7 +1251,7 @@ export function renderSessionWorkspaceRail(
                     : t("chat.workspaceFiles.dockBottom")}
                 >
                   <button
-                    class="btn btn--ghost btn--sm chat-workspace-rail__dock"
+                    class="rail-header__action chat-workspace-rail__dock"
                     type="button"
                     aria-label=${dock === "bottom"
                       ? t("chat.workspaceFiles.dockRight")
@@ -1198,7 +1265,7 @@ export function renderSessionWorkspaceRail(
               `}
           <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
             <button
-              class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
+              class="rail-header__action chat-workspace-rail__refresh"
               type="button"
               aria-label=${t("chat.workspaceFiles.refresh")}
               ?disabled=${sessionWorkspace.loading}
@@ -1210,7 +1277,7 @@ export function renderSessionWorkspaceRail(
           <openclaw-tooltip .content=${`${t("chat.workspaceFiles.collapse")} (⇧⌘B)`}>
             <button
               type="button"
-              class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
+              class="rail-header__action chat-workspace-rail__collapse-toggle"
               aria-label=${t("chat.workspaceFiles.collapse")}
               aria-keyshortcuts="Meta+Shift+B"
               aria-expanded="true"
@@ -1266,3 +1333,4 @@ export function renderSessionWorkspaceRail(
     </aside>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

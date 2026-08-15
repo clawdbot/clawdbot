@@ -1,7 +1,14 @@
 // Node connection notification routing tests cover active-first delivery and fallback fanout.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NodeConnectionNotificationRouter } from "./node-connection-notifications.js";
+import {
+  disposeNodeConnectionNotifications,
+  scheduleNodeConnectionNotification,
+} from "./node-connection-notifications.js";
 import type { NodeSession } from "./node-registry.js";
+
+const PRIMARY_DELAY_MS = 750;
+const FALLBACK_DELAY_MS = 5_000;
+const testRegistries: object[] = [];
 
 function node(
   nodeId: string,
@@ -10,6 +17,7 @@ function node(
   return {
     nodeId,
     connId: `conn-${nodeId}`,
+    pairingIdentity: `identity-${nodeId}`,
     displayName: nodeId,
     platform: "darwin",
     commands: ["system.notify"],
@@ -18,26 +26,66 @@ function node(
   } as NodeSession;
 }
 
-afterEach(() => vi.useRealTimers());
+function registry<T extends { listConnected: () => NodeSession[] }>(params: T): T {
+  const value = params as T & {
+    listCurrentConnected?: () => Promise<NodeSession[]>;
+    isConnectionCurrentPairingState?: (connId: string) => Promise<boolean>;
+  };
+  const listCurrentConnected = value.listCurrentConnected ?? (async () => value.listConnected());
+  value.listCurrentConnected = listCurrentConnected;
+  value.isConnectionCurrentPairingState ??= async (connId) =>
+    (await listCurrentConnected()).some((entry) => entry.connId === connId);
+  testRegistries.push(value);
+  return value;
+}
 
-describe("NodeConnectionNotificationRouter", () => {
+function schedule(registryValue: object, source: NodeSession): void {
+  scheduleNodeConnectionNotification(registryValue as never, source, {
+    isFirstConnection: true,
+  });
+}
+
+afterEach(() => {
+  for (const registryValue of testRegistries) {
+    disposeNodeConnectionNotifications(registryValue as never);
+  }
+  testRegistries.length = 0;
+  vi.useRealTimers();
+});
+
+describe("node connection notification routing", () => {
+  it("does not alert when a previously connected node reconnects", async () => {
+    vi.useFakeTimers();
+    const source = node("known-node");
+    const desk = node("desk");
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const registryValue = registry({ listConnected: () => [source, desk], invoke });
+
+    scheduleNodeConnectionNotification(registryValue as never, source, {
+      isFirstConnection: false,
+    });
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("delivers only to the most recently active Mac when primary delivery succeeds", async () => {
     vi.useFakeTimers();
     const source = node("new-node", { lastActiveAtMs: 50 });
     const desk = node("desk", { lastActiveAtMs: 100 });
     const laptop = node("laptop", { lastActiveAtMs: 200 });
     const invoke = vi.fn(async (_params: { nodeId: string }) => ({ ok: true }));
-    const router = new NodeConnectionNotificationRouter(
-      { listConnected: () => [source, desk, laptop], invoke } as never,
-      { primaryDelayMs: 10, fallbackDelayMs: 20, now: () => 1_000_000 },
-    );
+    const registryValue = registry({ listConnected: () => [source, desk, laptop], invoke });
 
-    router.onConnected(source);
-    await vi.advanceTimersByTimeAsync(10);
+    schedule(registryValue, source);
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS);
 
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke.mock.calls[0]?.[0]).toMatchObject({ nodeId: "laptop", command: "system.notify" });
-    await vi.advanceTimersByTimeAsync(20);
+    expect(invoke.mock.calls[0]?.[0]).toMatchObject({
+      nodeId: "laptop",
+      command: "system.notify",
+    });
+    await vi.advanceTimersByTimeAsync(FALLBACK_DELAY_MS);
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
@@ -49,16 +97,13 @@ describe("NodeConnectionNotificationRouter", () => {
     const invoke = vi.fn(async (params: { nodeId: string }) => ({
       ok: params.nodeId !== "laptop",
     }));
-    const router = new NodeConnectionNotificationRouter(
-      { listConnected: () => [source, desk, laptop], invoke } as never,
-      { primaryDelayMs: 10, fallbackDelayMs: 20, now: () => 1_000_000 },
-    );
+    const registryValue = registry({ listConnected: () => [source, desk, laptop], invoke });
 
-    router.onConnected(source);
-    await vi.advanceTimersByTimeAsync(10);
+    schedule(registryValue, source);
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS);
     expect(invoke.mock.calls.map((call) => call[0].nodeId)).toEqual(["laptop"]);
 
-    await vi.advanceTimersByTimeAsync(19);
+    await vi.advanceTimersByTimeAsync(FALLBACK_DELAY_MS - 1);
     expect(invoke).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(invoke.mock.calls.map((call) => call[0].nodeId).toSorted()).toEqual([
@@ -68,33 +113,32 @@ describe("NodeConnectionNotificationRouter", () => {
     ]);
   });
 
-  it("delays fanout when no Mac has reported activity and suppresses reconnect churn", async () => {
+  it("delays fanout without activity and keeps later reconnects silent", async () => {
     vi.useFakeTimers();
     const source = node("new-node");
     const desk = node("desk");
-    const invoke = vi.fn(async () => ({ ok: true }));
-    let now = 1_000_000;
-    const router = new NodeConnectionNotificationRouter(
-      { listConnected: () => [source, desk], invoke } as never,
-      {
-        primaryDelayMs: 10,
-        fallbackDelayMs: 20,
-        reconnectCooldownMs: 100,
-        now: () => now,
-      },
-    );
+    const invoke = vi.fn(async (_params: { nodeId: string }) => ({ ok: true }));
+    const registryValue = registry({ listConnected: () => [source, desk], invoke });
 
-    router.onConnected(source);
-    router.onConnected(source);
-    await vi.advanceTimersByTimeAsync(29);
+    schedule(registryValue, source);
+    schedule(registryValue, source);
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS - 1);
     expect(invoke).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(invoke).toHaveBeenCalledTimes(2);
 
-    now += 101;
-    router.onConnected(source);
-    await vi.advanceTimersByTimeAsync(30);
-    expect(invoke).toHaveBeenCalledTimes(4);
+    scheduleNodeConnectionNotification(registryValue as never, source, {
+      isFirstConnection: false,
+    });
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
+    expect(invoke).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    scheduleNodeConnectionNotification(registryValue as never, source, {
+      isFirstConnection: false,
+    });
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 
   it("drops stale timers and lets a replacement connection take ownership", async () => {
@@ -104,18 +148,84 @@ describe("NodeConnectionNotificationRouter", () => {
     const desk = node("desk", { lastActiveAtMs: 100 });
     let connected = [oldSource, desk];
     const invoke = vi.fn(async (_params: { nodeId: string }) => ({ ok: true }));
-    const router = new NodeConnectionNotificationRouter(
-      { listConnected: () => connected, invoke } as never,
-      { primaryDelayMs: 10, fallbackDelayMs: 20, now: () => 1_000_000 },
-    );
+    const registryValue = registry({ listConnected: () => connected, invoke });
 
-    router.onConnected(oldSource);
+    schedule(registryValue, oldSource);
     connected = [replacement, desk];
-    router.onConnected(replacement);
-    await vi.advanceTimersByTimeAsync(10);
+    scheduleNodeConnectionNotification(registryValue as never, replacement, {
+      isFirstConnection: false,
+    });
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS);
 
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke.mock.calls[0]?.[0]).toMatchObject({ nodeId: "desk" });
+  });
+
+  it("drops a source alert when its exact connection is replaced without taking ownership", async () => {
+    vi.useFakeTimers();
+    const oldSource = node("new-node");
+    const replacement = {
+      ...node("new-node"),
+      connId: "conn-new-node-replacement",
+      displayName: "Replacement Mac",
+    };
+    const desk = node("desk", { lastActiveAtMs: 100 });
+    let connected = [oldSource, desk];
+    const invoke = vi.fn(async (_params: { nodeId: string; params: { body: string } }) => ({
+      ok: true,
+    }));
+    const registryValue = registry({ listConnected: () => connected, invoke });
+
+    schedule(registryValue, oldSource);
+    connected = [replacement, desk];
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS);
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("drops a delayed alert when the source pairing generation is rotated", async () => {
+    vi.useFakeTimers();
+    const source = {
+      ...node("new-node"),
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    };
+    const desk = node("desk", { lastActiveAtMs: 100 });
+    let currentPairingGeneration = "generation-a";
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const registryValue = registry({
+      listConnected: () => [source, desk],
+      listCurrentConnected: async () =>
+        currentPairingGeneration === source.pairingGeneration ? [source, desk] : [desk],
+      isConnectionCurrentPairingState: async (connId: string) =>
+        connId === source.connId && currentPairingGeneration === source.pairingGeneration,
+      invoke,
+    });
+
+    schedule(registryValue, source);
+    currentPairingGeneration = "generation-b";
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("cancels the first-connection claim when the node is gone at delivery", async () => {
+    vi.useFakeTimers();
+    const source = node("new-node");
+    let connected: NodeSession[] = [source];
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const registryValue = registry({ listConnected: () => connected, invoke });
+
+    schedule(registryValue, source);
+    connected = [];
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS);
+
+    connected = [source];
+    scheduleNodeConnectionNotification(registryValue as never, source, {
+      isFirstConnection: false,
+    });
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("does not let an in-flight stale attempt cancel its replacement", async () => {
@@ -129,19 +239,18 @@ describe("NodeConnectionNotificationRouter", () => {
       resolveInvoke = resolve;
     });
     const invoke = vi.fn(async () => await firstInvoke);
-    const router = new NodeConnectionNotificationRouter(
-      { listConnected: () => connected, invoke } as never,
-      { primaryDelayMs: 10, fallbackDelayMs: 20, now: () => 1_000_000 },
-    );
+    const registryValue = registry({ listConnected: () => connected, invoke });
 
-    router.onConnected(oldSource);
-    await vi.advanceTimersByTimeAsync(10);
+    schedule(registryValue, oldSource);
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS);
     expect(invoke).toHaveBeenCalledTimes(1);
 
     connected = [replacement, desk];
-    router.onConnected(replacement);
+    scheduleNodeConnectionNotification(registryValue as never, replacement, {
+      isFirstConnection: false,
+    });
     resolveInvoke?.({ ok: true });
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS);
 
     expect(invoke).toHaveBeenCalledTimes(2);
   });
@@ -150,14 +259,11 @@ describe("NodeConnectionNotificationRouter", () => {
     vi.useFakeTimers();
     const source = node("new-node");
     const invoke = vi.fn(async () => ({ ok: true }));
-    const router = new NodeConnectionNotificationRouter(
-      { listConnected: () => [source], invoke } as never,
-      { primaryDelayMs: 10, fallbackDelayMs: 20 },
-    );
+    const registryValue = registry({ listConnected: () => [source], invoke });
 
-    router.onConnected(source);
-    router.dispose();
-    await vi.advanceTimersByTimeAsync(30);
+    schedule(registryValue, source);
+    disposeNodeConnectionNotifications(registryValue as never);
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
 
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -175,13 +281,10 @@ describe("NodeConnectionNotificationRouter", () => {
       }
       return { ok: true };
     });
-    const router = new NodeConnectionNotificationRouter(
-      { listConnected: () => connected, invoke } as never,
-      { primaryDelayMs: 10, fallbackDelayMs: 20, now: () => 1_000_000 },
-    );
+    const registryValue = registry({ listConnected: () => connected, invoke });
 
-    router.onConnected(source);
-    await vi.advanceTimersByTimeAsync(30);
+    schedule(registryValue, source);
+    await vi.advanceTimersByTimeAsync(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
 
     expect(invoke.mock.calls.map((call) => call[0].expectedConnId)).toEqual([
       oldDesk.connId,

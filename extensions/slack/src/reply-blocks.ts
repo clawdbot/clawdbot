@@ -121,7 +121,7 @@ export function resolveSlackReplyDeliveryMessages(params: {
   return messages;
 }
 
-export function resolveSlackReplyText(payload: ReplyPayload, text = payload.text): string {
+function resolveSlackReplyText(payload: ReplyPayload, text = payload.text): string {
   const presentation = normalizeMessagePresentation(payload.presentation);
   return presentation
     ? renderSlackMessagePresentationFallbackText({ text, presentation })

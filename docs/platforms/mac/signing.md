@@ -10,7 +10,7 @@ title: "macOS signing"
 [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) builds and packages the app to a fixed path (`dist/OpenClaw.app`), then calls [`scripts/codesign-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/codesign-mac-app.sh) to sign it. TCC permissions are tied to the bundle ID and code signature; keeping both stable (and the app at a fixed path) across rebuilds keeps macOS from forgetting TCC grants (notifications, accessibility, screen recording, mic, speech).
 
 - Debug bundle identifier defaults to `ai.openclaw.mac.debug` (override with `BUNDLE_ID=...`).
-- Node: `>=22.19.0 <23` or `>=23.11.0` (repo `package.json` `engines`). The packager also builds the Control UI (`pnpm ui:build`).
+- Node: `>=22.22.3 <23`, `>=24.15.0 <25`, or `>=25.9.0` (repo `package.json` `engines`). The packager also builds the Control UI (`pnpm ui:build`).
 - Requires a real signing identity by default; the codesign script exits with an error if none is found and `ALLOW_ADHOC_SIGNING` is not set. Ad-hoc signing (`SIGN_IDENTITY="-"`) is explicit opt-in and does not persist TCC permissions across rebuilds. See [macOS permissions](/platforms/mac/permissions).
 - Reads `SIGN_IDENTITY` from the environment (e.g. `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"`, or a Developer ID Application cert). Without it, `codesign-mac-app.sh` auto-selects an identity in this order: Developer ID Application, Apple Distribution, Apple Development, then the first valid codesigning identity found.
 - `CODESIGN_TIMESTAMP=auto` (default) enables trusted timestamps only for Developer ID Application signatures. Set `on`/`off` to force either way.

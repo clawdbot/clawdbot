@@ -35,7 +35,7 @@ class ChatControllerStreamReplayTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun cleanRunStreamsThenConvergesToHistoryWithoutDuplicates() =
+  fun cleanRunStreamsV3AndV4DeltasThenConvergesToHistoryWithoutDuplicates() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondChatSend(status = "started")
@@ -50,7 +50,8 @@ class ChatControllerStreamReplayTest {
           .single { it.role == "user" }
           .id
 
-      controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, 1, "Str", "Str"))
+      // V3 deltas carry the accumulated message without v4's deltaText field.
+      controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, 1, null, "Str"))
       assertEquals("Str", controller.streamingAssistantText.value)
       controller.handleGatewayEvent(
         "chat",
@@ -296,6 +297,49 @@ class ChatControllerStreamReplayTest {
       runCurrent()
       assertNull(controller.errorText.value)
       assertEquals(2, controller.messages.value.size)
+    }
+
+  @Test
+  fun liveEditDiffCreatesAndUpdatesPendingToolUntilResult() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondChatSend(status = "started")
+      val controller = newController(gateway)
+      controller.handleGatewayEvent("health", null)
+      assertTrue(controller.sendMessageAwaitAcceptance("edit the file", "off", emptyList()))
+      val runId = requireNotNull(gateway.lastRunId)
+
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"$runId","ts":10,"stream":"tool","data":{"phase":"input_delta","name":"edit","toolCallId":"tool-1","diff":{"added":4,"removed":1}}}""",
+      )
+      assertEquals(
+        ChatDiffStat(added = 4, removed = 1),
+        controller.pendingToolCalls.value
+          .single()
+          .liveDiff,
+      )
+
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"$runId","ts":11,"stream":"tool","data":{"phase":"input_delta","name":"edit","toolCallId":"tool-1","diff":{"added":8,"removed":2}}}""",
+      )
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"$runId","ts":12,"stream":"tool","data":{"phase":"start","name":"edit","toolCallId":"tool-1","args":{"path":"a.kt"}}}""",
+      )
+      assertEquals(
+        ChatDiffStat(added = 8, removed = 2),
+        controller.pendingToolCalls.value
+          .single()
+          .liveDiff,
+      )
+
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"$runId","ts":13,"stream":"tool","data":{"phase":"result","name":"edit","toolCallId":"tool-1"}}""",
+      )
+      assertTrue(controller.pendingToolCalls.value.isEmpty())
     }
 
   @Test

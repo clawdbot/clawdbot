@@ -3,25 +3,25 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
-import {
-  isManifestPluginAvailableForControlPlane,
-  loadManifestMetadataSnapshot,
-} from "../plugins/manifest-contract-eligibility.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { hasManifestToolAvailability } from "../plugins/manifest-tool-availability.js";
+import { isPluginMetadataSnapshotCompatible } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { DeclaredToolAllowlistContext } from "./tool-policy.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ToolDenylist = ReturnType<typeof compileGlobPatterns>;
 
 function normalizeToolDenylist(list?: string[]): ToolDenylist {
-  return compileGlobPatterns({ raw: list, normalize: normalizeToolName });
+  return compileGlobPatterns({ raw: list, normalize: normalizeToolPolicyName });
 }
 
 function denylistBlocksName(name: string, denylist: ToolDenylist): boolean {
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   return normalized ? matchesAnyGlobPattern(normalized, denylist) : false;
 }
 
@@ -29,7 +29,7 @@ function denylistBlocksMcpServerNamespace(params: {
   safeServerName: string;
   denylist: ToolDenylist;
 }): boolean {
-  const serverPrefix = normalizeToolName(params.safeServerName + TOOL_NAME_SEPARATOR);
+  const serverPrefix = normalizeToolPolicyName(params.safeServerName + TOOL_NAME_SEPARATOR);
   if (!serverPrefix) {
     return false;
   }
@@ -117,7 +117,7 @@ function collectAvailableManifestToolNames(params: {
         env: params.env,
       }),
     )
-    .map(normalizeToolName)
+    .map(normalizeToolPolicyName)
     .filter(Boolean);
 }
 
@@ -126,16 +126,33 @@ function collectDeclaredPluginContext(params: {
   workspaceDir?: string;
   toolDenylist?: string[];
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Pick<DeclaredToolAllowlistContext, "pluginIds" | "pluginToolNames"> {
   if (params.config?.plugins?.enabled === false) {
     return {};
   }
   const env = params.env ?? process.env;
-  const snapshot = loadManifestMetadataSnapshot({
-    config: params.config,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    env,
-  });
+  const preparedSnapshot =
+    params.metadataSnapshot &&
+    params.metadataSnapshot.pluginIds === undefined &&
+    isPluginMetadataSnapshotCompatible({
+      snapshot: params.metadataSnapshot,
+      config: params.config,
+      env,
+      workspaceDir: params.workspaceDir,
+    })
+      ? params.metadataSnapshot
+      : undefined;
+  const snapshot =
+    preparedSnapshot ??
+    getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      env,
+    });
+  if (!snapshot) {
+    return {};
+  }
   const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
   const denylist = normalizeToolDenylist(params.toolDenylist);
   const pluginIds = new Set<string>();
@@ -175,6 +192,7 @@ export function buildDeclaredToolAllowlistContext(params: {
   workspaceDir?: string;
   toolDenylist?: string[];
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): DeclaredToolAllowlistContext | undefined {
   const mcpServerNames = uniqueStrings(
     collectConfiguredMcpServerNames({

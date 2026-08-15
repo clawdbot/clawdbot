@@ -20,7 +20,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
@@ -28,7 +28,6 @@ import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
-const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 // One budget covers all three prune walks (legacy-deps prepass, file listing,
 // empty-dir sweep). npm upgrades transiently hold old+new content-hashed dist
@@ -112,14 +111,7 @@ const BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_REPLACEMENT = [
 const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]events['"]/u;
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
-const NODE_COMPILE_CACHE_VERSION_DIR_RE = /^v\d+\.\d+\.\d+-/u;
-
 class InstalledDistScanLimitError extends Error {}
-
-function hasEnvFlag(env, key) {
-  const value = env?.[key]?.trim().toLowerCase();
-  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
-}
 
 function normalizeRelativePath(filePath) {
   return filePath.replace(/\\/g, "/");
@@ -829,14 +821,17 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
   const log = params.log ?? console;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const env = params.env ?? process.env;
+  const pathExists = params.existsSync ?? existsSync;
 
-  if (hasEnvFlag(env, DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV)) {
-    return { status: "disabled", migrated: false, reason: "disabled-env" };
+  // Registry migration belongs to installed-package upgrades. Source checkouts
+  // can contain stale dist from a different build and must not touch operator state.
+  if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
+    return { status: "skipped", reason: "source-checkout" };
   }
 
   try {
     const migrationModule = await importInstalledDistModule(
-      params,
+      { ...params, existsSync: pathExists },
       "dist/commands/doctor/shared/plugin-registry-migration.js",
     );
     if (!migrationModule) {
@@ -850,9 +845,6 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
       env,
       packageRoot,
     });
-    for (const warning of result.preflight?.deprecationWarnings ?? []) {
-      log.warn(`[postinstall] ${warning}`);
-    }
     if (result.migrated) {
       log.log(
         `[postinstall] migrated plugin registry: ${result.current.plugins.length} plugin(s) indexed`,
@@ -911,53 +903,6 @@ function shouldRunBundledPluginPostinstall(params) {
   return true;
 }
 
-function isCompileCachePrunePermissionDenied(error) {
-  return error?.code === "EACCES" || error?.code === "EPERM";
-}
-
-export function pruneOpenClawCompileCache(params = {}) {
-  const env = params.env ?? process.env;
-  const pathExists = params.existsSync ?? existsSync;
-  const readDir = params.readdirSync ?? readdirSync;
-  const remove = params.rmSync ?? rmSync;
-  const log = params.log ?? console;
-  const baseDirs = [
-    env.NODE_DISABLE_COMPILE_CACHE ? "" : env.NODE_COMPILE_CACHE,
-    join(tmpdir(), "node-compile-cache"),
-  ].filter((value, index, values) => value && values.indexOf(value) === index);
-
-  for (const baseDir of baseDirs) {
-    if (!pathExists(baseDir)) {
-      continue;
-    }
-    try {
-      for (const entry of readDir(baseDir, { withFileTypes: true })) {
-        if (!entry.isDirectory() || !NODE_COMPILE_CACHE_VERSION_DIR_RE.test(entry.name)) {
-          continue;
-        }
-        try {
-          remove(join(baseDir, entry.name), {
-            recursive: true,
-            force: true,
-            maxRetries: 2,
-            retryDelay: 100,
-          });
-        } catch (error) {
-          if (isCompileCachePrunePermissionDenied(error)) {
-            continue;
-          }
-          log.warn?.(`[postinstall] could not prune OpenClaw compile cache: ${String(error)}`);
-        }
-      }
-    } catch (error) {
-      if (isCompileCachePrunePermissionDenied(error)) {
-        continue;
-      }
-      log.warn?.(`[postinstall] could not prune OpenClaw compile cache: ${String(error)}`);
-    }
-  }
-}
-
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
@@ -967,12 +912,6 @@ export function runBundledPluginPostinstall(params = {}) {
   if (env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
     return;
   }
-  pruneOpenClawCompileCache({
-    env,
-    existsSync: pathExists,
-    rmSync: params.rmSync,
-    log,
-  });
   if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
     try {
       pruneBundledPluginSourceNodeModules({

@@ -32,11 +32,22 @@ const MAX_TEXT_PART_CHARS = 128_000;
 const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
 // Codex app-server validates the summed v2 turn/start text input against
 // codex-rs/protocol/src/user_input.rs::MAX_USER_INPUT_TEXT_CHARS.
-export const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
+const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 /** Default token reserve kept out of rendered context-engine prompt text. */
-export const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
+const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
+
+// Codex scans every turn text input byte-for-byte for explicit `$name` skill
+// mentions and `[@name](plugin://…)` links (codex-rs/skills/src/mentions.rs);
+// quoted history must never count as a current explicit invocation, so swap
+// the sigils to same-length fullwidth lookalikes (same technique as
+// escapeCodexChatText). Only the raw current request stays selectable.
+export function neutralizeCodexExplicitMentionSigils(text: string): string {
+  return text
+    .replace(/\$(?=[A-Za-z0-9_:-])/gu, "＄")
+    .replace(/\[@(?=[A-Za-z0-9_:-]+\]\()/gu, "[＠");
+}
 
 /** Projects assembled OpenClaw context-engine messages into Codex prompt inputs. */
 export function projectContextEngineAssemblyForCodex(params: {
@@ -50,10 +61,12 @@ export function projectContextEngineAssemblyForCodex(params: {
   const prompt = params.prompt.trim();
   const contextMessages = dropDuplicateTrailingPrompt(params.assembledMessages, prompt);
   const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
-  const renderedContext = renderMessagesForCodexContext(contextMessages, {
-    maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
-    toolPayloadMode: params.toolPayloadMode ?? "elide",
-  });
+  const renderedContext = neutralizeCodexExplicitMentionSigils(
+    renderMessagesForCodexContext(contextMessages, {
+      maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
+      toolPayloadMode: params.toolPayloadMode ?? "elide",
+    }),
+  );
   const boundedContext = renderedContext
     ? truncateOlderContext(renderedContext, maxRenderedContextChars)
     : undefined;
@@ -98,24 +111,9 @@ export function resolveCodexContextEngineProjectionMaxChars(params: {
   return normalizeRenderedContextMaxChars(scaledChars);
 }
 
-/** Reads Codex projection reserve tokens from compaction config. */
-export function resolveCodexContextEngineProjectionReserveTokens(params: {
-  config?: unknown;
-}): number | undefined {
-  const compaction = asRecord(asRecord(asRecord(params.config)?.agents)?.defaults)?.compaction;
-  const configuredReserveTokens = toNonNegativeInt(asRecord(compaction)?.reserveTokens);
-  const configuredReserveTokensFloor = toNonNegativeInt(asRecord(compaction)?.reserveTokensFloor);
-
-  if (configuredReserveTokens !== undefined) {
-    return Math.max(
-      configuredReserveTokens,
-      configuredReserveTokensFloor ?? DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS,
-    );
-  }
-  if (configuredReserveTokensFloor !== undefined) {
-    return configuredReserveTokensFloor;
-  }
-  return undefined;
+/** Returns the fixed reserve used for Codex context-engine projections. */
+export function resolveCodexContextEngineProjectionReserveTokens(): number {
+  return DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
 }
 
 /** Fits projected context prompts under Codex app-server turn/start text limits. */
@@ -231,17 +229,6 @@ function resolveProjectionPromptBudgetTokens(params: {
     Math.max(0, params.contextTokenBudget - minPromptBudget),
   );
   return Math.max(1, params.contextTokenBudget - effectiveReserveTokens);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
-function toNonNegativeInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  return Math.floor(value);
 }
 
 function dropDuplicateTrailingPrompt(messages: AgentMessage[], prompt: string): AgentMessage[] {
@@ -469,13 +456,10 @@ function hasMessageContent(message: AgentMessage): message is AgentMessage & { c
 }
 
 function normalizeRenderedContextMaxChars(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return DEFAULT_RENDERED_CONTEXT_CHARS;
   }
-  return Math.min(
-    MAX_RENDERED_CONTEXT_CHARS,
-    Math.max(DEFAULT_RENDERED_CONTEXT_CHARS, Math.floor(value)),
-  );
+  return Math.min(MAX_RENDERED_CONTEXT_CHARS, Math.max(1, Math.floor(value)));
 }
 
 function resolveTextPartMaxChars(maxRenderedContextChars: number): number {

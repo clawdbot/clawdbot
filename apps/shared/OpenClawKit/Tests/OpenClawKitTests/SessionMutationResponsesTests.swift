@@ -1,16 +1,16 @@
 import Foundation
-import OpenClawKit
 import Testing
+@testable import OpenClawKit
 
 struct SessionMutationResponsesTests {
     @Test
-    func compactResponseAcceptsSuccess() throws {
+    func `compact response accepts success`() throws {
         try OpenClawSessionsCompactResponse.requireSuccess(
             from: Data(#"{"ok":true,"key":"agent:main:main","compacted":true}"#.utf8))
     }
 
     @Test
-    func compactResponseSurfacesGatewayFailureReason() {
+    func `compact response surfaces gateway failure reason`() {
         let data = Data(
             #"{"ok":false,"key":"agent:main:main","compacted":false,"reason":"turn failed"}"#.utf8)
         do {

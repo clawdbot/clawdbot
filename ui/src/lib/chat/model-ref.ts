@@ -62,10 +62,7 @@ export function normalizeChatModelOverrideValue(
   return resolveUniqueCatalogValueById(trimmed, catalog) || trimmed;
 }
 
-export function resolveServerChatModelValue(
-  model?: string | null,
-  provider?: string | null,
-): string {
+function resolveServerChatModelValue(model?: string | null, provider?: string | null): string {
   if (typeof model !== "string") {
     return "";
   }
@@ -182,7 +179,7 @@ export function resolvePreferredServerChatModelValue(
   return resolveServerChatModelValue(trimmedModel, trimmedProvider);
 }
 
-export function formatChatModelDisplay(value: string): string {
+function formatChatModelDisplay(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
@@ -200,7 +197,17 @@ function formatRawCatalogLabel(entry: ModelCatalogEntry): string {
 }
 
 function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
-  return entry.alias?.trim() || entry.name.trim();
+  const name = entry.name.trim();
+  const alias = entry.alias?.trim();
+  if (!name || !alias) {
+    return name || alias || "";
+  }
+  if (alias.toLowerCase() === name.toLowerCase()) {
+    return name;
+  }
+  // Aliases are selectable metadata, not a replacement for model identity.
+  // Preserve richer custom labels only when they already contain the full name.
+  return alias.toLowerCase().includes(name.toLowerCase()) ? alias : `${name} · ${alias}`;
 }
 
 function createQualifiedCatalogKey(entry: ModelCatalogEntry): string {
@@ -280,17 +287,6 @@ export function formatCatalogChatModelDisplayFromLookup(
   }
 
   return displayLookup.get(trimmed.toLowerCase()) ?? formatChatModelDisplay(trimmed);
-}
-
-export function formatCatalogChatModelDisplay(value: string, catalog: ModelCatalogEntry[]): string {
-  return formatCatalogChatModelDisplayFromLookup(value, buildCatalogDisplayLookup(catalog));
-}
-
-export function buildChatModelOption(
-  entry: ModelCatalogEntry,
-  catalog: ModelCatalogEntry[] = [entry],
-): { value: string; label: string } {
-  return buildChatModelOptionFromLookup(entry, buildCatalogDisplayLookup(catalog));
 }
 
 export function buildChatModelOptionFromLookup(

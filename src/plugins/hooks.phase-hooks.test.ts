@@ -1,7 +1,9 @@
 /** Tests phase-scoped plugin hooks and hook registration ordering. */
 import { beforeEach, describe, expect, it } from "vitest";
+import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
 import { createHookRunner } from "./hooks.js";
-import { addStaticTestHooks } from "./hooks.test-helpers.js";
+import { addStaticTestHooks } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeModelResolveResult,
@@ -119,7 +121,125 @@ describe("phase hooks merger", () => {
         appendSystemContext: "append A\n\nappend B",
       },
     },
+    {
+      name: "before_prompt_build intersects tool restrictions from every hook",
+      hookName: "before_prompt_build" as const,
+      hooks: [
+        {
+          pluginId: "high",
+          result: { toolsAllow: ["group:fs", "web_*"] as string[] },
+          priority: 10,
+        },
+        {
+          pluginId: "low",
+          result: { toolsAllow: ["read", "web_search"] as string[] },
+          priority: 1,
+        },
+      ],
+      expected: {
+        systemPrompt: undefined,
+        prependContext: undefined,
+        appendContext: undefined,
+        prependSystemContext: undefined,
+        appendSystemContext: undefined,
+        toolsAllow: ["read", "web_search"],
+      },
+    },
+    {
+      name: "before_prompt_build keeps an explicit empty restriction",
+      hookName: "before_prompt_build" as const,
+      hooks: [
+        {
+          pluginId: "high",
+          result: { toolsAllow: [] as string[] },
+          priority: 10,
+        },
+        {
+          pluginId: "low",
+          result: { toolsAllow: ["read"] as string[] },
+          priority: 1,
+        },
+      ],
+      expected: {
+        systemPrompt: undefined,
+        prependContext: undefined,
+        appendContext: undefined,
+        prependSystemContext: undefined,
+        appendSystemContext: undefined,
+        toolsAllow: [],
+      },
+    },
+    {
+      name: "before_prompt_build fails closed for malformed tool restrictions",
+      hookName: "before_prompt_build" as const,
+      hooks: [
+        {
+          pluginId: "invalid",
+          result: { toolsAllow: null as unknown as string[] },
+        },
+      ],
+      expected: {
+        systemPrompt: undefined,
+        prependContext: undefined,
+        appendContext: undefined,
+        prependSystemContext: undefined,
+        appendSystemContext: undefined,
+        toolsAllow: [],
+      },
+    },
+    {
+      name: "before_prompt_build rejects mixed-type tool restrictions",
+      hookName: "before_prompt_build" as const,
+      hooks: [
+        {
+          pluginId: "invalid",
+          result: { toolsAllow: ["*", null] as unknown as string[] },
+        },
+      ],
+      expected: {
+        systemPrompt: undefined,
+        prependContext: undefined,
+        appendContext: undefined,
+        prependSystemContext: undefined,
+        appendSystemContext: undefined,
+        toolsAllow: [],
+      },
+    },
   ] as const)("$name", async ({ hookName, hooks, expected }) => {
     await expectPhaseHookMerge({ hookName, hooks, expected });
+  });
+
+  it("accepts a frozen toolsAllow returned by a plugin", async () => {
+    const result = await runPhaseHook({
+      hookName: "before_prompt_build",
+      hooks: [
+        {
+          pluginId: "frozen",
+          result: { toolsAllow: Object.freeze(["read"]) as unknown as string[] },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({ toolsAllow: ["read"] });
+  });
+
+  it("preserves overlapping glob restrictions for concrete-surface evaluation", async () => {
+    const result = await runPhaseHook({
+      hookName: "before_prompt_build",
+      hooks: [
+        { pluginId: "prefix", result: { toolsAllow: ["web_*"] } },
+        { pluginId: "suffix", result: { toolsAllow: ["*_search"] } },
+      ],
+    });
+    const toolsAllow = (result as PluginHookBeforePromptBuildResult | undefined)?.toolsAllow;
+
+    expect(toolsAllow).toBeDefined();
+    expect(readToolAllowlistIntersection(toolsAllow ?? [])).toEqual([["web_*"], ["*_search"]]);
+    expect(
+      applyEmbeddedAttemptToolsAllow(
+        [{ name: "web_search" }, { name: "web_fetch" }, { name: "memory_search" }],
+        toolsAllow,
+      ),
+    ).toEqual([{ name: "web_search" }]);
   });
 });

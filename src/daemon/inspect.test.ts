@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { detectMarkerLineWithGateway, findExtraGatewayServices } from "./inspect.js";
+import {
+  detectMarkerLineWithGateway,
+  findExtraGatewayServices,
+  renderGatewayServiceCleanupHints,
+} from "./inspect.js";
 
 const { execSchtasksMock } = vi.hoisted(() => ({
   execSchtasksMock: vi.fn(),
@@ -16,7 +20,7 @@ vi.mock("./schtasks-exec.js", () => ({
 // Real content from the openclaw-gateway.service unit file (the canonical gateway unit).
 const GATEWAY_SERVICE_CONTENTS = `\
 [Unit]
-Description=OpenClaw Gateway (v2026.3.8)
+Description=OpenClaw Gateway
 After=network-online.target
 Wants=network-online.target
 
@@ -25,7 +29,6 @@ ExecStart=/usr/bin/node /home/openclaw/.npm-global/lib/node_modules/openclaw/dis
 Restart=always
 Environment=OPENCLAW_SERVICE_MARKER=openclaw
 Environment=OPENCLAW_SERVICE_KIND=gateway
-Environment=OPENCLAW_SERVICE_VERSION=2026.3.8
 
 [Install]
 WantedBy=default.target
@@ -97,6 +100,131 @@ describe("detectMarkerLineWithGateway", () => {
   it("ignores non-gateway ExecStart commands that only pass gateway-named options", () => {
     const contents = `[Service]\nExecStart=/usr/bin/openclaw-helper --gateway-url http://127.0.0.1:18789 sync\n`;
     expect(detectMarkerLineWithGateway(contents)).toBeNull();
+  });
+});
+
+describe("renderGatewayServiceCleanupHints", () => {
+  it("does not suggest removing a gateway when no extra service was detected", () => {
+    expect(renderGatewayServiceCleanupHints([])).toEqual([]);
+  });
+
+  it.each([
+    {
+      title: "targets the detected macOS LaunchAgent instead of the active gateway",
+      platform: "darwin",
+      serviceName: "com.example.openclaw-gateway",
+      source: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+      scope: "user",
+      stopCommand: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+      removeCommand: "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+    },
+    {
+      title: "uses the system domain for a detected macOS LaunchDaemon",
+      platform: "darwin",
+      serviceName: "com.example.openclaw-gateway",
+      source: "plist: /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
+      scope: "system",
+      stopCommand: "sudo launchctl bootout system/com.example.openclaw-gateway",
+      removeCommand: "sudo rm /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
+    },
+    {
+      title: "keeps global macOS LaunchAgents in the GUI domain",
+      platform: "darwin",
+      serviceName: "com.example.openclaw-gateway",
+      source: "plist: /Library/LaunchAgents/com.example.openclaw-gateway.plist",
+      scope: "system",
+      stopCommand: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+      removeCommand: "sudo rm /Library/LaunchAgents/com.example.openclaw-gateway.plist",
+    },
+    {
+      title: "targets the detected user-level systemd unit",
+      platform: "linux",
+      serviceName: "custom-gateway.service",
+      source: "unit: /home/test/.config/systemd/user/custom-gateway.service",
+      scope: "user",
+      stopCommand: "systemctl --user disable --now -- custom-gateway.service",
+      removeCommand: "rm /home/test/.config/systemd/user/custom-gateway.service",
+    },
+    {
+      title: "targets the detected system-level systemd unit",
+      platform: "linux",
+      serviceName: "custom-gateway.service",
+      source: "unit: /etc/systemd/system/custom-gateway.service",
+      scope: "system",
+      stopCommand: "sudo systemctl disable --now -- custom-gateway.service",
+      removeCommand: "sudo rm /etc/systemd/system/custom-gateway.service",
+    },
+    {
+      title: "terminates systemctl options before a detected unit that begins with a dash",
+      platform: "linux",
+      serviceName: "-custom-gateway.service",
+      source: "unit: /home/test/.config/systemd/user/-custom-gateway.service",
+      scope: "user",
+      stopCommand: "systemctl --user disable --now -- -custom-gateway.service",
+      removeCommand: "rm /home/test/.config/systemd/user/-custom-gateway.service",
+    },
+    {
+      title: "shell-quotes detected POSIX service labels and paths",
+      platform: "darwin",
+      serviceName: "com.example.gateway; touch injected",
+      source: "plist: /Users/test/Launch Agents/example's gateway.plist",
+      scope: "user",
+      stopCommand: "launchctl bootout gui/$UID/'com.example.gateway; touch injected'",
+      removeCommand: "rm '/Users/test/Launch Agents/example'\\''s gateway.plist'",
+    },
+  ] as const)("$title", ({ platform, serviceName, source, scope, stopCommand, removeCommand }) => {
+    expect(
+      renderGatewayServiceCleanupHints([
+        {
+          platform,
+          label: serviceName,
+          detail: source,
+          scope,
+        },
+      ]),
+    ).toEqual([stopCommand, removeCommand]);
+  });
+
+  it("targets the detected Windows scheduled task", () => {
+    expect(
+      renderGatewayServiceCleanupHints([
+        {
+          platform: "win32",
+          label: "\\OpenClaw Gateway Backup",
+          detail: "task: \\OpenClaw Gateway Backup",
+          scope: "system",
+        },
+      ]),
+    ).toEqual(['schtasks /Delete /TN "\\OpenClaw Gateway Backup" /F']);
+  });
+
+  it.each(["$(Start-Process calc)", "%OPENCLAW_GATEWAY_TASK%", "unsafe&task", "task`name"])(
+    "does not render a Windows task name expandable by cmd.exe or PowerShell: %s",
+    (label) => {
+      expect(
+        renderGatewayServiceCleanupHints([
+          {
+            platform: "win32",
+            label,
+            detail: `task: ${label}`,
+            scope: "system",
+          },
+        ]),
+      ).toEqual([]);
+    },
+  );
+
+  it("does not invent a removal path when service metadata omits it", () => {
+    expect(
+      renderGatewayServiceCleanupHints([
+        {
+          platform: "darwin",
+          label: "com.example.openclaw-gateway",
+          detail: "loaded",
+          scope: "user",
+        },
+      ]),
+    ).toEqual(["launchctl bootout gui/$UID/com.example.openclaw-gateway"]);
   });
 });
 
@@ -313,6 +441,10 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
           marker: "openclaw",
           legacy: false,
         },
+      ]);
+      expect(renderGatewayServiceCleanupHints(result)).toEqual([
+        "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+        `rm ${plistPath}`,
       ]);
     } finally {
       await fs.rm(tmpHome, { recursive: true, force: true });

@@ -83,7 +83,8 @@ export async function getMemoryManagerContextWithPurpose(params: {
     ? {
         manager,
         debug: {
-          ...debug,
+          backend: debug?.backend ?? "builtin",
+          purpose: debug?.purpose ?? params.purpose ?? "default",
           managerMs: debug?.managerMs ?? Math.max(0, Date.now() - startedAt),
         },
       }
@@ -107,9 +108,9 @@ export function createMemoryTool(params: {
     name: params.name,
     description: params.description,
     parameters: params.parameters,
-    execute: async (toolCallId, toolParams) => {
+    execute: async (toolCallId, toolParams, signal, onUpdate) => {
       const latestCtx = resolveMemoryToolContext(params.options) ?? ctx;
-      return await params.execute(latestCtx)(toolCallId, toolParams);
+      return await params.execute(latestCtx)(toolCallId, toolParams, signal, onUpdate);
     },
   };
 }

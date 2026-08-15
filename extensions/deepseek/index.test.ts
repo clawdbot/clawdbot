@@ -200,8 +200,6 @@ describe("deepseek provider plugin", () => {
     expect(catalogProvider.models?.map((model) => model.id)).toEqual([
       "deepseek-v4-flash",
       "deepseek-v4-pro",
-      "deepseek-chat",
-      "deepseek-reasoner",
     ]);
     const flashModel = catalogProvider.models?.find((model) => model.id === "deepseek-v4-flash");
     expect(flashModel?.reasoning).toBe(true);
@@ -209,9 +207,6 @@ describe("deepseek provider plugin", () => {
     expect(flashModel?.maxTokens).toBe(384_000);
     expect(flashModel?.compat?.supportsReasoningEffort).toBe(true);
     expect(flashModel?.compat?.maxTokensField).toBe("max_tokens");
-    expect(
-      catalogProvider.models?.find((model) => model.id === "deepseek-reasoner")?.reasoning,
-    ).toBe(true);
     expect(
       Object.fromEntries(
         (catalogProvider.models ?? []).map((model) => [
@@ -233,16 +228,6 @@ describe("deepseek provider plugin", () => {
         contextWindow: 1_000_000,
         maxTokens: 384_000,
         cost: { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0 },
-      },
-      "deepseek-chat": {
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
-      },
-      "deepseek-reasoner": {
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
       },
     });
   });

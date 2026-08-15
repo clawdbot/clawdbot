@@ -10,6 +10,9 @@ OpenClaw runs one Gateway (the master) on a host and connects every client to it
 - **Operators** (you, or the macOS app): direct LAN/Tailnet WebSocket is simplest when the Gateway is reachable; SSH tunneling is the universal fallback.
 - **Nodes** (iOS/Android and other devices): connect to the Gateway **WebSocket** (LAN/tailnet or SSH tunnel).
 
+Remote clients can continue the same Gateway-owned conversation by URL or short
+reference. See [Session synchronization and attachment](/concepts/session-attachment).
+
 ## The core idea
 
 The Gateway WebSocket binds to **loopback** by default, on port `18789` (`gateway.port`). For remote use, either expose it through Tailscale Serve / a trusted LAN-Tailnet bind, or forward the loopback port over SSH.
@@ -42,6 +45,8 @@ ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
 ```
 
 With the tunnel up, `openclaw health` and `openclaw status --deep` reach the remote Gateway via `ws://127.0.0.1:18789`. `openclaw gateway status`, `openclaw gateway health`, `openclaw gateway probe`, and `openclaw gateway call` can also target a forwarded URL via `--url`.
+
+To replace per-client SSH tunnels with one private `wss://` endpoint while keeping the Gateway on loopback, follow [Give your Gateway a stable HTTPS URL](/gateway/stable-https-url).
 
 <Note>
 Replace `18789` with your configured `gateway.port` (or `--port` / `OPENCLAW_GATEWAY_PORT`).
@@ -95,13 +100,18 @@ Gateway credential resolution follows one shared contract across call/probe/stat
   - CLI `--url` never reuses implicit config/env credentials.
   - Env `OPENCLAW_GATEWAY_URL` may use env credentials only (`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`).
 - Local mode defaults:
-  - token: `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token` -> `gateway.remote.token` (remote fallback only when the local token is unset)
-  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.auth.password` -> `gateway.remote.password` (remote fallback only when the local password is unset)
+  - token: `gateway.auth.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.remote.token` (remote fallback only when the local token is unset)
+  - password: `gateway.auth.password` -> `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` (remote fallback only when the local password is unset)
 - Remote mode defaults:
   - token: `gateway.remote.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token`
   - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` -> `gateway.auth.password`
-- Node-host local-mode exception: `gateway.remote.token` / `gateway.remote.password` are ignored.
-- Remote probe/status token checks are strict by default: they use `gateway.remote.token` only (no local token fallback) when targeting remote mode.
+- Node-host local-mode exception: environment credentials stay first and `gateway.remote.token` / `gateway.remote.password` are ignored because node commands target an explicit host and port.
+- Remote startup/status/wizard probes with SecretRef support treat configured
+  `gateway.remote.token` and `gateway.remote.password` as authoritative for the configured
+  target. Ambient environment credentials are considered only when neither remote credential
+  is configured. If a configured remote SecretRef cannot be resolved, the probe warns and does
+  not fall back to environment credentials; a separately configured sibling credential that
+  resolves successfully remains usable.
 - Gateway env overrides use `OPENCLAW_GATEWAY_*` only.
 
 ## Chat UI remote access
@@ -126,7 +136,7 @@ Keep the Gateway **loopback-only** unless you are sure you need a bind.
 - `gateway.remote.token` / `.password` are client credential sources; they do not configure server auth by themselves.
 - Local call paths can use `gateway.remote.*` as a fallback only when `gateway.auth.*` is unset.
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
-- `gateway.remote.tlsFingerprint` pins the remote TLS cert for `wss://`, including macOS direct mode. Without a stored pin, macOS only pins on first use after normal system trust passes; self-signed or private-CA Gateways need an explicit fingerprint or Remote over SSH.
+- `gateway.remote.tlsFingerprint` pins the remote TLS cert for `wss://`, including both operator/control traffic and the companion node in macOS direct mode. Without a stored pin, macOS pins on first use only after normal system trust passes; self-signed or private-CA Gateways need an explicit fingerprint or Remote over SSH.
 - **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity headers when `gateway.auth.allowTailscale: true`. HTTP API endpoints do not use that header auth and instead follow the Gateway's normal HTTP auth mode. This tokenless flow assumes the Gateway host is trusted; set it to `false` for shared-secret auth everywhere.
 - **Trusted-proxy** auth expects a non-loopback identity-aware proxy by default. Same-host loopback reverse proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`.
 - Treat browser control like operator access: tailnet-only plus deliberate node pairing.

@@ -58,6 +58,7 @@ describe("uploadImageFromUrl", () => {
     expect(mockReadRemoteMediaBuffer).toHaveBeenCalledWith({
       url: "https://example.com/image.png",
       maxBytes: MAX_IMAGE_BYTES,
+      responseHeaderTimeoutMs: 120_000,
       readIdleTimeoutMs: 30_000,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },

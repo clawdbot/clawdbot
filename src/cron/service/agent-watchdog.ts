@@ -46,13 +46,14 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
 } as const satisfies Record<CronAgentExecutionPhase, CronAgentPhaseWatchdogStage>;
 
 /** Handle for feeding isolated-agent progress into cron timeout watchdogs. */
-export type CronAgentWatchdog = {
+type CronAgentWatchdog = {
   start: () => void;
   noteLaneWait: () => void;
   noteLaneAdmitted: () => void;
   noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
   notePhase: (info: CronAgentExecutionPhaseUpdate) => void;
   activeExecution: () => CronAgentExecutionStarted | undefined;
+  deadlineAtMs: () => number | undefined;
   observedLaneWait: () => boolean;
   dispose: () => void;
 };
@@ -68,7 +69,9 @@ export function createCronAgentWatchdog(params: {
   let setupTimeoutId: NodeJS.Timeout | undefined;
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
+  let deadlineAtMs: number | undefined;
   let observedLaneWait = false;
+  let waitingForLane = false;
 
   const setTimedOut = (reason: string) => {
     if (state === "timed_out" || state === "disposed") {
@@ -81,6 +84,7 @@ export function createCronAgentWatchdog(params: {
     if (timeoutId || state === "disposed") {
       return;
     }
+    deadlineAtMs = Date.now() + params.jobTimeoutMs;
     timeoutId = setTimeout(() => {
       setTimedOut(timeoutErrorMessage(activeExecution));
     }, params.jobTimeoutMs);
@@ -91,6 +95,17 @@ export function createCronAgentWatchdog(params: {
     }
     clearTimeout(setupTimeoutId);
     setupTimeoutId = undefined;
+  };
+  // Queue contention is not runner setup; admission must begin a fresh setup budget.
+  const startSetupTimeout = () => {
+    if (setupTimeoutId || state !== "waiting_for_runner" || waitingForLane) {
+      return;
+    }
+    setupTimeoutId = setTimeout(() => {
+      if (state === "waiting_for_runner" && !waitingForLane) {
+        setTimedOut(setupTimeoutErrorMessage(activeExecution));
+      }
+    }, CRON_AGENT_SETUP_WATCHDOG_MS);
   };
   const clearPreExecutionTimeout = () => {
     if (!preExecutionTimeoutId) {
@@ -120,7 +135,8 @@ export function createCronAgentWatchdog(params: {
     // re-arm pre-execution timing so the fallback path cannot stall silently.
     if (
       state === "executing" &&
-      previousPhase === "before_agent_reply" &&
+      previousPhase !== undefined &&
+      CRON_AGENT_PHASE_WATCHDOG_STAGE[previousPhase] === "execution" &&
       stage === "pre_execution"
     ) {
       // Model fallback can move from an execution phase back into setup-like
@@ -129,7 +145,7 @@ export function createCronAgentWatchdog(params: {
       startPreExecutionTimeout();
       return;
     }
-    if (stage === "execution" || info.firstModelCallStarted) {
+    if (stage === "execution") {
       state = "executing";
       clearPreExecutionTimeout();
     }
@@ -138,11 +154,7 @@ export function createCronAgentWatchdog(params: {
   return {
     start: () => {
       if (params.deferUntilRunner) {
-        setupTimeoutId = setTimeout(() => {
-          if (state === "waiting_for_runner") {
-            setTimedOut(setupTimeoutErrorMessage(activeExecution));
-          }
-        }, CRON_AGENT_SETUP_WATCHDOG_MS);
+        startSetupTimeout();
         return;
       }
       startTimeout();
@@ -150,11 +162,15 @@ export function createCronAgentWatchdog(params: {
     noteLaneWait: () => {
       if (state === "waiting_for_runner") {
         observedLaneWait = true;
+        waitingForLane = true;
+        clearSetupTimeout();
       }
     },
     noteLaneAdmitted: () => {
       if (state === "waiting_for_runner") {
         observedLaneWait = false;
+        waitingForLane = false;
+        startSetupTimeout();
       }
     },
     noteRunnerStarted: (info?: CronAgentExecutionStarted) => {
@@ -176,6 +192,7 @@ export function createCronAgentWatchdog(params: {
       noteExecutionProgress(info);
     },
     activeExecution: () => activeExecution,
+    deadlineAtMs: () => deadlineAtMs,
     observedLaneWait: () => observedLaneWait,
     dispose: () => {
       state = "disposed";

@@ -1,11 +1,18 @@
 // Discord plugin module implements model picker preferences migrations behavior.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import type { BundledChannelLegacyStateMigrationDetector } from "openclaw/plugin-sdk/channel-entry-contract";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  DISCORD_COMMAND_DEPLOY_HASH_MAX_ENTRIES,
+  DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE,
+} from "../command-deploy-store.js";
+import {
+  buildPreferenceModelKey,
+  preferenceTimestampMs,
+  sanitizeRecentModels,
+} from "./model-picker-preference-primitives.js";
 import {
   normalizePersistedBinding,
   THREAD_BINDINGS_MAX_ENTRIES,
@@ -66,55 +73,8 @@ function normalizeLegacyPreferenceKey(key: string): string | undefined {
   return trimmed;
 }
 
-function normalizeModelRef(raw?: string): string | null {
-  const value = raw?.trim();
-  if (!value) {
-    return null;
-  }
-  const slashIndex = value.indexOf("/");
-  if (slashIndex <= 0 || slashIndex >= value.length - 1) {
-    return null;
-  }
-  const provider = normalizeProviderId(value.slice(0, slashIndex));
-  const model = value.slice(slashIndex + 1).trim();
-  return provider && model ? `${provider}/${model}` : null;
-}
-
-function sanitizeRecentModels(models: unknown, limit: number): string[] {
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  if (!Array.isArray(models)) {
-    return deduped;
-  }
-  for (const item of models) {
-    const normalized = normalizeModelRef(typeof item === "string" ? item : undefined);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    deduped.push(normalized);
-    if (deduped.length >= limit) {
-      break;
-    }
-  }
-  return deduped;
-}
-
-function hashSegment(value: string, length: number): string {
-  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, length);
-}
-
-function buildPreferenceModelKey(scopeKey: string, modelRef: string): string {
-  return `v1:${hashSegment(scopeKey, 32)}:${hashSegment(modelRef, 24)}`;
-}
-
-function timestampMs(value: unknown): number {
-  const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 function legacyUpdatedAtForIndex(updatedAt: unknown, index: number, total: number): string {
-  const baseMs = timestampMs(updatedAt);
+  const baseMs = preferenceTimestampMs(updatedAt);
   const anchorMs = Math.min(baseMs + Math.max(0, total), MAX_DATE_TIMESTAMP_MS);
   const shiftedMs = anchorMs - Math.max(0, index);
   return (
@@ -167,6 +127,23 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
   stateDir,
 }) => {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
+  const commandDeployCacheSourcePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+  if (fileExists(commandDeployCacheSourcePath)) {
+    plans.push({
+      kind: "plugin-state-import",
+      label: "Discord command deployment cache",
+      sourcePath: commandDeployCacheSourcePath,
+      targetPath: `plugin state:${DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE}`,
+      pluginId: "discord",
+      namespace: DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE,
+      maxEntries: DISCORD_COMMAND_DEPLOY_HASH_MAX_ENTRIES,
+      scopeKey: "",
+      cleanupSource: "remove",
+      cleanupWhenEmpty: true,
+      // Rebuildable cache: discard file-era hashes and reconcile once against Discord.
+      readEntries: () => [],
+    });
+  }
   const modelPickerSourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
   if (fileExists(modelPickerSourcePath)) {
     plans.push({

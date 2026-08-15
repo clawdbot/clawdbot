@@ -5,17 +5,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { isTruthyEnvValue, isVitestRuntimeEnv } from "../infra/env.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
 
 const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
 const TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV = "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR";
-let bundledPluginsDirOverrideForTest: string | undefined;
 const bundledPluginsDirCache = new Map<string, string | undefined>();
 
 /** Diagnostic emitted when source-checkout bundled plugins lack dependency installs. */
-export type SourceCheckoutDependencyDiagnostic = {
+type SourceCheckoutDependencyDiagnostic = {
   source: string;
   message: string;
 };
@@ -39,13 +39,8 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
   );
 }
 
-function isTruthyEnvValue(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
 function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boolean {
-  const isVitestProcess = Boolean(env.VITEST) || Boolean(process.env.VITEST);
+  const isVitestProcess = isVitestRuntimeEnv(env) || isVitestRuntimeEnv(process.env);
   return (
     isVitestProcess &&
     (isTruthyEnvValue(env[TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV]) ||
@@ -53,7 +48,7 @@ function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boole
   );
 }
 
-function hasUsableBundledPluginTree(pluginsDir: string): boolean {
+export function hasUsableBundledPluginTree(pluginsDir: string): boolean {
   if (!fs.existsSync(pluginsDir)) {
     return false;
   }
@@ -75,6 +70,8 @@ function hasUsableBundledPluginTree(pluginsDir: string): boolean {
 
 function safeRealpathSync(targetPath: string): string | null {
   try {
+    // Trusted-root containment requires native platform canonicalization here.
+    // The shared plain-realpath helper must not replace this security boundary.
     return fs.realpathSync.native(targetPath);
   } catch {
     return null;
@@ -210,17 +207,12 @@ function createBundledPluginsDirCacheKey(env: NodeJS.ProcessEnv): string {
     openClawHome: env.OPENCLAW_HOME ?? "",
     home: env.HOME ?? "",
     userProfile: env.USERPROFILE ?? "",
-    testOverride: bundledPluginsDirOverrideForTest ?? "",
   });
 }
 
 function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | undefined {
   if (areBundledPluginsDisabled(env)) {
     return resolveDisabledBundledPluginsDir();
-  }
-
-  if (bundledPluginsDirOverrideForTest) {
-    return bundledPluginsDirOverrideForTest;
   }
 
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
@@ -308,12 +300,4 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   const resolved = resolveBundledPluginsDirUncached(env);
   bundledPluginsDirCache.set(cacheKey, resolved);
   return resolved;
-}
-
-export function setBundledPluginsDirOverrideForTest(dir: string | undefined): void {
-  if (process.env.VITEST !== "true" && process.env.NODE_ENV !== "test") {
-    throw new Error("setBundledPluginsDirOverrideForTest is only available in tests");
-  }
-  bundledPluginsDirOverrideForTest = dir;
-  bundledPluginsDirCache.clear();
 }

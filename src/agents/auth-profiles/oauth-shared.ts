@@ -3,9 +3,9 @@
  * Used by manager, external CLI overlays, and persistence paths to decide when
  * incoming runtime credentials may replace or bootstrap stored profiles.
  */
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { cloneAuthProfileStore } from "./clone.js";
-import { hasUsableOAuthCredential as hasUsableStoredOAuthCredential } from "./credential-state.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
   isSafeToCopyOAuthIdentity,
   normalizeAuthEmailToken,
@@ -73,14 +73,6 @@ export function shouldReplaceStoredOAuthCredential(
   return !hasNewerStoredOAuthCredential(existing, incoming);
 }
 
-/** Returns true when an OAuth credential has a usable access token. */
-export function hasUsableOAuthCredential(
-  credential: OAuthCredential | undefined,
-  now = Date.now(),
-): boolean {
-  return hasUsableStoredOAuthCredential(credential, { now });
-}
-
 /** Returns true when an OAuth credential has account or email identity. */
 export function hasOAuthIdentity(
   credential: Pick<OAuthCredential, "accountId" | "email">,
@@ -126,17 +118,6 @@ function isSafeOAuthIdentityTransition(
   return hasMatchingOAuthIdentity(existing, incoming);
 }
 
-/** Returns true when stored OAuth identity can be overwritten. */
-export function isSafeToOverwriteStoredOAuthIdentity(
-  existing: OAuthCredential | undefined,
-  incoming: OAuthCredential,
-): boolean {
-  return isSafeOAuthIdentityTransition(existing, incoming, {
-    whenExistingCredentialMissing: true,
-    whenExistingIdentityMissing: false,
-  });
-}
-
 /** Returns true when bootstrap may adopt an external OAuth identity. */
 export function isSafeToAdoptBootstrapOAuthIdentity(
   existing: OAuthCredential | undefined,
@@ -166,10 +147,10 @@ export function shouldBootstrapFromExternalCliCredential(params: {
   now?: number;
 }): boolean {
   const now = params.now ?? Date.now();
-  if (hasUsableOAuthCredential(params.existing, now)) {
+  if (hasUsableOAuthCredential(params.existing, { now })) {
     return false;
   }
-  return hasUsableOAuthCredential(params.imported, now);
+  return hasUsableOAuthCredential(params.imported, { now });
 }
 
 /** Overlays runtime external OAuth profiles on a cloned store. */

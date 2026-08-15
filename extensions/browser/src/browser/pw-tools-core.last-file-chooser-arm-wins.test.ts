@@ -11,7 +11,8 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const mod = await import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.downloads.js");
+const interactions = await import("./pw-tools-core.interactions.js");
 
 describe("pw-tools-core", () => {
   it("last file-chooser arm wins", async () => {
@@ -69,7 +70,7 @@ describe("pw-tools-core", () => {
 
       expect(fc1.setFiles).not.toHaveBeenCalled();
       await vi.waitFor(() => {
-        expect(fc2.setFiles).toHaveBeenCalledWith([secondCanonicalPath]);
+        expect(fc2.setFiles).toHaveBeenCalledWith([secondCanonicalPath], { timeout: 120_000 });
       });
     } finally {
       await Promise.all([fs.rm(firstPath, { force: true }), fs.rm(secondPath, { force: true })]);
@@ -136,7 +137,7 @@ describe("pw-tools-core", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    await mod.waitForViaPlaywright({
+    await interactions.waitForViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       selector: "#main",
       url: "**/dash",
@@ -179,7 +180,7 @@ describe("pw-tools-core", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    await mod.waitForViaPlaywright({
+    await interactions.waitForViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       selector: "#main",
       timeoutMs: 999_999,
@@ -199,7 +200,7 @@ describe("pw-tools-core", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    await mod.clickViaPlaywright({
+    await interactions.clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       selector: "#main",
       timeoutMs: 999_999,

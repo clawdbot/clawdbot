@@ -16,7 +16,7 @@ Adds StepFun, StepFun Plan model provider support to OpenClaw.
 
 ## Surface
 
-providers: stepfun, stepfun-plan
+providers: `stepfun`, `stepfun-plan`
 
 ## Related docs
 

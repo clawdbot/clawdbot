@@ -2,12 +2,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { stableStringify } from "../../agents/stable-stringify.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -41,6 +41,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialHash: ["fixture", "digest"].join("-"),
   bundleHash: ["fixture", "bundle", "digest"].join("-"),
   sessionId: REQUEST.sessionId,
+  runId: REQUEST.runId,
   ownerEpoch: REQUEST.runEpoch,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],

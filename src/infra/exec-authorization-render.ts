@@ -6,11 +6,9 @@ import type {
   ExecAuthorizationPlan,
 } from "./exec-authorization-plan.js";
 
-export type AuthorizedShellRenderMode = "safeBins" | "enforced";
+type AuthorizedShellRenderMode = "safeBins" | "enforced";
 
-export type AuthorizedShellRenderResult =
-  | { ok: true; command: string }
-  | { ok: false; reason: string };
+type AuthorizedShellRenderResult = { ok: true; command: string } | { ok: false; reason: string };
 
 type SourceReplacement = {
   startIndex: number;
@@ -132,7 +130,10 @@ function shouldRewriteCandidate(params: {
   satisfiedBy: ExecSegmentSatisfiedBy | undefined;
 }): boolean {
   if (params.mode === "enforced") {
-    return true;
+    // Safe builtins (cd, :, true, false, pwd, test) are handled by the shell itself, not by an
+    // external executable. Rewriting them to a resolved path (e.g. /usr/bin/cd) is semantically
+    // wrong and does not strengthen PATH-shadowing protection, so enforced mode leaves them as-is.
+    return params.satisfiedBy !== "safeBuiltins";
   }
   return params.satisfiedBy === "safeBins" || params.satisfiedBy === "inlineChain";
 }

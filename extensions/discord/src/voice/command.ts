@@ -6,7 +6,7 @@ import {
 } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveDiscordAccountAllowFrom } from "../accounts.js";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
 import {
   Command,
   CommandWithSubcommands,
@@ -18,12 +18,19 @@ import { resolveDiscordChannelNameSafe } from "../monitor/channel-access.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadLikeChannelContext } from "../monitor/thread-channel-context.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
-import type { DiscordVoiceManager } from "./manager.js";
+import { resolveDiscordVoiceAccess } from "./owner-access.js";
+import type { DiscordVoiceManager } from "./voice-runtime.js";
 
 const VOICE_CHANNEL_TYPES: NonNullable<APIApplicationCommandChannelOption["channel_types"]> = [
   DiscordChannelType.GuildVoice,
   DiscordChannelType.GuildStageVoice,
 ];
+
+export const DISCORD_VOICE_COMMAND_SPEC = {
+  name: "vc",
+  description: "Voice channel controls",
+  acceptsArgs: false,
+} satisfies NativeCommandSpec;
 
 type VoiceCommandContext = {
   cfg: OpenClawConfig;
@@ -73,6 +80,7 @@ async function authorizeVoiceCommand(
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
   const sender = resolveDiscordSenderIdentity({ author: user, member: interaction.rawData.member });
+  const voiceAccess = resolveDiscordVoiceAccess(params);
   const access = await authorizeDiscordVoiceIngress({
     cfg: params.cfg,
     discordConfig: params.discordConfig,
@@ -90,10 +98,7 @@ async function authorizeVoiceCommand(
     scope: channelContext.isThreadChannel ? "thread" : "channel",
     channelLabel: channelId ? formatMention({ channelId }) : "This channel",
     memberRoleIds,
-    ownerAllowFrom: resolveDiscordAccountAllowFrom({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }),
+    admissionAllowFrom: voiceAccess.admissionAllowFrom,
     sender: {
       id: sender.id,
       name: sender.name,
@@ -274,8 +279,8 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   }
 
   return new (class extends CommandWithSubcommands {
-    override name = "vc";
-    override description = "Voice channel controls";
+    override name = DISCORD_VOICE_COMMAND_SPEC.name;
+    override description = DISCORD_VOICE_COMMAND_SPEC.description;
     subcommands = [new JoinCommand(), new LeaveCommand(), new StatusCommand()];
   })();
 }

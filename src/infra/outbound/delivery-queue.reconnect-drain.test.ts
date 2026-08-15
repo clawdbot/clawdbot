@@ -1,21 +1,25 @@
 // Covers reconnect-triggered queue drain selection, active claims, backoff
 // bypass, and concurrent drain suppression.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { RECOVERY_REPLAY_SPACING_MS } from "../delivery-recovery.shared.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import {
   type DeliverFn,
-  drainPendingDeliveries,
-  enqueueDelivery,
-  failDelivery,
-  loadPendingDeliveries,
-  MAX_RETRIES,
-  markDeliveryPlatformOutcomeUnknown,
+  drainPendingDeliveriesCore,
   type RecoveryLogger,
   recoverPendingDeliveries,
   withActiveDeliveryClaim,
-} from "./delivery-queue.js";
+} from "./delivery-queue-recovery.js";
+import {
+  loadPendingDeliveries,
+  markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendAttemptStarted,
+  reserveDeliveryAttempt,
+} from "./delivery-queue-storage.js";
+import { enqueueDelivery, failDelivery } from "./delivery-queue-storage.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -23,8 +27,17 @@ import {
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
+const RECOVERY_REPLAY_SPACING_MS = 250;
+const MAX_RETRIES = 5;
 const stubCfg = {} as OpenClawConfig;
 const NO_LISTENER_ERROR = "No active DirectChat listener";
+const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
+const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
+}));
 
 function normalizeReconnectAccountIdForTest(accountId?: string | null): string {
   return (accountId ?? "").trim() || "default";
@@ -40,12 +53,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
@@ -68,8 +76,8 @@ function readOutboundQueueStatus(tmpDir: string, id: string): string | undefined
     env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
   });
   const row = db
-    .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?")
-    .get(id) as { status?: string } | undefined;
+    .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+    .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { status?: string } | undefined;
   return row?.status;
 }
 
@@ -80,7 +88,7 @@ async function drainDirectChatReconnectPending(opts: {
   stateDir: string;
 }) {
   const normalizedAccountId = normalizeReconnectAccountIdForTest(opts.accountId);
-  await drainPendingDeliveries({
+  await drainPendingDeliveriesCore({
     drainKey: `directchat:${normalizedAccountId}`,
     logLabel: "DirectChat reconnect drain",
     cfg: stubCfg,
@@ -134,12 +142,15 @@ async function enqueueFailedDirectChatDelivery(params: {
   return id;
 }
 
-describe("drainPendingDeliveries for reconnect", () => {
+describe("drainPendingDeliveriesCore for reconnect", () => {
   let tmpDir: string;
   const fixtures = installDeliveryQueueTmpDirHooks();
 
   beforeEach(() => {
     tmpDir = fixtures.tmpDir();
+    sleepMock.mockReset();
+    sleepMock.mockResolvedValue(undefined);
+    resolveOutboundChannelMessageAdapterMock.mockReset();
   });
 
   it("drains entries that failed with 'no listener' error", async () => {
@@ -167,6 +178,106 @@ describe("drainPendingDeliveries for reconnect", () => {
 
     // deliver should not be called since no eligible entries for acct1
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("retries deferred rows for every channel through the gateway-wide drain", async () => {
+    const channels = ["discord", "slack", "signal"] as const;
+    const deliveryIds: string[] = [];
+    for (const channel of channels) {
+      const id = await enqueueDelivery(
+        {
+          channel,
+          to: `${channel}:recipient`,
+          payloads: [{ text: `retry ${channel}` }],
+        },
+        tmpDir,
+      );
+      await failDelivery(id, "temporary connection failure", tmpDir);
+      deliveryIds.push(id);
+    }
+    const deliver = vi.fn<DeliverFn>(async (entry) => [
+      { channel: entry.channel, messageId: `${entry.channel}-delivered` },
+    ]);
+    const drain = () =>
+      drainPendingDeliveriesCore({
+        drainKey: "gateway:outbound",
+        logLabel: "Outbound delivery retry",
+        cfg: stubCfg,
+        log: createRecoveryLog(),
+        stateDir: tmpDir,
+        deliver,
+        selectEntry: () => ({ match: true, bypassBackoff: false }),
+      });
+
+    await expect(
+      recoverPendingDeliveries({
+        cfg: stubCfg,
+        log: createRecoveryLog(),
+        stateDir: tmpDir,
+        deliver,
+      }),
+    ).resolves.toMatchObject({ recovered: 0, deferredBackoff: channels.length });
+
+    await drain();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(channels.length);
+
+    for (const id of deliveryIds) {
+      setQueuedEntryState(tmpDir, id, {
+        retryCount: 1,
+        lastAttemptAt: Date.now() - 5_000,
+        lastError: "temporary connection failure",
+      });
+    }
+    await drain();
+
+    expect(deliver.mock.calls.map(([entry]) => entry.channel).toSorted()).toEqual(
+      channels.toSorted(),
+    );
+    expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
+
+    await drain();
+    expect(deliver).toHaveBeenCalledTimes(channels.length);
+  });
+
+  it("rejects recovered delivery when the current channel config disables its account", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "discord",
+        to: "discord:recipient",
+        payloads: [{ text: "do not send after account revocation" }],
+      },
+      tmpDir,
+    );
+    await failDelivery(id, "temporary connection failure", tmpDir);
+    setQueuedEntryState(tmpDir, id, {
+      retryCount: 1,
+      lastAttemptAt: Date.now() - 5_000,
+    });
+    const cfg: OpenClawConfig = { channels: { discord: { enabled: false } } };
+    const admitDeferredDelivery = vi.fn(({ cfg: currentConfig }: { cfg: OpenClawConfig }) =>
+      currentConfig.channels?.discord?.enabled === false
+        ? { status: "permanent_rejection" as const, reason: "Discord account disabled" }
+        : { status: "allowed" as const },
+    );
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: { admitDeferredDelivery },
+    });
+    const deliver = vi.fn<DeliverFn>(async () => []);
+
+    await drainPendingDeliveriesCore({
+      drainKey: "gateway:outbound",
+      logLabel: "Outbound delivery retry",
+      cfg,
+      log: createRecoveryLog(),
+      stateDir: tmpDir,
+      deliver,
+      selectEntry: () => ({ match: true, bypassBackoff: false }),
+    });
+
+    expect(admitDeferredDelivery).toHaveBeenCalledWith(expect.objectContaining({ cfg }));
+    expect(deliver).not.toHaveBeenCalled();
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
   });
 
   it("retries immediately without resetting retry history", async () => {
@@ -198,7 +309,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("moves unknown-after-send entries to failed without replaying during reconnect drain", async () => {
+  it("removes random unknown-after-send entries without replaying during reconnect drain", async () => {
     const log = createRecoveryLog();
     const deliver = vi.fn<DeliverFn>(async () => {});
     const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
@@ -208,8 +319,48 @@ describe("drainPendingDeliveries for reconnect", () => {
 
     expect(deliver).not.toHaveBeenCalled();
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
     expectLogMessageWith(log.warn, "refusing blind replay without adapter reconciliation");
+  });
+
+  it("reconciles an exhausted final attempt before dead-lettering", async () => {
+    const log = createRecoveryLog();
+    const deliver = vi.fn<DeliverFn>(async () => {});
+    const id = await enqueueDelivery(
+      {
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "maybe sent" }],
+        accountId: "acct1",
+        maxRetries: 1,
+      },
+      tmpDir,
+    );
+    await reserveDeliveryAttempt(id, 1, tmpDir);
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir);
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "sent",
+      messageId: "platform-final",
+      receipt: {
+        primaryPlatformMessageId: "platform-final",
+        platformMessageIds: ["platform-final"],
+        parts: [{ platformMessageId: "platform-final", kind: "text", index: 0 }],
+        sentAt: 1,
+      },
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+
+    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
   });
 
   it("skips entries where retryCount >= MAX_RETRIES", async () => {
@@ -228,10 +379,10 @@ describe("drainPendingDeliveries for reconnect", () => {
 
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
-    // Should have moved to failed, not delivered
+    // Random delivery IDs do not need a reusable producer fence.
     expect(deliver).not.toHaveBeenCalled();
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
   });
 
   it("second concurrent call is skipped (concurrency guard)", async () => {
@@ -308,6 +459,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
     vi.setSystemTime(startedAt);
     try {
+      const controlledSleep = controlNextRecoverySleep(sleepMock);
       const log = createRecoveryLog();
       const startupLog = createRecoveryLog();
       let firstStarted!: () => void;
@@ -344,9 +496,9 @@ describe("drainPendingDeliveries for reconnect", () => {
       });
       releaseFirst();
 
-      await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS - 1);
+      await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
       expect(deliver).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
+      controlledSleep.release();
       await Promise.all([reconnectDrain, startupRecovery]);
 
       expect(deliver).toHaveBeenCalledTimes(2);
@@ -491,7 +643,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
     let mutated = false;
 
-    await drainPendingDeliveries({
+    await drainPendingDeliveriesCore({
       drainKey: "directchat:acct1",
       logLabel: "DirectChat reconnect drain",
       cfg: stubCfg,

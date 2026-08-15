@@ -1,16 +1,19 @@
 // Codex plugin module implements apply behavior.
 import path from "node:path";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   applyMigrationManualItem,
   markMigrationItemConflict,
   markMigrationItemError,
   markMigrationItemSkipped,
   MIGRATION_REASON_TARGET_EXISTS,
+  resolveMigrationConfigRuntime,
   summarizeMigrationItems,
   writeMigrationConfigPath,
 } from "openclaw/plugin-sdk/migration";
 import {
   archiveMigrationItem,
+  copyMemoryMigrationFileItem,
   copyMigrationFileItem,
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
@@ -36,19 +39,16 @@ import {
   resolveCodexAppServerRuntimeOptions,
   type ResolvedCodexPluginPolicy,
 } from "../app-server/config.js";
-import {
-  ensureCodexPluginActivation,
-  type CodexPluginActivationResult,
-} from "../app-server/plugin-activation.js";
+import { ensureCodexPluginActivation } from "../app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
-import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndWait,
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
-import { applyCodexAuthItem, buildCodexAuthConfigPatchItems } from "./auth.js";
+import { codexPluginActivationReportState, sanitizeAppsNeedingAuth } from "./apply-report.js";
+import { applyCodexAuthItems, type CodexAuthSource } from "./auth.js";
 import { buildCodexMigrationPlan } from "./plan.js";
 import {
   buildCodexPluginsConfigValue,
@@ -70,7 +70,7 @@ const TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 30_000;
 const TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV =
   "OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS";
 
-export type CodexMigrationTargetAppServerPreparation = {
+type CodexMigrationTargetAppServerPreparation = {
   dispose: () => Promise<void>;
 };
 
@@ -129,15 +129,10 @@ export async function applyCodexMigrationPlan(params: {
     typeof plan.metadata?.codexHome === "string" && plan.metadata.codexHome.trim()
       ? plan.metadata.codexHome
       : plan.source;
-  const authSource = {
-    root: plan.source,
-    confidence: "high" as const,
+  const authSource: CodexAuthSource = {
     codexHome,
     authPath: path.join(codexHome, "auth.json"),
     modelsCachePath: path.join(codexHome, "models_cache.json"),
-    skills: [],
-    plugins: [],
-    archivePaths: [],
   };
   const runtime = withCachedMigrationConfigRuntime(
     params.ctx.runtime ?? params.runtime,
@@ -152,18 +147,12 @@ export async function applyCodexMigrationPlan(params: {
     if (item.id === CODEX_PLUGIN_CONFIG_ITEM_ID) {
       items.push(await applyCodexPluginConfigItem(applyCtx, item, items));
     } else if (item.kind === "auth") {
-      const authItem = await applyCodexAuthItem({
-        ctx: applyCtx,
-        item,
-        source: authSource,
-        targets,
-      });
-      items.push(authItem);
       items.push(
-        ...(await buildCodexAuthConfigPatchItems({
+        ...(await applyCodexAuthItems({
           ctx: applyCtx,
-          item: authItem,
+          item,
           source: authSource,
+          targets,
         })),
       );
     } else if (item.kind === "plugin" && item.action === "install") {
@@ -172,6 +161,13 @@ export async function applyCodexMigrationPlan(params: {
       items.push(applyMigrationManualItem(item));
     } else if (item.action === "archive") {
       items.push(await archiveMigrationItem(item, reportDir));
+    } else if (item.kind === "memory") {
+      items.push(
+        await copyMemoryMigrationFileItem(item, reportDir, {
+          workspaceDir: targets.workspaceDir,
+          overwrite: params.ctx.overwrite,
+        }),
+      );
     } else {
       items.push(await copyMigrationFileItem(item, reportDir, { overwrite: params.ctx.overwrite }));
     }
@@ -277,14 +273,14 @@ async function applyCodexPluginInstallItem(
           ...item.details,
           code: "plugin_inventory_unavailable",
           warningReason: CODEX_PLUGIN_LOAD_WARNING,
-          diagnostic: formatCodexMigrationError(error),
+          diagnostic: coerceErrorMessage(error),
         },
       };
     }
     return {
       ...item,
       status: "error",
-      reason: formatCodexMigrationError(error),
+      reason: coerceErrorMessage(error),
       details: {
         ...item.details,
         code: "plugin_install_failed",
@@ -294,12 +290,8 @@ async function applyCodexPluginInstallItem(
 }
 
 function isCodexPluginInventoryLoadError(error: unknown): boolean {
-  const message = formatCodexMigrationError(error);
+  const message = coerceErrorMessage(error);
   return message.includes("codex app-server plugin/list timed out");
-}
-
-function formatCodexMigrationError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {
@@ -365,9 +357,7 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
   );
 }
 
-export function targetCodexMarketplaceDiscoveryTimeoutMs(
-  env: NodeJS.ProcessEnv = process.env,
-): number {
+function targetCodexMarketplaceDiscoveryTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   const configured = parseStrictNonNegativeInteger(
     env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
   );
@@ -417,21 +407,38 @@ async function applyCodexPluginConfigItem(
   item: MigrationItem,
   appliedItems: readonly MigrationItem[],
 ): Promise<MigrationItem> {
+  const incompletePluginItems = appliedItems.filter(
+    (candidate) =>
+      candidate.kind === "plugin" &&
+      candidate.action === "install" &&
+      readCodexPluginPolicy(candidate) !== undefined &&
+      !isCodexPluginConfigTerminal(candidate),
+  );
+  if (incompletePluginItems.length > 0) {
+    return {
+      ...item,
+      status: "warning",
+      reason: "selected Codex plugin activation is incomplete",
+    };
+  }
   const entries = appliedItems
     .map(readAppliedPluginConfigEntry)
     .filter((entry): entry is CodexPluginMigrationConfigEntry => entry !== undefined);
   if (entries.length === 0) {
-    return markMigrationItemSkipped(item, "no selected Codex plugins");
+    return {
+      ...markMigrationItemSkipped(item, "no selected Codex plugins"),
+      deferredCompletion: true,
+    };
   }
   const returnPatch = shouldReturnCodexPluginConfigPatch(ctx);
-  const configApi = ctx.runtime?.config;
+  const configApi = resolveMigrationConfigRuntime(ctx);
   const currentConfig = returnPatch
     ? ctx.config
     : (configApi?.current?.() as MigrationProviderContext["config"] | undefined);
   if (!currentConfig) {
     return markMigrationItemError(item, "config runtime unavailable");
   }
-  const value = buildCodexPluginsConfigValue(entries, { config: currentConfig });
+  const value = buildCodexPluginsConfigValue(entries, currentConfig);
   if (!ctx.overwrite && hasCodexPluginConfigConflict(currentConfig, value)) {
     return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
   }
@@ -466,76 +473,43 @@ async function applyCodexPluginConfigItem(
     if (error instanceof CodexPluginConfigConflictError) {
       return markMigrationItemConflict(item, error.reason);
     }
-    return markMigrationItemError(item, error instanceof Error ? error.message : String(error));
+    return markMigrationItemError(item, coerceErrorMessage(error));
   }
+}
+
+function isCodexPluginConfigTerminal(item: MigrationItem): boolean {
+  return (
+    item.status === "migrated" ||
+    (item.status === "skipped" &&
+      (item.deferredCompletion === true ||
+        item.reason === CODEX_PLUGIN_NOT_SELECTED_REASON ||
+        item.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON))
+  );
 }
 
 function readAppliedPluginConfigEntry(
   item: MigrationItem,
 ): CodexPluginMigrationConfigEntry | undefined {
-  if (item.status === "migrated") {
+  if (item.status === "migrated" || item.deferredCompletion === true) {
     return readCodexPluginMigrationConfigEntry(item, true);
   }
-  if (
-    item.status === "skipped" &&
-    item.reason !== CODEX_PLUGIN_NOT_SELECTED_REASON &&
-    item.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON
-  ) {
+  if (item.status === "skipped" && item.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON) {
     return readCodexPluginMigrationConfigEntry(item, false);
   }
   return undefined;
 }
 
 function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy | undefined {
-  const configKey = item.details?.configKey;
-  const marketplaceName = item.details?.marketplaceName;
-  const pluginName = item.details?.pluginName;
-  if (
-    typeof configKey !== "string" ||
-    marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
-    typeof pluginName !== "string"
-  ) {
+  const entry = readCodexPluginMigrationConfigEntry(item, true);
+  if (!entry) {
     return undefined;
   }
   return {
-    configKey,
+    configKey: entry.configKey,
     marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-    pluginName,
+    pluginName: entry.pluginName,
     enabled: true,
     allowDestructiveActions: true,
     destructiveApprovalMode: "allow",
   };
-}
-
-function codexPluginActivationReportState(result: CodexPluginActivationResult): {
-  installed?: boolean;
-  enabled?: boolean;
-} {
-  switch (result.reason) {
-    case "already_active":
-    case "installed":
-      return { installed: true, enabled: true };
-    case "auth_required":
-      return { installed: true, enabled: false };
-    case "disabled":
-    case "marketplace_missing":
-    case "plugin_missing":
-      return { installed: false, enabled: false };
-    case "refresh_failed":
-      return { installed: true, enabled: false };
-  }
-  const exhaustiveReason: never = result.reason;
-  return exhaustiveReason;
-}
-
-function sanitizeAppsNeedingAuth(apps: readonly v2.AppSummary[]): Array<{
-  id: string;
-  name: string;
-  needsAuth: boolean;
-}> {
-  return apps.map((app) => ({
-    id: app.id,
-    name: app.name,
-    needsAuth: app.needsAuth,
-  }));
 }

@@ -13,17 +13,13 @@ import {
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  DEFAULT_AGENT_WORKSPACE_DIR,
-  ensureAgentWorkspace,
-  resolveWorkspaceAttestationPaths,
-  shouldRemoveWorkspaceAttestation,
-} from "../agents/workspace.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { resolveConfigPath } from "../config/paths.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveAdvertisedControlUiLinks,
@@ -38,16 +34,33 @@ import {
   resolveBrowserOpenCommand,
 } from "../infra/browser-open.js";
 import { detectBinary } from "../infra/detect-binary.js";
-import { movePathToTrash } from "../infra/fs-safe.js";
+import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+  movePathToTrash,
+} from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+import { listAgentSessionDirs, removeWorkspaceDirs } from "./cleanup-utils.js";
+import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
+
+/** Builds the token-authenticated Control UI URL shown by onboarding surfaces. */
+export function buildOnboardingControlUiUrl(params: {
+  httpUrl: string;
+  authMode?: GatewayAuthMode;
+  token?: string;
+  suppressTokenOutput?: boolean;
+}): string {
+  return params.authMode === "token" && params.token && !params.suppressTokenOutput
+    ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
+    : params.httpUrl;
+}
 
 /** Handles Clack cancellation by exiting through the runtime. */
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
@@ -230,44 +243,33 @@ function resolveSshTargetHint(): string {
 export async function ensureWorkspaceAndSessions(
   workspaceDir: string,
   runtime: RuntimeEnv,
-  options?: {
+  options: {
     skipBootstrap?: boolean;
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
-    agentId?: string;
+    agentId: string;
   },
-) {
+): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !options?.skipBootstrap,
     skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
-}
-
-/** Returns package manager choices offered by onboarding. */
-export function resolveNodeManagerOptions(): Array<{
-  value: NodeManagerChoice;
-  label: string;
-}> {
-  return [
-    { value: "npm", label: "npm" },
-    { value: "pnpm", label: "pnpm" },
-    { value: "bun", label: "bun" },
-  ];
+  return { bootstrapPending: ws.bootstrapPending === true };
 }
 
 /** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
-export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<void> {
+export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<boolean> {
   if (!pathname) {
-    return;
+    return false;
   }
   try {
-    await fs.access(pathname);
-  } catch {
-    return;
+    await fs.lstat(pathname);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
   try {
     const targetPath = path.resolve(pathname);
@@ -276,8 +278,10 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
       allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
     });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
+    return true;
   } catch {
     runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
+    return false;
   }
 }
 
@@ -300,23 +304,67 @@ async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<strin
   return uniqueStrings(allowedRoots);
 }
 
+async function assertFullResetPreservesOnboardingLock(workspaceDir: string): Promise<void> {
+  const [workspacePath, migrationDir] = await Promise.all([
+    canonicalPathFromExistingAncestor(path.resolve(workspaceDir)),
+    canonicalPathFromExistingAncestor(path.join(resolveStateDir(), "migration")),
+  ]);
+  if (
+    workspacePath === migrationDir ||
+    isPathInside(workspacePath, migrationDir) ||
+    isPathInside(migrationDir, workspacePath)
+  ) {
+    throw new Error(
+      "Full reset workspace overlaps the active onboarding lock directory. " +
+        "Choose a workspace outside the OpenClaw state migration directory or use a narrower reset scope.",
+    );
+  }
+}
+
 /** Deletes onboarding-managed state according to the selected reset scope. */
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
-  await moveToTrash(resolveConfigPath(), runtime);
+  if (scope === "full") {
+    // Validate before moving config or credentials so an unsafe full reset has
+    // no partial destructive effects and cannot discard its own lock sidecar.
+    await assertFullResetPreservesOnboardingLock(workspaceDir);
+  }
+  const failures: string[] = [];
+  const trashRequiredPath = async (targetPath: string) => {
+    if (!(await moveToTrash(targetPath, runtime))) {
+      failures.push(targetPath);
+    }
+  };
+
+  await trashRequiredPath(resolveConfigPath());
   if (scope === "config") {
+    throwIfResetFailed(failures);
     return;
   }
-  await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
-  await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
-  if (scope === "full") {
-    await moveToTrash(workspaceDir, runtime);
-    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
-      workspaceDir,
-    ).entries()) {
-      if (await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
-        await moveToTrash(attestationPath, runtime);
-      }
+  await trashRequiredPath(path.join(resolveConfigDir(), "credentials"));
+  const stateDir = resolveStateDir();
+  try {
+    const sessionDirs = await listAgentSessionDirs(stateDir);
+    for (const sessionDir of sessionDirs) {
+      await trashRequiredPath(sessionDir);
     }
+  } catch {
+    failures.push(path.join(stateDir, "agents"));
+  }
+  if (scope === "full") {
+    failures.push(
+      ...(await removeWorkspaceDirs([workspaceDir], runtime, {
+        removeStateRows: true,
+        removeWorkspace: (workspace) => moveToTrash(workspace, runtime),
+      })),
+    );
+  }
+  throwIfResetFailed(failures);
+}
+
+function throwIfResetFailed(failures: string[]): void {
+  const uniqueFailures = [...new Set(failures)];
+  if (uniqueFailures.length > 0) {
+    throw new Error(`Reset failed to remove required state:\n${uniqueFailures.join("\n")}`);
   }
 }
 
@@ -488,8 +536,6 @@ function summarizeError(err: unknown): string {
       .find(Boolean) ?? raw;
   return line.length > 120 ? `${truncateUtf16Safe(line, 119)}…` : line;
 }
-
-export const testing = { summarizeError };
 
 /** Default workspace path shown by onboarding prompts. */
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;

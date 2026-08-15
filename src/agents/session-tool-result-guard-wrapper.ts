@@ -20,7 +20,9 @@ import {
   type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import type { EmbeddedRunTrigger } from "./embedded-agent-runner/run/params.js";
 import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transcript-visibility.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import type { SessionManager } from "./sessions/index.js";
@@ -50,13 +52,27 @@ export function guardSessionManager(
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
+    trigger?: EmbeddedRunTrigger;
     preparedUserTurnMessage?: PersistedUserTurnMessage;
+    preparedUserTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     suppressAssistantErrorPersistence?: boolean;
+    /** Finalization keeps core redaction but must not run plugin write hooks. */
+    skipBeforeMessageWriteHooks?: boolean;
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
+      runtimeMessage: Extract<AgentMessage, { role: "user" }> | undefined,
     ) => void | Promise<void>;
+    onUserMessagePersistenceSuppressed?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+      runtimeMessage: Extract<AgentMessage, { role: "user" }> | undefined,
+    ) => void | Promise<void>;
+    onUserMessagePreparingForPersistence?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+      recorder: UserTurnTranscriptRecorder | undefined,
+      preparedMessage: PersistedUserTurnMessage | undefined,
+    ) => void;
     onUserMessageBlocked?: (message: Extract<AgentMessage, { role: "user" }>) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
     withCompactionPersistence?: (
@@ -75,15 +91,21 @@ export function guardSessionManager(
   const hookRunner = getGlobalHookRunner();
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
   let queuedUserTurnTranscriptRecorder: UserTurnTranscriptRecorder | undefined;
+  const runtimeUserMessageByPersistedMessage = new WeakMap<
+    AgentMessage,
+    Extract<AgentMessage, { role: "user" }>
+  >();
   const beforeMessageWrite = (event: { message: AgentMessage }) => {
+    const runtimeUserMessage = runtimeUserMessageByPersistedMessage.get(event.message);
     let message = event.message;
     let changed = false;
-    if (hookRunner?.hasHooks("before_message_write")) {
+    if (!opts?.skipBeforeMessageWriteHooks && hookRunner?.hasHooks("before_message_write")) {
       const result = hookRunner.runBeforeMessageWrite(event, {
         agentId: opts?.agentId,
         sessionKey: opts?.sessionKey,
       });
       if (result?.block) {
+        runtimeUserMessageByPersistedMessage.delete(event.message);
         queuedUserTurnTranscriptRecorder?.markBlocked();
         queuedUserTurnTranscriptRecorder = undefined;
         return result;
@@ -101,6 +123,14 @@ export function guardSessionManager(
       message = redacted;
       changed = true;
     }
+    const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
+      hidden: opts?.trigger === "memory",
+      message,
+    });
+    if (projectedMessage !== message) {
+      message = projectedMessage;
+      changed = true;
+    }
     if (message.role !== "user" && queuedUserTurnTranscriptRecorder) {
       queuedUserTurnTranscriptRecorder.markBlocked();
       queuedUserTurnTranscriptRecorder = undefined;
@@ -108,6 +138,9 @@ export function guardSessionManager(
     if (message.role === "user" && queuedUserTurnTranscriptRecorder) {
       message = attachRuntimeUserTurnTranscriptRecorder(message, queuedUserTurnTranscriptRecorder);
       queuedUserTurnTranscriptRecorder = undefined;
+    }
+    if (runtimeUserMessage && message.role === "user") {
+      runtimeUserMessageByPersistedMessage.set(message, runtimeUserMessage);
     }
     return changed ? { message } : undefined;
   };
@@ -143,16 +176,28 @@ export function guardSessionManager(
       const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
       const runtimeContext = takeRuntimeUserTurnTranscriptContext(message);
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
+      const recorder =
+        runtimeContext?.recorder ??
+        (prepared !== undefined && prepared === pendingPreparedUserTurnMessage
+          ? opts?.preparedUserTurnTranscriptRecorder
+          : undefined);
+      if (message.role === "user") {
+        opts?.onUserMessagePreparingForPersistence?.(message, recorder, prepared);
+      }
       const merged = mergePreparedUserTurnMessageForRuntime({
         runtimeMessage: withProvenance,
         ...(prepared ? { preparedMessage: prepared } : {}),
       });
       if (merged !== withProvenance) {
-        if (runtimeContext) {
-          queuedUserTurnTranscriptRecorder = runtimeContext.recorder;
-        } else {
+        queuedUserTurnTranscriptRecorder = recorder;
+        if (!runtimeContext) {
           pendingPreparedUserTurnMessage = undefined;
         }
+      }
+      if (message.role === "user" && merged.role === "user") {
+        // Persistence callbacks may be re-entrant. Correlate through the exact
+        // transformed object instead of a mutable latest-message slot.
+        runtimeUserMessageByPersistedMessage.set(merged, message);
       }
       return merged;
     },
@@ -166,8 +211,6 @@ export function guardSessionManager(
       typeof opts?.contextWindowTokens === "number"
         ? resolveLiveToolResultMaxChars({
             contextWindowTokens: opts.contextWindowTokens,
-            cfg: opts.config,
-            agentId: opts.agentId,
           })
         : undefined,
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
@@ -175,10 +218,21 @@ export function guardSessionManager(
     suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
     onMessagePersisted: opts?.onMessagePersisted,
     withCompactionPersistence: opts?.withCompactionPersistence,
-    onUserMessagePersisted: async (message) => {
+    onUserMessagePersisted: async (message, persistence) => {
+      const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
+      runtimeUserMessageByPersistedMessage.delete(message);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      recorder?.markRuntimePersisted(message);
-      await opts?.onUserMessagePersisted?.(message);
+      if (persistence.anchor) {
+        recorder?.markRuntimePersisted(message, persistence.anchor);
+      } else {
+        recorder?.markRuntimePersisted(message);
+      }
+      await opts?.onUserMessagePersisted?.(message, runtimeMessage);
+    },
+    onUserMessagePersistenceSuppressed: async (message) => {
+      const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
+      runtimeUserMessageByPersistedMessage.delete(message);
+      await opts?.onUserMessagePersistenceSuppressed?.(message, runtimeMessage);
     },
     onUserMessageBlocked: opts?.onUserMessageBlocked,
     onAssistantErrorMessagePersisted: opts?.onAssistantErrorMessagePersisted,

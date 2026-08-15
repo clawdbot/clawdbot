@@ -11,16 +11,17 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { agentCommand } from "../commands/agent.js";
+import { agentCommandFromSystem } from "../commands/agent.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { preserveTemporarySessionMapping } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 import { clearBootEchoContextForSession, setBootEchoContextForSession } from "./boot-echo-guard.js";
@@ -36,7 +37,7 @@ const log = createSubsystemLogger("gateway/boot");
 const BOOT_FILENAME = "BOOT.md";
 
 /** Result of attempting to run a workspace BOOT.md check. */
-export type BootRunResult =
+type BootRunResult =
   | { status: "skipped"; reason: "missing" | "empty" }
   | { status: "ran" }
   | { status: "failed"; reason: string };
@@ -72,17 +73,24 @@ function resolveBootSessionKey(sessionKey: string): string {
   return `agent:${agentId}:boot`;
 }
 
+const MAX_BOOT_FILE_BYTES = 16 * 1024 * 1024;
+
 async function loadBootFile(
   workspaceDir: string,
 ): Promise<{ content?: string; status: "ok" | "missing" | "empty" }> {
   const bootPath = path.join(workspaceDir, BOOT_FILENAME);
+
+  // Resolve symlinks so BOOT.md can be a readable symlink to a regular file
+  // while keeping directory/permission/size-limit failures surfaced to the
+  // operator. ENOENT from either resolution or the bounded open keeps the
+  // established readFile contract: treat disappearance as missing.
+  let buffer: Buffer;
   try {
-    const content = await fs.readFile(bootPath, "utf-8");
-    const trimmed = content.trim();
-    if (!trimmed) {
-      return { status: "empty" };
-    }
-    return { status: "ok", content: trimmed };
+    const resolvedPath = await fs.realpath(bootPath);
+    ({ buffer } = await readRegularFile({
+      filePath: resolvedPath,
+      maxBytes: MAX_BOOT_FILE_BYTES,
+    }));
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code === "ENOENT") {
@@ -90,6 +98,12 @@ async function loadBootFile(
     }
     throw err;
   }
+  const content = buffer.toString("utf-8");
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return { status: "empty" };
+  }
+  return { status: "ok", content: trimmed };
 }
 
 export async function runBootOnce(params: {
@@ -123,7 +137,7 @@ export async function runBootOnce(params: {
   const message = buildBootPrompt(result.content ?? "");
   const sessionId = generateBootSessionId();
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
 
   const mappingPreservation = await preserveTemporarySessionMapping(
     { storePath, sessionKey },
@@ -136,7 +150,7 @@ export async function runBootOnce(params: {
       // same session key. Refs #53732.
       setBootEchoContextForSession(sessionKey, message);
       try {
-        await agentCommand(
+        await agentCommandFromSystem(
           {
             message,
             sessionKey,
@@ -144,6 +158,7 @@ export async function runBootOnce(params: {
             deliver: false,
             suppressPromptPersistence: true,
           },
+          { boundary: "gateway.boot" },
           bootRuntime,
           params.deps,
         );

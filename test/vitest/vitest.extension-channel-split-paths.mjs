@@ -1,7 +1,7 @@
 // Test routing specs for channel plugins split into dedicated Vitest configs.
 import { bundledPluginRoot } from "../../scripts/lib/bundled-plugin-paths.mjs";
 
-export const splitChannelExtensionShardSpecs = [
+const splitChannelExtensionShardSpecs = [
   {
     id: "discord",
     kind: "extensionDiscord",

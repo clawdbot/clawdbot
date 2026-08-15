@@ -62,7 +62,7 @@ describeLive("memory plugin live tests", () => {
     };
 
     // Register plugin
-    memoryPlugin.register(mockApi as any);
+    memoryPlugin.register(mockApi as unknown as Parameters<typeof memoryPlugin.register>[0]);
 
     // Check registration
     expect(registeredTools.length).toBe(3);
@@ -73,9 +73,15 @@ describeLive("memory plugin live tests", () => {
     expect(registeredServices.length).toBe(1);
 
     // Get tool functions
-    const storeTool = registeredTools.find((t) => t.opts?.name === "memory_store")?.tool;
-    const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
-    const forgetTool = registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool;
+    const materialize = (name: string) => {
+      const toolOrFactory = registeredTools.find((entry) => entry.opts?.name === name)?.tool;
+      return typeof toolOrFactory === "function"
+        ? toolOrFactory({ agentId: "main", config: {} })
+        : toolOrFactory;
+    };
+    const storeTool = materialize("memory_store");
+    const recallTool = materialize("memory_recall");
+    const forgetTool = materialize("memory_forget");
 
     // Test store
     const storeResult = await storeTool.execute("test-call-1", {

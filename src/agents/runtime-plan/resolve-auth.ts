@@ -1,9 +1,12 @@
 /** Resolves credentials for an immutable prepared runtime route. */
 import { toErrorObject } from "../../infra/errors.js";
+import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
+import { OAuthRefreshFailureError } from "../auth-profiles/oauth-refresh-failure.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
-import { getApiKeyForModel } from "../model-auth.js";
+import { getApiKeyForModelCore } from "../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../provider-model-route-auth.js";
+import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-model.js";
 import { sameAgentRuntimeAuthModelRoute } from "./model-route.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
@@ -13,7 +16,7 @@ import {
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
 type PreparedRuntimeModelAuthResolution = Readonly<{
-  auth: Awaited<ReturnType<typeof getApiKeyForModel>>;
+  auth: Awaited<ReturnType<typeof getApiKeyForModelCore>>;
   plan: AgentRuntimeAuthPlan;
 }>;
 
@@ -61,6 +64,7 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
     attempt: PreparedAgentRuntimeAuthAttempt;
     model: Model;
   }): Promise<{ plan: AgentRuntimeAuthPlan; auth: Auth }>;
+  forceCredentialScopedDirectModelResolve?: boolean;
   errorMessage: string;
 }): Promise<PreparedRuntimeAuthAttemptResolution<Model, Auth>> {
   let firstError: unknown;
@@ -90,6 +94,14 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
       let model = await params.materializeModel({
         plan: attempt.plan,
         model: params.model,
+        forceResolve:
+          (params.forceCredentialScopedDirectModelResolve === true &&
+            attempt.kind === "direct" &&
+            Boolean(attempt.plan.selectedAuthMode)) ||
+          shouldForceDirectAuthFallbackModelResolve({
+            attempt,
+            priorProfileAttempted,
+          }),
       });
       if (
         attempt.kind === "profile" &&
@@ -116,6 +128,12 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
       // Model, physical route, and credential become active together.
       return { model, plan: resolved.plan, auth: resolved.auth };
     } catch (error) {
+      if (
+        error instanceof SecretSurfaceUnavailableError ||
+        error instanceof OAuthRefreshFailureError
+      ) {
+        throw error;
+      }
       firstError ??= error;
     }
   }
@@ -194,7 +212,7 @@ export function scopeAuthProfileStoreToPreparedPlan(
 
 function applyResolvedAuthToPlan(params: {
   plan: AgentRuntimeAuthPlan;
-  auth: Awaited<ReturnType<typeof getApiKeyForModel>>;
+  auth: Awaited<ReturnType<typeof getApiKeyForModelCore>>;
   candidates: string[];
 }): AgentRuntimeAuthPlan {
   const profileId = params.auth.profileId?.trim();
@@ -224,7 +242,7 @@ function applyResolvedAuthToPlan(params: {
 
 function assertResolvedAuthMatchesPreparedRoute(params: {
   plan: AgentRuntimeAuthPlan;
-  auth: Awaited<ReturnType<typeof getApiKeyForModel>>;
+  auth: Awaited<ReturnType<typeof getApiKeyForModelCore>>;
 }): void {
   const route = params.plan.modelRoute;
   if (
@@ -243,7 +261,7 @@ function assertResolvedAuthMatchesPreparedRoute(params: {
 
 /** Resolves prepared same-route candidates without pinning the first unresolved profile. */
 export async function resolvePreparedRuntimeModelAuth(
-  params: Omit<Parameters<typeof getApiKeyForModel>[0], "profileId"> & {
+  params: Omit<Parameters<typeof getApiKeyForModelCore>[0], "profileId"> & {
     plan: AgentRuntimeAuthPlan;
   },
 ): Promise<PreparedRuntimeModelAuthResolution> {
@@ -257,7 +275,7 @@ export async function resolvePreparedRuntimeModelAuth(
   if (candidates.length === 0) {
     // The planner selected direct auth. Resolve only env/config material so an
     // unrelated full store cannot replace or pre-reject that immutable source.
-    const auth = await getApiKeyForModel({
+    const auth = await getApiKeyForModelCore({
       ...authParams,
       store: { version: 1, profiles: {} },
       lockedProfile: false,
@@ -268,7 +286,7 @@ export async function resolvePreparedRuntimeModelAuth(
     return { auth, plan: applyResolvedAuthToPlan({ plan, auth, candidates }) };
   }
   if (plan.forwardedAuthProfileSource !== "auto") {
-    const auth = await getApiKeyForModel({
+    const auth = await getApiKeyForModelCore({
       ...authParams,
       profileId: plan.forwardedAuthProfileId,
       lockedProfile: Boolean(plan.forwardedAuthProfileId),
@@ -293,9 +311,10 @@ export async function resolvePreparedRuntimeModelAuth(
     : undefined;
 
   let firstError: unknown;
+  let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const profileId of currentCandidates) {
     try {
-      const auth = await getApiKeyForModel({
+      const auth = await getApiKeyForModelCore({
         ...authParams,
         profileId,
         // This loop owns fallback order. Pin each lookup so the generic auth
@@ -309,8 +328,17 @@ export async function resolvePreparedRuntimeModelAuth(
         plan: applyResolvedAuthToPlan({ plan, auth, candidates: currentCandidates }),
       };
     } catch (error) {
+      if (error instanceof SecretSurfaceUnavailableError) {
+        throw error;
+      }
+      if (!refreshFailure && error instanceof OAuthRefreshFailureError) {
+        refreshFailure = error;
+      }
       firstError ??= error;
     }
+  }
+  if (refreshFailure) {
+    throw refreshFailure;
   }
   throw toErrorObject(firstError, "Prepared runtime auth candidates could not be resolved.");
 }

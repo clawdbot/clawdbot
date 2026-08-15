@@ -3,22 +3,22 @@ import fs from "node:fs";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
-import { pruneStaleEntries } from "./store.js";
+import { pruneStaleEntries } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionRegistryMaintenanceStoreSummary = {
+type SessionRegistryMaintenanceStoreSummary = {
   afterCount: number;
   beforeCount: number;
   preservedRunning: number;
   pruned: number;
 };
 
-export type SessionRegistryMaintenanceStoreOptions = {
+type SessionRegistryMaintenanceStoreOptions = {
   /** Apply pruning to the backing store; false previews against a clone. */
   apply: boolean;
   /** Retention window for cron-run session entries. */
@@ -34,7 +34,7 @@ function parseCronRunSessionJobId(sessionKey: string): string | undefined {
   if (!parsed) {
     return undefined;
   }
-  return /^cron:([^:]+):run:[^:]+$/u.exec(parsed.rest)?.[1];
+  return /^cron:([^:]+):run:[^:]+(?:$|:)/u.exec(parsed.rest)?.[1];
 }
 
 function buildSessionRegistryPreserveKeys(params: {
@@ -79,7 +79,11 @@ function pruneSessionRegistryStore(params: {
     log: false,
     onPruned: params.removals
       ? ({ key, entry }) => {
-          params.removals?.push({ sessionKey: key, expectedEntry: entry });
+          params.removals?.push({
+            sessionKey: key,
+            expectedEntry: entry,
+            archiveRemovedTranscript: true,
+          });
         }
       : undefined,
     preserveKeys,
@@ -109,7 +113,7 @@ export async function runSessionRegistryMaintenanceForStore(
     };
   }
   const beforeStore = Object.fromEntries(
-    listSessionEntries({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),

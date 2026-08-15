@@ -1,10 +1,7 @@
 /** Runs plugin cleanup callbacks and clears host-side plugin session/runtime state. */
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { getRuntimeConfig } from "../config/config.js";
-import {
-  cleanupPluginHostSessionStore,
-  clearPluginOwnedSessionState,
-} from "../config/sessions/session-accessor.js";
+import { cleanupPluginHostSessionStore } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   resolveAllAgentSessionStoreTargetsSync,
@@ -22,18 +19,16 @@ import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
-export { clearPluginOwnedSessionState };
-
 /** Failure captured while running plugin cleanup hooks. */
 /** Failure captured while running one plugin cleanup callback. */
-export type PluginHostCleanupFailure = {
+type PluginHostCleanupFailure = {
   pluginId: string;
   hookId: string;
   error: unknown;
 };
 
 /** Aggregate cleanup result for plugin host state. */
-export type PluginHostCleanupResult = {
+type PluginHostCleanupResult = {
   cleanupCount: number;
   failures: PluginHostCleanupFailure[];
 };
@@ -322,6 +317,7 @@ export async function runPluginHostCleanup(params: {
       sessionKey: params.sessionKey,
       records: registry.sessionSchedulerJobs,
       preserveJobIds: params.preserveSchedulerJobIds,
+      cleanupOwnerRegistry: registry,
       preserveOwnerRegistry: params.preserveSchedulerOwnerRegistry,
       shouldCleanup,
     });
@@ -346,6 +342,7 @@ export async function runPluginHostCleanup(params: {
       sessionKey: params.sessionKey,
       preserveJobIds: params.preserveSchedulerJobIds,
       excludeJobKeys: registrySchedulerJobKeys,
+      cleanupOwnerRegistry: registry ?? undefined,
       shouldCleanup,
     });
     for (const failure of runtimeSchedulerFailures) {

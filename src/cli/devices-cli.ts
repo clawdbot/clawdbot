@@ -1,6 +1,8 @@
 // Commander registration for device pairing and auth-token commands.
 import type { Command } from "commander";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { isDevicesMachineOutput } from "./devices-output-mode.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type DevicesRpcOpts = {
@@ -44,6 +46,16 @@ export function registerDevicesCli(program: Command) {
       .action(async (opts: DevicesRpcOpts) => {
         const { runDevicesListCommand } = await loadDevicesRuntime();
         await runDevicesListCommand(opts);
+      }),
+  );
+
+  devicesCallOpts(
+    devices
+      .command("join-code")
+      .description("Mint a single-use node onboarding URL")
+      .action(async (opts: DevicesRpcOpts) => {
+        const { runDevicesJoinCodeCommand } = await loadDevicesRuntime();
+        await runDevicesJoinCodeCommand(opts);
       }),
   );
 
@@ -129,6 +141,8 @@ export function registerDevicesCli(program: Command) {
         await runDevicesRevokeCommand(opts);
       }),
   );
+
+  setCommandJsonMode(devices, "output", ({ argv }) => isDevicesMachineOutput(argv));
 
   applyParentDefaultHelpAction(devices);
 }

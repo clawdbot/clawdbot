@@ -2,14 +2,17 @@
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
-import {
+import { pwAi } from "./pw-ai.js";
+
+const {
   closePlaywrightBrowserConnection,
   forceDisconnectPlaywrightForTarget,
   listPagesViaPlaywright,
-} from "./pw-session.js";
+} = pwAi;
 
 const wsMockState = vi.hoisted(() => ({
   constructorUrls: [] as string[],
+  constructorOptions: [] as Array<{ agent?: unknown } | undefined>,
 }));
 
 vi.mock("ws", () => {
@@ -19,8 +22,9 @@ vi.mock("ws", () => {
     readyState = 0;
     private readonly handlers = new Map<string, (error?: Error) => void>();
 
-    constructor(url: string) {
+    constructor(url: string, options?: { agent?: unknown }) {
       wsMockState.constructorUrls.push(url);
+      wsMockState.constructorOptions.push(options);
       setTimeout(() => {
         this.handlers.get("error")?.(new Error("test socket should not open"));
       }, 0);
@@ -32,6 +36,9 @@ vi.mock("ws", () => {
     }
 
     close() {
+      if (this.readyState === 3) {
+        return;
+      }
       this.readyState = 3;
       this.handlers.get("close")?.();
     }
@@ -43,7 +50,7 @@ vi.mock("ws", () => {
 });
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
-const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
 
 function installBrowserMock() {
   const sessionSend = vi.fn(async (method: string) => {
@@ -76,14 +83,17 @@ function installBrowserMock() {
   } as unknown as import("playwright-core").Browser;
 
   connectOverCdpSpy.mockResolvedValue(browser);
-  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+  getChromeWebSocketEndpointSpy.mockResolvedValue({
+    url: "ws://127.0.0.1:18792/devtools/browser/ROOT",
+  });
   return { browserClose };
 }
 
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
-  getChromeWebSocketUrlSpy.mockReset();
+  getChromeWebSocketEndpointSpy.mockReset();
   wsMockState.constructorUrls = [];
+  wsMockState.constructorOptions = [];
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
@@ -114,11 +124,63 @@ describe("pw-session termination CDP SSRF guard", () => {
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       });
 
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(fetchSpy.mock.calls[0]?.[0]).toBe("http://127.0.0.1:18792/json/list");
+      const fetchUrls = fetchSpy.mock.calls.map((call) => call[0]);
+      expect(fetchUrls).toContain("http://127.0.0.1:18792/json/list");
+      expect(fetchUrls).not.toContain("http://169.254.169.254/json/list");
       expect(wsMockState.constructorUrls).toEqual([]);
       expect(browserClose).toHaveBeenCalledTimes(1);
     } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("uses the discovered target lookup pin for best-effort termination sockets", async () => {
+    installBrowserMock();
+    const lookup = vi.fn((_hostname: string, options: unknown, callback?: unknown) => {
+      const cb = typeof options === "function" ? options : callback;
+      if (typeof cb === "function") {
+        cb(null, "127.0.0.1", 4);
+      }
+    });
+    const assertAllowedSpy = vi
+      .spyOn(await import("./cdp.helpers.js"), "assertCdpEndpointAllowed")
+      .mockImplementation(async (url: string) =>
+        url.includes("/devtools/page/")
+          ? {
+              hostname: "cdp-pinned.test",
+              addresses: ["127.0.0.1"],
+              lookup: lookup as never,
+            }
+          : undefined,
+      );
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: "TARGET_1",
+            webSocketDebuggerUrl: "ws://cdp-pinned.test/devtools/page/TARGET_1",
+          },
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    try {
+      await listPagesViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        ssrfPolicy: {},
+      });
+
+      await forceDisconnectPlaywrightForTarget({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "TARGET_1",
+        ssrfPolicy: {},
+      });
+
+      expect(wsMockState.constructorUrls).toEqual(["ws://cdp-pinned.test/devtools/page/TARGET_1"]);
+      expect(wsMockState.constructorOptions[0]?.agent).toBeDefined();
+    } finally {
+      assertAllowedSpy.mockRestore();
       fetchSpy.mockRestore();
     }
   });

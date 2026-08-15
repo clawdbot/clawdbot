@@ -28,9 +28,9 @@ vi.mock("./pw-ai-module.js", () => ({
 
 const { stopBrowserBridgeRuntime } = await import("./runtime-lifecycle.js");
 const {
-  createProfileRuntimeState,
   enqueueProfileStart,
   getProfileLifecycle,
+  getOrCreateProfileRuntime,
   registerProfileHandle,
 } = await import("./server-context.lifecycle.js");
 
@@ -64,14 +64,14 @@ describe("browser runtime shutdown profile races", () => {
       makeBrowserProfile({ name: "alpha", cdpPort: 18_801 }),
       makeBrowserProfile({ name: "beta", cdpPort: 18_802 }),
     ];
-    const runtimes = profiles.map((profile) => createProfileRuntimeState(profile));
     const state = {
       port: 18_791,
       resolved: {
         profiles: Object.fromEntries(profiles.map((profile) => [profile.name, profile])),
       },
-      profiles: new Map(runtimes.map((runtime) => [runtime.profile.name, runtime])),
+      profiles: new Map(),
     } as unknown as BrowserServerState;
+    const runtimes = profiles.map((profile) => getOrCreateProfileRuntime(state, profile));
     const launches = [deferred<RunningChrome>(), deferred<RunningChrome>()];
     const entered = [deferred<void>(), deferred<void>()];
     const startSignals: AbortSignal[] = [];

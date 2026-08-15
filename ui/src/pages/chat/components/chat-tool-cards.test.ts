@@ -2,45 +2,12 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-
-vi.mock("../markdown.ts", async (importOriginal) => await importOriginal());
-vi.mock("../tool-display.ts", () => ({
-  formatToolDetail: (display: { detail?: string }) => display.detail,
-  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => {
-    const argRecord =
-      args && typeof args === "object" && !Array.isArray(args)
-        ? (args as Record<string, unknown>)
-        : undefined;
-    const labels: Record<string, string> = {
-      sessions_spawn: "Sub-agent",
-      skill_workshop: "Skill Workshop",
-      web_search: "Web Search",
-    };
-    const detail =
-      name === "skill_workshop" && typeof argRecord?.action === "string"
-        ? argRecord.action
-        : name === "read" && typeof argRecord?.path === "string"
-          ? argRecord.path
-          : undefined;
-    return {
-      name,
-      label: labels[name] ?? name,
-      icon: "zap",
-      detail,
-    };
-  },
-}));
-
-import {
-  buildMcpAppHostCapabilities,
-  resolveMcpAppSandboxUrl,
-} from "../../../components/mcp-app-view.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
-  isToolErrorOutput,
+  resolveCollapsedToolArgumentPreview,
 } from "../../../lib/chat/tool-cards.ts";
 import { renderToolCard, renderToolPreview } from "./chat-tool-cards.ts";
 
@@ -72,72 +39,6 @@ function pointerClick(element: Element) {
 }
 
 describe("tool-cards", () => {
-  it("advertises the CSP actually applied to MCP Apps", () => {
-    expect(
-      buildMcpAppHostCapabilities({ connectDomains: ["https://api.example.com"] }),
-    ).toMatchObject({
-      sandbox: { csp: { connectDomains: ["https://api.example.com"] } },
-    });
-    expect(buildMcpAppHostCapabilities()).toMatchObject({ sandbox: { csp: {} } });
-  });
-
-  it("accepts only the dedicated-origin MCP App sandbox endpoint", () => {
-    expect(
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox?csp=abc",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toBe("https://gateway.example:8444/mcp-app-sandbox?csp=abc");
-    expect(
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox",
-        18790,
-        "https://apps.example.com",
-        "wss://gateway.example",
-        "https://gateway.example",
-      ),
-    ).toBe("https://apps.example.com/mcp-app-sandbox");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "https://attacker.example/mcp-app-sandbox",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "data:text/html;base64,cHJveHk=",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox",
-        8443,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox",
-        8444,
-        "https://gateway.example:8443",
-        "wss://gateway.example:8443/openclaw",
-        "https://control.example",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
-  });
-
   it("routes MCP App previews through the dedicated double-iframe host", async () => {
     const container = document.createElement("div");
     render(
@@ -158,6 +59,12 @@ describe("tool-cards", () => {
     const view = container.querySelector("mcp-app-view");
     expect(view).not.toBeNull();
     expect(view?.getAttribute("src")).toBeNull();
+    expect((view as { sessionKey?: string }).sessionKey).toBe("agent:main:main");
+    expect((view as { viewId?: string }).viewId).toBe("cv_app");
+    expect((view as { height?: number }).height).toBe(600);
+    await customElements.whenDefined("mcp-app-view");
+    expect(customElements.get("mcp-app-view")).toBeDefined();
+    expect((view as { sessionKey?: string }).sessionKey).toBe("agent:main:main");
     expect((view as { viewId?: string }).viewId).toBe("cv_app");
 
     const toolContainer = document.createElement("div");
@@ -175,6 +82,26 @@ describe("tool-cards", () => {
       toolContainer,
     );
     expect(toolContainer.querySelector("mcp-app-view")).toBeNull();
+  });
+
+  it("keeps ordinary canvas previews off the MCP Apps chunk", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_canvas",
+          url: "https://canvas.example/widget",
+        },
+        "chat_message",
+        { allowExternalEmbedUrls: true },
+      ),
+      container,
+    );
+
+    expect(container.querySelector("iframe")).not.toBeNull();
   });
 
   it("keeps selected summary text from toggling the disclosure", () => {
@@ -296,6 +223,33 @@ describe("tool-cards", () => {
     );
   });
 
+  it("labels a completed Codex file creation from its recorded operation", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:patch:add",
+          name: "apply_patch",
+          args: {
+            changes: [
+              {
+                path: "src/new.ts",
+                kind: { type: "add" },
+                diff: "export const created = true;\n",
+              },
+            ],
+          },
+          completed: true,
+        },
+        { expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe("Created");
+    expect(container.querySelector(".chat-tool-row__target")?.textContent).toBe("new.ts");
+  });
+
   it("renders edit and write rows from their result outcome", () => {
     const mutations = [
       {
@@ -312,11 +266,11 @@ describe("tool-cards", () => {
     const states = [
       {
         name: "running",
-        card: { live: true },
+        card: { live: true, liveDiffStat: { added: 12, removed: 3 } },
         runActive: true,
         verb: "running",
         label: "Attempted changes",
-        hasStat: false,
+        hasStat: true,
         failed: false,
       },
       {
@@ -385,9 +339,7 @@ describe("tool-cards", () => {
         expect(container.querySelector(".chat-tool-row__badge")?.textContent === "failed").toBe(
           state.failed,
         );
-        expect(container.querySelector(".chat-tool-msg-summary--error") !== null).toBe(
-          state.failed,
-        );
+        expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
       }
     }
   });
@@ -543,6 +495,48 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
 
+  it("shows the first message line in collapsed message tool rows", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:5-message:call-5-message",
+          name: "message",
+          args: {
+            action: "send",
+            channel: "reef",
+            target: "@molty",
+            message: "Hello Molty, first claw-to-claw hello.\nSecond line stays in details.",
+          },
+          inputText: "message input",
+        },
+        { expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const summaryButton = container.querySelector("button.chat-tool-msg-summary");
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "Message",
+    );
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
+      "Hello Molty, first claw-to-claw hello.",
+    );
+  });
+
+  it("previews common intent arguments across generic tools", () => {
+    expect(resolveCollapsedToolArgumentPreview({ task: "Review the PR" })).toBe("Review the PR");
+    expect(resolveCollapsedToolArgumentPreview({ prompt: "Draw a crab" })).toBe("Draw a crab");
+    expect(resolveCollapsedToolArgumentPreview({ text: "First line\nSecond line" })).toBe(
+      "First line",
+    );
+    expect(resolveCollapsedToolArgumentPreview({ query: " \r\rSecond line" })).toBe("Second line");
+    const credential = ["sk", "1234567890abcdef"].join("-");
+    expect(
+      resolveCollapsedToolArgumentPreview({ description: `OPENAI_API_KEY=${credential}` }),
+    ).not.toContain(credential);
+  });
+
   it("keeps tool display labels primary for collapsed result rows with action details", () => {
     const container = document.createElement("div");
     render(
@@ -626,6 +620,9 @@ describe("tool-cards", () => {
   it("keeps collapsed markdown previews bounded after display cleanup", () => {
     const preview = formatCollapsedToolPreviewText(`with ${"A".repeat(200)}`);
 
+    expect(formatCollapsedToolPreviewText("First line\nSecond line")).toBe(
+      "First line Second line",
+    );
     expect(preview).toHaveLength(120);
     expect(preview?.startsWith("A")).toBe(true);
     expect(preview).not.toContain("with ");
@@ -800,69 +797,8 @@ describe("tool-cards", () => {
     expect(sidebar.docId).toBe("cv_sidebar");
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
-  describe("isToolErrorOutput", () => {
-    it("flags JSON payloads that carry a top-level error string", () => {
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            error: "missing_brave_api_key",
-            message: "BRAVE_API_KEY is not configured",
-            provider: "brave",
-          }),
-        ),
-      ).toBe(true);
-    });
 
-    it("flags JSON payloads that carry a top-level isError flag", () => {
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            isError: true,
-            content: [{ type: "text", text: "Tool error: boom" }],
-          }),
-        ),
-      ).toBe(true);
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            is_error: true,
-            content: [{ type: "text", text: "Tool error: boom" }],
-          }),
-        ),
-      ).toBe(true);
-    });
-
-    it("flags 'Tool not found' bodies regardless of trailing punctuation or case", () => {
-      expect(isToolErrorOutput("Tool not found")).toBe(true);
-      expect(isToolErrorOutput("  tool not found.  ")).toBe(true);
-      expect(isToolErrorOutput("TOOL NOT FOUND")).toBe(true);
-    });
-
-    it("flags JSON payloads with top-level failure statuses", () => {
-      expect(isToolErrorOutput(JSON.stringify({ status: "error" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "failed" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "timeout" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "completed" }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ status: "ok" }))).toBe(false);
-    });
-
-    it("does not flag successful payloads or strings without a tool error signal", () => {
-      expect(isToolErrorOutput(undefined)).toBe(false);
-      expect(isToolErrorOutput("")).toBe(false);
-      expect(isToolErrorOutput("Opened page")).toBe(false);
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({ isError: false, result: "ok", error: "no validation errors" }),
-        ),
-      ).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: null }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: "" }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok" }))).toBe(false);
-      expect(isToolErrorOutput("{ not really json }")).toBe(false);
-    });
-  });
-
-  it("renders an error summary without a redundant Error badge", () => {
+  it("renders error details with only a failed summary badge", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -881,14 +817,12 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tool error");
-    expect(container.textContent).not.toMatch(/\bTool output\b/);
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
-    expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(true);
+    expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(false);
     expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Tool error",
+      "Web Search",
     );
-    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
+    expect(summaryButton?.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
     const expandedCard = container.querySelector(".chat-tool-card");
     expect(expandedCard?.classList.contains("chat-tool-card--error")).toBe(true);
     expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
@@ -899,7 +833,7 @@ describe("tool-cards", () => {
     ).toContain("Tool error");
   });
 
-  it("renders a Tool error label when output has a status-only error payload", () => {
+  it("renders a neutral summary for a status-only error payload", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -913,13 +847,14 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tool error");
-    expect(container.textContent).not.toMatch(/\bTool output\b/);
-    expect(container.querySelector(".chat-tool-msg-summary--error")).not.toBeNull();
+    const summary = container.querySelector(".chat-tool-msg-summary");
+    expect(summary?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Sub-agent");
+    expect(summary?.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
+    expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
   });
 
-  it("renders a Tool error label when output is the literal 'Tool not found'", () => {
+  it("renders a neutral summary when output is the literal 'Tool not found'", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -933,14 +868,15 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tool error");
-    expect(container.textContent).not.toMatch(/\bTool output\b/);
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
-    expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(true);
-    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
+    expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(false);
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "Unknown",
+    );
+    expect(summaryButton?.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
   });
 
-  it("renders a Tool error label when the tool card has an explicit error flag", () => {
+  it("renders a neutral summary when the tool card has an explicit error flag", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -955,9 +891,10 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tool error");
-    expect(container.textContent).not.toMatch(/\bTool output\b/);
-    expect(container.querySelector(".chat-tool-msg-summary--error")).not.toBeNull();
+    const summary = container.querySelector(".chat-tool-msg-summary");
+    expect(summary?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Lookup");
+    expect(summary?.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
+    expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
   });
 

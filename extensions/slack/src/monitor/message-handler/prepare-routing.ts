@@ -15,8 +15,13 @@ import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackChannelConfigResolved } from "../channel-config.js";
 import type { SlackEventScope } from "../event-scope.js";
+import {
+  qualifySlackConversationId,
+  qualifySlackRoutePeerId,
+  resolveSlackEnterpriseMainDmSessionKey,
+} from "../workspace-routing.js";
 
-export type SlackRoutingContextDeps = {
+type SlackRoutingContextDeps = {
   cfg: OpenClawConfig;
   teamId: string;
   threadInheritParent: boolean;
@@ -76,10 +81,13 @@ function normalizeSlackRouteBindingPeer(peer: SlackRouteBindingPeer): SlackRoute
       return undefined;
     }
   })();
-  if (!target || !slackTargetKindMatchesPeer(peer.kind, target.kind) || target.id === peer.id) {
+  if (!target || !slackTargetKindMatchesPeer(peer.kind, target.kind)) {
     return peer;
   }
-  return { ...peer, id: target.id };
+  const normalizedId = target.teamId
+    ? `team:${target.teamId}:${target.kind}:${target.id}`
+    : target.id;
+  return normalizedId === peer.id ? peer : { ...peer, id: normalizedId };
 }
 
 function normalizeSlackRouteBindingConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -130,18 +138,7 @@ function resolveSlackBaseConversationId(params: {
   const raw = params.isDirectMessage
     ? `user:${params.message.user ?? "unknown"}`
     : params.message.channel;
-  return params.eventScope ? `team:${encodeURIComponent(params.eventScope.teamId)}:${raw}` : raw;
-}
-
-function qualifySlackPeerId(params: {
-  id: string;
-  kind: "user" | "channel";
-  eventScope?: SlackEventScope;
-}): string {
-  if (!params.eventScope) {
-    return params.id;
-  }
-  return `team:${encodeURIComponent(params.eventScope.teamId)}:${params.kind}:${encodeURIComponent(params.id)}`;
+  return qualifySlackConversationId(raw, params.eventScope);
 }
 
 function resolveSlackInitialAgentRoute(params: {
@@ -159,7 +156,7 @@ function resolveSlackInitialAgentRoute(params: {
     teamId: params.eventScope?.teamId || params.ctx.teamId || undefined,
     peer: {
       kind: params.isDirectMessage ? "direct" : params.isRoom ? "channel" : "group",
-      id: qualifySlackPeerId({
+      id: qualifySlackRoutePeerId({
         id: params.isDirectMessage ? (params.message.user ?? "unknown") : params.message.channel,
         kind: params.isDirectMessage ? "user" : "channel",
         eventScope: params.eventScope,
@@ -169,8 +166,11 @@ function resolveSlackInitialAgentRoute(params: {
   if (!params.eventScope || !params.isDirectMessage || route.dmScope !== "main") {
     return route;
   }
-  const partition = `account:${encodeURIComponent(params.account.accountId).toLowerCase()}:team:${encodeURIComponent(params.eventScope.teamId).toLowerCase()}`;
-  const sessionKey = `${route.sessionKey}:${partition}`;
+  const sessionKey = resolveSlackEnterpriseMainDmSessionKey({
+    baseSessionKey: route.sessionKey,
+    accountId: params.account.accountId,
+    eventScope: params.eventScope,
+  });
   return { ...route, sessionKey, mainSessionKey: sessionKey };
 }
 
@@ -185,6 +185,7 @@ export function resolveSlackRoutingContext(params: {
   channelConfig?: SlackChannelConfigResolved | null;
   seedTopLevelRoomThread?: boolean;
   assistantThreadTs?: string;
+  agentViewThreadTs?: string;
   eventScope?: SlackEventScope;
 }): SlackRoutingContext {
   const {
@@ -198,6 +199,7 @@ export function resolveSlackRoutingContext(params: {
     channelConfig,
     seedTopLevelRoomThread,
     assistantThreadTs,
+    agentViewThreadTs,
     eventScope,
   } = params;
   let route = resolveSlackInitialAgentRoute({
@@ -237,14 +239,14 @@ export function resolveSlackRoutingContext(params: {
       ? seedCandidateThreadId
       : undefined;
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
-  const assistantThreadId = assistantThreadTs;
+  const directAgentThreadId = assistantThreadTs ?? agentViewThreadTs;
   // DM threads are a UI affordance, not a session boundary. Route all DM
   // messages, including thread replies, to the user's main DM session so
-  // the agent sees them as part of the existing conversation. Slack assistant
-  // threads are the exception: Slack treats each assistant thread as its own
-  // conversation and sends the lifecycle context only on assistant events.
+  // the agent sees them as part of the existing conversation. Slack Assistant
+  // View and Agent View threads are the exception: each visible root is its
+  // own conversation.
   const canonicalThreadId = isDirectMessage
-    ? assistantThreadId
+    ? directAgentThreadId
     : isRoomish
       ? roomThreadId
       : isThreadReply
@@ -333,8 +335,3 @@ export function resolveSlackRoutingContext(params: {
     historyKey,
   };
 }
-
-export const testing = {
-  normalizeSlackRouteBindingConfig,
-};
-export { testing as __testing };

@@ -1,11 +1,62 @@
 /** Validates persisted cron job records before loading them from disk/state. */
+import {
+  asSafeIntegerInRange,
+  MAX_DATE_TIMESTAMP_MS,
+} from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { compileSafeRegex } from "../security/safe-regex.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import type { CronJobState } from "./types.js";
+
+const CRON_STATE_TIMESTAMP_FIELDS = [
+  "nextRunAtMs",
+  "scheduleActivatedAtMs",
+  "startupCatchupAtMs",
+  "pacedNextRunAtMs",
+  "forcePreservedNextRunAtMs",
+  "queuedAtMs",
+  "runningAtMs",
+  "lastRunAtMs",
+  "lastFailureAlertAtMs",
+  "lastTriggerEvalAtMs",
+  "lastTriggerFireAtMs",
+  "streamLastStartedAtMs",
+  "streamLastExitAtMs",
+] as const satisfies readonly (keyof CronJobState)[];
+
+function isValidStateTimestamp(value: unknown): boolean {
+  return asSafeIntegerInRange(value, { min: 0, max: MAX_DATE_TIMESTAMP_MS }) !== undefined;
+}
+
+function getInvalidCronJobStateTimestampField(state: unknown): string | undefined {
+  const record = asRecord(state);
+  const field = CRON_STATE_TIMESTAMP_FIELDS.find(
+    (key) => record[key] !== undefined && !isValidStateTimestamp(record[key]),
+  );
+  if (field) {
+    return field;
+  }
+  const atMs = asRecord(record.autoDisabled).atMs;
+  return atMs !== undefined && !isValidStateTimestamp(atMs) ? "autoDisabled.atMs" : undefined;
+}
+
+/** Rejects caller-authored state timestamps that cannot round-trip through Date and SQLite. */
+export function assertCronJobStateTimestamps(state: Partial<CronJobState>): void {
+  const invalidField = getInvalidCronJobStateTimestampField(state);
+  if (invalidField) {
+    throw new Error(
+      `cron state.${invalidField} must be a non-negative Date-valid integer timestamp`,
+    );
+  }
+}
 
 /** Structural rejection code for persisted cron jobs that cannot be loaded safely. */
-export type InvalidPersistedCronJobReason =
+type InvalidPersistedCronJobReason =
   | "missing-id"
   | "missing-schedule"
   | "invalid-schedule"
+  | "invalid-state"
+  | "unsatisfiable-schedule"
   | "invalid-trigger"
   | "missing-payload"
   | "invalid-payload";
@@ -17,6 +68,9 @@ export function getInvalidPersistedCronJobReason(
   const id = candidate.id;
   if (typeof id !== "string" || !id.trim()) {
     return "missing-id";
+  }
+  if (getInvalidCronJobStateTimestampField(candidate.state)) {
+    return "invalid-state";
   }
   const schedule = candidate.schedule;
   if (!schedule || Array.isArray(schedule)) {
@@ -36,7 +90,8 @@ export function getInvalidPersistedCronJobReason(
     scheduleKind !== "at" &&
     scheduleKind !== "every" &&
     scheduleKind !== "cron" &&
-    scheduleKind !== "on-exit"
+    scheduleKind !== "on-exit" &&
+    scheduleKind !== "stream"
   ) {
     return "invalid-schedule";
   }
@@ -48,13 +103,24 @@ export function getInvalidPersistedCronJobReason(
   }
   if (scheduleKind === "every") {
     const everyMs = scheduleRecord.everyMs;
-    if (typeof everyMs !== "number" || !Number.isFinite(everyMs) || everyMs <= 0) {
+    const anchorMs = scheduleRecord.anchorMs;
+    if (
+      asSafeIntegerInRange(everyMs, { min: 1, max: MAX_DATE_TIMESTAMP_MS }) === undefined ||
+      (anchorMs !== undefined &&
+        asSafeIntegerInRange(anchorMs, { min: 0, max: MAX_DATE_TIMESTAMP_MS }) === undefined)
+    ) {
       return "invalid-schedule";
     }
   }
   if (scheduleKind === "cron") {
     const expr = scheduleRecord.expr;
-    if (typeof expr !== "string" || expr.trim().length === 0) {
+    const staggerMs = scheduleRecord.staggerMs;
+    if (
+      typeof expr !== "string" ||
+      expr.trim().length === 0 ||
+      (staggerMs !== undefined &&
+        asSafeIntegerInRange(staggerMs, { min: 0, max: MAX_DATE_TIMESTAMP_MS }) === undefined)
+    ) {
       return "invalid-schedule";
     }
   }
@@ -62,6 +128,33 @@ export function getInvalidPersistedCronJobReason(
     const command = scheduleRecord.command;
     if (typeof command !== "string" || command.trim().length === 0) {
       return "invalid-schedule";
+    }
+  }
+  if (scheduleKind === "stream") {
+    const command = scheduleRecord.command;
+    const mode = scheduleRecord.mode ?? "line";
+    // Batching fields are optional but, when present, must be safe integers:
+    // cronStreamScheduleKey -> resolveCronStreamBatching throws otherwise, and
+    // one such throw would abort the single-pass stream reconcile and block
+    // every valid stream job. Quarantine the row here instead.
+    const batchFieldValid = (value: unknown) =>
+      value === undefined || asSafeIntegerInRange(value, {}) !== undefined;
+    if (
+      !Array.isArray(command) ||
+      command.length === 0 ||
+      command.some((value) => typeof value !== "string" || value.length === 0) ||
+      (mode !== "line" && mode !== "match") ||
+      (mode === "match" && typeof scheduleRecord.match !== "string") ||
+      (mode === "line" && scheduleRecord.match !== undefined) ||
+      !batchFieldValid(scheduleRecord.batchMs) ||
+      !batchFieldValid(scheduleRecord.maxBatchBytes)
+    ) {
+      return "invalid-schedule";
+    }
+    if (mode === "match") {
+      if (!compileSafeRegex(scheduleRecord.match as string)) {
+        return "invalid-schedule";
+      }
     }
   }
   if ("trigger" in candidate) {
@@ -85,20 +178,28 @@ export function getInvalidPersistedCronJobReason(
   }
   const payloadRecord = payload as Record<string, unknown>;
   const payloadKind = payloadRecord.kind;
-  if (payloadKind !== "systemEvent" && payloadKind !== "agentTurn" && payloadKind !== "command") {
+  if (
+    payloadKind !== "systemEvent" &&
+    payloadKind !== "agentTurn" &&
+    payloadKind !== "command" &&
+    payloadKind !== "script" &&
+    payloadKind !== "heartbeat"
+  ) {
     return "invalid-payload";
   }
-  if (payloadKind === "systemEvent") {
-    const text = payloadRecord.text;
-    if (typeof text !== "string") {
-      return "invalid-payload";
-    }
-  }
-  if (payloadKind === "agentTurn") {
-    const message = payloadRecord.message;
-    if (typeof message !== "string" || message.trim().length === 0) {
-      return "invalid-payload";
-    }
+  const requiredText =
+    payloadKind === "systemEvent"
+      ? payloadRecord.text
+      : payloadKind === "agentTurn"
+        ? payloadRecord.message
+        : payloadKind === "script"
+          ? payloadRecord.script
+          : undefined;
+  if (
+    (payloadKind === "systemEvent" || payloadKind === "agentTurn" || payloadKind === "script") &&
+    (typeof requiredText !== "string" || (payloadKind !== "systemEvent" && !requiredText.trim()))
+  ) {
+    return "invalid-payload";
   }
   if (payloadKind === "command") {
     const argv = payloadRecord.argv;
@@ -107,6 +208,9 @@ export function getInvalidPersistedCronJobReason(
       argv.length === 0 ||
       argv.some((value) => typeof value !== "string" || value.length === 0)
     ) {
+      return "invalid-payload";
+    }
+    if (scheduleKind === "stream") {
       return "invalid-payload";
     }
   }

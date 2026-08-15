@@ -3,7 +3,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 
 const hoisted = vi.hoisted(() => ({
   loadConfigMock: vi.fn<() => OpenClawConfig>(),
@@ -18,7 +19,7 @@ vi.mock("./session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: (
+    loadCombinedSessionStoreForGatewayCore: (
       cfg: OpenClawConfig,
       opts?: { agentId?: string; configuredAgentsOnly?: boolean },
     ) => hoisted.loadCombinedSessionStoreForGatewayMock(cfg, opts),
@@ -40,13 +41,13 @@ describe("resolveSessionKeyForRun", () => {
   beforeEach(() => {
     hoisted.loadConfigMock.mockReset();
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReset();
-    resetAgentRunContextForTest();
+    resetAgentEventsForTest();
     resetResolvedSessionKeyForRunCacheForTest();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    resetAgentRunContextForTest();
+    resetAgentEventsForTest();
     resetResolvedSessionKeyForRunCacheForTest();
   });
 

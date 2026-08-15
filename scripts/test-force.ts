@@ -4,8 +4,10 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { forceFreePort, type PortProcess } from "../src/cli/ports.js";
+import { forceFreePort } from "../src/cli/ports.js";
 import { resolveGatewayPort } from "../src/config/config.js";
+
+type PortProcess = ReturnType<typeof forceFreePort>[number];
 
 function usage(): string {
   return [
@@ -56,7 +58,7 @@ function runTests() {
   const isolatedLock =
     process.env.OPENCLAW_GATEWAY_LOCK ??
     path.join(os.tmpdir(), `openclaw-gateway.lock.test.${Date.now()}`);
-  const result = spawnSync(process.execPath, ["scripts/test-projects.mjs"], {
+  const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/test-projects.mts"], {
     stdio: "inherit",
     env: {
       ...process.env,

@@ -3,8 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { drainSessionStoreWriterQueuesForTest } from "../config/sessions.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   readCompactionCount,
   seedSessionStore,
@@ -129,10 +128,6 @@ function loggedInfoMessageAt(info: ReturnType<typeof vi.fn>, index: number): str
   }
   return message;
 }
-
-afterEach(async () => {
-  await drainSessionStoreWriterQueuesForTest();
-});
 
 describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
   it("raises the stored compaction count to the observed value", async () => {
@@ -400,6 +395,44 @@ describe("handleCompactionEnd", () => {
     const freshAssistant = messages[3] as Extract<AgentMessage, { role: "assistant" }>;
     expect(staleAssistant.usage).toEqual(makeZeroUsageSnapshot());
     expect(freshAssistant.usage).toEqual(freshUsage);
+  });
+
+  it("preserves live assistant usage when compaction fails or is aborted", async () => {
+    // A failed/aborted end never rewrote history; zeroing usage here would
+    // disable the persistent-error compaction trigger for degraded sessions.
+    const failureEnds = [
+      { name: "failed", result: undefined, aborted: false },
+      { name: "aborted", result: { kept: 12 }, aborted: true },
+    ] as const;
+    for (const failure of failureEnds) {
+      const liveUsage = makeUsageSnapshot(123_000);
+      const messages = [
+        makeAssistantUsageMessage({
+          text: `live answer (${failure.name})`,
+          timestamp: 1_000,
+          usage: liveUsage,
+        }),
+      ] as AgentMessage[];
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-usage-keep-"));
+      const storePath = path.join(tmp, "sessions.json");
+      const ctx = createCompactionContext({
+        storePath,
+        sessionKey: "main",
+        initialCount: 0,
+        messages,
+      });
+
+      handleCompactionEnd(ctx, {
+        type: "compaction_end",
+        reason: "threshold",
+        result: failure.result,
+        willRetry: false,
+        aborted: failure.aborted,
+      });
+
+      const liveAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
+      expect(liveAssistant.usage, failure.name).toEqual(liveUsage);
+    }
   });
 
   it("uses the compaction timestamp for summary-first transcripts", async () => {

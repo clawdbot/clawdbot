@@ -5,7 +5,7 @@
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Runtime-only owner display secrets keyed by config path during config IO. */
-export type OwnerDisplaySecretRuntimeState = {
+type OwnerDisplaySecretRuntimeState = {
   pendingByPath: Map<string, string>;
 };
 

@@ -34,5 +34,4 @@ export {
   parseSlackTarget,
   resolveSlackChannelId,
 } from "./target-parsing.js";
-export { slackTargetsMatch };
 export type { SlackTarget, SlackTargetKind, SlackTargetParseOptions } from "./target-parsing.js";

@@ -2,7 +2,10 @@ import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-opti
 /**
  * Detects message-tool-only sends that delivered a visible source reply.
  */
-import { isDeliveredMessageToolOnlySourceReplyResult } from "../../embedded-agent-message-tool-source-reply.js";
+import {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  resolveMessageToolSourceReplyFinal,
+} from "../../embedded-agent-message-tool-source-reply.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
 
 function argsRecordForToolCall(context: AfterToolCallContext): Record<string, unknown> {
@@ -20,7 +23,7 @@ function argsRecordForToolCall(context: AfterToolCallContext): Record<string, un
  * in message-tool-only delivery mode. Only implicit-route, non-dry-run,
  * delivered sends qualify; explicit routes and errors are not source replies.
  */
-export function isDeliveredMessageToolOnlySourceReply(params: {
+function isDeliveredMessageToolOnlySourceReply(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   context: AfterToolCallContext;
   hookResult?: AfterToolCallResult;
@@ -55,7 +58,9 @@ export function installMessageToolOnlyTerminalHook(params: {
       })
     ) {
       params.onDeliveredSourceReply?.();
-      return hookResult;
+      if (resolveMessageToolSourceReplyFinal(argsRecordForToolCall(context))) {
+        return { ...hookResult, terminate: true };
+      }
     }
     return hookResult;
   };

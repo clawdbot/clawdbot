@@ -2,6 +2,7 @@
 // runtime override handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createAgentsListTool } from "./agents-list-tool.js";
 
 const loadConfigMock = vi.fn<() => OpenClawConfig>();
@@ -56,10 +57,15 @@ describe("agents_list tool", () => {
       },
     } as unknown as OpenClawConfig);
 
-    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-      "call",
-      {},
+    const tool = createAgentsListTool({ agentSessionKey: "agent:main:main" });
+    expect(tool.outputSchema).toMatchObject({
+      type: "object",
+      required: ["requester", "allowAny", "agents"],
+    });
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      '{ agents: Array<{ configured: boolean; id: string; agentRuntime?: { id: string; source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session" | "session-key" }; model?: string; name?: string }>; allowAny: boolean; requester: string }',
     );
+    const result = await tool.execute("call", {});
     const details = result.details as AgentListDetails;
 
     expect(details).toStrictEqual({
@@ -71,6 +77,49 @@ describe("agents_list tool", () => {
           name: "Codex",
           configured: true,
           model: "openai/gpt-5.5",
+          agentRuntime: { id: "codex", source: "model" },
+        },
+      ],
+    });
+  });
+
+  it("resolves configured model aliases to the canonical model identity", async () => {
+    // Routing aliases are transport-level names; the tool must publish the
+    // resolved model that will actually run so spawn decisions see one identity.
+    loadConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          model: {
+            primary: "clawrouter/openai/gpt-5.6",
+            fallbacks: ["openai/gpt-5.6-luna"],
+          },
+          models: {
+            "openai/gpt-5.6-sol": {
+              alias: "clawrouter/openai/gpt-5.6",
+              agentRuntime: { id: "codex" },
+            },
+          },
+          subagents: { allowAgents: ["main"] },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as unknown as OpenClawConfig);
+
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+    const details = result.details as AgentListDetails;
+
+    expect(details).toStrictEqual({
+      requester: "main",
+      allowAny: false,
+      agents: [
+        {
+          id: "main",
+          name: undefined,
+          configured: true,
+          model: "openai/gpt-5.6-sol",
           agentRuntime: { id: "codex", source: "model" },
         },
       ],
@@ -126,37 +175,7 @@ describe("agents_list tool", () => {
           id: "main",
           name: undefined,
           configured: true,
-          model: undefined,
-          agentRuntime: { id: "codex", source: "implicit" },
-        },
-      ],
-    });
-  });
-
-  it("uses the implicit default agent as a configured target", async () => {
-    loadConfigMock.mockReturnValue({
-      agents: {
-        defaults: {
-          subagents: { allowAgents: ["main"] },
-        },
-      },
-    } satisfies OpenClawConfig);
-
-    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-      "call",
-      {},
-    );
-    const details = result.details as AgentListDetails;
-
-    expect(details).toStrictEqual({
-      requester: "main",
-      allowAny: false,
-      agents: [
-        {
-          id: "main",
-          name: undefined,
-          configured: true,
-          model: undefined,
+          model: "openai/gpt-5.6-sol",
           agentRuntime: { id: "codex", source: "implicit" },
         },
       ],
@@ -225,10 +244,28 @@ describe("agents_list tool", () => {
           id: "strict",
           name: undefined,
           configured: true,
-          model: undefined,
+          model: "openai/gpt-5.6-sol",
           agentRuntime: { id: "codex", source: "implicit" },
         },
       ],
+    });
+  });
+
+  it("uses the persisted fixed-store owner for a bare requester key", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    });
+
+    const result = await createAgentsListTool({ agentSessionKey: "global" }).execute("call", {});
+
+    expect(result.details).toMatchObject({
+      requester: "ops",
+      agents: [{ id: "ops", configured: true }],
     });
   });
 });

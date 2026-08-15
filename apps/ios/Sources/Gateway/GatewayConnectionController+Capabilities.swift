@@ -16,13 +16,17 @@ struct GatewayManualTransportPresentation: Equatable {
 }
 
 extension GatewayConnectionController {
-    func buildGatewayURL(host: String, port: Int, useTLS: Bool) -> URL? {
-        let scheme = useTLS ? "wss" : "ws"
-        var components = URLComponents()
-        components.scheme = scheme
-        components.host = host
-        components.port = port
-        return components.url
+    func buildGatewayURL(
+        host: String,
+        port: Int,
+        useTLS: Bool,
+        contextPath: String? = nil) -> URL?
+    {
+        GatewayConnectEndpoint(
+            host: host,
+            port: port,
+            tls: useTLS,
+            contextPath: contextPath).websocketURL
     }
 
     func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
@@ -51,8 +55,8 @@ extension GatewayConnectionController {
             helperText: helperText)
     }
 
-    func manualStableID(host: String, port: Int) -> String {
-        ManualAuthOverride.manualStableID(host: host, port: port)
+    func manualStableID(host: String, port: Int, contextPath: String? = nil) -> String {
+        ManualAuthOverride.manualStableID(host: host, port: port, contextPath: contextPath)
     }
 
     func makeConnectOptions(
@@ -212,7 +216,7 @@ extension GatewayConnectionController {
         permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
-        let locationStatus = CLLocationManager().authorizationStatus
+        let locationStatus = self.locationAuthorizationSnapshot.authorizationStatus
         let locationServicesEnabled = await Self.locationServicesEnabled()
         permissions["location"] = Self.isLocationAvailable(
             servicesEnabled: locationServicesEnabled,
@@ -224,20 +228,14 @@ extension GatewayConnectionController {
         permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 
         let calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        permissions["calendar"] = Self.hasEventKitAccess(calendarStatus)
+        permissions["calendar"] = Self.hasEventKitReadAccess(calendarStatus)
         let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        permissions["reminders"] = Self.hasEventKitAccess(remindersStatus)
+        permissions["reminders"] = Self.hasEventKitReadAccess(remindersStatus)
 
         let motionStatus = CMMotionActivityManager.authorizationStatus()
         let pedometerStatus = CMPedometer.authorizationStatus()
         permissions["motion"] =
             motionStatus == .authorized || pedometerStatus == .authorized
-
-        let watchStatus = WatchMessagingService.currentStatusSnapshot()
-        permissions["watchSupported"] = watchStatus.supported
-        permissions["watchPaired"] = watchStatus.paired
-        permissions["watchAppInstalled"] = watchStatus.appInstalled
-        permissions["watchReachable"] = watchStatus.reachable
 
         return permissions
     }
@@ -258,8 +256,8 @@ extension GatewayConnectionController {
         }
     }
 
-    private static func hasEventKitAccess(_ status: EKAuthorizationStatus) -> Bool {
-        status == .fullAccess || status == .writeOnly
+    private static func hasEventKitReadAccess(_ status: EKAuthorizationStatus) -> Bool {
+        status == .fullAccess
     }
 
     private static func motionAvailable() -> Bool {
@@ -279,6 +277,14 @@ extension GatewayConnectionController {
 
     func _test_currentCommands() -> [String] {
         self.currentCommands()
+    }
+
+    func _test_currentPermissions() async -> [String: Bool] {
+        await self.currentPermissions()
+    }
+
+    static func _test_hasEventKitReadAccess(_ status: EKAuthorizationStatus) -> Bool {
+        self.hasEventKitReadAccess(status)
     }
 
     static func _test_isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {

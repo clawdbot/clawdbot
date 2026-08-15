@@ -6,8 +6,9 @@ import type {
 } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
+import type { PluginRegistry } from "../registry-types.js";
 
-export type PluginRuntimeGatewayRequestScope = {
+type PluginRuntimeGatewayRequestScope = {
   context?: GatewayRequestContext;
   client?: GatewayRequestOptions["client"];
   isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
@@ -16,9 +17,10 @@ export type PluginRuntimeGatewayRequestScope = {
   pluginOrigin?: PluginOrigin;
   pluginTrustedOfficialInstall?: boolean;
   gatewayMethodDispatchAllowed?: boolean;
+  pluginRegistry?: PluginRegistry;
 };
 
-export type PluginRuntimePluginScope = {
+type PluginRuntimePluginScope = {
   pluginId: string;
   pluginSource?: string;
   pluginOrigin?: PluginOrigin;
@@ -44,6 +46,21 @@ export function withPluginRuntimeGatewayRequestScope<T>(
   run: () => T,
 ): T {
   return pluginRuntimeGatewayRequestScope.run(scope, run);
+}
+
+/** Runs work against an owned registry handle while preserving any gateway request facts. */
+export function withPluginRuntimeRegistryScope<T>(
+  registry: PluginRegistry | undefined,
+  run: () => T,
+): T {
+  if (!registry) {
+    return run();
+  }
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  return pluginRuntimeGatewayRequestScope.run(
+    { isWebchatConnect: () => false, ...current, pluginRegistry: registry },
+    run,
+  );
 }
 
 /**

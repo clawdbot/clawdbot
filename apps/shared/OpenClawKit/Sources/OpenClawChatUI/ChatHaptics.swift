@@ -17,6 +17,7 @@ public struct OpenClawChatHaptics: Sendable {
         self.performer = Self.defaultPerformer
     }
 
+    // periphery:ignore - package tests inject a recorder; app consumers use the live performer.
     public init(performer: @escaping @Sendable (Event) -> Void) {
         self.performer = performer
     }

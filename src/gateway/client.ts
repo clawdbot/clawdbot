@@ -4,13 +4,16 @@ import { GatewayClient as BaseGatewayClient } from "../../packages/gateway-clien
 import type {
   GatewayClientConnectionMetadata,
   GatewayClientHostDeps,
-  GatewayClientOptions,
+  GatewayClientOptions as BaseGatewayClientOptions,
   GatewayClientRequestOptions,
 } from "../../packages/gateway-client/src/index.js";
 import {
   clearDeviceAuthToken,
+  clearOriginDeviceToken,
   loadDeviceAuthToken,
+  loadOriginDeviceToken,
   storeDeviceAuthToken,
+  storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -27,35 +30,47 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { VERSION } from "../version.js";
 
 export {
-  GATEWAY_CLOSE_CODE_HINTS,
   GatewayClientRequestError,
-  describeGatewayCloseCode,
   isGatewayConnectAssemblyError,
-  resolveGatewayClientConnectChallengeTimeoutMs,
 } from "../../packages/gateway-client/src/index.js";
 export type {
-  DeviceAuthTokenRecord,
-  DeviceIdentity,
   GatewayClientCloseInfo,
-  GatewayClientConnectionMetadata,
-  GatewayClientHostDeps,
-  GatewayClientOptions,
   GatewayClientRequestOptions,
   GatewayReconnectPausedInfo,
 } from "../../packages/gateway-client/src/index.js";
 
+export type GatewayClientOptions = BaseGatewayClientOptions & {
+  /** Exact normalized remote gateway scope for origin-bound device credentials. */
+  deviceAuthScope?: string;
+};
+
 function createOpenClawGatewayClientHostDeps(
   overrides?: GatewayClientHostDeps,
+  deviceAuthScope?: string,
+  suppressOriginDeviceAuth = false,
 ): GatewayClientHostDeps {
+  const deviceAuthDeps: Pick<
+    GatewayClientHostDeps,
+    "loadDeviceAuthToken" | "storeDeviceAuthToken" | "clearDeviceAuthToken"
+  > = deviceAuthScope
+    ? {
+        loadDeviceAuthToken: (params) =>
+          suppressOriginDeviceAuth
+            ? null
+            : loadOriginDeviceToken({ ...params, gatewayScope: deviceAuthScope }),
+        storeDeviceAuthToken: (params) =>
+          storeOriginDeviceToken({ ...params, gatewayScope: deviceAuthScope }),
+        clearDeviceAuthToken: (params) =>
+          clearOriginDeviceToken({ ...params, gatewayScope: deviceAuthScope }),
+      }
+    : { loadDeviceAuthToken, storeDeviceAuthToken, clearDeviceAuthToken };
   return {
     // This wrapper is the only place the package reaches into OpenClaw runtime
     // state. Keep device identity, token storage, proxy, and redaction here.
     loadOrCreateDeviceIdentity,
     signDevicePayload,
     publicKeyRawBase64UrlFromPem,
-    loadDeviceAuthToken,
-    storeDeviceAuthToken,
-    clearDeviceAuthToken,
+    ...deviceAuthDeps,
     beforeConnect: ensureInheritedManagedProxyRoutingActive,
     registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
     normalizeTlsFingerprint: (fingerprint) => normalizeFingerprint(fingerprint ?? ""),
@@ -70,10 +85,18 @@ export class GatewayClient {
   #client: BaseGatewayClient;
 
   constructor(opts: GatewayClientOptions) {
+    const { deviceAuthScope, ...baseOptions } = opts;
+    const suppressOriginDeviceAuth = Boolean(
+      deviceAuthScope && (baseOptions.token?.trim() || baseOptions.password?.trim()),
+    );
     this.#client = new BaseGatewayClient({
-      ...opts,
-      clientVersion: opts.clientVersion ?? VERSION,
-      hostDeps: createOpenClawGatewayClientHostDeps(opts.hostDeps),
+      ...baseOptions,
+      clientVersion: baseOptions.clientVersion ?? VERSION,
+      hostDeps: createOpenClawGatewayClientHostDeps(
+        baseOptions.hostDeps,
+        deviceAuthScope,
+        suppressOriginDeviceAuth,
+      ),
     });
   }
 
@@ -99,5 +122,13 @@ export class GatewayClient {
 
   getConnectionMetadata(): GatewayClientConnectionMetadata {
     return this.#client.getConnectionMetadata();
+  }
+
+  updateNodeManifest(manifest: {
+    caps: string[];
+    commands: string[];
+    computerUse?: BaseGatewayClientOptions["computerUse"];
+  }): void {
+    this.#client.updateNodeManifest(manifest);
   }
 }

@@ -2,12 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
-import { loadCommandHandlers } from "./commands-handlers.runtime.js";
-import { handleNameCommand, parseNameCommand } from "./commands-name.js";
+import { handleNameCommand } from "./commands-name.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const sessionKey = "agent:main:web:main";
@@ -66,14 +68,6 @@ function buildNameParams(
 }
 
 describe("name command", () => {
-  it("parses the captured title and ignores other commands", () => {
-    expect(parseNameCommand("/name Quarterly planning")).toEqual({
-      title: "Quarterly planning",
-    });
-    expect(parseNameCommand("/name")).toEqual({ title: "" });
-    expect(parseNameCommand("/goal status")).toBeNull();
-  });
-
   it("registers and loads the command on text and native surfaces", () => {
     const command = buildBuiltinChatCommands().find((entry) => entry.key === "name");
 
@@ -90,12 +84,11 @@ describe("name command", () => {
         captureRemaining: true,
       }),
     ]);
-    expect(loadCommandHandlers()).toContain(handleNameCommand);
   });
 
   it("renames the current session and persists the label", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath, sessionKey },
       { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
     );
@@ -114,7 +107,7 @@ describe("name command", () => {
 
   it("suggests a name without mutating when no argument is given", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath, sessionKey },
       { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
     );
@@ -132,11 +125,11 @@ describe("name command", () => {
   it("rejects a label already used by another session", async () => {
     const storePath = await createStorePath();
     const now = Date.now();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath, sessionKey },
       { sessionId: "sess-main", updatedAt: now, totalTokens: 0, totalTokensFresh: true },
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath, sessionKey: "agent:main:web:other" },
       {
         sessionId: "sess-other",
@@ -157,7 +150,7 @@ describe("name command", () => {
 
   it("reads the persisted name when params.sessionEntry is absent", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath, sessionKey },
       {
         sessionId: "sess-main",
@@ -202,7 +195,7 @@ describe("name command", () => {
 
   it("does not rename for an unauthorized sender", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath, sessionKey },
       { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
     );
@@ -215,9 +208,10 @@ describe("name command", () => {
     expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
   });
 
-  it("returns null when text commands are disabled", async () => {
+  it("ignores other commands and disabled text commands", async () => {
     const storePath = await createStorePath();
     const params = buildNameParams("/name Anything", storePath);
     expect(await handleNameCommand(params, false)).toBeNull();
+    expect(await handleNameCommand(buildNameParams("/goal status", storePath), true)).toBeNull();
   });
 });

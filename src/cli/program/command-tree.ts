@@ -2,7 +2,7 @@
 import type { Command } from "commander";
 
 /** Remove an exact Command instance from a parent program. */
-export function removeCommand(program: Command, command: Command): boolean {
+function removeCommand(program: Command, command: Command): boolean {
   const commands = program.commands as Command[];
   const index = commands.indexOf(command);
   if (index < 0) {

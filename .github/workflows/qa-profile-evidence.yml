@@ -10,6 +10,11 @@ on:
         required: true
         default: main
         type: string
+      trusted_ref:
+        description: Optional trusted branch, tag, or SHA identity for an immutable ref
+        required: false
+        default: ""
+        type: string
       expected_sha:
         description: Optional full SHA that ref must resolve to
         required: false
@@ -20,11 +25,21 @@ on:
         required: true
         default: all
         type: string
+      allow_failures:
+        description: Continue after validated QA result failures
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       ref:
         description: OpenClaw branch, tag, or SHA to run
         required: true
+        type: string
+      trusted_ref:
+        description: Optional trusted branch, tag, or SHA identity for an immutable ref
+        required: false
+        default: ""
         type: string
       expected_sha:
         description: Optional full SHA that ref must resolve to
@@ -35,10 +50,21 @@ on:
         description: Taxonomy QA profile id to run
         required: true
         type: string
+      allow_failures:
+        description: Continue after validated QA result failures
+        required: false
+        default: false
+        type: boolean
     secrets:
       OPENAI_API_KEY:
         description: OpenAI API key used by live QA profile scenarios
         required: true
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Optional Convex credential broker URL supplied by qa-live-shared
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Optional Convex CI credential supplied by qa-live-shared
+        required: false
     outputs:
       artifact_name:
         description: Uploaded QA profile evidence artifact name
@@ -125,11 +151,12 @@ jobs:
     if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
+      protocol_base_revision: ${{ steps.validate.outputs.protocol_base_revision }}
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -139,36 +166,44 @@ jobs:
         id: validate
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
-          INPUT_REF: ${{ inputs.ref }}
+          INPUT_REF: ${{ inputs.trusted_ref || inputs.ref }}
         shell: bash
         run: |
           set -euo pipefail
 
           selected_revision="$(git rev-parse HEAD)"
-          expected_sha="${EXPECTED_SHA,,}"
+          expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
+          branch_candidate="${INPUT_REF#refs/heads/}"
+          tag_candidate="${INPUT_REF#refs/tags/}"
           trusted_reason=""
 
           if [[ -n "${expected_sha// }" && ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "expected_sha must be a full 40-character SHA; got: ${EXPECTED_SHA}" >&2
             exit 1
           fi
-          if [[ -n "${expected_sha// }" && "${selected_revision,,}" != "$expected_sha" ]]; then
+          if [[ -n "${expected_sha// }" && "$selected_revision" != "$expected_sha" ]]; then
             echo "Ref '${INPUT_REF}' resolved to ${selected_revision}, expected ${EXPECTED_SHA}." >&2
             exit 1
           fi
 
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
-          if git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
-            trusted_reason="main-ancestor"
-          elif git tag --points-at "$selected_revision" | grep -Eq '^v'; then
-            trusted_reason="release-tag"
-          elif [[ "$INPUT_REF" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
-            git fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
-            release_branch_sha="$(git rev-parse "refs/remotes/origin/${INPUT_REF}")"
+          if [[ "$tag_candidate" =~ ^v ]]; then
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/tags/${tag_candidate}:refs/tags/${tag_candidate}"
+            release_tag_sha="$(git rev-parse "refs/tags/${tag_candidate}^{commit}")"
+            if [[ "$selected_revision" == "$release_tag_sha" ]]; then
+              trusted_reason="release-tag"
+            fi
+          elif [[ "$branch_candidate" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${branch_candidate}:refs/remotes/origin/${branch_candidate}"
+            release_branch_sha="$(git rev-parse "refs/remotes/origin/${branch_candidate}")"
             if [[ "$selected_revision" == "$release_branch_sha" ]]; then
               trusted_reason="release-branch-head"
             fi
+          elif git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
+            trusted_reason="main-ancestor"
+          elif git tag --points-at "$selected_revision" | grep -Eq '^v'; then
+            trusted_reason="release-tag"
           fi
 
           if [[ -z "$trusted_reason" ]]; then
@@ -177,6 +212,25 @@ jobs:
             exit 1
           fi
 
+          case "$trusted_reason" in
+            main-ancestor)
+              protocol_base_revision="$(git rev-parse "${selected_revision}^1")"
+              ;;
+            release-branch-head | release-tag)
+              protocol_base_revision="$(git merge-base "$selected_revision" refs/remotes/origin/main)"
+              ;;
+            *)
+              echo "Unsupported trusted ref classification: ${trusted_reason}" >&2
+              exit 1
+              ;;
+          esac
+          if [[ ! "$protocol_base_revision" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Protocol comparison base must resolve to a full commit SHA." >&2
+            exit 1
+          fi
+          git cat-file -e "${protocol_base_revision}^{commit}"
+
+          echo "protocol_base_revision=$protocol_base_revision" >> "$GITHUB_OUTPUT"
           echo "selected_revision=$selected_revision" >> "$GITHUB_OUTPUT"
           echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
           {
@@ -185,13 +239,16 @@ jobs:
             echo "- Requested ref: \`${INPUT_REF}\`"
             echo "- Resolved SHA: \`$selected_revision\`"
             echo "- Trust reason: \`$trusted_reason\`"
+            echo "- Protocol base: \`$protocol_base_revision\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   run_qa_profile:
     name: Generate QA profile evidence
     needs: validate_selected_ref
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 60
+    # The full live profile can exceed 90 minutes before aggregate evidence is finalized.
+    # Preserve enough headroom to record its terminal result instead of losing it to cancellation.
+    timeout-minutes: 150
     permissions:
       contents: read
     outputs:
@@ -205,11 +262,30 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
+
+      - name: Fetch protocol comparison base
+        env:
+          PROTOCOL_SINCE_BASE_SHA: ${{ needs.validate_selected_ref.outputs.protocol_base_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$PROTOCOL_SINCE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Protocol comparison base must be a full commit SHA." >&2
+            exit 1
+          fi
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --no-recurse-submodules --depth=1 origin \
+            "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/qa-protocol-base"
+          resolved_protocol_base="$(git rev-parse refs/remotes/origin/qa-protocol-base^{commit})"
+          if [[ "$resolved_protocol_base" != "$PROTOCOL_SINCE_BASE_SHA" ]]; then
+            echo "Protocol comparison base resolved to ${resolved_protocol_base}, expected ${PROTOCOL_SINCE_BASE_SHA}." >&2
+            exit 1
+          fi
+          git cat-file -e "${resolved_protocol_base}^{commit}"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -226,6 +302,7 @@ jobs:
           set -euo pipefail
           node --import tsx --input-type=module <<'NODE'
           import fs from "node:fs";
+          import { readQaScenarioPack } from "./extensions/qa-lab/src/scenario-catalog.ts";
           import { readQaScorecardTaxonomyReport } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
 
           const requested = process.env.QA_PROFILE?.trim() ?? "";
@@ -233,43 +310,151 @@ jobs:
             throw new Error(`qa_profile must use a taxonomy profile id, got ${JSON.stringify(process.env.QA_PROFILE)}`);
           }
 
-          const taxonomy = readQaScorecardTaxonomyReport([]);
+          const taxonomy = readQaScorecardTaxonomyReport(readQaScenarioPack().scenarios);
           const profile = taxonomy.profiles.find((entry) => entry.id === requested);
           if (!profile) {
             const available = taxonomy.profiles.map((entry) => entry.id).join(", ");
             throw new Error(`Unknown QA profile ${requested}. Available profiles: ${available}`);
           }
 
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `profile=${profile.id}\n`);
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `profile=${profile.id}\nchannel_driver=${profile.channelDriver}\n`,
+          );
           NODE
 
           echo "QA profile: \`${QA_PROFILE}\`" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Require live profile credentials
+        if: steps.profile.outputs.channel_driver == 'live'
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local name="$1"
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required qa-live-shared secret: ${name}" >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Ensure Playwright Chromium
-        run: node scripts/ensure-playwright-chromium.mjs
+        run: |
+          playwright_script="scripts/ensure-playwright-chromium.mts"
+          [[ -f "$playwright_script" ]] || playwright_script="scripts/ensure-playwright-chromium.mjs"
+          node --import tsx "$playwright_script"
 
       - name: Run QA profile
         id: run_profile
         env:
           QA_PROFILE: ${{ steps.profile.outputs.profile }}
+          REQUESTED_REF: ${{ inputs.trusted_ref || inputs.ref }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          PROTOCOL_SINCE_BASE_SHA: ${{ needs.validate_selected_ref.outputs.protocol_base_revision }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "120000"
+          OPENCLAW_QA_CREDENTIAL_ROLE: ci
+          OPENCLAW_QA_CREDENTIAL_SOURCE: convex
+          OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "1"
         shell: bash
         run: |
           set -euo pipefail
 
           output_dir=".artifacts/qa-e2e/profile-${QA_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$output_dir"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
+          timeout_supervisor_log="$(mktemp)"
+          timeout_supervisor_fifo="${timeout_supervisor_log}.fifo"
+          supervisor_tee_pid=""
+          cleanup_timeout_supervisor() {
+            if [[ -n "$supervisor_tee_pid" ]]; then
+              kill "$supervisor_tee_pid" 2>/dev/null || true
+              wait "$supervisor_tee_pid" 2>/dev/null || true
+            fi
+            rm -f "$timeout_supervisor_fifo" "$timeout_supervisor_log"
+          }
+          trap cleanup_timeout_supervisor EXIT
+
+          mkfifo "$timeout_supervisor_fifo"
+          tee "$timeout_supervisor_log" <"$timeout_supervisor_fifo" >&2 &
+          supervisor_tee_pid=$!
+
+          timeout_child_env=(env)
+          if [[ -v LC_ALL ]]; then
+            timeout_child_env+=("LC_ALL=$LC_ALL")
+          else
+            timeout_child_env+=("-u" "LC_ALL")
+          fi
+
           qa_exit_code=0
-          pnpm openclaw qa run \
-            --repo-root . \
-            --qa-profile "${QA_PROFILE}" \
-            --output-dir "${output_dir}" || qa_exit_code=$?
+          LC_ALL=C timeout --verbose --signal=TERM --kill-after=30s 110m \
+            "${timeout_child_env[@]}" bash -c 'exec "$@" 2>&3' bash \
+            pnpm openclaw qa run \
+              --repo-root . \
+              --qa-profile "${QA_PROFILE}" \
+              --concurrency 3 \
+              --fast \
+              --output-dir "${output_dir}" \
+            3>&2 2>"$timeout_supervisor_fifo" || qa_exit_code=$?
+
+          wait "$supervisor_tee_pid"
+          supervisor_tee_pid=""
+
+          timeout_outcome="none"
+          if [[ "$qa_exit_code" -eq 137 ]] && grep -Eq "^timeout: sending signal KILL to command '[A-Za-z0-9_./+-]+'$" "$timeout_supervisor_log"; then
+            timeout_outcome="kill"
+            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and required SIGKILL after the 30-second grace period; partial evidence will still be uploaded."
+          elif [[ "$qa_exit_code" -eq 124 ]] && grep -Eq "^timeout: sending signal TERM to command '[A-Za-z0-9_./+-]+'$" "$timeout_supervisor_log"; then
+            timeout_outcome="term"
+            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and was terminated; partial evidence will still be uploaded."
+          fi
+
+          QA_EXIT_CODE="$qa_exit_code" TIMEOUT_OUTCOME="$timeout_outcome" OUTPUT_DIR="$output_dir" \
+            node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+
+          const timeoutOutcome = process.env.TIMEOUT_OUTCOME;
+          if (!["none", "term", "kill"].includes(timeoutOutcome)) {
+            throw new Error(`Unexpected timeout outcome: ${JSON.stringify(timeoutOutcome)}`);
+          }
+
+          const status = {
+            target: {
+              ref: process.env.REQUESTED_REF,
+              sha: process.env.TARGET_SHA,
+              protocolBaseSha: process.env.PROTOCOL_SINCE_BASE_SHA,
+            },
+            profile: process.env.QA_PROFILE,
+            run: {
+              id: process.env.GITHUB_RUN_ID,
+              attempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            },
+            exitCode: Number(process.env.QA_EXIT_CODE),
+            timedOut: timeoutOutcome !== "none",
+            timeoutOutcome,
+            completedAt: new Date().toISOString(),
+          };
+          fs.writeFileSync(
+            path.join(process.env.OUTPUT_DIR, "qa-profile-run-status.json"),
+            `${JSON.stringify(status, null, 2)}\n`,
+          );
+          NODE
 
           echo "qa_exit_code=${qa_exit_code}" >> "$GITHUB_OUTPUT"
 
@@ -278,19 +463,23 @@ jobs:
         if: always()
         env:
           ARTIFACT_NAME: qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
           OUTPUT_DIR: ${{ steps.run_profile.outputs.output_dir }}
           QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
           QA_PROFILE: ${{ steps.profile.outputs.profile }}
-          REQUESTED_REF: ${{ inputs.ref }}
+          PROTOCOL_BASE_SHA: ${{ needs.validate_selected_ref.outputs.protocol_base_revision }}
+          REQUESTED_REF: ${{ inputs.trusted_ref || inputs.ref }}
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           TRUSTED_REASON: ${{ needs.validate_selected_ref.outputs.trusted_reason }}
         shell: bash
         run: |
           set -euo pipefail
 
-          node --input-type=module <<'NODE'
+          node --import tsx --input-type=module <<'NODE'
           import fs from "node:fs";
           import path from "node:path";
+          import { validateQaEvidenceSummaryJson } from "./extensions/qa-lab/src/evidence-summary.ts";
+          import { qaProfileEvidencePlan } from "./extensions/qa-lab/src/profile-evidence-plan.ts";
 
           const outputDir = process.env.OUTPUT_DIR;
           if (!outputDir) {
@@ -301,7 +490,9 @@ jobs:
           }
 
           const evidencePath = path.join(outputDir, "qa-evidence.json");
-          const payload = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+          const payload = validateQaEvidenceSummaryJson(
+            JSON.parse(fs.readFileSync(evidencePath, "utf8")),
+          );
           if (payload.profile !== process.env.QA_PROFILE) {
             throw new Error(`qa-evidence.json profile must be ${process.env.QA_PROFILE}, got ${JSON.stringify(payload.profile)}`);
           }
@@ -311,6 +502,16 @@ jobs:
           if (payload.scorecard.categoryReports.length === 0) {
             throw new Error("QA profile qa-evidence.json scorecard has no category reports");
           }
+          if (!payload.profilePlan) {
+            throw new Error("QA profile qa-evidence.json is missing profilePlan; rerun the QA Profile Evidence workflow with current code.");
+          }
+          const { plan: profilePlan, sha256: profilePlanSha256 } = qaProfileEvidencePlan.attest(
+            payload.profilePlan,
+            process.env.QA_EXIT_CODE === "0",
+          );
+          if (profilePlan.profile !== process.env.QA_PROFILE) {
+            throw new Error(`qa-evidence.json profilePlan.profile must be ${process.env.QA_PROFILE}, got ${JSON.stringify(profilePlan.profile)}`);
+          }
 
           const manifest = {
             artifactName: process.env.ARTIFACT_NAME,
@@ -318,10 +519,13 @@ jobs:
             qaProfile: process.env.QA_PROFILE,
             qaExitCode: Number(process.env.QA_EXIT_CODE),
             qaPassed: process.env.QA_EXIT_CODE === "0",
+            allowFailures: process.env.ALLOW_FAILURES === "true",
             requestedRef: process.env.REQUESTED_REF,
             targetSha: process.env.TARGET_SHA,
+            protocolBaseSha: process.env.PROTOCOL_BASE_SHA,
             trustedReason: process.env.TRUSTED_REASON,
             evidenceMode: payload.evidenceMode,
+            profilePlanSha256,
             qaEvidencePath: "qa-evidence.json",
             scorecard: {
               categories: payload.scorecard.categories,
@@ -353,7 +557,9 @@ jobs:
             echo "- Artifact: \`${ARTIFACT_NAME}\`"
             echo "- QA profile: \`${QA_PROFILE}\`"
             echo "- QA exit code: \`${QA_EXIT_CODE}\`"
+            echo "- QA failures allowed: \`${ALLOW_FAILURES}\`"
             echo "- Target SHA: \`${TARGET_SHA}\`"
+            echo "- Protocol base SHA: \`${PROTOCOL_BASE_SHA}\`"
             echo "- Evidence path: \`${OUTPUT_DIR}/qa-evidence.json\`"
             echo "- Manifest: \`${OUTPUT_DIR}/qa-profile-evidence-manifest.json\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -370,6 +576,8 @@ jobs:
       - name: Fail if QA profile failed
         if: always()
         env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
+          EVIDENCE_VALIDATED: ${{ steps.evidence.outcome == 'success' }}
           QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
           QA_PROFILE: ${{ steps.profile.outputs.profile }}
         shell: bash
@@ -380,6 +588,10 @@ jobs:
             exit 1
           fi
           if [[ "$QA_EXIT_CODE" != "0" ]]; then
+            if [[ "$ALLOW_FAILURES" == "true" && "$EVIDENCE_VALIDATED" == "true" ]]; then
+              echo "::warning::QA profile '${QA_PROFILE}' failed with exit code ${QA_EXIT_CODE}; allow_failures accepted the validated evidence."
+              exit 0
+            fi
             echo "QA profile '${QA_PROFILE}' failed with exit code ${QA_EXIT_CODE}." >&2
             exit "$QA_EXIT_CODE"
           fi

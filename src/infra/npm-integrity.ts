@@ -38,7 +38,7 @@ function normalizeIntegrity(value: string | undefined): string | undefined {
  * Compares expected and resolved npm integrity values and asks the caller
  * whether a drifted archive may still be installed.
  */
-export async function resolveNpmIntegrityDrift<TPayload>(
+async function resolveNpmIntegrityDrift<TPayload>(
   params: ResolveNpmIntegrityDriftParams<TPayload>,
 ): Promise<ResolveNpmIntegrityDriftResult<TPayload>> {
   const expectedIntegrity = normalizeIntegrity(params.expectedIntegrity);

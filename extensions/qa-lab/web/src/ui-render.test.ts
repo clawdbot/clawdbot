@@ -68,10 +68,11 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
     latestReport: null,
     runnerDraft: null,
     runnerDraftDirty: false,
+    runnerPlanOverride: null,
     scenarioRun: null,
     selectedCaptureEventKey: null,
     selectedCaptureSessionIds: [],
-    selectedConversationId: null,
+    selectedConversationKey: null,
     selectedEvidenceEntryId: null,
     selectedScenarioId: null,
     selectedThreadId: null,
@@ -84,6 +85,257 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
 }
 
 describe("QA Lab UI evidence render", () => {
+  it("keeps same-id conversations isolated by account and kind", () => {
+    const selectedConversationKey = JSON.stringify(["account-a", "channel", "shared"]);
+    const html = renderQaLabUi(
+      evidenceState({
+        activeTab: "chat",
+        selectedConversationKey,
+        snapshot: {
+          conversations: [
+            { accountId: "account-a", id: "shared", kind: "channel" },
+            { accountId: "account-b", id: "shared", kind: "channel" },
+            { accountId: "account-a", id: "shared", kind: "direct" },
+          ],
+          cursor: 0,
+          events: [],
+          messages: [
+            {
+              accountId: "account-a",
+              conversation: { id: "shared", kind: "channel" },
+              direction: "outbound",
+              id: "selected-message",
+              reactions: [],
+              senderId: "openclaw",
+              text: "selected account message",
+              timestamp: 1,
+            },
+            {
+              accountId: "account-b",
+              conversation: { id: "shared", kind: "channel" },
+              direction: "outbound",
+              id: "foreign-account-message",
+              reactions: [],
+              senderId: "openclaw",
+              text: "foreign account message",
+              timestamp: 2,
+            },
+            {
+              accountId: "account-a",
+              conversation: { id: "shared", kind: "direct" },
+              direction: "outbound",
+              id: "foreign-kind-message",
+              reactions: [],
+              senderId: "openclaw",
+              text: "foreign kind message",
+              timestamp: 3,
+            },
+          ],
+          threads: [
+            {
+              accountId: "account-a",
+              conversationId: "shared",
+              createdAt: 0,
+              createdBy: "openclaw",
+              id: "selected-thread",
+              title: "Selected thread",
+            },
+            {
+              accountId: "account-b",
+              conversationId: "shared",
+              createdAt: 0,
+              createdBy: "openclaw",
+              id: "foreign-thread",
+              title: "Foreign thread",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(html).toContain("selected account message");
+    expect(html).toContain("Selected thread");
+    expect(html).not.toContain("foreign account message");
+    expect(html).not.toContain("foreign kind message");
+    expect(html).not.toContain("Foreign thread");
+    expect(html).toContain("shared (account-a)");
+    expect(html).toContain("shared (account-b)");
+    expect(html).toContain(
+      `data-conversation-key="${selectedConversationKey.replaceAll('"', "&quot;")}"`,
+    );
+
+    const crossAccountKindHtml = renderQaLabUi(
+      evidenceState({
+        activeTab: "chat",
+        snapshot: {
+          conversations: [
+            { accountId: "account-a", id: "shared", kind: "group" },
+            { accountId: "account-b", id: "shared", kind: "channel" },
+          ],
+          cursor: 0,
+          events: [],
+          messages: [],
+          threads: [],
+        },
+      }),
+    );
+    expect(crossAccountKindHtml).toContain("shared (group, account-a)");
+    expect(crossAccountKindHtml).toContain("shared (channel, account-b)");
+  });
+
+  it("shows group conversations in the sidebar and composer without leaking same-id rooms", () => {
+    const selectedConversationKey = JSON.stringify(["account-a", "group", "shared"]);
+    const html = renderQaLabUi(
+      evidenceState({
+        activeTab: "chat",
+        selectedConversationKey,
+        composer: {
+          conversationId: "shared",
+          conversationKind: "group",
+          senderId: "alice",
+          senderName: "Alice",
+          text: "",
+        },
+        snapshot: {
+          conversations: [
+            { accountId: "account-a", id: "shared", kind: "group" },
+            { accountId: "account-b", id: "shared", kind: "group" },
+            { accountId: "account-a", id: "shared", kind: "channel" },
+            { accountId: "account-a", id: "shared", kind: "direct" },
+          ],
+          cursor: 0,
+          events: [],
+          messages: [
+            {
+              accountId: "account-a",
+              conversation: { id: "shared", kind: "group" },
+              direction: "inbound",
+              id: "selected-group-message",
+              reactions: [],
+              senderId: "alice",
+              text: "selected group message",
+              timestamp: 1,
+            },
+            {
+              accountId: "account-b",
+              conversation: { id: "shared", kind: "group" },
+              direction: "inbound",
+              id: "foreign-group-message",
+              reactions: [],
+              senderId: "bob",
+              text: "foreign group message",
+              timestamp: 2,
+            },
+            {
+              accountId: "account-a",
+              conversation: { id: "shared", kind: "channel" },
+              direction: "outbound",
+              id: "same-id-channel-message",
+              reactions: [],
+              senderId: "openclaw",
+              text: "same-id channel message",
+              timestamp: 3,
+            },
+          ],
+          threads: [],
+        },
+      }),
+    );
+
+    expect(html).toContain("shared (group, account-a)");
+    expect(html).toContain("shared (group, account-b)");
+    expect(html).toContain("shared (channel, account-a)");
+    expect(html).toContain("selected group message");
+    expect(html).not.toContain("foreign group message");
+    expect(html).not.toContain("same-id channel message");
+    expect(html).toContain('<option value="group" selected>Group</option>');
+    expect(html).toContain(
+      `data-conversation-key="${selectedConversationKey.replaceAll('"', "&quot;")}"`,
+    );
+  });
+
+  it("keeps thread replies out of the root timeline when thread navigation exists", () => {
+    const selectedConversationKey = JSON.stringify(["default", "channel", "qa-room"]);
+    const snapshot: NonNullable<UiState["snapshot"]> = {
+      conversations: [{ accountId: "default", id: "qa-room", kind: "channel" }],
+      cursor: 0,
+      events: [],
+      messages: [
+        {
+          accountId: "default",
+          conversation: { id: "qa-room", kind: "channel" },
+          direction: "outbound",
+          id: "root-message",
+          reactions: [],
+          senderId: "openclaw",
+          text: "root timeline message",
+          timestamp: 1,
+        },
+        {
+          accountId: "default",
+          conversation: { id: "qa-room", kind: "channel" },
+          direction: "outbound",
+          id: "thread-message",
+          reactions: [],
+          senderId: "openclaw",
+          text: "thread-only reply",
+          threadId: "owned-thread",
+          timestamp: 2,
+        },
+        {
+          accountId: "default",
+          conversation: { id: "qa-room", kind: "channel" },
+          direction: "outbound",
+          id: "external-thread-message",
+          reactions: [],
+          senderId: "openclaw",
+          text: "externally observed thread reply",
+          threadId: "external-thread",
+          timestamp: 3,
+        },
+      ],
+      threads: [
+        {
+          accountId: "default",
+          conversationId: "qa-room",
+          createdAt: 0,
+          createdBy: "openclaw",
+          id: "owned-thread",
+          title: "Owned thread",
+        },
+      ],
+    };
+
+    const rootHtml = renderQaLabUi(
+      evidenceState({ activeTab: "chat", selectedConversationKey, snapshot }),
+    );
+    expect(rootHtml).toContain("Main timeline");
+    expect(rootHtml).toContain("root timeline message");
+    expect(rootHtml).not.toContain("thread-only reply");
+    expect(rootHtml).toContain("externally observed thread reply");
+
+    const threadHtml = renderQaLabUi(
+      evidenceState({
+        activeTab: "chat",
+        selectedConversationKey,
+        selectedThreadId: "owned-thread",
+        snapshot,
+      }),
+    );
+    expect(threadHtml).not.toContain("root timeline message");
+    expect(threadHtml).toContain("thread-only reply");
+    expect(threadHtml).not.toContain("externally observed thread reply");
+
+    const externalThreadHtml = renderQaLabUi(
+      evidenceState({
+        activeTab: "chat",
+        selectedConversationKey,
+        snapshot: { ...snapshot, threads: [] },
+      }),
+    );
+    expect(externalThreadHtml).toContain("thread-only reply");
+  });
+
   it("renders capture startup commands without personal home paths", () => {
     const html = renderQaLabUi(evidenceState({ activeTab: "capture" }));
 
@@ -177,7 +429,7 @@ describe("QA Lab UI evidence render", () => {
                   source: "ux-matrix:web-ui:first-run",
                 },
               ],
-              coverage: [{ id: "ui.control", role: "primary" }],
+              coverage: [],
               failureReason: null,
               id: "ux-matrix.web-ui.first-run",
               kind: "ux-matrix-cell",
@@ -204,10 +456,11 @@ describe("QA Lab UI evidence render", () => {
                 {
                   artifactKinds: ["screenshot"],
                   artifactPaths: ["screenshot.png"],
-                  coverageIds: ["ui.control"],
+                  coverageIds: [],
                   runner: {
                     availability: "local",
-                    command: "pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard",
+                    command:
+                      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
                     lane: "web-ui-playwright",
                     workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
                   },
@@ -220,10 +473,11 @@ describe("QA Lab UI evidence render", () => {
                 {
                   artifactKinds: [],
                   artifactPaths: [],
-                  coverageIds: ["cli.entrypoint"],
+                  coverageIds: [],
                   runner: {
                     availability: "local",
-                    command: "pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard",
+                    command:
+                      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
                     lane: "cli-status",
                     workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
                   },
@@ -241,7 +495,7 @@ describe("QA Lab UI evidence render", () => {
             },
             preflight: { adbDevices: null, memory: null },
             releaseLedger: null,
-            rootPath: ".artifacts/qa-e2e/suite/script/ux-matrix-evidence-dashboard/run-1",
+            rootPath: ".artifacts/qa-e2e/suite/script/ux-matrix-producer/run-1",
             scorecard: null,
           },
           profile: null,
@@ -254,7 +508,7 @@ describe("QA Lab UI evidence render", () => {
     expect(html).toContain('data-evidence-entry-id="ux-matrix.web-ui.first-run"');
     expect(html).toContain("evidence-matrix-cell-proof-gap");
     expect(html).toContain("not executed in this run");
-    expect(html).toContain("Coverage: cli.entrypoint");
+    expect(html).not.toContain("Coverage:");
     expect(html).toContain("Runner: cli-status");
     expect(html).toContain("Open media artifact");
     expect(html).toContain("Open video artifact");

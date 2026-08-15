@@ -8,6 +8,18 @@ export type NodeHostBrowserProxyConfig = {
 };
 
 export type NodeHostConfig = {
+  /** Sensitive native agent execution exposed by the headless node host. */
+  agentRuns?: {
+    claude?: {
+      /** Advertise approval-gated Claude CLI turns when the binary is installed. */
+      enabled?: boolean;
+    };
+  };
+  /** Full OpenClaw session hosting from this node's local installation. */
+  workerRuns?: {
+    /** Advertise this paired node as a worker session host (default: false). */
+    enabled?: boolean;
+  };
   /** Browser proxy settings for node hosts. */
   browserProxy?: NodeHostBrowserProxyConfig;
   /** MCP servers started and exposed by the headless node host. */

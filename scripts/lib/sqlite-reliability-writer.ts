@@ -1,7 +1,7 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { setImmediate as delayImmediate, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { requireNodeSqlite } from "../../src/infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import {
   COMMITTED_WAL_SENTINEL,
   STRESS_TABLE_SQL,
@@ -12,10 +12,12 @@ type WriterReadyMessage = {
   kind: "ready";
 };
 
-export type WriterPartialMessage = {
+type WriterPartialMessage = {
   batch: number;
+  batchesCommitted: number;
   kind: "partial";
   rows: number;
+  rowsCommitted: number;
 };
 
 type WriterReleasedMessage = {
@@ -23,7 +25,7 @@ type WriterReleasedMessage = {
   kind: "released";
 };
 
-export type WriterResultMessage = {
+type WriterResultMessage = {
   batchesCommitted: number;
   kind: "result";
   rowsCommitted: number;
@@ -47,6 +49,11 @@ export type WriterHandle = {
   stopped: boolean;
 };
 
+export type WriterExit = {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+};
+
 const WRITER_MESSAGE_TIMEOUT_MS = 30_000;
 
 export function startWriter(databasePath: string, profile: ProfileConfig): WriterHandle {
@@ -57,6 +64,8 @@ export function startWriter(databasePath: string, profile: ProfileConfig): Write
       String(profile.rowsPerBatch),
       String(profile.payloadBytes),
       String(profile.retainedBatches),
+      String(profile.walAutoCheckpointPages),
+      String(profile.maxWalBytes),
       String(profile.writerPauseMs),
     ],
     {
@@ -141,18 +150,18 @@ export async function stopWriter(writer: WriterHandle): Promise<WriterResultMess
   return result;
 }
 
-async function waitForChildExit(child: ChildProcess): Promise<void> {
+async function waitForChildExit(child: ChildProcess): Promise<WriterExit> {
   if (child.exitCode !== null || child.signalCode !== null) {
-    return;
+    return { code: child.exitCode, signal: child.signalCode };
   }
-  await new Promise<void>((resolve, reject) => {
+  return await new Promise<WriterExit>((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error("SQLite reliability writer did not exit after stopping."));
+      reject(new Error("SQLite reliability writer did not exit after termination was requested."));
     }, WRITER_MESSAGE_TIMEOUT_MS);
-    const onExit = () => {
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       cleanup();
-      resolve();
+      resolve({ code, signal });
     };
     const onError = (error: Error) => {
       cleanup();
@@ -168,12 +177,26 @@ async function waitForChildExit(child: ChildProcess): Promise<void> {
   });
 }
 
+export async function crashWriter(writer: WriterHandle): Promise<WriterExit> {
+  if (writer.stopped) {
+    throw new Error("SQLite reliability writer was already stopped.");
+  }
+  if (!writer.child.kill("SIGKILL")) {
+    throw new Error("SQLite reliability writer exited before the crash signal was delivered.");
+  }
+  const exit = await waitForChildExit(writer.child);
+  writer.stopped = true;
+  return exit;
+}
+
 export async function terminateWriter(writer: WriterHandle): Promise<void> {
   if (writer.child.exitCode !== null || writer.child.signalCode !== null) {
+    writer.stopped = true;
     return;
   }
   writer.child.kill();
   await waitForChildExit(writer.child).catch(() => undefined);
+  writer.stopped = true;
 }
 
 function parseWriterChildArgs(argv: string[]): {
@@ -181,12 +204,25 @@ function parseWriterChildArgs(argv: string[]): {
   payloadBytes: number;
   retainedBatches: number;
   rowsPerBatch: number;
+  walAutoCheckpointPages: number;
+  walSizeLimitBytes: number;
   writerPauseMs: number;
 } {
-  const [databasePath, rowsRaw, payloadRaw, retainedRaw, pauseRaw, ...extra] = argv;
+  const [
+    databasePath,
+    rowsRaw,
+    payloadRaw,
+    retainedRaw,
+    checkpointRaw,
+    walSizeLimitRaw,
+    pauseRaw,
+    ...extra
+  ] = argv;
   const rowsPerBatch = Number(rowsRaw);
   const payloadBytes = Number(payloadRaw);
   const retainedBatches = Number(retainedRaw);
+  const walAutoCheckpointPages = Number(checkpointRaw);
+  const walSizeLimitBytes = Number(walSizeLimitRaw);
   const writerPauseMs = Number(pauseRaw);
   if (
     !databasePath ||
@@ -197,18 +233,29 @@ function parseWriterChildArgs(argv: string[]): {
     payloadBytes < 1 ||
     !Number.isSafeInteger(retainedBatches) ||
     retainedBatches < 1 ||
+    !Number.isSafeInteger(walAutoCheckpointPages) ||
+    walAutoCheckpointPages < 1 ||
+    !Number.isSafeInteger(walSizeLimitBytes) ||
+    walSizeLimitBytes < 1 ||
     !Number.isSafeInteger(writerPauseMs) ||
     writerPauseMs < 0
   ) {
     throw new Error("invalid SQLite reliability writer arguments");
   }
-  return { databasePath, payloadBytes, retainedBatches, rowsPerBatch, writerPauseMs };
+  return {
+    databasePath,
+    payloadBytes,
+    retainedBatches,
+    rowsPerBatch,
+    walAutoCheckpointPages,
+    walSizeLimitBytes,
+    writerPauseMs,
+  };
 }
 
 async function runWriterChild(argv: string[]): Promise<void> {
   const options = parseWriterChildArgs(argv);
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(options.databasePath);
+  const database = openNodeSqliteDatabase(options.databasePath);
   let nextBatch = 0;
   let batchesCommitted = 0;
   let rowsCommitted = 0;
@@ -227,7 +274,8 @@ async function runWriterChild(argv: string[]): Promise<void> {
   };
   try {
     database.exec("PRAGMA journal_mode = WAL;");
-    database.exec("PRAGMA wal_autocheckpoint = 0;");
+    database.exec(`PRAGMA wal_autocheckpoint = ${options.walAutoCheckpointPages};`);
+    database.exec(`PRAGMA journal_size_limit = ${options.walSizeLimitBytes};`);
     database.exec("PRAGMA busy_timeout = 30000;");
     database.exec(STRESS_TABLE_SQL);
     const next = database
@@ -239,9 +287,10 @@ async function runWriterChild(argv: string[]): Promise<void> {
     const insert = database.prepare(
       "INSERT INTO openclaw_reliability_entries (batch, ordinal, payload) VALUES (?, ?, ?)",
     );
-    const insertSentinel = database.prepare(
-      "INSERT INTO openclaw_reliability_sentinel (id, payload) VALUES (1, ?)",
-    );
+    const upsertSentinel = database.prepare(`
+      INSERT INTO openclaw_reliability_sentinel (id, payload) VALUES (1, ?)
+      ON CONFLICT(id) DO UPDATE SET payload = excluded.payload
+    `);
     const deleteExpired = database.prepare(
       "DELETE FROM openclaw_reliability_entries WHERE batch < ?",
     );
@@ -272,7 +321,7 @@ async function runWriterChild(argv: string[]): Promise<void> {
       database.exec("BEGIN IMMEDIATE;");
       try {
         if (includeSentinel) {
-          insertSentinel.run(COMMITTED_WAL_SENTINEL);
+          upsertSentinel.run(COMMITTED_WAL_SENTINEL);
         }
         for (let ordinal = 0; ordinal < options.rowsPerBatch; ordinal += 1) {
           insert.run(nextBatch, ordinal, `${nextBatch}:${ordinal}:${payload}`);
@@ -302,8 +351,10 @@ async function runWriterChild(argv: string[]): Promise<void> {
           }
           sendMessage({
             batch: heldBatch,
+            batchesCommitted,
             kind: "partial",
             rows: heldRows,
+            rowsCommitted,
           } satisfies WriterPartialMessage);
           while (!shouldReleasePartial()) {
             await delay(1);

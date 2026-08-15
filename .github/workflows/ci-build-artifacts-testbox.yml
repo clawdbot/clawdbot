@@ -8,6 +8,7 @@ on:
         description: "Testbox session ID"
         required: true
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
     paths:
       - ".github/workflows/**"
 
@@ -27,70 +28,30 @@ jobs:
     permissions:
       contents: read
     name: "build-artifacts"
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    # Pull requests only validate the artifact build; real Testbox leases
+    # arrive via dispatch. Hosted PR runs keep this landing gate satisfiable
+    # during Blacksmith outages (mirrors ci-check-testbox.yml).
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 35
     steps:
+      # Testbox lifecycle actions require Blacksmith VM metadata; PRs validate the build only.
       - name: Begin Testbox
+        if: github.event_name == 'workflow_dispatch'
         uses: useblacksmith/begin-testbox@233448af4bfdc6fca509a7f0974411ac6d8a8043
         with:
           testbox_id: ${{ inputs.testbox_id }}
 
       - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          if [[ -z "$CHECKOUT_TOKEN" ]]; then
-            echo "checkout token is missing" >&2
-            exit 1
-          fi
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
-              -c protocol.version=2 \
-              -c "http.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '0' }}
+          persist-credentials: false
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          install-trufflehog: "true"
 
       - name: Resolve release dist cache seeds
         id: dist-cache-seeds
@@ -144,7 +105,7 @@ jobs:
 
       - name: Restore dist build cache
         id: dist-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             .artifacts/build-all-cache/
@@ -157,7 +118,9 @@ jobs:
       - name: Build dist on cache miss
         if: steps.dist-cache.outputs.cache-hit != 'true'
         env:
-          NODE_OPTIONS: --max-old-space-size=16384
+          # Hosted PR runners have 16GB total; the 16GB heap fits only the
+          # dispatch-time 16vcpu Blacksmith box.
+          NODE_OPTIONS: ${{ github.event_name == 'pull_request' && '--max-old-space-size=8192' || '--max-old-space-size=16384' }}
         run: pnpm build:ci-artifacts
 
       - name: Build Control UI on cache miss
@@ -181,7 +144,7 @@ jobs:
 
       - name: Save dist build cache
         if: steps.dist-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             .artifacts/build-all-cache/
@@ -190,35 +153,16 @@ jobs:
             packages/*/dist/
           key: ${{ runner.os }}-dist-build-v2-${{ github.sha }}
 
+      - name: Ensure Testbox base commit
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
       - name: Prepare Testbox shell
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          timeout --signal=TERM --kill-after=10s 120s git \
-            -c protocol.version=2 \
-            fetch --no-tags --prune --no-recurse-submodules --depth=50 origin \
-            "+refs/heads/main:refs/remotes/origin/main"
-
-          node_bin="$(dirname "$(node -p 'process.execPath')")"
-          link_node_tool() {
-            local tool="$1"
-            local source="$node_bin/$tool"
-            local target="/usr/local/bin/$tool"
-            if [ -e "$target" ] && [ "$(readlink -f "$source")" = "$(readlink -f "$target")" ]; then
-              return
-            fi
-            sudo ln -sf "$source" "$target"
-          }
-          link_node_tool node
-          link_node_tool npm
-          link_node_tool npx
-          link_node_tool corepack
-          sudo tee /usr/local/bin/pnpm >/dev/null <<'PNPM'
-          #!/usr/bin/env bash
-          exec /usr/local/bin/corepack pnpm "$@"
-          PNPM
-          sudo chmod 0755 /usr/local/bin/pnpm
+        uses: ./.github/actions/prepare-testbox-shell
+        with:
+          base-ref: ${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}
 
       - name: Hydrate Testbox provider env helper
         shell: bash
@@ -273,6 +217,6 @@ jobs:
 
       - name: Run Testbox
         uses: useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d
-        if: always()
+        if: github.event_name == 'workflow_dispatch' && always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

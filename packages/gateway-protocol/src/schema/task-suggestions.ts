@@ -1,61 +1,61 @@
 // Gateway Protocol schema module defines ephemeral follow-up task suggestions.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { closedObject } from "./closed-object.js";
 
 const TaskIdSchema = Type.String({ minLength: 1, maxLength: 128 });
-const TaskTitleSchema = Type.String({ minLength: 1, maxLength: 60 });
-const TaskPromptSchema = Type.String({ minLength: 1, maxLength: 32_768 });
-const TaskTldrSchema = Type.String({ minLength: 1, maxLength: 1_024 });
+const TaskTitleSchema = Type.String({ minLength: 1, maxLength: 60, pattern: "\\S" });
+const TaskPromptSchema = Type.String({ minLength: 1, maxLength: 32_768, pattern: "\\S" });
+const TaskTldrSchema = Type.String({ minLength: 1, maxLength: 1_024, pattern: "\\S" });
 const TaskCwdSchema = Type.String({ minLength: 1, maxLength: 4_096 });
 const TaskSessionKeySchema = Type.String({ minLength: 1, maxLength: 512 });
 const TaskAgentIdSchema = Type.String({ minLength: 1, maxLength: 128 });
+const TaskSuggestionAcceptanceModeSchema = Type.Enum(
+  {
+    WORKTREE: "worktree",
+    LOCAL: "local",
+    CLOUD: "cloud",
+    SESSION: "session",
+  } as const,
+  { type: "string" },
+);
 
 /** One model-proposed follow-up task waiting for operator action. */
-export const TaskSuggestionSchema = Type.Object(
-  {
-    id: TaskIdSchema,
-    title: TaskTitleSchema,
-    prompt: TaskPromptSchema,
-    tldr: TaskTldrSchema,
-    cwd: TaskCwdSchema,
-    sessionKey: TaskSessionKeySchema,
-    agentId: Type.Optional(TaskAgentIdSchema),
-    createdAt: Type.Integer({ minimum: 0 }),
-  },
-  { additionalProperties: false },
-);
+export const TaskSuggestionSchema = closedObject({
+  id: TaskIdSchema,
+  title: TaskTitleSchema,
+  prompt: TaskPromptSchema,
+  tldr: TaskTldrSchema,
+  cwd: TaskCwdSchema,
+  sessionKey: TaskSessionKeySchema,
+  agentId: Type.Optional(TaskAgentIdSchema),
+  createdAt: Type.Integer({ minimum: 0 }),
+});
 
 /** Lists pending suggestions, optionally narrowed to one source session. */
-export const TaskSuggestionsListParamsSchema = Type.Object(
-  {
-    sessionKey: Type.Optional(TaskSessionKeySchema),
-    agentId: Type.Optional(TaskAgentIdSchema),
-  },
-  { additionalProperties: false },
-);
+export const TaskSuggestionsListParamsSchema = closedObject({
+  sessionKey: Type.Optional(TaskSessionKeySchema),
+  agentId: Type.Optional(TaskAgentIdSchema),
+});
 
-export const TaskSuggestionsListResultSchema = Type.Object(
-  { suggestions: Type.Array(TaskSuggestionSchema) },
-  { additionalProperties: false },
-);
+export const TaskSuggestionsListResultSchema = closedObject({
+  suggestions: Type.Array(TaskSuggestionSchema),
+});
 
 /** Creates a pending suggestion without starting any work. */
-export const TaskSuggestionsCreateParamsSchema = Type.Object(
-  {
-    title: TaskTitleSchema,
-    prompt: TaskPromptSchema,
-    tldr: TaskTldrSchema,
-    cwd: TaskCwdSchema,
-    sessionKey: TaskSessionKeySchema,
-    agentId: Type.Optional(TaskAgentIdSchema),
-  },
-  { additionalProperties: false },
-);
+export const TaskSuggestionsCreateParamsSchema = closedObject({
+  title: TaskTitleSchema,
+  prompt: TaskPromptSchema,
+  tldr: TaskTldrSchema,
+  cwd: TaskCwdSchema,
+  sessionKey: TaskSessionKeySchema,
+  agentId: Type.Optional(TaskAgentIdSchema),
+});
 
-export const TaskSuggestionsCreateResultSchema = Type.Object(
-  { taskId: TaskIdSchema, suggestion: TaskSuggestionSchema },
-  { additionalProperties: false },
-);
+export const TaskSuggestionsCreateResultSchema = closedObject({
+  taskId: TaskIdSchema,
+  suggestion: TaskSuggestionSchema,
+});
 
 export const TaskSuggestionResolutionSchema = Type.Union([
   Type.Literal("dismissed"),
@@ -63,45 +63,37 @@ export const TaskSuggestionResolutionSchema = Type.Union([
   Type.Literal("expired"),
 ]);
 
-/** Atomically claims a pending suggestion and starts its server-owned worktree session. */
-export const TaskSuggestionsAcceptParamsSchema = Type.Object(
-  { taskId: TaskIdSchema },
-  { additionalProperties: false },
-);
+/** Atomically claims a pending suggestion and starts it in the requested execution mode. */
+export const TaskSuggestionsAcceptParamsSchema = closedObject({
+  taskId: TaskIdSchema,
+  mode: Type.Optional(TaskSuggestionAcceptanceModeSchema),
+  cloudProfileId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+});
 
-export const TaskSuggestionsAcceptResultSchema = Type.Object(
-  { taskId: TaskIdSchema, key: TaskSessionKeySchema },
-  { additionalProperties: false },
-);
+export const TaskSuggestionsAcceptResultSchema = closedObject({
+  taskId: TaskIdSchema,
+  key: TaskSessionKeySchema,
+});
 
 /** Removes a pending suggestion without starting work. */
-export const TaskSuggestionsDismissParamsSchema = Type.Object(
-  {
-    taskId: TaskIdSchema,
-    reason: Type.Optional(Type.String({ maxLength: 1_024 })),
-  },
-  { additionalProperties: false },
-);
+export const TaskSuggestionsDismissParamsSchema = closedObject({
+  taskId: TaskIdSchema,
+  reason: Type.Optional(Type.String({ maxLength: 1_024 })),
+});
 
-export const TaskSuggestionsDismissResultSchema = Type.Object(
-  { taskId: TaskIdSchema, dismissed: Type.Boolean() },
-  { additionalProperties: false },
-);
+export const TaskSuggestionsDismissResultSchema = closedObject({
+  taskId: TaskIdSchema,
+  dismissed: Type.Boolean(),
+});
 
 /** Live update emitted when a pending suggestion is created or resolved. */
 export const TaskSuggestionEventSchema = Type.Union([
-  Type.Object(
-    { action: Type.Literal("created"), suggestion: TaskSuggestionSchema },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      action: Type.Literal("resolved"),
-      taskId: TaskIdSchema,
-      resolution: TaskSuggestionResolutionSchema,
-    },
-    { additionalProperties: false },
-  ),
+  closedObject({ action: Type.Literal("created"), suggestion: TaskSuggestionSchema }),
+  closedObject({
+    action: Type.Literal("resolved"),
+    taskId: TaskIdSchema,
+    resolution: TaskSuggestionResolutionSchema,
+  }),
 ]);
 
 // Wire types derive directly from local schema consts so public d.ts graphs never

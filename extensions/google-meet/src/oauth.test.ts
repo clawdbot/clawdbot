@@ -3,7 +3,6 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildGoogleMeetAuthUrl,
-  refreshGoogleMeetAccessToken,
   resolveGoogleMeetAccessToken,
   waitForGoogleMeetAuthCode,
 } from "./oauth.js";
@@ -84,15 +83,13 @@ describe("Google Meet OAuth", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const tokens = await refreshGoogleMeetAccessToken({
+    const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
       clientSecret: "client-secret",
       refreshToken: "refresh-token",
     });
     expect(tokens.accessToken).toBe("new-access-token");
-    expect(tokens.refreshToken).toBeUndefined();
-    expect(tokens.scope).toBeUndefined();
-    expect(tokens.tokenType).toBe("Bearer");
+    expect(tokens.refreshed).toBe(true);
     expect(Number.isFinite(tokens.expiresAt)).toBe(true);
     expect(tokens.expiresAt).toBeGreaterThan(Date.now());
     const body = fetchMock.mock.calls[0]?.[1]?.body;
@@ -115,7 +112,7 @@ describe("Google Meet OAuth", () => {
     );
 
     await expect(
-      refreshGoogleMeetAccessToken({
+      resolveGoogleMeetAccessToken({
         clientId: "client-id",
         refreshToken: "refresh-token",
       }),
@@ -159,7 +156,7 @@ describe("Google Meet OAuth", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const tokens = await refreshGoogleMeetAccessToken({
+    const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
       refreshToken: "refresh-token",
     });
@@ -180,7 +177,7 @@ describe("Google Meet OAuth", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const tokens = await refreshGoogleMeetAccessToken({
+    const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
       refreshToken: "refresh-token",
     });
@@ -202,7 +199,7 @@ describe("Google Meet OAuth", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const tokens = await refreshGoogleMeetAccessToken({
+    const tokens = await resolveGoogleMeetAccessToken({
       clientId: "client-id",
       refreshToken: "refresh-token",
     });

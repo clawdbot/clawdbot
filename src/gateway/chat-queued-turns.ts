@@ -7,6 +7,7 @@
  * remain abortable by authorized requesters after chat.send terminalizes.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { chatRunBelongsToAgent } from "./chat-run-owner.js";
 
 export type QueuedChatTurnEntry = {
   controller: AbortController;
@@ -21,7 +22,7 @@ export type QueuedChatTurnEntry = {
 
 export type QueuedChatTurnMap = Map<string, QueuedChatTurnEntry>;
 
-export type RegisterQueuedChatTurnParams = {
+type RegisterQueuedChatTurnParams = {
   chatQueuedTurns: QueuedChatTurnMap;
   runId: string;
   controller: AbortController;
@@ -122,7 +123,7 @@ export function retireQueuedChatTurnCancellation(
   return true;
 }
 
-export function getQueuedChatTurn(
+function getQueuedChatTurn(
   chatQueuedTurns: QueuedChatTurnMap,
   runId: string,
 ): QueuedChatTurnEntry | undefined {
@@ -168,7 +169,7 @@ export function abortQueuedChatTurnById(
   return { aborted: true };
 }
 
-export type QueuedChatTurnMatch = {
+type QueuedChatTurnMatch = {
   runId: string;
   entry: QueuedChatTurnEntry;
 };
@@ -204,11 +205,18 @@ export function listQueuedChatTurnsForSession(params: {
     if (!sessionKeys.has(entry.sessionKey) && !sessionIds.has(entry.sessionId)) {
       continue;
     }
-    if (agentId && entry.sessionKey === "global") {
-      const entryAgent = (entry.agentId ?? defaultAgentId)?.toLowerCase();
-      if (entryAgent !== agentId) {
-        continue;
-      }
+    if (
+      agentId &&
+      !chatRunBelongsToAgent(
+        {
+          agentId: entry.agentId,
+          sessionKey: entry.sessionKey,
+          defaultAgentId,
+        },
+        agentId,
+      )
+    ) {
+      continue;
     }
     matches.push({ runId, entry });
   }

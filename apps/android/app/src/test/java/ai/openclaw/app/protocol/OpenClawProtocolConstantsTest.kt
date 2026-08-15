@@ -1,108 +1,39 @@
 package ai.openclaw.app.protocol
 
-import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OpenClawProtocolConstantsTest {
   @Test
-  fun canvasCommandsUseStableStrings() {
-    assertEquals("canvas.present", OpenClawCanvasCommand.Present.rawValue)
-    assertEquals("canvas.hide", OpenClawCanvasCommand.Hide.rawValue)
-    assertEquals("canvas.navigate", OpenClawCanvasCommand.Navigate.rawValue)
-    assertEquals("canvas.eval", OpenClawCanvasCommand.Eval.rawValue)
-    assertEquals("canvas.snapshot", OpenClawCanvasCommand.Snapshot.rawValue)
+  fun generatedCapabilitiesAreUniqueProtocolIds() {
+    val values = OpenClawCapability.entries.map { it.rawValue }
+
+    assertTrue(values.isNotEmpty())
+    assertTrue(values.all { it.isNotBlank() && "." !in it })
+    assertTrue(values.size == values.toSet().size)
   }
 
   @Test
-  fun a2uiCommandsUseStableStrings() {
-    assertEquals("canvas.a2ui.push", OpenClawCanvasA2UICommand.Push.rawValue)
-    assertEquals("canvas.a2ui.pushJSONL", OpenClawCanvasA2UICommand.PushJSONL.rawValue)
-    assertEquals("canvas.a2ui.reset", OpenClawCanvasA2UICommand.Reset.rawValue)
-  }
+  fun generatedCommandGroupsMatchTheirNamespaces() {
+    val groups =
+      listOf(
+        OpenClawCanvasCommand.NamespacePrefix to OpenClawCanvasCommand.entries.map { it.rawValue },
+        OpenClawCanvasA2UICommand.NamespacePrefix to OpenClawCanvasA2UICommand.entries.map { it.rawValue },
+        OpenClawCameraCommand.NamespacePrefix to OpenClawCameraCommand.entries.map { it.rawValue },
+        OpenClawSmsCommand.NamespacePrefix to OpenClawSmsCommand.entries.map { it.rawValue },
+        OpenClawTalkCommand.NamespacePrefix to OpenClawTalkCommand.entries.map { it.rawValue },
+        OpenClawLocationCommand.NamespacePrefix to OpenClawLocationCommand.entries.map { it.rawValue },
+        OpenClawDeviceCommand.NamespacePrefix to OpenClawDeviceCommand.entries.map { it.rawValue },
+        OpenClawNotificationsCommand.NamespacePrefix to OpenClawNotificationsCommand.entries.map { it.rawValue },
+        OpenClawSystemCommand.NamespacePrefix to OpenClawSystemCommand.entries.map { it.rawValue },
+        OpenClawPhotosCommand.NamespacePrefix to OpenClawPhotosCommand.entries.map { it.rawValue },
+        OpenClawContactsCommand.NamespacePrefix to OpenClawContactsCommand.entries.map { it.rawValue },
+        OpenClawCalendarCommand.NamespacePrefix to OpenClawCalendarCommand.entries.map { it.rawValue },
+        OpenClawMotionCommand.NamespacePrefix to OpenClawMotionCommand.entries.map { it.rawValue },
+        OpenClawCallLogCommand.NamespacePrefix to OpenClawCallLogCommand.entries.map { it.rawValue },
+      )
 
-  @Test
-  fun capabilitiesUseStableStrings() {
-    assertEquals("canvas", OpenClawCapability.Canvas.rawValue)
-    assertEquals("camera", OpenClawCapability.Camera.rawValue)
-    assertEquals("talk", OpenClawCapability.Talk.rawValue)
-    assertEquals("location", OpenClawCapability.Location.rawValue)
-    assertEquals("sms", OpenClawCapability.Sms.rawValue)
-    assertEquals("device", OpenClawCapability.Device.rawValue)
-    assertEquals("notifications", OpenClawCapability.Notifications.rawValue)
-    assertEquals("system", OpenClawCapability.System.rawValue)
-    assertEquals("photos", OpenClawCapability.Photos.rawValue)
-    assertEquals("contacts", OpenClawCapability.Contacts.rawValue)
-    assertEquals("calendar", OpenClawCapability.Calendar.rawValue)
-    assertEquals("motion", OpenClawCapability.Motion.rawValue)
-    assertEquals("callLog", OpenClawCapability.CallLog.rawValue)
-  }
-
-  @Test
-  fun cameraCommandsUseStableStrings() {
-    assertEquals("camera.list", OpenClawCameraCommand.List.rawValue)
-    assertEquals("camera.snap", OpenClawCameraCommand.Snap.rawValue)
-    assertEquals("camera.clip", OpenClawCameraCommand.Clip.rawValue)
-  }
-
-  @Test
-  fun notificationsCommandsUseStableStrings() {
-    assertEquals("notifications.list", OpenClawNotificationsCommand.List.rawValue)
-    assertEquals("notifications.actions", OpenClawNotificationsCommand.Actions.rawValue)
-  }
-
-  @Test
-  fun deviceCommandsUseStableStrings() {
-    assertEquals("device.status", OpenClawDeviceCommand.Status.rawValue)
-    assertEquals("device.info", OpenClawDeviceCommand.Info.rawValue)
-    assertEquals("device.permissions", OpenClawDeviceCommand.Permissions.rawValue)
-    assertEquals("device.health", OpenClawDeviceCommand.Health.rawValue)
-    assertEquals("device.apps", OpenClawDeviceCommand.Apps.rawValue)
-  }
-
-  @Test
-  fun systemCommandsUseStableStrings() {
-    assertEquals("system.notify", OpenClawSystemCommand.Notify.rawValue)
-  }
-
-  @Test
-  fun photosCommandsUseStableStrings() {
-    assertEquals("photos.latest", OpenClawPhotosCommand.Latest.rawValue)
-  }
-
-  @Test
-  fun contactsCommandsUseStableStrings() {
-    assertEquals("contacts.search", OpenClawContactsCommand.Search.rawValue)
-    assertEquals("contacts.add", OpenClawContactsCommand.Add.rawValue)
-  }
-
-  @Test
-  fun calendarCommandsUseStableStrings() {
-    assertEquals("calendar.events", OpenClawCalendarCommand.Events.rawValue)
-    assertEquals("calendar.add", OpenClawCalendarCommand.Add.rawValue)
-  }
-
-  @Test
-  fun motionCommandsUseStableStrings() {
-    assertEquals("motion.activity", OpenClawMotionCommand.Activity.rawValue)
-    assertEquals("motion.pedometer", OpenClawMotionCommand.Pedometer.rawValue)
-  }
-
-  @Test
-  fun smsCommandsUseStableStrings() {
-    assertEquals("sms.send", OpenClawSmsCommand.Send.rawValue)
-    assertEquals("sms.search", OpenClawSmsCommand.Search.rawValue)
-  }
-
-  @Test
-  fun talkCommandsUseStableStrings() {
-    assertEquals("talk.ptt.start", OpenClawTalkCommand.PttStart.rawValue)
-    assertEquals("talk.ptt.stop", OpenClawTalkCommand.PttStop.rawValue)
-    assertEquals("talk.ptt.cancel", OpenClawTalkCommand.PttCancel.rawValue)
-    assertEquals("talk.ptt.once", OpenClawTalkCommand.PttOnce.rawValue)
-  }
-
-  @Test
-  fun callLogCommandsUseStableStrings() {
-    assertEquals("callLog.search", OpenClawCallLogCommand.Search.rawValue)
+    val commands = groups.flatMap { (prefix, values) -> values.onEach { assertTrue(it.startsWith(prefix)) } }
+    assertTrue(commands.size == commands.toSet().size)
   }
 }

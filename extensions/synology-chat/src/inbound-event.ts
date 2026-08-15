@@ -5,6 +5,7 @@ import type { SynologyInboundMessage } from "./inbound-context.js";
 import { getSynologyRuntime } from "./runtime.js";
 import { buildSynologyChatInboundSessionKey } from "./session-key.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
+import type { SynologyIngressLifecycle } from "./webhook-ingress.js";
 
 const CHANNEL_ID = "synology-chat";
 
@@ -61,6 +62,7 @@ export async function dispatchSynologyChatInboundEvent(params: {
   account: ResolvedSynologyChatAccount;
   msg: SynologyInboundMessage;
   log?: SynologyChannelLog;
+  turnAdoptionLifecycle?: SynologyIngressLifecycle;
 }): Promise<null> {
   const rt = getSynologyRuntime();
   const currentCfg = rt.config.current() as OpenClawConfig;
@@ -78,9 +80,12 @@ export async function dispatchSynologyChatInboundEvent(params: {
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
     raw: params.msg,
+    ...(params.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+      : {}),
     adapter: {
       ingest: (msg) => ({
-        id: `${params.account.accountId}:${msg.from}`,
+        id: msg.messageId,
         timestamp: Date.now(),
         rawText: msg.body,
         textForAgent: msg.body,
@@ -92,9 +97,17 @@ export async function dispatchSynologyChatInboundEvent(params: {
           params.msg.chatType === "group" || params.msg.chatType === "channel"
             ? params.msg.chatType
             : "direct";
+        const channelIngress = await params.msg.resolveChannelIngress({
+          agentId: resolved.route.agentId,
+          sessionKey: resolved.sessionKey,
+          messageId: input.id,
+          inboundEventKind: "user_request",
+        });
         const msgCtx = resolved.rt.channel.inbound.buildContext({
+          channelIngress,
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
+          messageId: input.id,
           timestamp: input.timestamp,
           from: `synology-chat:${params.msg.from}`,
           sender: {
@@ -108,6 +121,7 @@ export async function dispatchSynologyChatInboundEvent(params: {
           },
           route: {
             agentId: resolved.route.agentId,
+            dmScope: resolved.route.dmScope,
             accountId: params.account.accountId,
             routeSessionKey: resolved.sessionKey,
             dispatchSessionKey: resolved.sessionKey,
@@ -125,20 +139,16 @@ export async function dispatchSynologyChatInboundEvent(params: {
             CommandAuthorized: params.msg.commandAuthorized,
           },
         });
-        const storePath = resolved.rt.channel.session.resolveStorePath(currentCfg.session?.store, {
-          agentId: resolved.route.agentId,
-        });
         return {
           cfg: currentCfg,
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
-          agentId: resolved.route.agentId,
-          routeSessionKey: resolved.route.sessionKey,
-          storePath,
+          route: {
+            agentId: resolved.route.agentId,
+            dmScope: resolved.route.dmScope,
+            sessionKey: resolved.route.sessionKey,
+          },
           ctxPayload: msgCtx,
-          recordInboundSession: resolved.rt.channel.session.recordInboundSession,
-          dispatchReplyWithBufferedBlockDispatcher:
-            resolved.rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
           delivery: {
             durable: () => ({
               to: sendUserId,

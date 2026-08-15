@@ -7,14 +7,14 @@ import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
+type TelegramBotRuntimeForTest = typeof import("./bot.runtime.js");
 type GetRuntimeConfigFn =
   typeof import("openclaw/plugin-sdk/runtime-config-snapshot").getRuntimeConfig;
 type GetSessionEntryFn = typeof import("openclaw/plugin-sdk/session-store-runtime").getSessionEntry;
-type ListSessionEntriesFn =
-  typeof import("openclaw/plugin-sdk/session-store-runtime").listSessionEntries;
 type ResolveStorePathFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
 type ReadSessionUpdatedAtFn =
@@ -22,9 +22,6 @@ type ReadSessionUpdatedAtFn =
 type SessionEntry = import("openclaw/plugin-sdk/session-store-runtime").SessionEntry;
 type SessionStore = Record<string, SessionEntry>;
 type LoadSessionStoreFn = (storePath?: string, opts?: unknown) => SessionStore;
-type TelegramBotRuntimeForTest = NonNullable<
-  Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
->;
 type ResolveTelegramApprovalForTest = NonNullable<TelegramBotDeps["resolveApproval"]>;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
@@ -38,6 +35,8 @@ type ReplyPayloadLike = {
   mediaUrls?: string[];
   replyToId?: string;
 };
+type ReplySpyResult = ReplyPayloadLike | ReplyPayloadLike[] | undefined;
+type ReplySpy = (ctx: MsgContext, opts?: GetReplyOptions) => Promise<ReplySpyResult>;
 
 const { sessionStorePath } = vi.hoisted(() => {
   const tempRoot =
@@ -67,7 +66,6 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 const {
   getSessionEntryMock,
   getRuntimeConfig,
-  listSessionEntriesMock,
   loadSessionStoreMock,
   readSessionUpdatedAtMock,
   recordInboundSessionMock,
@@ -77,7 +75,6 @@ const {
   (): {
     getSessionEntryMock: MockFn<GetSessionEntryFn>;
     getRuntimeConfig: MockFn<GetRuntimeConfigFn>;
-    listSessionEntriesMock: MockFn<ListSessionEntriesFn>;
     loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
     readSessionUpdatedAtMock: MockFn<ReadSessionUpdatedAtFn>;
     recordInboundSessionMock: MockFn<NonNullable<TelegramBotDeps["recordInboundSession"]>>;
@@ -94,13 +91,6 @@ const {
     getSessionEntryMock: vi.fn<GetSessionEntryFn>(({ storePath, sessionKey, agentId }) => {
       const resolvedStorePath = storePath ?? resolveStorePathMock(undefined, { agentId });
       return loadSessionStoreMock(resolvedStorePath)[sessionKey];
-    }),
-    listSessionEntriesMock: vi.fn<ListSessionEntriesFn>(({ storePath, agentId } = {}) => {
-      const resolvedStorePath = storePath ?? resolveStorePathMock(undefined, { agentId });
-      return Object.entries(loadSessionStoreMock(resolvedStorePath)).map(([sessionKey, entry]) => ({
-        sessionKey,
-        entry,
-      }));
     }),
     readSessionUpdatedAtMock: vi.fn<ReadSessionUpdatedAtFn>(() => undefined),
     recordInboundSessionMock: vi.fn(async () => undefined),
@@ -148,22 +138,14 @@ export function getUpsertChannelPairingRequestMock(): MockFn<
 const skillCommandListHoisted = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
 }));
-const modelProviderDataHoisted = vi.hoisted(
-  (): { buildModelsProviderData: MockFn<TelegramBotDeps["buildModelsProviderData"]> } => ({
-    buildModelsProviderData: vi.fn(),
-  }),
-);
+const modelProviderDataHoisted = vi.hoisted(() => ({
+  buildModelsProviderData: vi.fn() as MockFn<TelegramBotDeps["buildModelsProviderData"]>,
+}));
 const replySpyHoisted = vi.hoisted(() => ({
-  replySpy: vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+  replySpy: vi.fn<ReplySpy>(async (_ctx, opts) => {
     await opts?.onReplyStart?.();
     return undefined;
-  }) as MockFn<
-    (
-      ctx: MsgContext,
-      opts?: GetReplyOptions,
-      configOverride?: OpenClawConfig,
-    ) => Promise<ReplyPayloadLike | ReplyPayloadLike[] | undefined>
-  >,
+  }),
 }));
 
 async function dispatchHarnessReplies(
@@ -210,11 +192,27 @@ const dispatchReplyHoisted = vi.hoisted(() => ({
       }),
   ),
 }));
+export const dispatchReplyWithBufferedBlockDispatcher =
+  dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher;
+vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
+  dispatchReplyWithBufferedBlockDispatcherCore:
+    dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher,
+}));
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) =>
+      await runTelegramChannelInboundEventWithHarness(
+        actual,
+        params,
+        dispatchReplyWithBufferedBlockDispatcher,
+      ),
+  };
+});
 export const listSkillCommandsForAgents = skillCommandListHoisted.listSkillCommandsForAgents;
 const buildModelsProviderData = modelProviderDataHoisted.buildModelsProviderData;
 export const replySpy = replySpyHoisted.replySpy;
-export const dispatchReplyWithBufferedBlockDispatcher =
-  dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher;
 const menuSyncHoisted = vi.hoisted(() => ({
   syncTelegramMenuCommands: vi.fn(async ({ bot, commandsToRegister }) => {
     await bot.api.setMyCommands(commandsToRegister);
@@ -324,7 +322,6 @@ export const wasSentByBot = sentMessageCacheHoisted.wasSentByBot;
 vi.doMock("./sent-message-cache.js", () => ({
   wasSentByBot: sentMessageCacheHoisted.wasSentByBot,
   recordSentMessage: vi.fn(),
-  clearSentMessageCache: vi.fn(),
 }));
 
 // All spy variables used inside vi.mock("grammy", ...) must be created via
@@ -360,7 +357,7 @@ const grammySpies = vi.hoisted(() => ({
 export const useSpy: MockFn<(arg: unknown) => void> = grammySpies.useSpy;
 export const middlewareUseSpy: AnyMock = grammySpies.middlewareUseSpy;
 export const onSpy: AnyMock = grammySpies.onSpy;
-export const stopSpy: AnyMock = grammySpies.stopSpy;
+const stopSpy: AnyMock = grammySpies.stopSpy;
 export const commandSpy: AnyMock = grammySpies.commandSpy;
 export const botCtorSpy: MockFn<
   (token: string, options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => void
@@ -382,6 +379,7 @@ type RichMessageParams = {
   chat_id?: string | number;
   message_id?: number;
   rich_message?: {
+    blocks?: Array<{ type?: string; text?: unknown }>;
     markdown?: string;
     html?: string;
   };
@@ -389,7 +387,22 @@ type RichMessageParams = {
 };
 
 function getRichMessageText(params: RichMessageParams): string {
-  return params.rich_message?.markdown ?? params.rich_message?.html ?? "";
+  const rich = params.rich_message;
+  if (!rich) {
+    return "";
+  }
+  if (rich.blocks) {
+    // Test harness only needs a readable plain-ish projection for assertions.
+    return rich.blocks
+      .map((block) => {
+        if (typeof block.text === "string") {
+          return block.text;
+        }
+        return JSON.stringify(block.text ?? "");
+      })
+      .join("\n");
+  }
+  return rich.markdown ?? rich.html ?? "";
 }
 
 function toLegacyMessageParams(params: RichMessageParams): Record<string, unknown> {
@@ -418,9 +431,9 @@ const runnerHoisted = vi.hoisted(() => ({
   throttlerSpy: vi.fn(() => "throttler"),
 }));
 export const sequentializeSpy: AnyMock = runnerHoisted.sequentializeSpy;
-export let sequentializeKey: ((ctx: unknown) => string) | undefined;
+export let sequentializeKey: ((ctx: unknown) => string | string[] | undefined) | undefined;
 export const throttlerSpy: AnyMock = runnerHoisted.throttlerSpy;
-export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
+const telegramBotRuntimeForTest = {
   Bot: class {
     api = {
       config: { use: grammySpies.useSpy },
@@ -433,6 +446,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
       setMyCommands: grammySpies.setMyCommandsSpy,
       getMe: grammySpies.getMeSpy,
       getChat: grammySpies.getChatSpy,
+      getChatMember: grammySpies.getChatSpy,
       sendMessage: grammySpies.sendMessageSpy,
       sendAnimation: grammySpies.sendAnimationSpy,
       sendPhoto: grammySpies.sendPhotoSpy,
@@ -468,7 +482,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
       );
     }
   } as unknown as TelegramBotRuntimeForTest["Bot"],
-  sequentialize: ((keyFn: (ctx: unknown) => string) => {
+  sequentialize: ((keyFn: (ctx: unknown) => string | string[] | undefined) => {
     sequentializeKey = keyFn;
     return (
       runnerHoisted.sequentializeSpy as unknown as () => ReturnType<
@@ -484,7 +498,6 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
 export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
   getSessionEntry: getSessionEntryMock,
-  listSessionEntries: listSessionEntriesMock,
   resolveStorePath: resolveStorePathMock,
   readSessionUpdatedAt: readSessionUpdatedAtMock,
   recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],
@@ -506,9 +519,6 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   syncTelegramMenuCommands: syncTelegramMenuCommands as TelegramBotDeps["syncTelegramMenuCommands"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   resolveApproval: resolveExecApprovalSpy,
-  resolveLegacyApproval: async (params) => {
-    await resolveExecApprovalSpy(params);
-  },
 };
 
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
@@ -524,7 +534,7 @@ export const getOnHandler = (event: string) => {
 const DEFAULT_TELEGRAM_TEST_CONFIG: OpenClawConfig = {
   agents: {
     defaults: {
-      envelopeTimezone: "utc",
+      userTimezone: "UTC",
     },
   },
   channels: {
@@ -609,14 +619,6 @@ beforeEach(() => {
   getSessionEntryMock.mockImplementation(({ storePath, sessionKey, agentId }) => {
     const resolvedStorePath = storePath ?? resolveStorePathMock(undefined, { agentId });
     return loadSessionStoreMock(resolvedStorePath)[sessionKey];
-  });
-  listSessionEntriesMock.mockReset();
-  listSessionEntriesMock.mockImplementation(({ storePath, agentId } = {}) => {
-    const resolvedStorePath = storePath ?? resolveStorePathMock(undefined, { agentId });
-    return Object.entries(loadSessionStoreMock(resolvedStorePath)).map(([sessionKey, entry]) => ({
-      sessionKey,
-      entry,
-    }));
   });
   readSessionUpdatedAtMock.mockReset();
   readSessionUpdatedAtMock.mockReturnValue(undefined);

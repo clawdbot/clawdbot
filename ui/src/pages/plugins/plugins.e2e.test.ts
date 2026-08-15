@@ -1,14 +1,15 @@
 // Control UI tests cover plugin catalog browsing and lifecycle mutations.
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type {
   PluginCatalogItem,
   PluginListResult,
   PluginMutationResult,
-  PluginSearchResponse,
 } from "../../lib/plugins/index.ts";
 import {
   canRunPlaywrightChromium,
@@ -39,6 +40,7 @@ const pluginMethods = [
 const workboardDisabled = {
   id: "workboard",
   name: "Workboard",
+  packageName: "@openclaw/workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   version: "2026.7.9",
   kind: ["productivity"],
@@ -72,6 +74,32 @@ const lobsterPlugin = {
   install: { source: "clawhub", packageName: "@openclaw/lobster" },
 } satisfies PluginCatalogItem;
 
+const installedLobsterPlugin = {
+  ...lobsterPlugin,
+  packageName: "@openclaw/lobster",
+  version: "2026.8.10",
+  origin: "global",
+  installed: true,
+  enabled: true,
+  state: "enabled",
+  removable: true,
+} satisfies PluginCatalogItem;
+
+const remoteIconPlugin = {
+  id: "remote-icon",
+  name: "FireCrawl",
+  description: "Web extraction and crawling.",
+  kind: ["plugin"],
+  origin: "official",
+  installed: false,
+  enabled: false,
+  state: "not-installed",
+  featured: true,
+  order: 60,
+  hasIcon: true,
+  install: { source: "clawhub", packageName: "@openclaw/firecrawl" },
+} satisfies PluginCatalogItem;
+
 const calendarPlugin = {
   id: "calendar-plus",
   name: "Calendar Plus",
@@ -87,10 +115,20 @@ const calendarPlugin = {
   removable: true,
 } satisfies PluginCatalogItem;
 
-const initialInventory = inventory([workboardDisabled, lobsterPlugin]);
-const installedInventory = inventory([workboardDisabled, lobsterPlugin, calendarPlugin]);
-const finalInventory = inventory([workboardEnabled, lobsterPlugin, calendarPlugin]);
-const uninstalledInventory = inventory([workboardEnabled, lobsterPlugin]);
+const initialInventory = inventory([workboardDisabled, lobsterPlugin, remoteIconPlugin]);
+const installedInventory = inventory([
+  workboardDisabled,
+  lobsterPlugin,
+  remoteIconPlugin,
+  calendarPlugin,
+]);
+const finalInventory = inventory([
+  workboardEnabled,
+  lobsterPlugin,
+  remoteIconPlugin,
+  calendarPlugin,
+]);
+const uninstalledInventory = inventory([workboardEnabled, lobsterPlugin, remoteIconPlugin]);
 
 const calendarSearchResponse = {
   results: [
@@ -109,7 +147,23 @@ const calendarSearchResponse = {
       },
     },
   ],
-} satisfies PluginSearchResponse;
+} satisfies PluginsSearchResult;
+
+const lobsterSearchResponse = {
+  results: [
+    {
+      score: 1,
+      package: {
+        name: "@openclaw/lobster",
+        displayName: "Lobster",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        runtimeId: "lobster",
+      },
+    },
+  ],
+} satisfies PluginsSearchResult;
 
 const uninstallResult = {
   ok: true,
@@ -123,6 +177,37 @@ const installResult = {
   plugin: calendarPlugin,
   restartRequired: true,
 } satisfies PluginMutationResult;
+
+const installPolicyWarning = {
+  installPolicyCode: "install_policy_warning_acknowledgement_required",
+  targetName: "@openclaw/lobster",
+  targetType: "plugin",
+  requestMode: "install",
+  reason: "ClawScan found issues to review.",
+  findings: [
+    {
+      ruleId: "semgrep-finding",
+      severity: "warn",
+      message: "Semgrep found a risky command.",
+      file: "index.ts",
+      line: 12,
+    },
+  ],
+};
+
+const changedInstallPolicyWarning = {
+  ...installPolicyWarning,
+  reason: "ClawScan returned a changed warning after the fresh check.",
+  findings: [
+    {
+      ruleId: "dependency-finding",
+      severity: "critical",
+      message: "The freshly checked warning changed and requires review.",
+      file: "package-lock.json",
+      line: 24,
+    },
+  ],
+};
 
 const enableWorkboardResult = {
   ok: true,
@@ -180,12 +265,7 @@ function readOnlyConnectResponse() {
   };
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
@@ -206,16 +286,14 @@ async function waitForNextRequest(
       }
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`Timed out waiting for the next ${method} request`);
 }
 
-async function clickRowMenuItem(page: Page, rowSelector: string, itemName: string): Promise<void> {
-  const row = page.locator(rowSelector);
-  await row.locator(".plugins-kebab").click();
-  await page.getByRole("menuitem", { name: itemName, exact: true }).click();
+async function clickRowAction(page: Page, rowSelector: string, buttonName: string): Promise<void> {
+  await page.locator(rowSelector).getByRole("button", { name: buttonName, exact: true }).click();
 }
 
 async function captureScreenshot(page: Page, name: string): Promise<void> {
@@ -223,10 +301,8 @@ async function captureScreenshot(page: Page, name: string): Promise<void> {
     return;
   }
   await mkdir(artifactDir, { recursive: true });
-  // UI transitions top out at 180ms; capture only after Chromium has painted
-  // the settled catalog grid rather than a partially composited transition.
-  await page.waitForTimeout(250);
   await page.locator(".content").screenshot({
+    animations: "disabled",
     caret: "hide",
     path: path.join(artifactDir, name),
   });
@@ -304,12 +380,71 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await server?.close();
   });
 
+  it.each(["installed", "discover"] as const)(
+    "finds an existing plugin by scoped package identity in the %s catalog",
+    async (tab) => {
+      const context = await newContext();
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        featureMethods: pluginMethods,
+        methodResponses: {
+          ...pluginMethodResponses(),
+          "plugins.search": { results: [] },
+        },
+      });
+
+      try {
+        await page.goto(`${server.baseUrl}settings/plugins`);
+        const workboardCard = page.locator('[data-plugin-id="workboard"]');
+        await workboardCard.waitFor({ state: "visible" });
+
+        if (tab === "discover") {
+          await page.getByRole("tab", { name: /^Discover/u }).click();
+          await workboardCard.waitFor({ state: "visible" });
+        }
+
+        await page.getByRole("searchbox", { name: "Search plugins" }).fill("@openclaw/workboard");
+        await workboardCard.waitFor({ state: "visible", timeout: 5_000 });
+        await captureScreenshot(page, `08-scoped-package-${tab}.png`);
+
+        if (tab === "discover") {
+          const searchRequest = await gateway.waitForRequest("plugins.search");
+          expect(requestParams(searchRequest)).toEqual({
+            query: "@openclaw/workboard",
+            limit: 20,
+          });
+        }
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it("browses the catalog, installs from ClawHub, enables Workboard, and refreshes authoritative state", async () => {
     const context = await newContext();
     const page = await context.newPage();
+    await page.addInitScript(
+      ({ gatewayUrl }) => {
+        window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl };
+      },
+      { gatewayUrl: server.baseUrl.replace(/^http/u, "ws") },
+    );
     const gateway = await installMockGateway(page, {
       featureMethods: pluginMethods,
       methodResponses: pluginMethodResponses(),
+    });
+    let pluginIconAuth = "";
+    await page.route("**/__openclaw__/plugin-icon/remote-icon", async (route) => {
+      pluginIconAuth = route.request().headers().authorization ?? "";
+      await route.fulfill({
+        body: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="#f97316" d="M4 3h16v18H4z"/></svg>`,
+        contentType: "image/svg+xml",
+        headers: {
+          "content-disposition": 'attachment; filename="plugin-icon.svg"',
+          "content-security-policy": "default-src 'none'; sandbox",
+        },
+        status: 200,
+      });
     });
 
     try {
@@ -319,13 +454,15 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.waitForRequest("config.get");
 
       const workboardCard = page.locator('[data-plugin-id="workboard"]');
-      await page.getByRole("heading", { name: "Tools" }).waitFor();
-      await page.getByRole("heading", { name: "MCP servers" }).waitFor();
-      expect(await workboardCard.textContent()).toContain("Disabled");
+      await page.getByRole("heading", { name: /^Tools/u }).waitFor();
+      await page.getByRole("heading", { name: /^MCP servers/u }).waitFor();
+      await workboardCard.getByRole("button", { name: "Enable", exact: true }).waitFor();
       await captureScreenshot(page, "01-installed-desktop.png");
 
-      // Rows open a detail overlay; close it before continuing.
-      await workboardCard.click();
+      // The row's primary action is a real named button, so keyboard users can inspect plugins.
+      const detailsButton = workboardCard.getByRole("button", { name: "Workboard", exact: true });
+      await detailsButton.focus();
+      await page.keyboard.press("Enter");
       const detail = page.locator(".plugins-detail");
       await detail.waitFor({ state: "visible" });
       expect(await detail.textContent()).toContain("Workboard");
@@ -334,12 +471,25 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await detail.waitFor({ state: "detached" });
 
       await page.getByRole("tab", { name: /^Discover/u }).click();
-      await page.getByRole("heading", { name: "Featured" }).waitFor();
-      await page.getByRole("heading", { name: "Connect your world" }).waitFor();
+      await page.getByRole("heading", { name: /^Featured/u }).waitFor();
+      await page.getByRole("heading", { name: /^Connect your world/u }).waitFor();
       const lobsterCard = page.locator('[data-plugin-id="lobster"]');
       await lobsterCard.getByRole("button", { name: "Install Lobster" }).waitFor();
-      // Bundled cover art renders instead of monogram tiles for curated plugins.
-      await lobsterCard.locator(".plugins-cover img").waitFor({ state: "attached" });
+      // Bundled art renders instead of monogram fallbacks for curated plugins.
+      await lobsterCard.locator(".plugins-tile img").waitFor({ state: "attached" });
+      const remoteIconCard = page.locator('[data-plugin-id="remote-icon"]');
+      const remoteIcon = remoteIconCard.locator(".plugins-tile img.plugins-icon");
+      await remoteIcon.waitFor({ state: "visible" });
+      expect(pluginIconAuth).toBe("Bearer e2e-device-token");
+      await expect
+        .poll(
+          async () =>
+            await remoteIcon.evaluate(async (image: HTMLImageElement) => {
+              const iconResponse = await fetch(image.src);
+              return (await iconResponse.blob()).type;
+            }),
+        )
+        .toBe("image/png");
       await page
         .locator('[data-connector-id="github"]')
         .getByRole("button", { name: "Add", exact: true })
@@ -350,7 +500,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");
       const searchRequest = await gateway.waitForRequest("plugins.search");
       expect(requestParams(searchRequest)).toEqual({ query: "calendar", limit: 20 });
-      await page.getByRole("heading", { name: "From ClawHub" }).waitFor();
+      await page.getByRole("heading", { name: /^From ClawHub/u }).waitFor();
       const searchRow = page.locator('[data-package-name="calendar-plus"]');
       await searchRow.waitFor({ state: "visible" });
       expect(await searchRow.textContent()).toContain("Calendar Plus");
@@ -400,37 +550,42 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         version: "1.2.3",
         acknowledgeClawHubRisk: true,
       });
-      const postInstallListRequest = await waitForNextRequest(
-        gateway,
-        "plugins.list",
-        listCountBeforeInstall,
-      );
+      // The mutation boundary refreshes config before the page refreshes the
+      // plugin catalog; release the deferred requests in that contract order.
       const postInstallConfigRequest = await waitForNextRequest(
         gateway,
         "config.get",
         configCountBeforeInstall,
       );
-      expect(requestParams(postInstallListRequest)).toEqual({});
       expect(requestParams(postInstallConfigRequest)).toEqual({});
+      await gateway.resolveDeferred("config.get", configSnapshot(false));
+      const postInstallListRequest = await waitForNextRequest(
+        gateway,
+        "plugins.list",
+        listCountBeforeInstall,
+      );
+      expect(requestParams(postInstallListRequest)).toEqual({});
       await expect.poll(() => searchRow.getAttribute("aria-busy")).toBe("true");
       expect(await searchRow.getByRole("status").textContent()).toContain(
         "A Gateway restart is required",
       );
       await gateway.resolveDeferred("plugins.list", installedInventory);
-      await gateway.resolveDeferred("config.get", configSnapshot(false));
       await expect.poll(() => searchRow.getAttribute("aria-busy")).toBe("false");
-      // Installed search results swap Install for an enabled state chip + menu.
-      await searchRow.locator(".plugins-state--enabled").waitFor({ state: "attached" });
+      // Installed search results swap Install for the enable/disable toggle.
+      await page
+        .locator('[data-package-name="calendar-plus"][data-plugin-status="enabled"]')
+        .waitFor({ state: "attached" });
 
       await page.getByRole("tab", { name: /^Installed/u }).click();
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("");
       await workboardCard.waitFor({ state: "visible" });
       const listCountBeforeEnable = (await gateway.getRequests("plugins.list")).length;
       const configCountBeforeEnable = (await gateway.getRequests("config.get")).length;
+      const connectCountBeforeEnable = (await gateway.getRequests("connect")).length;
       const enableCountBefore = (await gateway.getRequests("plugins.setEnabled")).length;
       await gateway.deferNext("plugins.list");
       await gateway.deferNext("config.get");
-      await clickRowMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+      await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
 
       const enableRequest = await waitForNextRequest(
         gateway,
@@ -438,29 +593,34 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         enableCountBefore,
       );
       expect(requestParams(enableRequest)).toEqual({ pluginId: "workboard", enabled: true });
-      const postEnableListRequest = await waitForNextRequest(
-        gateway,
-        "plugins.list",
-        listCountBeforeEnable,
-      );
       const postEnableConfigRequest = await waitForNextRequest(
         gateway,
         "config.get",
         configCountBeforeEnable,
       );
-      expect(requestParams(postEnableListRequest)).toEqual({});
       expect(requestParams(postEnableConfigRequest)).toEqual({});
-      await gateway.resolveDeferred("plugins.list", finalInventory);
+      await gateway.setMethodResponse("plugins.list", finalInventory);
+      await gateway.setMethodResponse("config.get", configSnapshot(true));
       await gateway.resolveDeferred("config.get", configSnapshot(true));
+      const postEnableListRequest = await waitForNextRequest(
+        gateway,
+        "plugins.list",
+        listCountBeforeEnable,
+      );
+      expect(requestParams(postEnableListRequest)).toEqual({});
+      await gateway.resolveDeferred("plugins.list", finalInventory);
+      await waitForNextRequest(gateway, "connect", connectCountBeforeEnable);
       await expect.poll(() => workboardCard.getAttribute("aria-busy")).toBe("false");
 
-      await workboardCard.locator(".plugins-state--enabled").waitFor({ state: "attached" });
+      await page
+        .locator('[data-plugin-id="workboard"][data-plugin-status="enabled"]')
+        .waitFor({ state: "attached" });
       const calendarRow = page.locator('[data-plugin-id="calendar-plus"]');
       await calendarRow.waitFor({ state: "visible" });
       await captureScreenshot(page, "05-enabled-installed-desktop.png");
 
-      // Removable installs expose a menu-driven, confirm-guarded uninstall.
-      await clickRowMenuItem(page, '[data-plugin-id="calendar-plus"]', "Remove");
+      // Removable installs expose a confirm-guarded uninstall behind the trash button.
+      await clickRowAction(page, '[data-plugin-id="calendar-plus"]', "Remove Calendar Plus");
       const uninstallCountBefore = (await gateway.getRequests("plugins.uninstall")).length;
       const listCountBeforeRemove = (await gateway.getRequests("plugins.list")).length;
       const configCountBeforeRemove = (await gateway.getRequests("config.get")).length;
@@ -475,10 +635,20 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         uninstallCountBefore,
       );
       expect(requestParams(uninstallRequest)).toEqual({ pluginId: "calendar-plus" });
-      await waitForNextRequest(gateway, "plugins.list", listCountBeforeRemove);
-      await waitForNextRequest(gateway, "config.get", configCountBeforeRemove);
-      await gateway.resolveDeferred("plugins.list", uninstalledInventory);
+      const postUninstallConfigRequest = await waitForNextRequest(
+        gateway,
+        "config.get",
+        configCountBeforeRemove,
+      );
+      expect(requestParams(postUninstallConfigRequest)).toEqual({});
       await gateway.resolveDeferred("config.get", configSnapshot(true));
+      const postUninstallListRequest = await waitForNextRequest(
+        gateway,
+        "plugins.list",
+        listCountBeforeRemove,
+      );
+      expect(requestParams(postUninstallListRequest)).toEqual({});
+      await gateway.resolveDeferred("plugins.list", uninstalledInventory);
       await calendarRow.waitFor({ state: "detached" });
       expect(await page.locator(".plugins-page-notice").textContent()).toContain(
         "Removed calendar-plus",
@@ -509,11 +679,166 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       }
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.waitFor({ state: "visible" });
-      const moreButton = sidebar.getByRole("button", { name: "More" });
-      if ((await moreButton.getAttribute("aria-expanded")) !== "true") {
-        await moreButton.click();
+      const workboardSidebarItem = sidebar.locator(
+        '.sidebar-zone-entry[data-sidebar-entry="route:workboard"] > .nav-item',
+      );
+      await workboardSidebarItem.waitFor({ state: "visible" });
+      expect(await workboardSidebarItem.getAttribute("href")).toBe("/workboard");
+      if (updateScreenshots) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "07-workboard-sidebar.png"),
+        });
       }
-      await sidebar.getByRole("link", { name: "Workboard" }).waitFor({ state: "visible" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("reviews an install policy warning before sending an acknowledged retry", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.search": lobsterSearchResponse,
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}settings/plugins`);
+      await page.getByRole("tab", { name: /^Discover/u }).click();
+      const row = page.locator('[data-plugin-id="lobster"]');
+      await row.waitFor({ state: "visible" });
+
+      await gateway.deferNext("plugins.install");
+      await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
+      expect(requestParams(await gateway.waitForRequest("plugins.install"))).toEqual({
+        source: "clawhub",
+        packageName: "@openclaw/lobster",
+      });
+      await gateway.rejectDeferred("plugins.install", {
+        code: "INVALID_REQUEST",
+        message: "raw terminal install-policy output",
+        details: installPolicyWarning,
+      });
+
+      const review = row.getByRole("alert");
+      await review.waitFor({ state: "visible" });
+      expect(await review.textContent()).toContain("Security review needed");
+      await review
+        .getByText("ClawScan found issues to review.", { exact: true })
+        .waitFor({ state: "visible" });
+      expect(await review.textContent()).toContain("Policy warnings: 1");
+      expect(await review.textContent()).toContain("Not installed");
+      expect(await review.textContent()).toContain(
+        "Install anyway approves every install-policy warning encountered during this install",
+      );
+      expect(await review.textContent()).toContain("Warning");
+      expect(await review.textContent()).toContain("Semgrep found a risky command.");
+      expect(await review.textContent()).not.toContain("raw terminal install-policy output");
+      await page.getByRole("searchbox", { name: "Search plugins" }).fill("lobster");
+      await gateway.waitForRequest("plugins.search");
+      const searchRow = page.locator('[data-package-name="@openclaw/lobster"]');
+      const searchReview = searchRow.getByRole("alert");
+      await searchReview.waitFor({ state: "visible" });
+      expect(
+        await searchRow.getByRole("button", { name: "Install Lobster", exact: true }).count(),
+      ).toBe(0);
+      await captureScreenshot(page, "09-policy-review-desktop.png");
+
+      await page.setViewportSize(mobileViewport);
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) -
+              window.innerWidth,
+          ),
+        )
+        .toBeLessThanOrEqual(1);
+      await review.waitFor({ state: "visible" });
+      await captureScreenshot(page, "09-policy-review-mobile.png");
+
+      const installCountBeforeCancel = (await gateway.getRequests("plugins.install")).length;
+      await searchReview.getByRole("button", { name: "Cancel", exact: true }).click();
+      await review.waitFor({ state: "detached" });
+      await searchReview.waitFor({ state: "detached" });
+      expect((await gateway.getRequests("plugins.install")).length).toBe(installCountBeforeCancel);
+      await page.setViewportSize(desktopViewport);
+
+      const installCountBeforeSecondAttempt = (await gateway.getRequests("plugins.install")).length;
+      await gateway.deferNext("plugins.install");
+      await row.getByRole("button", { name: "Install Lobster", exact: true }).click();
+      await waitForNextRequest(gateway, "plugins.install", installCountBeforeSecondAttempt);
+      await gateway.rejectDeferred("plugins.install", {
+        code: "INVALID_REQUEST",
+        message: "raw terminal install-policy output",
+        details: installPolicyWarning,
+      });
+      await review.waitFor({ state: "visible" });
+
+      const installCountBeforeRetry = (await gateway.getRequests("plugins.install")).length;
+      await gateway.deferNext("plugins.install");
+      await searchReview.getByRole("button", { name: "Install anyway", exact: true }).click();
+      const retry = await waitForNextRequest(gateway, "plugins.install", installCountBeforeRetry);
+      expect(requestParams(retry)).toEqual({
+        source: "clawhub",
+        packageName: "@openclaw/lobster",
+        acknowledgeInstallPolicyWarning: true,
+      });
+      const pendingRetry = review.getByRole("button", { name: "Installing…", exact: true });
+      await pendingRetry.waitFor({ state: "visible" });
+      expect(await pendingRetry.isDisabled()).toBe(true);
+      expect(await review.textContent()).toContain("Semgrep found a risky command.");
+      await gateway.rejectDeferred("plugins.install", {
+        code: "INVALID_REQUEST",
+        message: "raw dependency policy output",
+        details: changedInstallPolicyWarning,
+      });
+
+      await review.waitFor({ state: "visible" });
+      expect(await review.textContent()).toContain("Critical");
+      expect(await review.textContent()).toContain(
+        "The freshly checked warning changed and requires review.",
+      );
+      expect(await review.textContent()).not.toContain("raw dependency policy output");
+      await captureScreenshot(page, "10-dependency-policy-review-desktop.png");
+
+      const installCountBeforeSecondRetry = (await gateway.getRequests("plugins.install")).length;
+      await gateway.deferNext("plugins.install");
+      await review.getByRole("button", { name: "Install anyway", exact: true }).click();
+      const secondRetry = await waitForNextRequest(
+        gateway,
+        "plugins.install",
+        installCountBeforeSecondRetry,
+      );
+      expect(requestParams(secondRetry)).toEqual({
+        source: "clawhub",
+        packageName: "@openclaw/lobster",
+        acknowledgeInstallPolicyWarning: true,
+      });
+
+      await gateway.setMethodResponse(
+        "plugins.list",
+        inventory([workboardDisabled, installedLobsterPlugin, remoteIconPlugin]),
+      );
+      await gateway.resolveDeferred("plugins.install", {
+        ok: true,
+        plugin: installedLobsterPlugin,
+        restartRequired: true,
+      } satisfies PluginMutationResult);
+      await page
+        .locator('[data-plugin-id="lobster"][data-plugin-status="enabled"]')
+        .waitFor({ state: "visible" });
+      await review.waitFor({ state: "detached" });
+      await searchReview.waitFor({ state: "detached" });
+      expect(await page.getByRole("button", { name: "Install anyway", exact: true }).count()).toBe(
+        0,
+      );
     } finally {
       await context.close();
     }
@@ -535,11 +860,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const workboardCard = page.locator('[data-plugin-id="workboard"]');
       await workboardCard.waitFor({ state: "visible" });
       expect(await page.getByRole("note").textContent()).toContain("operator.admin");
-      await workboardCard.locator(".plugins-kebab").click();
-      expect(await page.getByRole("menuitem", { name: "Enable", exact: true }).isDisabled()).toBe(
-        true,
-      );
-      await page.keyboard.press("Escape");
+      expect(
+        await workboardCard.getByRole("button", { name: "Enable", exact: true }).isDisabled(),
+      ).toBe(true);
 
       await page.getByRole("tab", { name: /^Discover/u }).click();
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");
@@ -598,7 +921,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.resolveDeferred("plugins.list", finalInventory);
       await error.waitFor({ state: "detached" });
       await page
-        .locator('[data-plugin-id="workboard"] .plugins-state--enabled')
+        .locator('[data-plugin-id="workboard"][data-plugin-status="enabled"]')
         .waitFor({ state: "attached" });
     } finally {
       await context.close();

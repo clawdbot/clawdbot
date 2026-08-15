@@ -6,6 +6,7 @@ import {
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
+  type ChannelIngressContextBinding,
   type ChannelIngressIdentitySubjectInput,
   type ResolveChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -131,6 +132,7 @@ export async function resolveFeishuDmIngressAccess(params: {
   conversationId: string;
   mayPair: boolean;
   command?: { hasControlCommand: boolean };
+  contextBinding?: ChannelIngressContextBinding;
 }) {
   return await createFeishuIngressResolver({
     cfg: params.cfg,
@@ -145,6 +147,7 @@ export async function resolveFeishuDmIngressAccess(params: {
       kind: "direct",
       id: params.conversationId,
     },
+    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     event: {
       mayPair: params.mayPair,
     },
@@ -162,6 +165,8 @@ export async function resolveFeishuGroupConversationIngressAccess(params: {
   groupPolicy: FeishuGroupPolicy;
   groupAllowFrom?: Array<string | number> | null;
   groupExplicitlyConfigured?: boolean;
+  contextBinding?: ChannelIngressContextBinding;
+  threadId?: string;
 }) {
   const groupPolicy = normalizeFeishuGroupPolicy(params.groupPolicy);
   const groupAllowFrom =
@@ -178,7 +183,9 @@ export async function resolveFeishuGroupConversationIngressAccess(params: {
     conversation: {
       kind: "group",
       id: params.chatId,
+      threadId: params.threadId,
     },
+    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     dmPolicy: "disabled",
     groupPolicy,
     groupAllowFrom,
@@ -195,6 +202,8 @@ export async function resolveFeishuGroupSenderActivationIngressAccess(params: {
   requireMention: boolean;
   mentionedBot: boolean;
   command?: { hasControlCommand: boolean };
+  contextBinding?: ChannelIngressContextBinding;
+  threadId?: string;
 }) {
   const groupAllowFrom = params.allowFrom ?? [];
   return await createFeishuIngressResolver({
@@ -208,7 +217,9 @@ export async function resolveFeishuGroupSenderActivationIngressAccess(params: {
     conversation: {
       kind: "group",
       id: params.chatId,
+      threadId: params.threadId,
     },
+    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     dmPolicy: "disabled",
     groupPolicy: groupAllowFrom.length > 0 ? "allowlist" : "open",
     groupAllowFrom,
@@ -226,60 +237,47 @@ export async function resolveFeishuGroupSenderActivationIngressAccess(params: {
   });
 }
 
-export function resolveFeishuGroupConfig(params: { cfg?: FeishuConfig; groupId?: string | null }) {
+function resolveFeishuExplicitGroupConfigKey(params: {
+  cfg?: FeishuConfig;
+  groupId?: string | null;
+}): string | undefined {
   const groups = params.cfg?.groups ?? {};
-  const wildcard = groups["*"];
   const groupId = params.groupId?.trim();
-  if (!groupId) {
+  if (!groupId || groupId === "*") {
     return undefined;
   }
-
-  const direct = groups[groupId];
-  if (direct) {
-    return direct;
+  if (Object.hasOwn(groups, groupId)) {
+    return groupId;
   }
-
   const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
-  const matchKey = Object.keys(groups).find(
-    (key) => normalizeOptionalLowercaseString(key) === lowered,
+  return Object.keys(groups).find(
+    (key) => key !== "*" && normalizeOptionalLowercaseString(key) === lowered,
   );
-  if (matchKey) {
-    return groups[matchKey];
+}
+
+export function resolveFeishuGroupConfig(params: { cfg?: FeishuConfig; groupId?: string | null }) {
+  if (!params.groupId?.trim()) {
+    return undefined;
   }
-  return wildcard;
+  const groups = params.cfg?.groups ?? {};
+  const key = resolveFeishuExplicitGroupConfigKey(params);
+  return key ? groups[key] : groups["*"];
 }
 
 export function hasExplicitFeishuGroupConfig(params: {
   cfg?: FeishuConfig;
   groupId?: string | null;
 }): boolean {
-  const groups = params.cfg?.groups ?? {};
-  const groupId = params.groupId?.trim();
-  if (!groupId) {
-    return false;
-  }
-  if (Object.hasOwn(groups, groupId) && groupId !== "*") {
-    return true;
-  }
-
-  const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
-  return Object.keys(groups).some(
-    (key) => key !== "*" && normalizeOptionalLowercaseString(key) === lowered,
-  );
+  return resolveFeishuExplicitGroupConfigKey(params) !== undefined;
 }
 
 export function resolveFeishuGroupToolPolicy(params: ChannelGroupContext) {
-  const cfg = params.cfg.channels?.feishu;
-  if (!cfg) {
-    return undefined;
-  }
-
-  const groupConfig = resolveFeishuGroupConfig({
-    cfg,
+  // This adapter intentionally reads root channels.feishu without account merge;
+  // reply mention policy merges accounts, and changing that asymmetry is product behavior.
+  return resolveFeishuGroupConfig({
+    cfg: params.cfg.channels?.feishu,
     groupId: params.groupId,
-  });
-
-  return groupConfig?.tools;
+  })?.tools;
 }
 
 export function resolveFeishuReplyPolicy(params: {

@@ -6,6 +6,7 @@
  */
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CDPSession, Page } from "playwright-core";
+import { readCdpMainFrameDocumentIdentity } from "./cdp-page-session.js";
 
 type PageCdpSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 type MarkBackendDomRef = { ref: string; backendDOMNodeId: number };
@@ -42,6 +43,24 @@ export async function withPageScopedCdpClient<T>(opts: {
       )(method, params),
     );
   });
+}
+
+/** Read the browser-owned loader identity for a Playwright page's main frame. */
+export async function readMainFrameDocumentIdentityForPage(
+  page: Page,
+): Promise<string | undefined> {
+  return await withPlaywrightPageCdpSession(
+    page,
+    async (session) =>
+      await readCdpMainFrameDocumentIdentity((method, params) =>
+        (
+          session.send as unknown as (
+            method: string,
+            params?: Record<string, unknown>,
+          ) => Promise<unknown>
+        )(method, params),
+      ),
+  );
 }
 
 /** Mark backend DOM node ids on the page with browser ref attributes. */

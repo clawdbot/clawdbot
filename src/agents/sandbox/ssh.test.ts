@@ -5,18 +5,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
   buildExecRemoteCommand,
   buildRemoteWorkdirValidationCommand,
   buildValidatedExecRemoteCommand,
+  createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
   type SshSandboxSession,
   uploadDirectoryToSshTarget,
-  VALIDATE_REMOTE_WORKDIR_SCRIPT,
 } from "./ssh.js";
 
 const sessions: SshSandboxSession[] = [];
@@ -67,6 +67,36 @@ describe("sandbox ssh helpers", () => {
     );
   });
 
+  it.each(["writeFile", "chmod"] as const)(
+    "removes the temp config directory when %s fails",
+    async (failurePoint) => {
+      const injectedError = new Error(`injected ${failurePoint} failure`);
+      const realMkdtemp = fs.mkdtemp.bind(fs);
+      let configDir: string | undefined;
+      vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
+        configDir = await realMkdtemp(prefix, options);
+        tempDirs.push(configDir);
+        return configDir;
+      });
+      if (failurePoint === "writeFile") {
+        vi.spyOn(fs, "writeFile").mockRejectedValueOnce(injectedError);
+      } else {
+        vi.spyOn(fs, "chmod").mockRejectedValueOnce(injectedError);
+      }
+
+      try {
+        const rejection = createSshSandboxSessionFromConfigText({
+          configText: "Host openclaw-test\n",
+        });
+        await expect(rejection).rejects.toBe(injectedError);
+        expect(configDir).toBeDefined();
+        await expect(fs.access(configDir as string)).rejects.toThrow();
+      } finally {
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
   it("normalizes CRLF and escaped-newline private keys before writing temp files", async () => {
     const session = await createSshSandboxSessionFromSettings({
       command: "ssh",
@@ -107,6 +137,40 @@ describe("sandbox ssh helpers", () => {
         "line-2\n" +
         "-----END OPENSSH PRIVATE KEY-----\n",
     );
+  });
+
+  it.each([
+    ["identityFile", "IdentityFile"] as const,
+    ["certificateFile", "CertificateFile"] as const,
+    ["knownHostsFile", "UserKnownHostsFile"] as const,
+  ])("rejects %s values that would break ssh config directives", async (field, directive) => {
+    await expect(
+      createSshSandboxSessionFromSettings({
+        command: "ssh",
+        target: "peter@example.com:2222",
+        strictHostKeyChecking: true,
+        updateHostKeys: false,
+        [field]: `/tmp/key\n  ${directive} /tmp/injected`,
+      }),
+    ).rejects.toThrow(`SSH sandbox ${field} must not contain line breaks or double quotes.`);
+  });
+
+  // Default macOS crabbox lease keys live under "Application Support"; unquoted
+  // ssh_config arguments tokenize on whitespace and read as extra arguments.
+  it("quotes path directives containing whitespace", async () => {
+    const session = await createSshSandboxSessionFromSettings({
+      command: "ssh",
+      target: "peter@example.com:2222",
+      strictHostKeyChecking: true,
+      updateHostKeys: false,
+      identityFile: "/tmp/Application Support/lease/id_ed25519",
+      knownHostsFile: "/tmp/Application Support/lease/known_hosts",
+    });
+    sessions.push(session);
+
+    const config = await fs.readFile(session.configPath, "utf8");
+    expect(config).toContain('  IdentityFile "/tmp/Application Support/lease/id_ed25519"');
+    expect(config).toContain('  UserKnownHostsFile "/tmp/Application Support/lease/known_hosts"');
   });
 
   it("wraps remote exec commands with env and workdir", () => {
@@ -249,20 +313,20 @@ describe("sandbox ssh helpers", () => {
 
       const { stdout } = await execFileAsync("/bin/sh", [
         "-c",
-        VALIDATE_REMOTE_WORKDIR_SCRIPT,
-        "openclaw-validate-workdir",
-        project,
-        path.join(root, "workspace"),
+        buildRemoteWorkdirValidationCommand({
+          workdir: project,
+          root: path.join(root, "workspace"),
+        }),
       ]);
 
       expect(stdout.trim()).toBe(canonicalProject);
       await expect(
         execFileAsync("/bin/sh", [
           "-c",
-          VALIDATE_REMOTE_WORKDIR_SCRIPT,
-          "openclaw-validate-workdir",
-          path.join(root, "workspace", "missing"),
-          path.join(root, "workspace"),
+          buildRemoteWorkdirValidationCommand({
+            workdir: path.join(root, "workspace", "missing"),
+            root: path.join(root, "workspace"),
+          }),
         ]),
       ).rejects.toThrow(/remote directory not found/);
       await expect(fs.stat(path.join(root, "workspace", "missing"))).rejects.toThrow();
@@ -280,10 +344,10 @@ describe("sandbox ssh helpers", () => {
       await expect(
         execFileAsync("/bin/sh", [
           "-c",
-          VALIDATE_REMOTE_WORKDIR_SCRIPT,
-          "openclaw-validate-workdir",
-          path.join(workspace, "escape"),
-          workspace,
+          buildRemoteWorkdirValidationCommand({
+            workdir: path.join(workspace, "escape"),
+            root: workspace,
+          }),
         ]),
       ).rejects.toThrow(/unsafe remote directory symlink/);
     },
@@ -299,10 +363,10 @@ describe("sandbox ssh helpers", () => {
 
       const { stdout } = await execFileAsync("/bin/sh", [
         "-c",
-        VALIDATE_REMOTE_WORKDIR_SCRIPT,
-        "openclaw-validate-workdir",
-        canonicalProject,
-        "/",
+        buildRemoteWorkdirValidationCommand({
+          workdir: canonicalProject,
+          root: "/",
+        }),
       ]);
 
       expect(stdout.trim()).toBe(canonicalProject);

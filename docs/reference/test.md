@@ -10,19 +10,18 @@ title: "Tests"
 
 ## Agent default
 
-Agent sessions run tests and computationally intensive validation remotely
-through Crabbox. Trusted maintainer code defaults to Blacksmith Testbox. The
-configured Testbox workflow hydrates credentials, so untrusted contributor or
-fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
+Agent sessions run one/few focused tests and cheap static checks locally only
+for trusted source and when the existing dependency install is ready. Never
+execute untrusted repository tooling locally. Larger suites, changed gates with
+typecheck/lint fan-out, builds, Docker, package lanes, E2E, live proof, and
+cross-platform validation run remotely through Crabbox. Trusted maintainer
+heavy proof defaults to Blacksmith Testbox. The configured Testbox workflow
+hydrates credentials, so untrusted contributor or fork code must use
+secretless fork CI or sanitized direct AWS Crabbox instead.
 
-When a trusted code task is likely to need tests or heavy proof, pre-warm
-immediately in a background command session, keep working while it hydrates,
-reuse the returned `tbx_...` id, sync the current checkout on every run, and
-stop it before handoff:
-
-```bash
-node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --keep --timing-json
-```
+Do not pre-warm for anticipated work. Acquire the backend lazily when the
+first heavy command is ready, reuse the returned `tbx_...` id for later heavy
+commands, sync the current checkout on every run, and stop it before handoff.
 
 After the first successful reuse, the wrapper records the lease's base,
 dependency, and Testbox workflow fingerprint under `.crabbox/testbox-leases/`.
@@ -32,11 +31,11 @@ fresh lease. Every run still syncs the current checkout.
 `OPENCLAW_TESTBOX_ALLOW_STALE=1` is only for intentional diagnostics, not
 release proof.
 
-Local test commands below are for human workflows or an explicit agent fallback
-requested by the user. Remote-provider unavailability must be reported; it is
-not permission to silently run a broad local gate.
+Local test commands below are for human workflows and bounded agent proof.
+Remote-provider unavailability must be reported; it is not permission to
+silently run a broad local gate.
 
-For untrusted code, pre-warm with `--provider aws`. Every run must set
+For untrusted heavy proof, lazily warm with `--provider aws`. Every run must set
 `CRABBOX_ENV_ALLOW=CI`, pass `--provider aws --no-hydrate`, and use
 a fresh temporary remote `HOME` before installing dependencies or running
 tests. Use a newly warmed lease dedicated to that untrusted source; never reuse
@@ -67,9 +66,12 @@ report public networking with no Tailscale state before uploading any script.
 In a Codex worktree or linked/sparse checkout, agents avoid direct local
 `pnpm test*` / `pnpm check*` / `pnpm crabbox:run`:
 
-- Explicit user-requested local fallback for a tiny file:
+- Bounded focused proof with ready dependencies:
   `node scripts/run-vitest.mjs <path-or-filter>`.
-- Changed gates or broad proof: `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed` so pnpm runs inside Testbox.
+- Classify-first changed check: `node scripts/check-changed.mjs`; docs-only,
+  no-change, and small metadata plans stay local when dependencies are ready,
+  while heavy or dependency-missing plans delegate to Testbox.
+- Explicit kept-lease broad proof: `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed` so pnpm runs inside Testbox.
 - The wrapper's final `exitCode` and timing JSON are the command result. A delegated Blacksmith GitHub Actions run may show `cancelled` after a successful SSH command because the Testbox is stopped from outside the keepalive action; check the wrapper summary and command output before treating that as a failure.
 - `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree <local-heavy-check command>`: keeps heavy-check serialization inside the current worktree instead of the Git common dir for commands such as `pnpm check:changed` and targeted `pnpm test ...`. Use it only on high-capacity local hosts when you intentionally run independent checks across linked worktrees.
 
@@ -77,28 +79,28 @@ In a Codex worktree or linked/sparse checkout, agents avoid direct local
 
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
 
-| Command                                           | What it does                                                                                                                                                                                                                                                                                                                                          |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm test`                                       | Explicit file/directory targets route through scoped Vitest lanes. Untargeted runs are full-suite proof: fixed shard groups expand to leaf configs for local parallel execution, with the expected shard fanout printed before starting. The extension group always expands to per-extension shard configs instead of one giant root-project process. |
-| `pnpm test:changed`                               | Cheap smart changed-test run: precise targets from direct test edits, sibling `*.test.ts` files, explicit source mappings, and the local import graph. Broad/config/package changes are skipped unless they map to precise tests.                                                                                                                     |
-| `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` | Explicit broad changed-test run; use when a test harness/config/package edit should fall back to Vitest's broader changed-test behavior.                                                                                                                                                                                                              |
-| `pnpm test:force`                                 | Frees the configured OpenClaw gateway port (default `18789`), then runs the full suite with an isolated gateway port so server tests do not collide with a running instance.                                                                                                                                                                          |
-| `pnpm test:coverage`                              | Emits an informational V8 coverage report for the default unit lane (`vitest.unit.config.ts`); no coverage thresholds are enforced.                                                                                                                                                                                                                   |
-| `pnpm test:coverage:changed`                      | Unit coverage only for files changed since `origin/main`.                                                                                                                                                                                                                                                                                             |
-| `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                            |
-| `pnpm check:changed`                              | Delegates to Crabbox/Testbox by default outside CI, then runs the smart changed check gate inside the remote child: formatting plus typecheck, lint, and guard commands for affected lanes. Does not run Vitest; use `pnpm test:changed` or `pnpm test <target>` for test proof.                                                                      |
+| Command                                           | What it does                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm test`                                       | Explicit file/directory targets route through scoped Vitest lanes. Untargeted runs are full-suite proof: fixed shard groups expand to leaf configs for local parallel execution, with the expected shard fanout printed before starting. The extension group always expands to per-extension shard configs instead of one giant root-project process.           |
+| `pnpm test:changed`                               | Cheap smart changed-test run: precise targets from direct test edits, sibling `*.test.ts` files, explicit source mappings, and the local import graph. Broad/config/package changes are skipped unless they map to precise tests.                                                                                                                               |
+| `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` | Explicit broad changed-test run; use when a test harness/config/package edit should fall back to Vitest's broader changed-test behavior.                                                                                                                                                                                                                        |
+| `pnpm test:force`                                 | Frees the configured OpenClaw gateway port (default `18789`), then runs the full suite with an isolated gateway port so server tests do not collide with a running instance.                                                                                                                                                                                    |
+| `pnpm test:coverage`                              | Emits an informational V8 coverage report for the default unit lane (`vitest.unit.config.ts`); no coverage thresholds are enforced.                                                                                                                                                                                                                             |
+| `pnpm test:coverage:changed`                      | Unit coverage only for files changed since `origin/main`.                                                                                                                                                                                                                                                                                                       |
+| `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                                      |
+| `pnpm check:changed`                              | Classifies the changed lanes before choosing execution. Docs-only, no-change, and small metadata plans stay local when dependencies are ready; plans with typecheck/lint fan-out, other heavy lanes, or missing local dependencies delegate to Crabbox/Testbox outside CI. Does not run Vitest; use `pnpm test:changed` or `pnpm test <target>` for test proof. |
 
 ## Shared test state and process helpers
 
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
 - `test/helpers/openclaw-test-instance.ts`: process-level E2E tests needing a running Gateway, CLI env, log capture, and cleanup in one place.
-- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node scripts/lib/openclaw-test-state.mjs -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness probes, state env export, log dumps, and process cleanup.
+- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node --import tsx scripts/lib/openclaw-test-state.mts -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness probes, state env export, log dumps, and process cleanup.
 
 ## Control UI, TUI, and extension lanes
 
-- **Control UI mocked E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane that starts the Vite Control UI and drives a real Chromium page against a mocked Gateway WebSocket. Tests live in `ui/src/**/*.e2e.test.ts`; shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. `pnpm test:e2e` includes this lane. Agent runs default to Testbox/Crabbox, including targeted proof; use `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/ui/e2e/chat-flow.e2e.test.ts` only for an explicit local fallback.
-- **TUI PTY tests:** `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` runs the fast fake-backend PTY lane. `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` runs the slower `tui --local` smoke, which mocks only the external model endpoint. Assert stable visible text or fixture calls, not raw ANSI snapshots.
+- **Control UI mocked E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane that starts the Vite Control UI and drives a real Chromium page against a mocked Gateway WebSocket. Tests live in `ui/src/**/*.e2e.test.ts`; shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. `pnpm test:e2e` includes this lane. Agent runs default to Testbox/Crabbox, including targeted proof; use `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts` only for an explicit local fallback.
+- **TUI PTY tests:** `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` runs the fast fake-backend PTY lane. `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` runs the slower `tui --local` smoke, which mocks only the external model endpoint. CI also sets `OPENCLAW_TUI_PTY_USE_BUILT_CLI=1` after building `dist/`; use that flag only when exact-head built artifacts already exist. Assert stable visible text or fixture calls, not raw ANSI snapshots.
 - `pnpm test:extensions` and `pnpm test extensions` run all extension/plugin shards. Heavy channel plugins, the browser plugin, and OpenAI run as dedicated shards; other plugin groups stay batched. `pnpm test extensions/<id>` runs one bundled plugin lane.
 - Source files with sibling tests map to that sibling before falling back to wider directory globs. Helper edits under `src/channels/plugins/contracts/test-helpers`, `src/plugin-sdk/test-helpers`, and `src/plugins/contracts` use a local import graph to run importing tests instead of broad-running every shard when the dependency path is precise.
 - Contract directory targets fan out to their contract lanes: `pnpm test src/channels/plugins/contracts` runs the four channel contract configs and `pnpm test src/plugins/contracts` runs the plugin contracts config, since the generic `channels`/`plugins` projects exclude `contracts/**`.
@@ -109,18 +111,18 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 
 ## Gateway and E2E
 
-- Gateway integration is opt-in: `OPENCLAW_TEST_INCLUDE_GATEWAY=1 pnpm test` or `pnpm test:gateway`.
+- Gateway tests are included in the untargeted `pnpm test` full suite; run them alone with `pnpm test:gateway`.
 - `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:ui:e2e`.
-- `pnpm test:e2e:gateway`: gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>`, verbose logs with `OPENCLAW_E2E_VERBOSE=1`.
+- `pnpm test:e2e:gateway`: gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with one worker in `vitest.e2e.config.ts`; opt into parallelism with `OPENCLAW_E2E_WORKERS=<n>` (capped at 16), and enable verbose logs with `OPENCLAW_E2E_VERBOSE=1`.
 - `pnpm test:live`: provider live tests (Claude/Minimax/DeepSeek/z.ai/etc, gated by `*.live.test.ts`). Requires API keys and `LIVE=1` (or `OPENCLAW_LIVE_TEST=1`) to unskip; verbose output with `OPENCLAW_LIVE_TEST_QUIET=0`.
 
 ## Full Docker suite (`pnpm test:docker:all`)
 
-Builds the shared live-test image, packs OpenClaw once as an npm tarball, builds/reuses a bare Node/Git runner image plus a functional image that installs that tarball into `/app`, then runs Docker smoke lanes through a weighted scheduler. `scripts/package-openclaw-for-docker.mjs` is the single local/CI package packer and validates the tarball plus `dist/postinstall-inventory.json` before Docker consumes it.
+Builds the shared live-test image, packs OpenClaw once as an npm tarball, builds/reuses a bare Node/Git runner image plus a functional image that installs that tarball into `/app`, then runs Docker smoke lanes through a weighted scheduler. `scripts/package-openclaw-for-docker.mjs` is the stable local/CI package packer entrypoint and validates the tarball plus `dist/postinstall-inventory.json` before Docker consumes it.
 
 - Bare image (`OPENCLAW_DOCKER_E2E_BARE_IMAGE`): installer/update/plugin-dependency lanes; mounts the prebuilt tarball instead of copied repo sources.
 - Functional image (`OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE`): normal built-app functionality lanes.
-- Lane definitions: `scripts/lib/docker-e2e-scenarios.mjs`. Planner: `scripts/lib/docker-e2e-plan.mjs`. Executor: `scripts/test-docker-all.mjs`.
+- Lane definitions: `scripts/lib/docker-e2e-scenarios.mts`. Planner: `scripts/lib/docker-e2e-plan.mts`. Executor: `scripts/test-docker-all.mjs`.
 - `node scripts/test-docker-all.mjs --plan-json` emits the scheduler-owned CI plan (lanes, image kinds, package/live-image needs, state scenarios, credential checks) without building or running Docker.
 
 Scheduling knobs (env vars, defaults in parentheses):
@@ -157,10 +159,21 @@ Other behavior: the runner preflights Docker by default, cleans stale OpenClaw E
 | `pnpm test:docker:live-cli-backend:claude`, `:claude:resume`, `:claude:mcp` | Focused CLI backend live probes; Gemini has matching `:resume` and `:mcp` aliases.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `pnpm test:docker:openwebui`                                                | Dockerized OpenClaw + Open WebUI: sign in, check `/api/models`, run a real proxied chat through `/api/chat/completions`. Requires a usable live model key and pulls an external image; not expected to be CI-stable like the unit/e2e suites.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `pnpm test:docker:mcp-channels`                                             | Seeded Gateway container plus a client container spawning `openclaw mcp serve`: routed conversation discovery, transcript reads, attachment metadata, live event queue behavior, outbound send routing, and Claude-style channel + permission notifications over the real stdio bridge (assertion reads raw stdio MCP frames directly).                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `pnpm test:docker:upgrade-survivor`                                         | Installs the packed tarball over a dirty old-user fixture, runs package update plus non-interactive doctor without live provider/channel keys, starts a loopback Gateway, checks agents/channel config/plugin allowlists/workspace/session files/stale legacy plugin dependency state/startup/RPC status survive.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `pnpm test:docker:upgrade-survivor`                                         | Installs the packed tarball over a dirty old-user fixture, runs package update plus non-interactive doctor without live provider/channel keys, starts a loopback Gateway, checks agents/channel config/plugin allowlists/workspace/session state/stale legacy plugin dependency state/startup/RPC status survive.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `pnpm test:docker:published-upgrade-survivor`                               | Installs `openclaw@latest` by default, seeds realistic existing-user files, configures via a baked `openclaw config set` recipe, updates to the packed tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, checks `/healthz`, `/readyz`, RPC status. Override with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, expand a matrix with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, or add scenario fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=reported-issues` (includes `configured-plugin-installs` and `stale-source-plugin-shadow`). Package Acceptance exposes these as `published_upgrade_survivor_baseline(s)` / `_scenarios` and resolves meta tokens like `last-stable-4` or `all-since-2026.4.23`. |
 | `pnpm test:docker:update-migration`                                         | Published-upgrade survivor harness in the `plugin-deps-cleanup` scenario, starting at `openclaw@2026.4.23` by default. The `Update Migration` workflow expands this with `baselines=all-since-2026.4.23` to prove configured-plugin dependency cleanup outside Full Release CI.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `pnpm test:docker:plugins`                                                  | Install/update smoke for local path, `file:`, npm registry packages with hoisted dependencies, git moving refs, ClawHub fixtures, marketplace updates, and Claude-bundle enable/inspect.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+
+### Sandbox compatibility lanes
+
+| Command                                      | Verifies                                                                                                                                                           |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm test:e2e:openshell`                    | Real OpenShell gateway, custom image build, managed sandbox lifecycle, SSH execution, remote filesystem bridge, seeded workspace, and deny/allow network policies. |
+| `pnpm test:docker:package-install`           | Packed OpenClaw npm artifact installation into a clean global prefix, then CLI version and help startup from the installed package.                                |
+| `pnpm test:docker:openai-web-search-minimal` | Mocked TLS endpoint with a private test CA, isolated Gateway startup, and web-search request handling through the configured certificate trust path.               |
+| `pnpm test:docker:browser-cdp-snapshot`      | Chromium startup, raw CDP connectivity, isolated Gateway browser commands, doctor output, and accessibility snapshot roles.                                        |
+| `pnpm test:docker:kitchen-sink-rpc`          | Installed plugin commands and catalog tools, read-only Gateway RPC traversal, authentication boundaries, channel lifecycle, and resource ceilings.                 |
+| `pnpm test:docker:kitchen-sink-plugin`       | Packaged and registry plugin install flows, plugin execution, expected unsupported-version failures, ClawHub fallback, and npm-to-ClawHub migration.               |
 
 ## Local PR gate
 
@@ -268,7 +281,7 @@ Optional; only needed for containerized onboarding smoke tests. Full cold-start 
 scripts/e2e/onboard-docker.sh
 ```
 
-Drives the interactive wizard via a pseudo-tty, verifies config/workspace/session files, then starts the gateway and runs `openclaw health`.
+Drives the interactive wizard via a pseudo-tty, verifies config/workspace/session state, then starts the gateway and runs `openclaw health`.
 
 ## QR import smoke (Docker)
 

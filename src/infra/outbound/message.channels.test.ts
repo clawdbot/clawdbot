@@ -1,7 +1,7 @@
 // Covers channel-specific outbound adapter behavior for message sends,
 // structured payloads, and channel capability interactions.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -260,9 +260,11 @@ describe("sendPoll channel normalization", () => {
       question: "Lunch?",
       options: ["Pizza", "Sushi"],
       channel: "Workspace-Chat",
+      idempotencyKey: "stable-poll-key",
     });
 
     expect(gatewayCall()?.params?.channel).toBe("demo-alias-channel");
+    expect(gatewayCall()?.params?.idempotencyKey).toBe("stable-poll-key");
     expect(result.channel).toBe("demo-alias-channel");
     expect(result.via).toBe("gateway");
   });
@@ -425,6 +427,17 @@ describe("gateway url override hardening", () => {
           forceDocument: true,
           silent: true,
           parseMode: "HTML",
+        },
+      },
+    },
+    {
+      name: "preserves an explicit send idempotency key",
+      params: {
+        idempotencyKey: "stable-send-key",
+      },
+      expected: {
+        params: {
+          idempotencyKey: "stable-send-key",
         },
       },
     },

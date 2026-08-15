@@ -6,7 +6,7 @@
  */
 
 import { TwitchClientManager } from "./twitch-client.js";
-import type { ChannelLogSink } from "./types.js";
+import type { ChannelAccountSnapshot, ChannelLogSink } from "./types.js";
 
 /**
  * Registry entry tracking a client manager and its associated account.
@@ -38,13 +38,15 @@ const registry = new Map<string, RegistryEntry>();
 export function getOrCreateClientManager(
   accountId: string,
   logger: ChannelLogSink,
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void,
 ): TwitchClientManager {
   const existing = registry.get(accountId);
   if (existing) {
+    existing.manager.setStatusSink(statusSink);
     return existing.manager;
   }
 
-  const manager = new TwitchClientManager(logger);
+  const manager = new TwitchClientManager(logger, statusSink);
   registry.set(accountId, {
     manager,
     accountId,
@@ -83,27 +85,5 @@ export async function removeClientManager(accountId: string): Promise<void> {
   } finally {
     registry.delete(accountId);
     entry.logger.info(`Unregistered client manager for account: ${accountId}`);
-  }
-}
-
-/**
- * Test-only: clear the module-level registry of all client manager entries.
- *
- * Mirrors the `clearForTest` escape hatch on `TwitchClientManager`. Without
- * this, the module-level `registry` Map survives across tests when vitest
- * is run with `--isolate=false` (or any harness that does not tear the
- * module graph down between cases), and a stale entry from one test will
- * shadow `getOrCreateClientManager` calls in subsequent tests, silently
- * handing back another test's mocked logger/manager. See #83887.
- *
- * Production code MUST NOT call this. It disconnects cached managers before
- * clearing the registry so tests do not leave handlers or clients behind.
- */
-export async function clearRegistryForTest(): Promise<void> {
-  const entries = [...registry.values()];
-  try {
-    await Promise.all(entries.map((entry) => entry.manager.disconnectAll()));
-  } finally {
-    registry.clear();
   }
 }

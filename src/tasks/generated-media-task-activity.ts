@@ -47,6 +47,11 @@ export function listActiveGeneratedMediaTaskIdsForSessionKey(sessionKey: string)
   return runIds;
 }
 
+/** Returns the set of all session keys with in-process generated-media activity. */
+export function getAllActiveGeneratedMediaSessionKeys(): Set<string> {
+  return new Set(getActiveGeneratedMediaTasks().values());
+}
+
 /** Returns the latest admitted run id even after that task became terminal. */
 export function getLatestGeneratedMediaTaskAdmissionIdForSessionKey(
   sessionKey: string,
@@ -54,7 +59,13 @@ export function getLatestGeneratedMediaTaskAdmissionIdForSessionKey(
   return getLatestGeneratedMediaTaskAdmissions().get(sessionKey);
 }
 
-export function resetGeneratedMediaTaskActivityForTests(): void {
+function resetGeneratedMediaTaskActivityForTests(): void {
   getActiveGeneratedMediaTasks().clear();
   getLatestGeneratedMediaTaskAdmissions().clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.generatedMediaTaskActivityTestApi")
+  ] = { resetGeneratedMediaTaskActivityForTests };
 }

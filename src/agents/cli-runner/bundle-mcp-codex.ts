@@ -2,12 +2,18 @@
  * Codex CLI and app-server bundle MCP projection helpers.
  */
 import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize.js";
+import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
-import { buildCodexMcpServersConfig, normalizeCodexMcpServerConfig } from "../codex-mcp-config.js";
+import { isRecord } from "../bundle-mcp-adapter.js";
+import {
+  applyCodexSessionMcpToolDenials,
+  buildCodexMcpServersConfig,
+  normalizeCodexMcpServerConfig,
+} from "../codex-mcp-config.js";
 import { requiresMcpBearerProjection, resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
-import { isRecord } from "./bundle-mcp-adapter-shared.js";
+import { partitionMcpServersByConnectionScope } from "../mcp-connection-resolver.js";
 import { serializeTomlInlineValue } from "./toml-inline.js";
 
 // Mutable JSON shape structurally compatible with the bundled Codex
@@ -29,6 +35,7 @@ type CodexUserMcpServersProjectionOptions = {
   agentDir?: string;
   allowLiteralOAuthProjection?: boolean;
   onServerUnavailable?: (serverName: string, error: unknown) => void;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 };
 
 function normalizeAgentIds(value: unknown): string[] {
@@ -61,6 +68,35 @@ function isCodexMcpServerAllowedForAgent(
   return agentIds.includes(normalizeAgentId(options.agentId));
 }
 
+/**
+ * Applies Codex-only agent scoping before OpenClaw resolves credentials or opens transports.
+ * Session overrides may narrow this result, but cannot widen `codex.agents`.
+ */
+export function resolveCodexMcpToolOverridesForAgent(
+  cfg: OpenClawConfig | undefined,
+  options: Pick<CodexUserMcpServersProjectionOptions, "agentId" | "toolOverrides">,
+): Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny"> | undefined {
+  const deniedServerNames = Object.entries(normalizeConfiguredMcpServers(cfg?.mcp?.servers))
+    .filter(([, server]) => !isCodexMcpServerAllowedForAgent(server, options))
+    .map(([name]) => name);
+  if (deniedServerNames.length === 0) {
+    return options.toolOverrides;
+  }
+  const mcpServers = { ...options.toolOverrides?.mcpServers };
+  for (const serverName of deniedServerNames) {
+    mcpServers[serverName] = false;
+  }
+  return { ...options.toolOverrides, mcpServers };
+}
+
+function readSessionMcpServerOverride(
+  options: CodexUserMcpServersProjectionOptions | undefined,
+  name: string,
+): boolean | undefined {
+  const overrides = options?.toolOverrides?.mcpServers;
+  return overrides && Object.hasOwn(overrides, name) ? overrides[name] : undefined;
+}
+
 /** Returns Codex CLI args with TOML MCP server overrides injected. */
 export function injectCodexMcpConfigArgs(
   args: string[] | undefined,
@@ -87,20 +123,32 @@ export function buildCodexUserMcpServersThreadConfigPatch(
   options?: CodexUserMcpServersProjectionOptions,
 ): { mcp_servers: CodexThreadConfigObject } | undefined {
   const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
-  const entries = Object.entries(userServers);
+  // Fail-closed: requester-scoped servers never enter harness-native MCP config.
+  const { staticServers } = partitionMcpServersByConnectionScope(userServers);
+  const entries = Object.entries(staticServers);
   if (entries.length === 0) {
     return undefined;
   }
-  const mcp_servers: CodexThreadConfigObject = {};
+  // Collected as entries: a server literally named `__proto__` would hit the
+  // prototype setter under plain assignment and vanish from the patch.
+  const projected: [string, CodexThreadConfigObject][] = [];
   for (const [name, server] of entries) {
-    if (server.enabled === false) {
+    const serverOverride = readSessionMcpServerOverride(options, name);
+    if (serverOverride === false || (serverOverride !== true && server.enabled === false)) {
       continue;
     }
     if (!isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, options)) {
       continue;
     }
-    mcp_servers[name] = normalizeCodexMcpServerConfig(name, server) as CodexThreadConfigObject;
+    projected.push([
+      name,
+      normalizeCodexMcpServerConfig(
+        name,
+        applyCodexSessionMcpToolDenials(name, server, options?.toolOverrides),
+      ) as CodexThreadConfigObject,
+    ]);
   }
+  const mcp_servers: CodexThreadConfigObject = Object.fromEntries(projected);
   if (Object.keys(mcp_servers).length === 0) {
     return undefined;
   }
@@ -113,16 +161,21 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
   options?: CodexUserMcpServersProjectionOptions,
 ): Promise<{ mcp_servers: CodexThreadConfigObject } | undefined> {
   const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
-  const entries = Object.entries(userServers);
+  // Fail-closed: requester-scoped servers never enter harness-native MCP config.
+  const { staticServers } = partitionMcpServersByConnectionScope(userServers);
+  const entries = Object.entries(staticServers);
   if (entries.length === 0) {
     return undefined;
   }
   let allowedServers = Object.fromEntries(
-    entries.filter(
-      ([, server]) =>
-        server.enabled !== false &&
-        isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, options),
-    ),
+    entries.filter(([name, server]) => {
+      const serverOverride = readSessionMcpServerOverride(options, name);
+      return (
+        serverOverride !== false &&
+        (serverOverride === true || server.enabled !== false) &&
+        isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, options)
+      );
+    }),
   ) as BundleMcpConfig["mcpServers"];
   if (Object.keys(allowedServers).length === 0) {
     return undefined;
@@ -154,9 +207,14 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
     omitUnavailableOAuthServers: true,
     onServerUnavailable: options?.onServerUnavailable,
   });
-  const mcp_servers: CodexThreadConfigObject = {};
-  for (const [name, server] of Object.entries(resolvedConfig.config.mcpServers)) {
-    mcp_servers[name] = normalizeCodexMcpServerConfig(name, server) as CodexThreadConfigObject;
-  }
+  const mcp_servers: CodexThreadConfigObject = Object.fromEntries(
+    Object.entries(resolvedConfig.config.mcpServers).map(([name, server]) => [
+      name,
+      normalizeCodexMcpServerConfig(
+        name,
+        applyCodexSessionMcpToolDenials(name, server, options?.toolOverrides),
+      ) as CodexThreadConfigObject,
+    ]),
+  );
   return Object.keys(mcp_servers).length === 0 ? undefined : { mcp_servers };
 }

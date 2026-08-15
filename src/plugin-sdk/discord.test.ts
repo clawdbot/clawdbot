@@ -75,7 +75,7 @@ const mocks = vi.hoisted(() => {
     componentEditResult,
     runtimeModule,
     runtimeConfig,
-    loadBundledPluginPublicSurfaceModuleSync: vi.fn((params: { artifactBasename: string }) => {
+    loadBundledPluginPublicSurfaceModuleSyncCore: vi.fn((params: { artifactBasename: string }) => {
       if (params.artifactBasename === "runtime-api.js") {
         return runtimeModule;
       }
@@ -94,7 +94,7 @@ vi.mock("./facade-loader.js", () => ({
         },
       },
     ),
-  loadBundledPluginPublicSurfaceModuleSync: mocks.loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore: mocks.loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
 vi.mock("./runtime-config-snapshot.js", () => ({
@@ -108,7 +108,6 @@ describe("discord plugin-sdk facade", () => {
 
     for (const exportName of [
       "DEFAULT_ACCOUNT_ID",
-      "DiscordConfigSchema",
       "PAIRING_APPROVED_MESSAGE",
       "applyAccountNameToChannelSection",
       "autoBindSpawnedDiscordSubagent",

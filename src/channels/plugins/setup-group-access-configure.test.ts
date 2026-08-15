@@ -1,15 +1,24 @@
 // Setup group access configure tests cover channel setup writes for group access config.
 import { describe, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
 import type { ChannelAccessPolicy } from "./setup-group-access.js";
 
 function createPrompter(params: { confirm: boolean; policy?: ChannelAccessPolicy; text?: string }) {
+  const confirm = vi.fn(async () => params.confirm);
+  const text = vi.fn(async () => params.text ?? "");
+  const note = vi.fn();
+  const prompter = createWizardPrompter(
+    { confirm, text, note },
+    { defaultSelect: params.policy ?? "allowlist" },
+  );
   return {
-    confirm: vi.fn(async () => params.confirm),
-    select: vi.fn(async () => params.policy ?? "allowlist"),
-    text: vi.fn(async () => params.text ?? ""),
-    note: vi.fn(),
+    ...prompter,
+    confirm,
+    select: vi.mocked(prompter.select),
+    text,
+    note,
   };
 }
 
@@ -24,7 +33,7 @@ async function runConfigureChannelAccess<TResolved>(params: {
 }) {
   return await configureChannelAccessWithAllowlist({
     cfg: params.cfg,
-    prompter: params.prompter as any,
+    prompter: params.prompter,
     label: params.label ?? "Slack channels",
     currentPolicy: "allowlist",
     currentEntries: [],
@@ -106,7 +115,7 @@ describe("configureChannelAccessWithAllowlist", () => {
 
     const next = await configureChannelAccessWithAllowlist({
       cfg,
-      prompter: prompter as any,
+      prompter,
       label: "Twitch chat",
       currentPolicy: "disabled",
       currentEntries: [],

@@ -80,6 +80,18 @@ struct ExecApprovalsPromptServerTests {
     }
 
     @Test
+    func `prompt server retry backoff grows exponentially and caps`() {
+        var backoff = ExecApprovalsPromptRetryBackoff(
+            initialDelay: .milliseconds(10),
+            maximumDelay: .milliseconds(40))
+
+        #expect(backoff.nextDelay() == .milliseconds(10))
+        #expect(backoff.nextDelay() == .milliseconds(20))
+        #expect(backoff.nextDelay() == .milliseconds(40))
+        #expect(backoff.nextDelay() == .milliseconds(40))
+    }
+
+    @Test
     func `prompt server reloads credentials after an unavailable approvals read`() async throws {
         let root = try self.makeShortSocketRoot()
         let socketPath = root.appendingPathComponent("exec-approvals.sock").path

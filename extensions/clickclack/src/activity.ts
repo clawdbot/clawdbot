@@ -33,6 +33,7 @@ type ClickClackItemEventPayload = {
   summary?: string;
   progressText?: string;
   meta?: string;
+  commandBearing?: boolean;
 };
 
 /** Destination for durable activity rows (channel or DM conversation). */
@@ -42,7 +43,7 @@ type ClickClackActivityTarget = {
 };
 
 /** Client subset needed by the publisher (satisfied by `createClickClackClient`). */
-export type ClickClackActivityClient = {
+type ClickClackActivityClient = {
   createActivityMessage(params: {
     channelId?: string;
     conversationId?: string;
@@ -105,6 +106,7 @@ function activityBody(payload: ClickClackItemEventPayload): string {
     summary: payload.summary,
     progressText: payload.progressText,
     meta: payload.meta,
+    commandBearing: payload.commandBearing,
   })?.text?.trim();
   if (line) {
     return line;
@@ -139,7 +141,7 @@ type ToolRow = {
 
 /** Publisher wired into one agent turn via `replyOptions.onItemEvent`. */
 export type ClickClackActivityPublisher = {
-  onItemEvent: (payload: ClickClackItemEventPayload) => void;
+  onItemEvent: (payload: ClickClackItemEventPayload) => false;
   /**
    * Records the resolved model/thinking for this turn (from
    * `replyOptions.onModelSelected`); stamped onto subsequent activity rows.
@@ -300,12 +302,14 @@ export function createClickClackActivityPublisher(params: {
       const kind = normalizedItemKind(payload);
       if (STREAMING_COMMENTARY_ITEM_KINDS.has(kind)) {
         handleCommentary(payload);
-        return;
+        return false;
       }
       if (SKIPPED_ITEM_KINDS.has(kind)) {
-        return;
+        return false;
       }
       handleDiscreteItem(payload);
+      // Activity transport is serialized in the background; queueing is not visibility.
+      return false;
     },
     setProvenance: (next) => {
       provenance = next;

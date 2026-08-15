@@ -2,12 +2,14 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
-import type { AgentRunLoopResult } from "./agent-runner-execution.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
-import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
+import {
+  createMockFollowupRun,
+  createMockReplyOperation,
+  createMockTypingController,
+} from "./test-helpers.js";
 
-const runAgentTurnWithFallbackMock = vi.fn();
+const executeAgentTurnMock = vi.fn();
 const resolveOutboundAttachmentFromUrlMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
@@ -62,9 +64,13 @@ vi.mock("../../media/outbound-attachment.js", () => ({
     resolveOutboundAttachmentFromUrlMock(...args),
 }));
 
-vi.mock("./agent-runner-execution.js", () => ({
+vi.mock("./agent-runner-failure-reply.js", () => ({
+  buildEmptyInteractiveReplyPayload: vi.fn(() => undefined),
   buildKnownAgentRunFailureReplyPayload: vi.fn(() => undefined),
-  runAgentTurnWithFallback: (...args: unknown[]) => runAgentTurnWithFallbackMock(...args),
+}));
+
+vi.mock("./agent-runner-execution.js", () => ({
+  executeAgentTurn: (...args: unknown[]) => executeAgentTurnMock(...args),
 }));
 
 vi.mock("./agent-runner-memory.js", () => ({
@@ -102,19 +108,9 @@ vi.mock("./session-run-accounting.js", () => ({
 
 const { runReplyAgent } = await import("./agent-runner.js");
 
-function createReplyOperation(): ReplyOperation {
-  return {
-    result: undefined,
-    startedAtMs: Date.now(),
-    lastActivityAtMs: Date.now(),
-    recordActivity: vi.fn(),
-    setPhase: vi.fn(),
-    freezeAbort: vi.fn(),
-    fail: vi.fn(),
-    complete: vi.fn(),
-    completeThen: vi.fn(),
-  } as unknown as ReplyOperation;
-}
+type AgentTurnExecutionResult = Awaited<
+  ReturnType<typeof import("./agent-runner-execution.js").executeAgentTurn>
+>;
 
 function makeRunReplyAgentParams(
   overrides: Partial<Parameters<typeof runReplyAgent>[0]> = {},
@@ -139,7 +135,6 @@ function makeRunReplyAgentParams(
     shouldSteer: false,
     shouldFollowup: false,
     isActive: false,
-    isStreaming: false,
     typing: createMockTypingController(),
     sessionCtx: {
       Provider: provider,
@@ -156,7 +151,7 @@ function makeRunReplyAgentParams(
     resolvedBlockStreamingBreak: "message_end",
     shouldInjectGroupIntro: false,
     typingMode: "instant",
-    replyOperation: createReplyOperation(),
+    replyOperation: createMockReplyOperation().replyOperation,
     ...overrides,
   };
 }
@@ -164,13 +159,13 @@ function makeRunReplyAgentParams(
 describe("runReplyAgent final MEDIA replies", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    runAgentTurnWithFallbackMock.mockReset();
+    executeAgentTurnMock.mockReset();
     resolveOutboundAttachmentFromUrlMock.mockReset();
     enqueueFollowupRunMock.mockReset();
     refreshQueuedFollowupSessionMock.mockReset();
     scheduleFollowupDrainMock.mockReset();
 
-    runAgentTurnWithFallbackMock.mockImplementation(async (params: unknown) => {
+    executeAgentTurnMock.mockImplementation(async (params: unknown) => {
       const { buildReplyPayloads } = await vi.importActual<
         typeof import("./agent-runner-payloads.js")
       >("./agent-runner-payloads.js");
@@ -207,9 +202,9 @@ describe("runReplyAgent final MEDIA replies", () => {
         throw new Error("expected parsed reply payload");
       }
       return {
-        kind: "final",
-        payload,
-      } satisfies AgentRunLoopResult;
+        runId: "media-test",
+        outcome: { kind: "rejected", payload },
+      } satisfies AgentTurnExecutionResult;
     });
     resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => ({
       path: path.join("/tmp/outbound-media", path.basename(mediaUrl)),
@@ -228,7 +223,7 @@ describe("runReplyAgent final MEDIA replies", () => {
       mediaUrl: "/tmp/outbound-media/generated.png",
       mediaUrls: ["/tmp/outbound-media/generated.png"],
     });
-    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
+    expect(executeAgentTurnMock).toHaveBeenCalledOnce();
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
       path.join("/tmp/workspace", "out", "generated.png"),
       5 * 1024 * 1024,
@@ -244,7 +239,7 @@ describe("runReplyAgent final MEDIA replies", () => {
         path: path.join("/tmp/outbound-media", `${stagedIndex}-${path.basename(mediaUrl)}`),
       };
     });
-    runAgentTurnWithFallbackMock.mockImplementationOnce(async (params: unknown) => {
+    executeAgentTurnMock.mockImplementationOnce(async (params: unknown) => {
       const { buildReplyPayloads } = await vi.importActual<
         typeof import("./agent-runner-payloads.js")
       >("./agent-runner-payloads.js");
@@ -292,9 +287,9 @@ describe("runReplyAgent final MEDIA replies", () => {
         throw new Error("expected parsed final payload");
       }
       return {
-        kind: "final",
-        payload,
-      } satisfies AgentRunLoopResult;
+        runId: "media-test",
+        outcome: { kind: "rejected", payload },
+      } satisfies AgentTurnExecutionResult;
     });
 
     const result = await runReplyAgent(

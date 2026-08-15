@@ -7,7 +7,7 @@ import type {
   ExecApprovalForwardingConfig,
   ExecApprovalForwardingMode,
 } from "../config/types.approvals.js";
-import { doesApprovalRequestMatchChannelAccount } from "../infra/approval-request-account-binding.js";
+import { doesApprovalRequestSelectChannelAccount } from "../infra/approval-request-account-binding.js";
 import { matchesApprovalRequestFilters } from "../infra/approval-request-filters.js";
 import {
   getExecApprovalReplyMetadata,
@@ -245,6 +245,66 @@ export type NativeApprovalTarget = {
   /** Optional thread/topic id inside the destination. */
   threadId?: string | number | null;
 };
+
+/**
+ * Create the standard target adapters for messaging channels whose native
+ * approval destination is a normalized `to` value.
+ */
+export function createNativeApprovalMessagingTargetResolvers(params: {
+  /** Lowercase channel id used by forwarding and turn-source routes. */
+  channel: string;
+  /** Channel-owned destination normalizer. */
+  normalizeTo: (to: string) => string | null | undefined;
+}): {
+  normalizeForwardTarget: (target: NativeApprovalForwardTarget) => NativeApprovalTarget | null;
+  resolveTurnSourceTarget: (request: ApprovalRequest) => NativeApprovalTarget | null;
+  resolveSessionTarget: (sessionTarget: ExecApprovalSessionTarget) => NativeApprovalTarget | null;
+  normalizeTarget: (target: NativeApprovalTarget) => NativeApprovalTarget | null;
+} {
+  const normalizeTo = (to: string): string | null => params.normalizeTo(to) || null;
+  const normalizeTarget = (target: NativeApprovalTarget): NativeApprovalTarget | null => {
+    const to = normalizeTo(target.to);
+    return to ? { ...target, to } : null;
+  };
+
+  return {
+    normalizeForwardTarget: (target) => {
+      if (normalizeLowercaseStringOrEmpty(target.channel) !== params.channel) {
+        return null;
+      }
+      const to = normalizeTo(target.to);
+      return to
+        ? {
+            to,
+            accountId: normalizeOptionalString(target.accountId),
+            threadId: target.threadId ?? null,
+          }
+        : null;
+    },
+    resolveTurnSourceTarget: (request) => {
+      if (normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel) !== params.channel) {
+        return null;
+      }
+      const to = normalizeTo(request.request.turnSourceTo ?? "");
+      return to
+        ? {
+            to,
+            accountId: normalizeOptionalString(request.request.turnSourceAccountId),
+          }
+        : null;
+    },
+    resolveSessionTarget: (sessionTarget) => {
+      const to = normalizeTo(sessionTarget.to);
+      return to
+        ? {
+            to,
+            accountId: normalizeOptionalString(sessionTarget.accountId),
+          }
+        : null;
+    },
+    normalizeTarget,
+  };
+}
 
 /** Compare channel-native approval targets with the same normalization used by outbound routes. */
 export function nativeApprovalTargetsMatch(params: {
@@ -485,16 +545,6 @@ function isSessionApprovalEligibleViaForwarding(
   if (!matchesForwardingFilters({ config: forwarding.config, request: params.request })) {
     return false;
   }
-  if (
-    !doesApprovalRequestMatchChannelAccount({
-      cfg: params.cfg,
-      request: params.request,
-      channel: params.channel,
-      accountId: params.accountId,
-    })
-  ) {
-    return false;
-  }
   return params.hasOriginOrSessionTarget({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -635,21 +685,7 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     }
     const normalizedAccountId = normalizeAccountId(accountId);
     const defaultAccountId = normalizeAccountId(params.resolveDefaultAccountId(input.cfg));
-    if (normalizedAccountId === defaultAccountId) {
-      return true;
-    }
-    const enabledAccountIds = params
-      .listAccountIds(input.cfg)
-      .filter((candidateAccountId) =>
-        params.isTransportEnabled({
-          cfg: input.cfg,
-          accountId: candidateAccountId,
-        }),
-      )
-      .map((candidateAccountId) => normalizeAccountId(candidateAccountId));
-    // Unscoped targets are safe for a non-default account only when exactly
-    // one enabled account can receive them; otherwise they would be ambiguous.
-    return enabledAccountIds.length === 1 && enabledAccountIds[0] === normalizedAccountId;
+    return normalizedAccountId === defaultAccountId;
   };
 
   const hasMatchingChannelTarget = (input: {
@@ -737,6 +773,24 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     approvalKind: ApprovalKind;
     request: ApprovalRequest;
   }): boolean => {
+    // Per-account runtimes report raw candidates here. The route coordinator rejects
+    // unbound multi-account groups as ambiguous before any runtime can deliver.
+    const accountId = input.accountId ?? params.resolveDefaultAccountId(input.cfg);
+    const eligibleAccountIds = params.isTransportEnabled({ cfg: input.cfg, accountId })
+      ? [accountId]
+      : [];
+    if (
+      !doesApprovalRequestSelectChannelAccount({
+        cfg: input.cfg,
+        request: input.request,
+        channel: params.channel,
+        accountId: input.accountId,
+        defaultAccountId: params.resolveDefaultAccountId(input.cfg),
+        eligibleAccountIds,
+      })
+    ) {
+      return false;
+    }
     return isSessionApprovalEligibleViaForwarding({
       ...input,
       channel: params.channel,
@@ -973,3 +1027,4 @@ export function createChannelApproverDmTargetResolver<
     return targets;
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

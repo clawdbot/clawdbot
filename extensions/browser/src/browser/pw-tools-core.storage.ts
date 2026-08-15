@@ -4,7 +4,7 @@
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 
-export type PlaywrightCookieInput = {
+type PlaywrightCookieInput = {
   name: string;
   value: string;
   url?: string;

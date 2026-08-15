@@ -127,28 +127,17 @@ describe("xAI doctor contract", () => {
             { provider: "x-ai", model: "grok-stt" },
             { provider: "xai" },
           ],
-          audio: {
-            models: [
-              {
-                type: "provider",
-                provider: "xai",
-                model: "grok-stt",
-                profile: "speech",
-                timeoutSeconds: 45,
-              },
-            ],
-          },
         },
       },
     } as unknown as OpenClawConfig;
 
     expect(
       legacyConfigRules.filter((rule) => rule.match(readPathForTest(config, rule.path))),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
 
     const result = normalizeCompatibilityConfig({ cfg: config });
 
-    expect(result.changes).toHaveLength(2);
+    expect(result.changes).toHaveLength(1);
     expect(result.config).not.toBe(config);
     expect(result.config.tools?.media?.models).toEqual([
       { provider: " xAI ", language: "en", timeoutSeconds: 30 },
@@ -158,16 +147,7 @@ describe("xAI doctor contract", () => {
       { provider: "x-ai", model: "grok-stt" },
       { provider: "xai" },
     ]);
-    expect(result.config.tools?.media?.audio?.models).toEqual([
-      {
-        type: "provider",
-        provider: "xai",
-        profile: "speech",
-        timeoutSeconds: 45,
-      },
-    ]);
     expect(config.tools?.media?.models?.[0]).toHaveProperty("model", " GROK-STT ");
-    expect(config.tools?.media?.audio?.models?.[0]).toHaveProperty("model", "grok-stt");
     expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
       config: result.config,
       changes: [],

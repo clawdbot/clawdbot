@@ -1,64 +1,12 @@
 // Qa Lab plugin module implements shared live-transport RTT behavior.
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { QaEvidenceTiming } from "../../evidence-summary.js";
-
-export type LiveTransportRttOptions<CheckId extends string = string> = {
-  count: number;
-  timeoutMs: number;
-  maxFailures: number;
-  checkIds: Set<CheckId>;
-};
 
 export type LiveTransportRttSample = {
   rttMs?: number;
   status: "pass" | "fail";
 };
 
-function normalizePositiveRttInteger(value: number | undefined) {
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value <= 0 ||
-    value > MAX_TIMER_TIMEOUT_MS
-  ) {
-    return undefined;
-  }
-  return value;
-}
-
-export function normalizeLiveTransportRttOptions<CheckId extends string>(params: {
-  count?: number;
-  defaultCheckIds: readonly CheckId[];
-  knownCheckIds: ReadonlySet<CheckId>;
-  maxFailures?: number;
-  rawCheckIds?: readonly string[];
-  timeoutMs?: number;
-  unknownCheckMessage: (checkId: string) => string;
-}): LiveTransportRttOptions<CheckId> | undefined {
-  const count = normalizePositiveRttInteger(params.count);
-  if (count === undefined) {
-    return undefined;
-  }
-  const rawCheckIds =
-    params.rawCheckIds && params.rawCheckIds.length > 0
-      ? params.rawCheckIds
-      : params.defaultCheckIds;
-  const checkIds = new Set<CheckId>();
-  for (const checkId of rawCheckIds) {
-    if (!params.knownCheckIds.has(checkId as CheckId)) {
-      throw new Error(params.unknownCheckMessage(checkId));
-    }
-    checkIds.add(checkId as CheckId);
-  }
-  return {
-    count,
-    maxFailures: normalizePositiveRttInteger(params.maxFailures) ?? count,
-    checkIds,
-    timeoutMs: normalizePositiveRttInteger(params.timeoutMs) ?? 30_000,
-  };
-}
-
-export function percentile(sortedValues: readonly number[], percentileValue: number) {
+function percentile(sortedValues: readonly number[], percentileValue: number) {
   if (sortedValues.length === 0) {
     return undefined;
   }

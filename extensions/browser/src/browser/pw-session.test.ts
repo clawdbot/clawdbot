@@ -11,7 +11,6 @@ import {
   ensurePageState,
   isDownloadStartingNavigationError,
   refLocator,
-  rememberRoleRefsForTarget,
   restoreRoleRefsForTarget,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
@@ -173,41 +172,6 @@ describe("pw-session refLocator", () => {
 });
 
 describe("pw-session role refs cache", () => {
-  it("restores unscoped refs for a different Page instance", () => {
-    const cdpUrl = "http://127.0.0.1:9222";
-    const targetId = "t1";
-
-    rememberRoleRefsForTarget({
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "button", name: "OK" } },
-      mode: "role",
-    });
-
-    const { page, mocks } = fakePage();
-    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
-
-    refLocator(page, "e1");
-    expect(mocks.getByRole).toHaveBeenCalled();
-  });
-
-  it("does not restore frame-scoped refs onto a replacement Page", () => {
-    const cdpUrl = "http://127.0.0.1:9222";
-    const targetId = "frame-target";
-    rememberRoleRefsForTarget({
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "button", name: "Old frame" } },
-      frameSelector: "iframe#main",
-      mode: "role",
-    });
-
-    const { page } = fakePage();
-    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
-
-    expect(ensurePageState(page).roleRefs).toBeUndefined();
-  });
-
   it("invalidates cached refs for replacement Pages after main-frame navigation", () => {
     const cdpUrl = "http://127.0.0.1:9222";
     const targetId = "t1";

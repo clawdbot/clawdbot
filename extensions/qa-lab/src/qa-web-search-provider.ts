@@ -12,10 +12,7 @@ import {
   QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY,
 } from "./qa-web-search-provider.shared.js";
 
-export {
-  QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY,
-  QA_LAB_WEB_SEARCH_PROVIDER_ID,
-} from "./qa-web-search-provider.shared.js";
+export { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "./qa-web-search-provider.shared.js";
 
 const QaLabWebSearchSchema = {
   type: "object",
@@ -55,7 +52,8 @@ export function createQaLabWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search a deterministic QA Lab fixture corpus. This provider is for QA runtime parity only and never calls the public web.",
       parameters: QaLabWebSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
+        context?.signal?.throwIfAborted();
         const query = readStringParam(args, "query", { required: true });
         if (query === QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY) {
           throw new Error("QA Lab web_search denied input sentinel");

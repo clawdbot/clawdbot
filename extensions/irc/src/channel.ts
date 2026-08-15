@@ -44,10 +44,10 @@ import {
   resolveIrcOutboundSessionRoute,
 } from "./normalize.js";
 import { ircOutboundBaseAdapter } from "./outbound-base.js";
-import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
+import { resolveIrcGroupRequireMention, resolveIrcGroupToolPolicy } from "./policy.js";
 import { probeIrc } from "./probe.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { ircSetupAdapter } from "./setup-core.js";
+import { ircSetupContract } from "./setup-core.js";
 import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
 
@@ -170,7 +170,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       ...meta,
       quickstartAllowFrom: true,
     },
-    setup: ircSetupAdapter,
+    setupContract: ircSetupContract,
     setupWizard: ircSetupWizard,
     capabilities: {
       chatTypes: ["direct", "group"],
@@ -197,6 +197,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
             tls: account.tls,
             nick: account.nick,
             passwordSource: account.passwordSource,
+            tokenStatus: account.tokenStatus,
           },
         }),
     },
@@ -214,24 +215,23 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
         if (!groupId) {
           return true;
         }
-        const match = resolveIrcGroupMatch({ groups: account.config.groups, target: groupId });
-        return resolveIrcRequireMention({
-          groupConfig: match.groupConfig,
-          wildcardConfig: match.wildcardConfig,
-        });
+        return resolveIrcGroupRequireMention({ groups: account.config.groups, target: groupId });
       },
       resolveToolPolicy: ({ cfg, accountId, groupId }) => {
         const account = resolveIrcAccount({ cfg: cfg as CoreConfig, accountId });
         if (!groupId) {
           return undefined;
         }
-        const match = resolveIrcGroupMatch({ groups: account.config.groups, target: groupId });
-        return match.groupConfig?.tools ?? match.wildcardConfig?.tools;
+        return resolveIrcGroupToolPolicy({ groups: account.config.groups, target: groupId });
       },
     },
     messaging: {
       targetPrefixes: ["irc"],
       normalizeTarget: normalizeIrcMessagingTarget,
+      inferTargetChatType: ({ to }) => {
+        const target = normalizeIrcMessagingTarget(to);
+        return target ? (isChannelTarget(target) ? "group" : "direct") : undefined;
+      },
       resolveOutboundSessionRoute: (params) => resolveIrcOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: looksLikeIrcTargetId,
@@ -306,6 +306,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
           tls: account.tls,
           nick: account.nick,
           passwordSource: account.passwordSource,
+          tokenStatus: account.tokenStatus,
         },
       }),
     }),
@@ -342,22 +343,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
     base: ircOutboundBaseAdapter,
     attachedResults: {
       channel: "irc",
-      sendText: async ({ cfg, to, text, accountId, replyToId }) => {
-        const { sendMessageIrc } = await loadIrcChannelRuntime();
-        return await sendMessageIrc(to, text, {
-          cfg: cfg as CoreConfig,
-          accountId: accountId ?? undefined,
-          replyTo: replyToId ?? undefined,
-        });
-      },
-      sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) => {
-        const { sendMessageIrc } = await loadIrcChannelRuntime();
-        return await sendMessageIrc(to, mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text, {
-          cfg: cfg as CoreConfig,
-          accountId: accountId ?? undefined,
-          replyTo: replyToId ?? undefined,
-        });
-      },
+      sendText: ({ onDeliveryResult: _onDeliveryResult, ...ctx }) =>
+        ircMessageAdapter.send.text(ctx),
+      sendMedia: ({ onDeliveryResult: _onDeliveryResult, mediaUrl, ...ctx }) =>
+        ircMessageAdapter.send.media({ ...ctx, mediaUrl: mediaUrl ?? "" }),
     },
   },
 });

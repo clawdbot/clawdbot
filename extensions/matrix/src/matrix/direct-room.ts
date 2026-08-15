@@ -1,20 +1,13 @@
 // Matrix plugin module implements direct room behavior.
+import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixClient } from "./sdk.js";
-
-function trimMaybeString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
 
 function normalizeJoinedMatrixMembers(joinedMembers: unknown): string[] {
   if (!Array.isArray(joinedMembers)) {
     return [];
   }
   return joinedMembers
-    .map((entry) => trimMaybeString(entry))
+    .map((entry) => normalizeNullableString(entry))
     .filter((entry): entry is string => Boolean(entry));
 }
 
@@ -23,8 +16,8 @@ export function isStrictDirectMembership(params: {
   remoteUserId?: string | null;
   joinedMembers?: readonly string[] | null;
 }): boolean {
-  const selfUserId = trimMaybeString(params.selfUserId);
-  const remoteUserId = trimMaybeString(params.remoteUserId);
+  const selfUserId = normalizeNullableString(params.selfUserId);
+  const remoteUserId = normalizeNullableString(params.remoteUserId);
   const joinedMembers = params.joinedMembers ?? [];
   return Boolean(
     selfUserId &&
@@ -51,7 +44,7 @@ export async function hasDirectMatrixMemberFlag(
   roomId: string,
   userId?: string | null,
 ): Promise<boolean | null> {
-  const normalizedUserId = trimMaybeString(userId);
+  const normalizedUserId = normalizeNullableString(userId);
   if (!normalizedUserId) {
     return null;
   }
@@ -87,8 +80,8 @@ export async function inspectMatrixDirectRoomEvidence(params: {
 }): Promise<MatrixDirectRoomEvidence> {
   const selfUserId =
     params.selfUserId !== undefined
-      ? trimMaybeString(params.selfUserId)
-      : trimMaybeString(await params.client.getUserId().catch(() => null));
+      ? normalizeNullableString(params.selfUserId)
+      : normalizeNullableString(await params.client.getUserId().catch(() => null));
   const joinedMembers = await readJoinedMatrixMembers(params.client, params.roomId);
   const strict = isStrictDirectMembership({
     selfUserId,

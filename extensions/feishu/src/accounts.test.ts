@@ -381,6 +381,27 @@ describe("resolveFeishuAccount", () => {
     expect(account.appId).toBe("cli_default");
   });
 
+  it("inherits and overrides VC auto-join per account", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          vcAutoJoin: true,
+          accounts: {
+            inherited: {},
+            disabled: { vcAutoJoin: false },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveFeishuAccount({ cfg: cfg as never, accountId: "inherited" }).config.vcAutoJoin,
+    ).toBe(true);
+    expect(
+      resolveFeishuAccount({ cfg: cfg as never, accountId: "disabled" }).config.vcAutoJoin,
+    ).toBe(false);
+  });
+
   it("treats unresolved SecretRef as not configured in account resolution", () => {
     const account = resolveFeishuAccount({
       cfg: {

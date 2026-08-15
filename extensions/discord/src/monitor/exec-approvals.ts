@@ -10,7 +10,7 @@ import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { buildExecApprovalCustomId, parseExecApprovalData } from "../approval-custom-id.js";
+import { parseExecApprovalData } from "../approval-custom-id.js";
 import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
   formatDiscordApprovalDisplayValue,
@@ -26,15 +26,13 @@ import {
   type MessagePayloadObject,
 } from "../internal/discord.js";
 
-export { buildExecApprovalCustomId, parseExecApprovalData };
-export { extractDiscordChannelId } from "../approval-native.js";
-
 type ExecApprovalButtonContext = {
   getApprovers: () => string[];
   resolveApproval: (
     approvalId: string,
     approvalKind: PendingApprovalView["approvalKind"],
     decision: ExecApprovalDecision,
+    senderId: string,
   ) => Promise<ExecApprovalResolveResult>;
 };
 
@@ -96,7 +94,7 @@ function isStructuredApprovalNotFoundError(err: unknown): boolean {
   );
 }
 
-export class ExecApprovalButton extends Button {
+class ExecApprovalButton extends Button {
   override label = "execapproval";
   customId = "execapproval:seed=1";
   override style = ButtonStyle.Primary;
@@ -144,6 +142,7 @@ export class ExecApprovalButton extends Button {
       parsed.approvalId,
       parsed.approvalKind,
       parsed.action,
+      userId,
     );
     if (!result.ok) {
       try {
@@ -200,15 +199,17 @@ export function createDiscordExecApprovalButtonContext(params: {
         accountId: params.accountId,
         configOverride: params.config,
       }),
-    resolveApproval: async (approvalId, approvalKind, decision) => {
+    resolveApproval: async (approvalId, approvalKind, decision, senderId) => {
       try {
         const resolution = await resolveApprovalOverGateway({
           cfg: params.cfg,
           approvalId,
           approvalKind,
           decision,
+          channel: "discord",
+          accountId: params.accountId,
+          senderId,
           gatewayUrl: params.gatewayUrl,
-          clientDisplayName: `Discord approval (${params.accountId})`,
         });
         return { ok: true, resolution };
       } catch (err) {

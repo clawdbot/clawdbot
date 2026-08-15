@@ -28,6 +28,26 @@
     "target": "BlueBubbles"
   },
   {
+    "source": "Buzz",
+    "target": "Buzz"
+  },
+  {
+    "source": "Channel overview",
+    "target": "频道概览"
+  },
+  {
+    "source": "Channel access controls",
+    "target": "频道访问控制"
+  },
+  {
+    "source": "Secrets management",
+    "target": "密钥管理"
+  },
+  {
+    "source": "Channel troubleshooting",
+    "target": "频道故障排除"
+  },
+  {
     "source": "Configuration reference - iMessage",
     "target": "Configuration reference - iMessage"
   },
@@ -42,6 +62,18 @@
   {
     "source": "ClawHub",
     "target": "ClawHub"
+  },
+  {
+    "source": "Claws",
+    "target": "Claws"
+  },
+  {
+    "source": "Cron jobs",
+    "target": "定时任务"
+  },
+  {
+    "source": "MCP configuration",
+    "target": "MCP 配置"
   },
   {
     "source": "ClawRouter (managed multi-provider routing)",
@@ -132,6 +164,14 @@
     "target": "Gateway RPC 参考"
   },
   {
+    "source": "Building a Gateway client",
+    "target": "构建 Gateway 客户端"
+  },
+  {
+    "source": "Embedding OpenClaw",
+    "target": "嵌入 OpenClaw"
+  },
+  {
     "source": "Secure file operations",
     "target": "安全文件操作"
   },
@@ -154,6 +194,10 @@
   {
     "source": "Code mode",
     "target": "代码模式"
+  },
+  {
+    "source": "Swarm",
+    "target": "Swarm"
   },
   {
     "source": "Codex harness",
@@ -234,6 +278,10 @@
   {
     "source": "Skills Config",
     "target": "Skills 配置"
+  },
+  {
+    "source": "Self-learning",
+    "target": "自我学习"
   },
   {
     "source": "local loopback",
@@ -338,6 +386,10 @@
   {
     "source": "WeChat",
     "target": "微信"
+  },
+  {
+    "source": "WeCom",
+    "target": "企业微信"
   },
   {
     "source": "Weixin",
@@ -544,6 +596,14 @@
     "target": "Discord"
   },
   {
+    "source": "Fireworks",
+    "target": "Fireworks"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
     "source": "Matrix",
     "target": "Matrix"
   },
@@ -552,12 +612,36 @@
     "target": "Microsoft Teams"
   },
   {
+    "source": "Raft",
+    "target": "Raft"
+  },
+  {
+    "source": "Runway",
+    "target": "Runway"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
     "source": "Slack",
     "target": "Slack"
   },
   {
+    "source": "Synthetic",
+    "target": "Synthetic"
+  },
+  {
     "source": "Telegram",
     "target": "Telegram"
+  },
+  {
+    "source": "Tokenjuice",
+    "target": "Tokenjuice"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
   },
   {
     "source": "Discovery + transports",
@@ -590,6 +674,10 @@
   {
     "source": "Memory overview",
     "target": "记忆概览"
+  },
+  {
+    "source": "QMD memory backend removal",
+    "target": "QMD 记忆后端移除"
   },
   {
     "source": "Active memory",
@@ -752,6 +840,38 @@
     "target": "Google Meet 插件"
   },
   {
+    "source": "Google Meet plugin",
+    "target": "Google Meet 插件"
+  },
+  {
+    "source": "Meeting plugins",
+    "target": "会议插件"
+  },
+  {
+    "source": "Meeting plugins overview",
+    "target": "会议插件概览"
+  },
+  {
+    "source": "Microsoft Teams channel",
+    "target": "Microsoft Teams 频道"
+  },
+  {
+    "source": "Microsoft Teams meetings plugin",
+    "target": "Microsoft Teams 会议插件"
+  },
+  {
+    "source": "Zoom meetings plugin",
+    "target": "Zoom 会议插件"
+  },
+  {
+    "source": "Voice call plugin",
+    "target": "语音通话插件"
+  },
+  {
+    "source": "Browser control",
+    "target": "浏览器控制"
+  },
+  {
     "source": "Plugin SDK",
     "target": "插件 SDK"
   },
@@ -814,6 +934,10 @@
   {
     "source": "Parallel search",
     "target": "Parallel 搜索"
+  },
+  {
+    "source": "Mxc plugin",
+    "target": "MXC 插件"
   },
   {
     "source": "CLI reference",
@@ -1164,6 +1288,10 @@
     "target": "Discord 语音"
   },
   {
+    "source": "Discord voice channels",
+    "target": "Discord 语音频道"
+  },
+  {
     "source": "Plugin management",
     "target": "插件管理"
   },
@@ -1328,6 +1456,34 @@
     "target": "媒体理解"
   },
   {
+    "source": "Media playback",
+    "target": "媒体播放"
+  },
+  {
+    "source": "Image and media support",
+    "target": "图像和媒体支持"
+  },
+  {
+    "source": "Audio and voice notes",
+    "target": "音频和语音消息"
+  },
+  {
+    "source": "Media overview",
+    "target": "媒体概览"
+  },
+  {
+    "source": "Text to speech",
+    "target": "文本转语音"
+  },
+  {
+    "source": "Linux app",
+    "target": "Linux 应用"
+  },
+  {
+    "source": "Inline audio and video playback",
+    "target": "内联音频和视频播放"
+  },
+  {
     "source": "Models CLI reference",
     "target": "模型 CLI 参考"
   },
@@ -1364,8 +1520,16 @@
     "target": "操作员权限范围"
   },
   {
+    "source": "Pull request review flow",
+    "target": "PR 审查流程"
+  },
+  {
     "source": "Scheduled tasks vs heartbeat",
     "target": "定时任务与心跳对比"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI 流水线"
   },
   {
     "source": "Scheduled tasks: Troubleshooting",
@@ -1466,5 +1630,125 @@
   {
     "source": "Path 3 live SQLite E2E harness",
     "target": "Path 3 live SQLite E2E harness"
+  },
+  {
+    "source": "HealthKit summaries",
+    "target": "HealthKit 摘要"
+  },
+  {
+    "source": "iOS app",
+    "target": "iOS 应用"
+  },
+  {
+    "source": "Gateway configuration reference",
+    "target": "Gateway 配置参考"
+  },
+  {
+    "source": "v2026.7.1",
+    "target": "v2026.7.1"
+  },
+  {
+    "source": "Security audit",
+    "target": "安全审计"
+  },
+  {
+    "source": "Linux Canvas plugin",
+    "target": "Linux Canvas plugin"
+  },
+  {
+    "source": "Baseten",
+    "target": "Baseten"
+  },
+  {
+    "source": "Baseten plugin",
+    "target": "Baseten 插件"
+  },
+  {
+    "source": "baseten",
+    "target": "baseten"
+  },
+  {
+    "source": "Baseten (Inkling + Model APIs)",
+    "target": "Baseten（Inkling + Model APIs）"
+  },
+  {
+    "source": "ChromeOS",
+    "target": "ChromeOS"
+  },
+  {
+    "source": "ChromeOS (Crostini)",
+    "target": "ChromeOS (Crostini)"
+  },
+  {
+    "source": "Linux guide",
+    "target": "Linux 指南"
+  },
+  {
+    "source": "Node install guidance",
+    "target": "Node 安装指南"
+  },
+  {
+    "source": "Gateway runbook",
+    "target": "Gateway 运行手册"
+  },
+  {
+    "source": "Multi-user mode",
+    "target": "多用户模式"
+  },
+  {
+    "source": "The main session",
+    "target": "主会话"
+  },
+  {
+    "source": "Session management",
+    "target": "会话管理"
+  },
+  {
+    "source": "Presence",
+    "target": "在线状态"
+  },
+  {
+    "source": "Gateway security",
+    "target": "Gateway 安全"
+  },
+  {
+    "source": "Retired HEARTBEAT.md workspace file",
+    "target": "已弃用的 HEARTBEAT.md 工作区文件"
+  },
+  {
+    "source": "Cron CLI",
+    "target": "Cron CLI"
+  },
+  {
+    "source": "TOOLS.md retired",
+    "target": "TOOLS.md 已弃用"
+  },
+  {
+    "source": "Automations",
+    "target": "自动化"
+  },
+  {
+    "source": "Automations (cron)",
+    "target": "自动化 (cron)"
+  },
+  {
+    "source": "Daytona",
+    "target": "Daytona"
+  },
+  {
+    "source": "Gateway remote access",
+    "target": "Gateway 远程访问"
+  },
+  {
+    "source": "Updating OpenClaw",
+    "target": "更新 OpenClaw"
+  },
+  {
+    "source": "Connect a machine",
+    "target": "连接机器"
+  },
+  {
+    "source": "Portals",
+    "target": "门户"
   }
 ]

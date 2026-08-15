@@ -1,7 +1,11 @@
 // Control UI controller manages skill workshop gateway state.
-import { formatByteSize } from "@openclaw/normalization-core";
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
+import { formatBytes } from "../../lib/agents/display.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -9,12 +13,17 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type {
   SkillWorkshopAction,
-  SkillWorkshopActionNotice,
-  SkillWorkshopMode,
+  SkillWorkshopEvaluation,
   SkillWorkshopProposal,
   SkillWorkshopProposalStatus,
-  SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
+import { createSkillWorkshopHistoryScanState, type SkillWorkshopState } from "./state.ts";
+export {
+  createSkillWorkshopState,
+  skillWorkshopRouteData,
+  type SkillWorkshopRouteData,
+  type SkillWorkshopState,
+} from "./state.ts";
 
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
 
@@ -62,6 +71,8 @@ type SkillProposalRecord = {
   createdAt: string;
   updatedAt: string;
   proposedVersion: string;
+  draftHash: string;
+  evaluation?: SkillWorkshopEvaluation;
   origin?: SkillProposalOrigin;
   supportFiles?: SkillProposalSupportFileRecord[];
   target: {
@@ -77,95 +88,20 @@ type SkillProposalSupportFile = {
 
 type SkillProposalInspectResult = {
   record: SkillProposalRecord;
+  revisionHash?: string;
   content: string;
   supportFiles?: SkillProposalSupportFile[];
+};
+
+type SkillProposalEvaluateResult = {
+  record: SkillProposalRecord;
+  evaluation: SkillWorkshopEvaluation;
 };
 
 export type SkillWorkshopContext = {
   gateway: ApplicationGateway;
   agentSelection: Pick<AgentSelectionCapability, "state">;
 };
-
-export type SkillWorkshopState = {
-  skillWorkshopAgentId: string | null;
-  skillWorkshopLoading: boolean;
-  skillWorkshopLoaded: boolean;
-  skillWorkshopError: string | null;
-  skillWorkshopInspectingKey: string | null;
-  skillWorkshopProposals: SkillWorkshopProposal[];
-  skillWorkshopSelectedKey: string | null;
-  skillWorkshopActionBusy: { key: string; action: SkillWorkshopAction } | null;
-  skillWorkshopActionNotice: SkillWorkshopActionNotice | null;
-  skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
-  skillWorkshopRevisionKey: string | null;
-  skillWorkshopRevisionDraft: string;
-  skillWorkshopStatusFilter: SkillWorkshopStatusFilter;
-  skillWorkshopQuery: string;
-  skillWorkshopFilePreviewKey: string | null;
-  skillWorkshopFilePreviewQuery: string;
-  skillWorkshopQueueWidth: number;
-  skillWorkshopMode: SkillWorkshopMode;
-  skillWorkshopUseCurrentChatForRevisions: boolean;
-};
-
-export type SkillWorkshopRouteData = Pick<
-  SkillWorkshopState,
-  | "skillWorkshopAgentId"
-  | "skillWorkshopLoading"
-  | "skillWorkshopLoaded"
-  | "skillWorkshopError"
-  | "skillWorkshopInspectingKey"
-  | "skillWorkshopProposals"
-  | "skillWorkshopSelectedKey"
-  | "skillWorkshopActionBusy"
-  | "skillWorkshopActionNotice"
-  | "skillWorkshopRevisionKey"
-  | "skillWorkshopRevisionDraft"
->;
-
-export function createSkillWorkshopState(data?: SkillWorkshopRouteData): SkillWorkshopState {
-  return {
-    skillWorkshopAgentId: data?.skillWorkshopAgentId ?? null,
-    skillWorkshopLoading: data?.skillWorkshopLoading ?? false,
-    skillWorkshopLoaded: data?.skillWorkshopLoaded ?? false,
-    skillWorkshopError: data?.skillWorkshopError ?? null,
-    skillWorkshopInspectingKey: data?.skillWorkshopInspectingKey ?? null,
-    skillWorkshopProposals: data?.skillWorkshopProposals ?? [],
-    skillWorkshopSelectedKey: data?.skillWorkshopSelectedKey ?? null,
-    skillWorkshopActionBusy: data?.skillWorkshopActionBusy ?? null,
-    skillWorkshopActionNotice: data?.skillWorkshopActionNotice ?? null,
-    skillWorkshopActionNoticeTimer: null,
-    skillWorkshopRevisionKey: data?.skillWorkshopRevisionKey ?? null,
-    skillWorkshopRevisionDraft: data?.skillWorkshopRevisionDraft ?? "",
-    skillWorkshopStatusFilter: "pending",
-    skillWorkshopQuery: "",
-    skillWorkshopFilePreviewKey: null,
-    skillWorkshopFilePreviewQuery: "",
-    skillWorkshopQueueWidth: 360,
-    skillWorkshopMode: "today",
-    skillWorkshopUseCurrentChatForRevisions: false,
-  };
-}
-
-export function skillWorkshopRouteData(state: SkillWorkshopState): SkillWorkshopRouteData {
-  return {
-    skillWorkshopAgentId: state.skillWorkshopAgentId,
-    skillWorkshopLoading: state.skillWorkshopLoading,
-    skillWorkshopLoaded: state.skillWorkshopLoaded,
-    skillWorkshopError: state.skillWorkshopError,
-    skillWorkshopInspectingKey: state.skillWorkshopInspectingKey,
-    skillWorkshopProposals: state.skillWorkshopProposals,
-    skillWorkshopSelectedKey: state.skillWorkshopSelectedKey,
-    skillWorkshopActionBusy: state.skillWorkshopActionBusy,
-    skillWorkshopActionNotice: state.skillWorkshopActionNotice,
-    skillWorkshopRevisionKey: state.skillWorkshopRevisionKey,
-    skillWorkshopRevisionDraft: state.skillWorkshopRevisionDraft,
-  };
-}
-
-function getErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 function skillWorkshopAgentParams(context: SkillWorkshopContext): { agentId: string } {
   const snapshot = context.gateway.snapshot;
@@ -178,6 +114,10 @@ function skillWorkshopAgentParams(context: SkillWorkshopContext): { agentId: str
         ? normalizeAgentId(selectedAgentId)
         : resolveUiSelectedGlobalAgentId(snapshot),
   };
+}
+
+export function resolveSkillWorkshopAgentId(context: SkillWorkshopContext): string {
+  return skillWorkshopAgentParams(context).agentId;
 }
 
 function loadedSkillWorkshopAgentParams(
@@ -199,14 +139,11 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
   state.skillWorkshopRevisionDraft = "";
   state.skillWorkshopFilePreviewKey = null;
   state.skillWorkshopFilePreviewQuery = "";
+  state.skillWorkshopHistoryScan = createSkillWorkshopHistoryScanState();
 }
 
 function parseDateMs(value: string | undefined): number {
-  if (!value) {
-    return Date.now();
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Date.now();
+  return parseDateStringTimestampMs(value) ?? Date.now();
 }
 
 function startOfLocalDay(ms: number): number {
@@ -248,18 +185,6 @@ function proposedVersionNumber(value: string | undefined): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "0 B";
-  }
-  return formatByteSize(bytes, {
-    style: "legacy-binary",
-    maxUnit: "kilo",
-    separator: " ",
-    fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
-  });
-}
-
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).length;
 }
@@ -276,7 +201,11 @@ function supportFilesFromInspect(
   );
   return (result.supportFiles ?? []).map((file) => ({
     path: file.path,
-    size: formatBytes(sizes.get(file.path) ?? byteLength(file.content)),
+    size: formatBytes(Math.max(0, sizes.get(file.path) ?? byteLength(file.content)), {
+      fallback: "0 B",
+      maxUnit: "kilo",
+      fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
+    }),
     contents: file.content,
   }));
 }
@@ -297,6 +226,8 @@ function proposalFromManifest(
     status: entry.status,
     ...(previousIsCurrent && previous.origin ? { origin: previous.origin } : {}),
     version: previousIsCurrent ? previous.version : 1,
+    revisionHash: previousIsCurrent ? previous.revisionHash : null,
+    ...(previousIsCurrent && previous.evaluation ? { evaluation: previous.evaluation } : {}),
     createdAt,
     updatedAt,
     recencyGroup: recencyGroup(updatedAt || createdAt),
@@ -313,6 +244,13 @@ function proposalFromInspect(
   const record = result.record;
   const updatedAt = parseDateMs(record.updatedAt);
   const createdAt = parseDateMs(record.createdAt);
+  const revisionHash = result.revisionHash?.trim() || null;
+  const evaluation =
+    record.evaluation?.revisionHash === revisionHash
+      ? record.evaluation
+      : previous?.evaluation?.revisionHash === revisionHash
+        ? previous.evaluation
+        : undefined;
   return {
     key: record.id,
     slug: record.target.skillKey,
@@ -322,12 +260,45 @@ function proposalFromInspect(
     status: record.status,
     ...(record.origin ? { origin: record.origin } : {}),
     version: proposedVersionNumber(record.proposedVersion),
+    revisionHash,
+    ...(evaluation ? { evaluation } : {}),
     createdAt,
     updatedAt,
     recencyGroup: recencyGroup(updatedAt || createdAt),
     ageLabel: compactAgeLabel(updatedAt || createdAt),
     supportFiles: supportFilesFromInspect(result),
     isNew: previous?.isNew ?? false,
+  };
+}
+
+function proposalFromEvaluation(
+  result: SkillProposalEvaluateResult,
+  previous: SkillWorkshopProposal,
+): SkillWorkshopProposal {
+  const record = result.record;
+  const updatedAt = parseDateMs(record.updatedAt);
+  const createdAt = parseDateMs(record.createdAt);
+  return {
+    key: record.id,
+    slug: record.target.skillKey,
+    name: record.title || record.target.skillName,
+    oneLine: record.description,
+    body: previous.body,
+    status: record.status,
+    ...(record.origin
+      ? { origin: record.origin }
+      : previous.origin
+        ? { origin: previous.origin }
+        : {}),
+    version: proposedVersionNumber(record.proposedVersion),
+    revisionHash: result.evaluation.revisionHash,
+    evaluation: result.evaluation,
+    createdAt,
+    updatedAt,
+    recencyGroup: recencyGroup(updatedAt || createdAt),
+    ageLabel: compactAgeLabel(updatedAt || createdAt),
+    supportFiles: previous.supportFiles,
+    isNew: previous.isNew,
   };
 }
 
@@ -394,7 +365,7 @@ export async function loadSkillWorkshopProposals(
 ): Promise<void> {
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
-  if (!client || !snapshot.connected) {
+  if (!client || snapshot.phase !== "connected") {
     return;
   }
   const requestAgentId = skillWorkshopAgentParams(context).agentId;
@@ -431,7 +402,7 @@ export async function loadSkillWorkshopProposals(
       await loadSkillWorkshopProposalDetail(state, context, state.skillWorkshopSelectedKey);
     }
   } catch (err) {
-    state.skillWorkshopError = getErrorMessage(err);
+    state.skillWorkshopError = formatUiError(err);
   } finally {
     state.skillWorkshopLoading = false;
     if (skillWorkshopAgentParams(context).agentId !== requestAgentId) {
@@ -440,7 +411,7 @@ export async function loadSkillWorkshopProposals(
   }
 }
 
-export async function loadSkillWorkshopProposalDetail(
+async function loadSkillWorkshopProposalDetail(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
   proposalId: string,
@@ -448,7 +419,11 @@ export async function loadSkillWorkshopProposalDetail(
 ): Promise<boolean> {
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
-  if (!client || !snapshot.connected || state.skillWorkshopInspectingKey === proposalId) {
+  if (
+    !client ||
+    snapshot.phase !== "connected" ||
+    state.skillWorkshopInspectingKey === proposalId
+  ) {
     return false;
   }
   const existing = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
@@ -477,7 +452,7 @@ export async function loadSkillWorkshopProposalDetail(
     return true;
   } catch (err) {
     if (state.skillWorkshopAgentId === requestAgentId) {
-      state.skillWorkshopError = getErrorMessage(err);
+      state.skillWorkshopError = formatUiError(err);
     }
     return false;
   } finally {
@@ -521,9 +496,13 @@ export async function runSkillWorkshopLifecycleAction(
   action: Extract<SkillWorkshopAction, "apply" | "reject">,
   proposalId: string,
 ): Promise<void> {
+  const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
+  if (!canCallGatewayMethod(context.gateway.snapshot, method, "operator.admin")) {
+    return;
+  }
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
-  if (!client || !snapshot.connected || state.skillWorkshopActionBusy) {
+  if (!client || snapshot.phase !== "connected" || state.skillWorkshopActionBusy) {
     return;
   }
   const previous = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
@@ -531,18 +510,98 @@ export async function runSkillWorkshopLifecycleAction(
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
   try {
-    const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
     const requestParams = { ...loadedSkillWorkshopAgentParams(state, context), proposalId };
     await client.request(method, requestParams);
     await refreshAfterMutation(state, context, proposalId);
     const updated = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
-    showActionNotice(state, updated ?? previous, action === "apply" ? "Applied" : "Rejected");
+    showActionNotice(
+      state,
+      updated ?? previous,
+      t(action === "apply" ? "skillWorkshop.notices.applied" : "skillWorkshop.notices.rejected"),
+    );
   } catch (err) {
-    state.skillWorkshopError = getErrorMessage(err);
+    state.skillWorkshopError = formatUiError(err);
   } finally {
     if (
       state.skillWorkshopActionBusy?.key === proposalId &&
       state.skillWorkshopActionBusy.action === action
+    ) {
+      state.skillWorkshopActionBusy = null;
+    }
+  }
+}
+
+export async function runSkillWorkshopEvaluation(
+  state: SkillWorkshopState,
+  context: SkillWorkshopContext,
+  proposalId: string,
+  isCurrent: () => boolean = () => true,
+): Promise<boolean> {
+  if (
+    !canCallGatewayMethod(context.gateway.snapshot, "skills.proposals.evaluate", "operator.admin")
+  ) {
+    return false;
+  }
+  const snapshot = context.gateway.snapshot;
+  const client = snapshot.client;
+  if (!client || snapshot.phase !== "connected" || state.skillWorkshopActionBusy) {
+    return false;
+  }
+  const previous = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+  if (!previous || previous.status !== "pending") {
+    return false;
+  }
+  const requestAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
+  if (state.skillWorkshopAgentId === null) {
+    state.skillWorkshopAgentId = requestAgentId;
+  }
+  state.skillWorkshopActionBusy = { key: proposalId, action: "evaluate" };
+  state.skillWorkshopActionNotice = null;
+  state.skillWorkshopError = null;
+  try {
+    const loaded = await loadSkillWorkshopProposalDetail(state, context, proposalId, {
+      force: true,
+    });
+    if (
+      !loaded ||
+      !isCurrent() ||
+      state.skillWorkshopAgentId !== requestAgentId ||
+      !canCallGatewayMethod(context.gateway.snapshot, "skills.proposals.evaluate", "operator.admin")
+    ) {
+      return false;
+    }
+    const current = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+    if (!current || current.status !== "pending" || !current.revisionHash) {
+      throw new Error(t("skillWorkshop.evaluation.errors.revisionHashUnavailable"));
+    }
+    const result = await client.request<SkillProposalEvaluateResult>("skills.proposals.evaluate", {
+      agentId: requestAgentId,
+      proposalId,
+      expectedRevisionHash: current.revisionHash,
+    });
+    if (!isCurrent() || state.skillWorkshopAgentId !== requestAgentId) {
+      return false;
+    }
+    if (result.evaluation.revisionHash !== current.revisionHash) {
+      throw new Error(t("skillWorkshop.evaluation.errors.revisionChanged"));
+    }
+    mergeProposal(state, proposalFromEvaluation(result, current));
+    await loadSkillWorkshopProposalDetail(state, context, proposalId, { force: true });
+    showActionNotice(
+      state,
+      state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId) ?? previous,
+      t("skillWorkshop.actions.evaluated"),
+    );
+    return true;
+  } catch (err) {
+    if (state.skillWorkshopAgentId === requestAgentId) {
+      state.skillWorkshopError = formatUiError(err);
+    }
+    return false;
+  } finally {
+    if (
+      state.skillWorkshopActionBusy?.key === proposalId &&
+      state.skillWorkshopActionBusy.action === "evaluate"
     ) {
       state.skillWorkshopActionBusy = null;
     }
@@ -558,7 +617,17 @@ export async function requestSkillWorkshopRevision(
     proposal: SkillWorkshopProposal,
     agentId: string,
   ) => Promise<void>,
+  isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
+  if (
+    !canCallGatewayMethod(
+      context.gateway.snapshot,
+      "skills.proposals.requestRevision",
+      "operator.admin",
+    )
+  ) {
+    return false;
+  }
   if (state.skillWorkshopActionBusy) {
     return false;
   }
@@ -576,7 +645,15 @@ export async function requestSkillWorkshopRevision(
   state.skillWorkshopError = null;
   try {
     await loadSkillWorkshopProposalDetail(state, context, proposalId);
-    if (state.skillWorkshopAgentId !== proposalAgentId) {
+    if (
+      !isCurrent() ||
+      state.skillWorkshopAgentId !== proposalAgentId ||
+      !canCallGatewayMethod(
+        context.gateway.snapshot,
+        "skills.proposals.requestRevision",
+        "operator.admin",
+      )
+    ) {
       return false;
     }
     const currentProposal =
@@ -584,10 +661,10 @@ export async function requestSkillWorkshopRevision(
     await sendRevisionRequest(instructions, currentProposal, proposalAgentId);
     state.skillWorkshopRevisionKey = null;
     state.skillWorkshopRevisionDraft = "";
-    showActionNotice(state, proposal, "Revision requested");
+    showActionNotice(state, proposal, t("skillWorkshop.notices.revisionRequested"));
     return true;
   } catch (err) {
-    state.skillWorkshopError = getErrorMessage(err);
+    state.skillWorkshopError = formatUiError(err);
     return false;
   } finally {
     if (

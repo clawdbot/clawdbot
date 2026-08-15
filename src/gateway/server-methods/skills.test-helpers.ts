@@ -14,7 +14,12 @@ type CapturedGatewayResponse = {
 function makeGatewayHandlerTestContext(): GatewayRequestContext {
   return {
     getRuntimeConfig: () => ({}),
-    logGateway: vi.fn(),
+    logGateway: {
+      debug: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+    },
   } as unknown as GatewayRequestContext;
 }
 

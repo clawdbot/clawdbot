@@ -1,25 +1,10 @@
 // Tests approval view model formatting for prompts and decisions.
 import { describe, expect, it } from "vitest";
-import {
-  buildPendingApprovalView,
-  isTypedApprovalActionView,
-  resolveApprovalRequestKind,
-} from "./approval-view-model.js";
+import { buildPendingApprovalView, resolveApprovalRequestKind } from "./approval-view-model.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 describe("buildPendingApprovalView", () => {
-  it("keeps legacy action views valid while the host guard rejects untyped actions", () => {
-    expect(
-      isTypedApprovalActionView({
-        decision: "deny",
-        label: "Deny",
-        style: "danger",
-        command: "/approve legacy deny",
-      }),
-    ).toBe(false);
-  });
-
   it("passes command analysis through exec approval views", () => {
     const request: ExecApprovalRequest = {
       id: "approval-id",
@@ -45,7 +30,6 @@ describe("buildPendingApprovalView", () => {
       throw new Error("expected exec approval view");
     }
     expect(view.commandAnalysis?.warningLines).toEqual(["Contains inline-eval: python -c"]);
-    expect(view.actions.every(isTypedApprovalActionView)).toBe(true);
     expect(view.actions[0]?.action).toEqual({
       type: "approval",
       approvalId: "approval-id",

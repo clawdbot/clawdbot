@@ -1,6 +1,6 @@
 # Color Tokens
 
-All tokens are defined in `ui/src/styles/base.css` under `:root` (dark mode default) and `:root[data-theme-mode="light"]` (light override). Theme families may override accent tokens while keeping shared surface tokens.
+All tokens are defined in `ui/src/styles/base.css` under `:root` (dark mode default) and `:root[data-theme-mode="light"]` (light override). Values in this doc are the default claw family; the knot (`data-theme="openknot"`/`openknot-light`) and dash (`dash`/`dash-light`) families override surface, accent, and status tokens in their own `base.css` blocks, each with its own WCAG audit comment.
 
 > Contrast ratios are measured against `--bg` (`#0e1015`) in dark mode using WCAG relative luminance formula. AA requires ≥4.5:1 for normal text, ≥3:1 for large text and UI components.
 
@@ -30,12 +30,12 @@ Light mode uses a warm paper palette: ivory backgrounds, warm gray borders (`#e8
 
 ## Text
 
-| Token            | Dark Value | Contrast on `--bg` | Use                                                  |
-| ---------------- | ---------- | ------------------ | ---------------------------------------------------- |
-| `--text`         | `#d4d4d8`  | ~12.9:1 ✅         | Body copy, labels                                    |
-| `--text-strong`  | `#f4f4f5`  | ~17.3:1 ✅         | Headings, emphasis                                   |
-| `--muted`        | `#838387`  | ~5.0:1 ✅          | Placeholder, metadata                                |
-| `--muted-strong` | `#75757d`  | ~4.2:1             | Secondary text, captions; avoid for normal body text |
+| Token            | Dark Value | Contrast on `--bg` | Use                                                |
+| ---------------- | ---------- | ------------------ | -------------------------------------------------- |
+| `--text`         | `#bcbcc0`  | ~10.1:1 ✅         | Body copy, labels                                  |
+| `--text-strong`  | `#f4f4f5`  | ~17.3:1 ✅         | Headings, emphasis                                 |
+| `--muted`        | `#8b8b94`  | ~5.6:1 ✅          | Placeholder, metadata                              |
+| `--muted-strong` | `#898990`  | ~5.5:1 ✅          | Secondary text, captions; prefer `--text` for body |
 
 ## Accent (Primary — Red)
 
@@ -46,7 +46,7 @@ Light mode uses a warm paper palette: ivory backgrounds, warm gray borders (`#e8
 | `--accent-muted`  | `#ff5c5c`             | Same as accent (aliased)                       | —                                        |
 | `--accent-subtle` | `rgba(255,92,92,0.1)` | Badge backgrounds, tinted fills                | Not for text on dark bg (fails contrast) |
 | `--accent-glow`   | `rgba(255,92,92,0.2)` | Focus rings, glow effects                      | Not as background                        |
-| `--primary`       | `#ff5c5c`             | Component library `primary` alias              | —                                        |
+| `--primary`       | `#d13c3c`             | Filled primary buttons (white text, ~4.8:1 AA) | Not interchangeable with `--accent`      |
 
 ## Accent 2 (Teal)
 
@@ -58,13 +58,17 @@ Light mode uses a warm paper palette: ivory backgrounds, warm gray borders (`#e8
 
 ## Semantic
 
-| Token           | Dark Value | Light Value | Contrast on `--bg` | Use                                           |
-| --------------- | ---------- | ----------- | ------------------ | --------------------------------------------- |
-| `--ok`          | `#22c55e`  | `#15803d`   | ~8.4:1 ✅          | Success states, token meter low               |
-| `--warn`        | `#f59e0b`  | `#d97706`   | ~8.9:1 ✅          | Warnings, degraded states                     |
-| `--danger`      | `#ef4444`  | `#dc2626`   | ~5.1:1 ✅          | Errors, destructive actions, token meter high |
-| `--info`        | `#3b82f6`  | `#2563eb`   | ~5.2:1 ✅          | Informational, token meter mid                |
-| `--destructive` | `#ef4444`  | —           | ~5.1:1 ✅          | Destructive action labels                     |
+| Token           | Dark Value | Light Value | Contrast on dark `--bg` | Use                                            |
+| --------------- | ---------- | ----------- | ----------------------- | ---------------------------------------------- |
+| `--ok`          | `#22c55e`  | `#166534`   | ~8.4:1 ✅               | Success states, token meter low                |
+| `--warn`        | `#f59e0b`  | `#92400e`   | ~8.9:1 ✅               | Warnings, degraded states                      |
+| `--danger`      | `#f87171`  | `#b91c1c`   | ~6.9:1 ✅               | Errors, destructive text, token meter high     |
+| `--info`        | `#60a5fa`  | `#1d4ed8`   | ~7.5:1 ✅               | Informational, token meter mid                 |
+| `--destructive` | `#d32f2f`  | `#dc2626`   | ~3.8:1 (fill only)      | Destructive button fills (with `#fafafa` text) |
+
+Each `--x` has `-muted` (0.75 alpha) and `-subtle` (0.08 alpha) rgba siblings that must stay in sync with the base hex — the base doubles as label text on its own subtle tint, and re-tinting one without the other silently drops the pair below AA. Bases stay literal hex because `widget-theme.ts` publishes them to MCP app guest documents where `color-mix()` would not resolve. See the audit comments in `base.css` for the per-theme measurements.
+
+The dark `--destructive` value is the claw-family override (`:root[data-theme="dark"]`); the shared `:root` fallback is `#ef4444`.
 
 ## Border
 
@@ -90,4 +94,4 @@ Light mode uses a warm paper palette: ivory backgrounds, warm gray borders (`#e8
 - ❌ `--accent-subtle` as text colour — fails contrast on dark backgrounds
 - ❌ Mixing `--ok` and `--accent-2` for "green success" — use `--ok` only
 - ❌ Using `--danger` for non-error states (e.g. "hot feature") — reserve for errors and destructive actions
-- ❌ `--muted-strong` for normal body text — below 4.5:1 on dark `--bg`; use `--text` instead
+- ❌ `--muted-strong` for normal body text — passes AA on `--bg` but not on every hover/input surface; use `--text` instead

@@ -72,28 +72,6 @@ public enum CameraCapturePipelineSupport {
         }
     }
 
-    /// Keeps the flat overload source-compatible while the options form owns the implementation.
-    public static func prepareMovieSession(
-        preferFrontCamera: Bool,
-        deviceId: String?,
-        includeAudio: Bool,
-        durationMs: Int,
-        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
-        cameraUnavailableError: @autoclosure () -> Error,
-        mapSetupError: (CameraSessionConfigurationError) -> Error) throws
-        -> (session: AVCaptureSession, output: AVCaptureMovieFileOutput)
-    {
-        try self.prepareMovieSession(
-            options: CameraMovieSessionOptions(
-                preferFrontCamera: preferFrontCamera,
-                deviceId: deviceId,
-                includeAudio: includeAudio,
-                durationMs: durationMs),
-            pickCamera: pickCamera,
-            cameraUnavailableError: cameraUnavailableError(),
-            mapSetupError: mapSetupError)
-    }
-
     public static func prepareWarmMovieSession(
         options: CameraMovieSessionOptions,
         pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
@@ -119,28 +97,6 @@ public enum CameraCapturePipelineSupport {
         return prepared
     }
 
-    /// Keeps the flat overload source-compatible while the options form owns the implementation.
-    public static func prepareWarmMovieSession(
-        preferFrontCamera: Bool,
-        deviceId: String?,
-        includeAudio: Bool,
-        durationMs: Int,
-        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
-        cameraUnavailableError: @autoclosure () -> Error,
-        mapSetupError: (CameraSessionConfigurationError) -> Error) async throws
-        -> (session: AVCaptureSession, output: AVCaptureMovieFileOutput)
-    {
-        try await self.prepareWarmMovieSession(
-            options: CameraMovieSessionOptions(
-                preferFrontCamera: preferFrontCamera,
-                deviceId: deviceId,
-                includeAudio: includeAudio,
-                durationMs: durationMs),
-            pickCamera: pickCamera,
-            cameraUnavailableError: cameraUnavailableError(),
-            mapSetupError: mapSetupError)
-    }
-
     public static func withWarmMovieSession<T>(
         options: CameraMovieSessionOptions,
         pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
@@ -159,29 +115,6 @@ public enum CameraCapturePipelineSupport {
             stop: { prepared.session.stopRunning() },
             warmUp: { try await self.warmUpCaptureSession() },
             operation: { try await operation(prepared.output) })
-    }
-
-    /// Keeps the flat overload source-compatible while the options form owns the implementation.
-    public static func withWarmMovieSession<T>(
-        preferFrontCamera: Bool,
-        deviceId: String? = nil,
-        includeAudio: Bool,
-        durationMs: Int,
-        pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
-        cameraUnavailableError: @autoclosure () -> Error,
-        mapSetupError: (CameraSessionConfigurationError) -> Error,
-        operation: (AVCaptureMovieFileOutput) async throws -> T) async throws -> T
-    {
-        try await self.withWarmMovieSession(
-            options: CameraMovieSessionOptions(
-                preferFrontCamera: preferFrontCamera,
-                deviceId: deviceId,
-                includeAudio: includeAudio,
-                durationMs: durationMs),
-            pickCamera: pickCamera,
-            cameraUnavailableError: cameraUnavailableError(),
-            mapSetupError: mapSetupError,
-            operation: operation)
     }
 
     static func withCaptureSessionLifecycle<T>(

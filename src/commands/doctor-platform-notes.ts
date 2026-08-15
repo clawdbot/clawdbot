@@ -1,9 +1,7 @@
 /** Platform-specific doctor notes for macOS gateway launchd state and startup tuning. */
-import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -11,16 +9,17 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { findStaleOpenClawUpdateLaunchdJobs } from "../daemon/launchd.js";
 import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
+import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
 
-const execFileAsync = promisify(execFile);
+const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
 
 function resolveHomeDir(): string {
   return process.env.HOME ?? os.homedir();
 }
 
 /** Returns the macOS marker warning when LaunchAgent writes are locally disabled. */
-export function collectMacLaunchAgentOverrideWarning(deps?: {
+function collectMacLaunchAgentOverrideWarning(deps?: {
   platform?: NodeJS.Platform;
   homeDir?: string;
   exists?: (candidate: string) => boolean;
@@ -53,7 +52,7 @@ export async function noteMacLaunchAgentOverrides() {
 }
 
 /** Returns a warning for stale OpenClaw updater launchd jobs left after interrupted updates. */
-export async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
+async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
   env?: NodeJS.ProcessEnv;
@@ -107,8 +106,11 @@ export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
   try {
-    const result = await execFileAsync("/bin/launchctl", ["getenv", name], { encoding: "utf8" });
-    const value = normalizeOptionalString(result.stdout ?? "") ?? "";
+    const result = await runExec("/bin/launchctl", ["getenv", name], {
+      logOutput: false,
+      timeoutMs: DOCTOR_LAUNCHCTL_TIMEOUT_MS,
+    });
+    const value = normalizeOptionalString(result.stdout) ?? "";
     return value.length > 0 ? value : undefined;
   } catch {
     return undefined;
@@ -128,7 +130,7 @@ function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
 }
 
 /** Returns a warning for host-wide launchctl gateway auth env overrides. */
-export async function collectMacLaunchctlGatewayEnvOverrideWarning(
+async function collectMacLaunchctlGatewayEnvOverrideWarning(
   cfg: OpenClawConfig,
   deps?: {
     platform?: NodeJS.Platform;
@@ -164,10 +166,10 @@ export async function collectMacLaunchctlGatewayEnvOverrideWarning(
     "- Host-wide launchctl gateway auth overrides detected.",
     "- Current managed Gateway installs do not need these values unless config intentionally references the env var.",
     envToken && envTokenKey
-      ? `- \`${envTokenKey}\` is set; it can make local clients use a different token than gateway.auth.token.`
+      ? `- \`${envTokenKey}\` is set; explicit environment URL or node-host targets can use a different token than gateway.auth.token.`
       : undefined,
     envPassword
-      ? `- \`${envPasswordKey ?? "OPENCLAW_GATEWAY_PASSWORD"}\` is set; it can make local clients use a different password than gateway.auth.password.`
+      ? `- \`${envPasswordKey ?? "OPENCLAW_GATEWAY_PASSWORD"}\` is set; explicit environment URL or node-host targets can use a different password than gateway.auth.password.`
       : undefined,
     "- Clear overrides and restart the app/gateway:",
     envTokenKey ? `  launchctl unsetenv ${envTokenKey}` : undefined,
@@ -240,10 +242,6 @@ export async function collectMacGatewayPlatformWarnings(
   return warnings;
 }
 
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return Boolean(normalizeOptionalString(value));
-}
-
 function isTmpCompileCachePath(cachePath: string): boolean {
   const normalized = cachePath.trim().replace(/\/+$/, "");
   return (
@@ -294,7 +292,7 @@ export function noteStartupOptimizationHints(
     );
   }
 
-  if (isTruthyEnvValue(disableCompileCache)) {
+  if (disableCompileCache) {
     lines.push("- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled.");
   }
 
@@ -313,7 +311,7 @@ export function noteStartupOptimizationHints(
     "  export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache",
     "  mkdir -p /var/tmp/openclaw-compile-cache",
     "  export OPENCLAW_NO_RESPAWN=1",
-    isTruthyEnvValue(disableCompileCache) ? "  unset NODE_DISABLE_COMPILE_CACHE" : undefined,
+    disableCompileCache ? "  unset NODE_DISABLE_COMPILE_CACHE" : undefined,
   ].filter((line): line is string => Boolean(line));
 
   noteFn([...lines, ...suggestions].join("\n"), "Startup optimization");

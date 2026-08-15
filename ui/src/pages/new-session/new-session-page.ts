@@ -1,60 +1,49 @@
-// Full-page new-session draft: pick agent, exec host, folder, and branch/worktree,
-// then the first message creates the session in one sessions.create call.
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { icons } from "../../components/icons.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import "../../components/tooltip.ts";
+import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import { generateUUID } from "../../lib/uuid.ts";
+import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
+import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import "../../styles/chat.css";
+import "../../styles/new-session.css";
+import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
-import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
-
-type NewSessionRouteData = { agentId?: string };
-
-type DraftBranches = {
-  repoRoot: string;
-  branches: Array<{ name: string; kind: "local" | "remote" }>;
-  defaultBranch?: string;
-  headBranch?: string;
-};
-
-type DraftNode = {
-  nodeId: string;
-  displayName: string;
-  connected: boolean;
-  canExec: boolean;
-  canBrowse: boolean;
-};
-
-type BrowserTarget = { nodeId: string; label: string };
-
-const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
-
-/** Last path segment for the folder trigger label; handles both separators.
-    Falls back to the raw path so filesystem roots ("/", "C:\") stay visible. */
-function folderDisplayName(path: string): string {
-  return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? path;
-}
-
-/** Focusable rows for the menu keyboard contract (menu items + browser rows). */
-const MENU_ITEM_SELECTOR =
-  ".session-menu__item:not(:disabled), .new-session-page__browser-entry:not(:disabled)";
-
-function isAbsolutePath(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path);
-}
+import * as catalog from "./catalog-target.ts";
+import type { SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
+import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
+import { renderConnectMachineDialog } from "./connect-machine-dialog.ts";
+import { isWorktreeNameValid } from "./create-params.ts";
+import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
+import { DraftGatewayState } from "./draft-gateway-state.ts";
+import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
+import { DraftPlaceBrowser } from "./draft-place-browser.ts";
+import { DraftPlaceState } from "./draft-place-state.ts";
+import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import {
+  closeAgentPicker,
+  closeSessionMenus,
+  createControllerHost,
+  handleSessionPickerEvent,
+  isPlaceTopologyEvent,
+  presenceStateSignature,
+  readPresenceEntries,
+} from "./new-session-runtime.ts";
+import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
+import { renderAgentSelect } from "./target-controls.ts";
+import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
@@ -62,1035 +51,599 @@ class NewSessionPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
-  @state() private agentId = "";
-  @state() private folder = "";
-  @state() private worktree = false;
-  @state() private worktreeName = "";
-  @state() private baseRef = "";
-  @state() private branches: DraftBranches | null = null;
-  @state() private branchesLoading = false;
-  @state() private nodes: DraftNode[] = [];
-  @state() private execNode = "";
-  @state() private message = "";
-  @state() private submitting = false;
-  @state() private error: string | null = null;
-  @state() private browserOpen = false;
-  @state() private browserLoading = false;
-  @state() private browserError: string | null = null;
-  @state() private browserListing: FsListDirResult | null = null;
-  @state() private browserTarget: BrowserTarget | null = null;
-  // The head input's live value; a typed absolute path stays applicable via
-  // "Use this folder" even when the host cannot list it (no fs.listDir).
-  @state() private browserPathDraft = "";
-
   private openedFor: string | null = null;
-  private agentsHydrated = false;
-  private branchesRequestToken = 0;
-  private baseRefEditGeneration = 0;
-  private browserRequestToken = 0;
+  private openedGroupDefaults = "";
+  private openedAgentId = "";
+  private messageOwnerKey = "";
+  private presenceSignature = "";
+  private connectMachineOpen = false;
+  private connectMachineLoading = false;
+  private connectMachineError: string | null = null;
+  private connectMachineSetup: DevicePairSetup | null = null;
+  private connectMachineRequestId = 0;
+  @state() private imageLightbox: ImageLightboxItem | null = null;
+  private readonly groupRouteRevalidation = new catalog.GroupRouteRevalidation(
+    () => this.data,
+    () => this.context?.revalidate("new-session"),
+  );
+  private readonly gateway: DraftGatewayState;
+  private readonly browser: DraftPlaceBrowser;
+  private readonly place: DraftPlaceState;
+  private readonly submission: DraftSubmissionFlow;
+  private readonly subscriptions: SubscriptionsController;
 
-  // Re-render when agents/sessions hydrate so the hero identity and the
-  // recent-chats list appear without a route change.
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.sessions,
-      (sessions, notify) => sessions.subscribe(notify),
+  constructor() {
+    super();
+    const host = createControllerHost(this);
+    this.gateway = new DraftGatewayState(
+      host,
+      () => ({
+        context: this.context,
+        data: this.data,
+        isConnected: this.isConnected,
+        isAdmin: this.place?.isAdmin() ?? false,
+        canStartAsDraft: this.submission?.canStartAsDraft() ?? false,
+        visibility: this.submission?.visibility ?? "normal",
+        cloudProfileId: this.place?.cloudProfileId ?? "",
+        pendingCloud: this.submission?.pendingCloud ?? {
+          sessionKey: "",
+          gatewayUrl: "",
+          recoveryScope: "",
+        },
+        agentsHydrated: this.place?.agentsHydrated ?? false,
+      }),
+      {
+        requestUpdate: () => this.requestUpdate(),
+        updateComplete: () => this.updateComplete,
+        onInvalidate: (resetHostSelection, outcome) =>
+          this.invalidateGatewayDiscovery(resetHostSelection, outcome),
+        onVisibilityRetired: () => this.submission.setVisibility("normal"),
+        onCloudProfileCleared: () => this.place.clearCloudProfile(),
+        onCloudState: (error) => this.submission.setError(error),
+        onPendingCloudReset: () => this.submission.resetPendingCloudWithoutClearingStorage(),
+        onRecoveryReady: (gatewayUrl, recoveryScope) =>
+          this.submission.restorePendingCloudRecovery(gatewayUrl, recoveryScope),
+        onAdoptAgentDefaults: () =>
+          this.place.adoptAgentDefaults({
+            preserveSelectedAgent: true,
+            preserveSelectedFolder: true,
+          }),
+      },
     );
+    this.browser = new DraftPlaceBrowser(
+      host,
+      this.gateway,
+      () => ({
+        context: this.context,
+        nodes: this.place?.nodes ?? [],
+        folder: this.place?.folder ?? "",
+        execNode: this.place?.execNode ?? "",
+        isAdmin: this.place?.isAdmin() ?? false,
+      }),
+      {
+        requestUpdate: () => this.requestUpdate(),
+        onProjectMissing: () => this.place.clearProjectSelection(),
+        onSelectProject: (projectId) => this.place.selectProjectId(projectId),
+        onApprovedListing: (listing) => this.place.recordGatewayApprovedListing(listing),
+        querySelector: (selector) => this.querySelector(selector),
+        activeElement: () => this.ownerDocument.activeElement,
+        body: () => this.ownerDocument.body,
+      },
+    );
+    this.place = new DraftPlaceState(
+      this.gateway,
+      this.browser,
+      () => ({
+        context: this.context,
+        data: this.data,
+        submitting: this.submission?.submitting ?? false,
+        pendingCloudSessionKey: this.submission?.pendingCloud.sessionKey ?? "",
+      }),
+      {
+        requestUpdate: () => this.requestUpdate(),
+        onError: (error) =>
+          error === null ? this.submission.clearError() : this.submission.setError(error),
+        onClearError: (error) => this.submission.clearErrorIf(error),
+      },
+    );
+    this.submission = new DraftSubmissionFlow(
+      this.gateway,
+      this.place,
+      () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
+      {
+        requestUpdate: () => this.requestUpdate(),
+        closeTransientUi: () => closeSessionMenus(this),
+      },
+    );
+    this.subscriptions = new SubscriptionsController(this)
+      .watch(
+        () => this.context?.gateway,
+        (gateway, notify) => gateway.subscribe(notify),
+        (gateway) => this.gateway.synchronize(gateway),
+      )
+      .effect(
+        () => this.context?.gateway,
+        (gateway) => {
+          this.presenceSignature = presenceStateSignature(
+            readPresenceEntries(gateway.snapshot.hello?.snapshot) ?? [],
+          );
+          return gateway.subscribeEvents((event) => {
+            if (this.context?.gateway !== gateway) {
+              return;
+            }
+            if (isPlaceTopologyEvent(event.event)) {
+              this.refreshPlaceTopology();
+              return;
+            }
+            const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
+            if (!presence) {
+              return;
+            }
+            const signature = presenceStateSignature(presence);
+            if (signature !== this.presenceSignature) {
+              this.presenceSignature = signature;
+              this.refreshPlaceTopology();
+            }
+          });
+        },
+      )
+      .watch(
+        () => this.context?.agents,
+        (agents, notify) => agents.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.agentIdentity,
+        (agentIdentity, notify) => agentIdentity.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.sessions,
+        (sessions, notify) => sessions.subscribe(notify),
+        (sessions) => this.groupRouteRevalidation.synchronize(sessions),
+      )
+      .watch(
+        () => this.context?.config,
+        (config, notify) => config.subscribe(() => notify()),
+      );
+  }
+
+  // Device visibility intersects both catalogs, so topology changes must refresh them together.
+  private refreshPlaceTopology() {
+    void this.place.refreshNodes();
+    void this.gateway.refreshCloudProfiles();
+  }
+
+  handleEvent(event: Event) {
+    handleSessionPickerEvent(this, event);
+  }
 
   override connectedCallback() {
     super.connectedCallback();
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    document.addEventListener("keydown", this, true);
+    document.addEventListener("pointerdown", this, true);
   }
 
   override disconnectedCallback() {
-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    document.removeEventListener("keydown", this, true);
+    document.removeEventListener("pointerdown", this, true);
+    retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
     this.subscriptions.clear();
+    this.gateway.invalidateDiscovery(
+      true,
+      this.submission.pendingCloud.sessionKey ? "cloud-interrupted" : "gateway-changed",
+    );
+    this.gateway.disconnect();
+    this.browser.disconnect();
+    this.submission.disconnect();
+    this.closeConnectMachine();
     super.disconnectedCallback();
   }
 
-  private openMenus(): HTMLDetailsElement[] {
-    return [...this.querySelectorAll<HTMLDetailsElement>(".new-session-page__select[open]")];
-  }
-
-  // Same central dismissal contract as the chat composer's <details> menus:
-  // pointerdown outside an open menu closes it, Escape closes and restores
-  // trigger focus.
-  private readonly handleDocumentPointerDown = (event: PointerEvent) => {
-    const path = event.composedPath();
-    for (const details of this.openMenus()) {
-      if (!path.includes(details)) {
-        details.open = false;
-      }
-    }
-  };
-
-  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape") {
-      return;
-    }
-    const open = this.openMenus().at(-1);
-    if (open) {
-      event.stopPropagation();
-      open.open = false;
-      open.querySelector<HTMLElement>("summary")?.focus();
-    }
-  };
-
-  // Mutual exclusion must hook the details toggle, not just pointerdown:
-  // keyboard activation (Enter/Space on a summary) opens without any pointer
-  // event, and two open panels would overlap.
-  private readonly handleMenuToggle = (event: Event) => {
-    const details = event.currentTarget as HTMLDetailsElement;
-    if (this.submitting) {
-      // Native details can reopen from keyboard or scripted activation even
-      // after the draft becomes inert. Submission owns one frozen snapshot.
-      details.open = false;
-      return;
-    }
-    if (!details.open) {
-      return;
-    }
-    for (const other of this.openMenus()) {
-      if (other !== details) {
-        other.open = false;
-      }
-    }
-    // Keyboard contract of the replaced native selects: opening moves focus
-    // into the menu (browser content renders on the next Lit update). The
-    // summary sits outside the menu div, so this only skips when the user
-    // already focused menu content (e.g. a field).
-    void this.updateComplete.then(() => {
-      if (!details.open) {
-        return;
-      }
-      const menu = details.querySelector(".new-session-page__menu");
-      if (menu && !menu.contains(document.activeElement)) {
-        menu.querySelector<HTMLElement>(MENU_ITEM_SELECTOR)?.focus();
-      }
-    });
-  };
-
-  /** ArrowUp/Down wrap through the menu's items; Home/End jump to the edges.
-      Text fields keep native caret/datalist behavior for these keys. */
-  private readonly handleMenuKeydown = (event: KeyboardEvent) => {
-    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-      return;
-    }
-    const origin = event.target as HTMLElement;
-    if (origin instanceof HTMLInputElement || origin instanceof HTMLTextAreaElement) {
-      return;
-    }
-    const items = [
-      ...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR),
-    ];
-    if (items.length === 0) {
-      return;
-    }
-    event.preventDefault();
-    const index = items.indexOf(document.activeElement as HTMLElement);
-    const target =
-      event.key === "Home"
-        ? items[0]
-        : event.key === "End"
-          ? items.at(-1)
-          : items[(index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length];
-    target?.focus();
-  };
-
   override updated() {
-    const agentsReady = this.agents().length > 0;
-    const openKey = this.data?.agentId ?? "";
+    if (this.connectMachineOpen && !this.place.isAdmin()) {
+      this.closeConnectMachine();
+    }
+    this.gateway.retryPendingCatalogTarget();
+    void this.context?.agentIdentity.ensure(this.place.agents().map((agent) => agent.id));
+    this.place.modelControl.loadCatalogTargets(
+      this.context,
+      this.place.agentId,
+      this.context?.config.current.cliAgentsEnabled === true && !catalog.isTarget(this.data),
+    );
+    const agentState = this.context?.agents.state;
+    const agentsReady = Boolean(
+      this.gateway.connected &&
+      this.gateway.client &&
+      agentState?.connected &&
+      agentState.client === this.gateway.client &&
+      this.place.agents().length > 0,
+    );
+    const openKey = this.data
+      ? catalog.routeKey(this.data)
+      : catalog.routeKeyFromSearch(window.location.search);
+    const resolvedAgentId = this.data?.agentId ?? "";
+    const groupDefaults = catalog.groupDefaultsKey(this.data);
     if (this.openedFor !== openKey) {
+      const ownedMessage = this.messageOwnerKey === openKey ? this.submission.message : "";
       this.openedFor = openKey;
-      this.agentsHydrated = agentsReady;
+      this.openedGroupDefaults = groupDefaults;
+      this.openedAgentId = resolvedAgentId;
+      this.place.setAgentsHydrated(agentsReady);
       this.resetDraft();
+      this.messageOwnerKey = restoreDraft(this.context, this.submission, openKey, ownedMessage);
       return;
     }
-    // A hard reload can land here before agents.list resolves. Once the list
-    // arrives, adopt only agent-derived defaults; a full reset would discard
-    // anything the user already typed while the list was loading.
-    if (!this.agentsHydrated && agentsReady) {
-      this.agentsHydrated = true;
-      this.adoptAgentDefaults();
+    if (this.openedGroupDefaults !== groupDefaults) {
+      this.openedGroupDefaults = groupDefaults;
+      this.place.adoptGroupDefaults();
     }
-  }
-
-  private agents() {
-    return this.context?.agents.state.agentsList?.agents ?? [];
-  }
-
-  private selectedAgent() {
-    const agentId = normalizeAgentId(this.agentId);
-    return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
-  }
-
-  private execNodes(): DraftNode[] {
-    return this.nodes.filter((node) => node.canExec);
-  }
-
-  private isAdmin(): boolean {
-    return hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null);
-  }
-
-  private workspacePath(): string {
-    return normalizeOptionalString(this.selectedAgent()?.workspace) ?? "";
-  }
-
-  private usesCustomFolder(): boolean {
-    const folder = this.folder.trim();
-    return Boolean(folder) && folder !== this.workspacePath();
-  }
-
-  /** Resolves the agent selection and workspace-derived fields; keeps user input. */
-  private adoptAgentDefaults() {
-    const agents = this.agents();
-    const requested = normalizeAgentId(this.data?.agentId || "");
-    const fallback = this.context?.agents.state.agentsList?.defaultId ?? agents[0]?.id ?? "main";
-    this.agentId = agents.some((agent) => normalizeAgentId(agent.id) === requested)
-      ? requested
-      : normalizeAgentId(fallback);
-    if (!this.folder.trim()) {
-      this.folder = this.workspacePath();
+    if (this.openedAgentId !== resolvedAgentId) {
+      this.openedAgentId = resolvedAgentId;
+      this.place.setAgentsHydrated(false);
     }
-    void this.loadNodes();
-    this.maybeLoadBranches();
+    if (!this.place.agentsHydrated && agentsReady) {
+      this.place.setAgentsHydrated(true);
+      this.place.adoptAgentDefaults({
+        preserveSelectedAgent: true,
+        preserveSelectedFolder: true,
+      });
+    }
+    this.place.restorePreferenceSelections();
+  }
+
+  private invalidateGatewayDiscovery(
+    resetHostSelection: boolean,
+    submissionOutcome: SubmissionOutcomeReason,
+  ) {
+    this.place.invalidateGatewayDiscovery(resetHostSelection);
+    this.submission.attachmentDraft.abortReads();
+    this.submission.invalidate(submissionOutcome);
+    if (resetHostSelection && this.submission.pendingCloud.sessionKey) {
+      this.submission.markPendingCloudUnavailable(submissionOutcome);
+    }
+    if (resetHostSelection) {
+      this.submission.clearError();
+    }
+    this.closeConnectMachine();
   }
 
   private resetDraft() {
-    this.folder = "";
-    this.worktree = false;
-    this.worktreeName = "";
-    this.baseRef = "";
-    this.branches = null;
-    this.branchesLoading = false;
-    this.execNode = "";
-    this.message = "";
-    this.submitting = false;
-    this.error = null;
-    this.closeBrowser();
-    this.adoptAgentDefaults();
+    this.place.resetDraft();
+    this.submission.resetDraft();
+    this.messageOwnerKey = catalog.routeKey(this.data);
+    this.browser.clearPopoverHiding();
+    closeAgentPicker(this);
+    this.browser.close();
+    this.closeConnectMachine();
+    this.place.adoptAgentDefaults();
     void this.updateComplete.then(() => {
       this.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.focus();
     });
   }
 
-  private async loadNodes() {
-    const client = this.context?.gateway.snapshot.client;
-    if (!client || !this.isAdmin()) {
-      this.nodes = [];
-      return;
-    }
-    try {
-      const result = await client.request<{ nodes?: unknown }>("node.list", {});
-      const rawNodes = Array.isArray(result?.nodes) ? (result.nodes as Array<unknown>) : [];
-      this.nodes = rawNodes
-        .flatMap((raw) => {
-          const node = raw as {
-            nodeId?: unknown;
-            displayName?: unknown;
-            connected?: unknown;
-            commands?: unknown;
-          };
-          const nodeId = normalizeOptionalString(node.nodeId);
-          const commands = Array.isArray(node.commands)
-            ? node.commands.filter((command): command is string => typeof command === "string")
-            : [];
-          if (!nodeId) {
-            return [];
-          }
-          const connected = node.connected === true;
-          const canExec = connected && commands.includes("system.run");
-          return [
-            {
-              nodeId,
-              displayName: normalizeOptionalString(node.displayName) ?? nodeId,
-              connected,
-              canExec,
-              canBrowse: canExec && commands.includes("fs.listDir"),
-            },
-          ];
-        })
-        .toSorted(
-          (left, right) =>
-            left.displayName.localeCompare(right.displayName) ||
-            left.nodeId.localeCompare(right.nodeId),
-        );
-    } catch {
-      this.nodes = [];
-    }
+  private setMessage(message: string, ownerKey = catalog.routeKey(this.data)) {
+    this.submission.setMessage(message);
+    this.messageOwnerKey = ownerKey;
   }
 
-  private maybeLoadBranches() {
-    // Branch data belongs to one repository selection. Clear it before any
-    // exit or request so a previous repo's ref can never reach sessions.create.
-    const requestId = ++this.branchesRequestToken;
-    const baseRefEditGeneration = this.baseRefEditGeneration;
-    this.branches = null;
-    this.branchesLoading = false;
-    this.baseRef = "";
-    if (this.execNode) {
-      return;
-    }
-    const repoRoot = this.folder.trim() || this.workspacePath();
-    const agent = this.selectedAgent();
-    const usesWorkspace = repoRoot === this.workspacePath();
-    if (!repoRoot || (usesWorkspace && agent?.workspaceGit !== true)) {
-      this.branches = null;
-      return;
-    }
-    const client = this.context?.gateway.snapshot.client;
-    if (!client) {
-      return;
-    }
-    this.branchesLoading = true;
-    void client
-      .request<DraftBranches>("worktrees.branches", { repoRoot })
-      .then((result) => {
-        if (requestId !== this.branchesRequestToken) {
-          return;
-        }
-        this.branches = result ? { ...result, repoRoot } : null;
-        // Discovery supplies a default only while the field is untouched;
-        // a user edit made during the request remains authoritative.
-        if (baseRefEditGeneration === this.baseRefEditGeneration) {
-          this.baseRef = result?.defaultBranch ?? result?.headBranch ?? "";
-        }
-      })
-      .catch(() => {
-        if (requestId === this.branchesRequestToken) {
-          this.branches = null;
-        }
-      })
-      .finally(() => {
-        if (requestId === this.branchesRequestToken) {
-          this.branchesLoading = false;
-        }
-      });
+  private setMessageFromUser(message: string) {
+    this.setMessage(message, catalog.routeKeyFromSearch(window.location.search));
   }
 
-  private worktreeAvailable(): boolean {
-    if (this.execNode) {
-      return false;
-    }
-    if (this.usesCustomFolder()) {
-      return this.isAdmin();
-    }
-    return this.selectedAgent()?.workspaceGit === true;
-  }
-
-  private canSubmit(): boolean {
-    if (this.submitting || !this.message.trim() || !this.context?.gateway.snapshot.connected) {
-      return false;
-    }
-    // Pre-hydration the selection is a provisional fallback; submitting then
-    // would create the session under the wrong agent.
-    if (this.agents().length === 0) {
-      return false;
-    }
-    if (this.usesCustomFolder() && (!this.isAdmin() || (!this.execNode && !this.worktree))) {
-      return false;
-    }
-    if (this.execNode && this.worktree) {
-      return false;
-    }
-    if (this.worktree && !this.worktreeAvailable()) {
-      return false;
-    }
-    const name = this.worktreeName.trim();
-    if (this.worktree && name && !WORKTREE_NAME_PATTERN.test(name)) {
-      return false;
-    }
-    return true;
-  }
-
-  private async submit() {
-    const context = this.context;
-    if (!context || !this.canSubmit()) {
-      return;
-    }
-    const message = this.message.trim();
-    this.submitting = true;
-    this.error = null;
-    // Collapse menus and retire browser requests before awaiting the Gateway;
-    // otherwise a now-hidden picker can keep mutating the submitted draft.
-    this.closeBrowser();
-    for (const details of this.openMenus()) {
-      details.open = false;
-    }
-    try {
-      const result = await context.sessions.createResult(
-        buildDraftSessionCreateParams({
-          agentId: this.agentId,
-          message,
-          worktree: this.worktree,
-          baseRef: this.baseRef,
-          worktreeName: this.worktreeName,
-          cwd: this.folder,
-          workspace: this.workspacePath(),
-          execNode: this.execNode,
-        }),
-      );
-      if (!result) {
-        this.error = context.sessions.state.error ?? t("newSession.createFailed");
-        return;
-      }
-      if (result.initialRun.status === "rejected") {
-        const gateway = context.gateway.snapshot;
-        const persisted = admitStoredChatComposerQueueItem(
-          {
-            settings: loadSettings(),
-            assistantAgentId: gateway.assistantAgentId,
-            agentsList: context.agents.state.agentsList,
-            hello: gateway.hello,
-          },
-          result.key,
-          {
-            id: generateUUID(),
-            text: message,
-            createdAt: Date.now(),
-            kind: "queued",
-            refreshSessions: true,
-            sendAttempts: 1,
-            sendError: result.initialRun.error,
-            sendState: "failed",
-            sessionKey: result.key,
-            agentId: normalizeAgentId(this.agentId),
-          },
-        );
-        if (!persisted) {
-          // Stay on the draft when browser storage is unavailable: preserving
-          // the typed task takes priority over navigating to the partial session.
-          this.error = result.initialRun.error;
-          return;
-        }
-      }
-      context.gateway.setSessionKey(result.key);
-      context.navigate("chat", { search: searchForSession(result.key) });
-    } finally {
-      this.submitting = false;
-    }
-  }
-
-  private selectAgentId(agentId: string) {
-    if (this.submitting) {
-      return;
-    }
-    // Re-picking the checked agent must not reset the draft (the native
-    // select never fired change for the same option).
-    if (normalizeAgentId(agentId) === normalizeAgentId(this.agentId)) {
-      return;
-    }
-    this.agentId = normalizeAgentId(agentId);
-    this.folder = this.execNode ? "" : this.workspacePath();
-    this.worktree = false;
-    this.worktreeName = "";
-    this.closeBrowser();
-    this.maybeLoadBranches();
-  }
-
-  private applyFolder(folder: string, execNode = this.execNode) {
-    if (this.submitting) {
-      return;
-    }
-    this.execNode = execNode;
-    this.folder = folder.trim();
-    if (this.execNode) {
-      this.worktree = false;
-    } else if (this.usesCustomFolder()) {
-      // Explicit host paths only materialize through a managed worktree.
-      this.worktree = true;
-    }
-    this.maybeLoadBranches();
-  }
-
-  private selectExecNode(execNode: string) {
-    if (this.submitting) {
-      return;
-    }
-    if (execNode === this.execNode) {
-      return;
-    }
-    this.execNode = execNode;
-    // Folder paths belong to one host; never carry a Gateway or node path to another host.
-    this.folder = execNode ? "" : this.workspacePath();
-    this.worktree = false;
-    this.closeBrowser();
-    this.maybeLoadBranches();
-  }
-
-  private browseAvailable(): boolean {
-    return this.isAdmin();
-  }
-
-  /** Grayed-out device rows must say why: offline vs. node lacks browse support. */
-  private nodeBrowseBlockedReason(node: DraftNode): string | undefined {
-    if (node.canBrowse) {
-      return undefined;
-    }
-    return node.connected ? t("newSession.nodeCannotBrowse") : t("newSession.nodeOffline");
-  }
-
-  private closeBrowser() {
-    this.browserRequestToken += 1;
-    // Reset state before collapsing the <details> so its toggle handler sees
-    // browserOpen === false and does not re-enter this method.
-    this.browserOpen = false;
-    this.browserLoading = false;
-    this.browserError = null;
-    this.browserListing = null;
-    this.browserTarget = null;
-    this.browserPathDraft = "";
-    const details = this.querySelector<HTMLDetailsElement>(
-      ".new-session-page__select--folder[open]",
-    );
-    if (details) {
-      details.open = false;
-    }
-  }
-
-  private showBrowserRoot() {
-    this.browserRequestToken += 1;
-    this.browserLoading = false;
-    this.browserError = null;
-    this.browserListing = null;
-    this.browserTarget = null;
-    this.browserPathDraft = "";
-  }
-
-  /** "Use this folder" applies exactly what the head input shows. The draft
-      syncs to every listed directory, covers hosts that cannot list
-      (fs.listDir missing/failing), and an edited path always wins over a
-      stale listing. A cleared input applies "" — the host's default
-      directory (workspace on the Gateway, home on a node) — matching the
-      clearable folder textbox this browser replaced. Null disables Use. */
-  private usableBrowserPath(): string | null {
-    const draft = this.browserPathDraft.trim();
-    if (draft.length === 0) {
-      return "";
-    }
-    return isAbsolutePath(draft) ? draft : null;
-  }
-
-  private selectBrowserTarget(target: BrowserTarget) {
-    const folder = this.folder.trim();
-    const matchesCurrentTarget = target.nodeId === this.execNode;
-    const path = matchesCurrentTarget && isAbsolutePath(folder) ? folder : undefined;
-    this.browserTarget = target;
-    this.loadBrowser(path);
-  }
-
-  private loadBrowser(path: string | undefined) {
-    const client = this.context?.gateway.snapshot.client;
-    const target = this.browserTarget;
-    if (!client || !target) {
-      return;
-    }
-    const requestId = ++this.browserRequestToken;
-    this.browserLoading = true;
-    this.browserError = null;
-    // Clear the previous directory immediately: keeping it clickable while the
-    // request is in flight would let "Use this folder" apply the stale path.
-    this.browserListing = null;
-    // Navigation owns the shown path at once, so a mid-flight "Use this
-    // folder" applies where the user is heading, never the directory they
-    // just left ("" = the host default while heading home).
-    this.browserPathDraft = path ?? "";
-    const draftAtRequest = this.browserPathDraft;
-    void client
-      .request<FsListDirResult>("fs.listDir", {
-        ...(path ? { path } : {}),
-        ...(target.nodeId ? { nodeId: target.nodeId } : {}),
-      })
-      .then((result) => {
-        if (requestId !== this.browserRequestToken) {
-          return;
-        }
-        this.browserListing = result ?? null;
-        // Sync the head input to the listed directory unless the user typed
-        // while this request was in flight; their edit wins.
-        if (result?.path && this.browserPathDraft === draftAtRequest) {
-          this.browserPathDraft = result.path;
-        }
-      })
-      .catch(() => {
-        if (requestId !== this.browserRequestToken) {
-          return;
-        }
-        // A stale or mistyped folder should not strand the picker: fall back home.
-        if (path) {
-          this.loadBrowser(undefined);
-          return;
-        }
-        this.browserError = t("newSession.browserLoadFailed");
-      })
-      .finally(() => {
-        if (requestId === this.browserRequestToken) {
-          this.browserLoading = false;
-        }
-      });
-  }
-
-  private renderBrowser() {
-    if (!this.browserOpen) {
-      return nothing;
-    }
-    const listing = this.browserListing;
-    const target = this.browserTarget;
-    // Hosts can answer fs.listDir with a shapeless payload; a missing entries
-    // array must read as an empty directory, not crash the render.
-    const entries = listing?.entries ?? [];
-    return html`
-      <div class="new-session-page__browser">
-        <div class="new-session-page__browser-head">
-          <button
-            type="button"
-            class="new-session-page__browser-nav"
-            title=${t("newSession.browserUp")}
-            aria-label=${t("newSession.browserUp")}
-            ?disabled=${!target || (!listing && this.browserLoading)}
-            @click=${() => {
-              if (listing?.parent) {
-                this.loadBrowser(listing.parent);
-              } else if (target) {
-                this.showBrowserRoot();
-              }
-            }}
-          >
-            ${icons.arrowLeft}
-          </button>
-          ${target
-            ? html`
-                <input
-                  class="new-session-page__browser-path"
-                  type="text"
-                  aria-label=${t("newSession.folder")}
-                  placeholder=${target.label}
-                  .value=${this.browserPathDraft}
-                  @input=${(event: Event) => {
-                    this.browserPathDraft = (event.target as HTMLInputElement).value;
-                  }}
-                  @keydown=${(event: KeyboardEvent) => {
-                    // Manual path entry browses there; "Use this folder" applies
-                    // the typed path even when the host cannot list it.
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      const path = this.browserPathDraft.trim();
-                      this.loadBrowser(path || undefined);
-                    }
-                  }}
-                />
-              `
-            : html`<span class="new-session-page__browser-path">${t("newSession.where")}</span>`}
-          ${this.browserLoading
-            ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
-            : nothing}
-          <button
-            type="button"
-            class="new-session-page__browser-nav"
-            title=${t("common.close")}
-            aria-label=${t("common.close")}
-            @click=${() => this.closeBrowser()}
-          >
-            ${icons.x}
-          </button>
-        </div>
-        ${this.browserError
-          ? html`<div class="new-session-page__error">${this.browserError}</div>`
-          : nothing}
-        <div class="new-session-page__browser-list" role="listbox">
-          ${!target
-            ? html`
-                <button
-                  type="button"
-                  class="new-session-page__browser-entry"
-                  @click=${() =>
-                    this.selectBrowserTarget({ nodeId: "", label: t("newSession.gateway") })}
-                >
-                  <span class="new-session-page__target-icon" aria-hidden="true"
-                    >${icons.monitor}</span
-                  >
-                  <span>${t("newSession.gateway")}</span>
-                </button>
-                ${this.nodes.map(
-                  (node) => html`
-                    <button
-                      type="button"
-                      class="new-session-page__browser-entry"
-                      ?disabled=${!node.canBrowse}
-                      title=${this.nodeBrowseBlockedReason(node) ?? nothing}
-                      @click=${() =>
-                        this.selectBrowserTarget({
-                          nodeId: node.nodeId,
-                          label: node.displayName,
-                        })}
-                    >
-                      <span class="new-session-page__target-icon" aria-hidden="true"
-                        >${icons.monitor}</span
-                      >
-                      <span>${node.displayName}</span>
-                    </button>
-                  `,
-                )}
-              `
-            : nothing}
-          ${listing && entries.length === 0 && !this.browserLoading
-            ? html`<div class="new-session-page__browser-empty">
-                ${t("newSession.browserEmpty")}
-              </div>`
-            : nothing}
-          ${target
-            ? entries.map(
-                (entry) => html`
-                  <button
-                    type="button"
-                    class="new-session-page__browser-entry ${entry.hidden
-                      ? "new-session-page__browser-entry--hidden"
-                      : ""}"
-                    title=${entry.hidden ? t("newSession.hiddenFolder") : nothing}
-                    @click=${() => this.loadBrowser(entry.path)}
-                  >
-                    <span class="new-session-page__target-icon" aria-hidden="true"
-                      >${icons.folder}</span
-                    >
-                    <span>${entry.name}</span>
-                  </button>
-                `,
-              )
-            : nothing}
-        </div>
-        <div class="new-session-page__browser-actions">
-          <button
-            type="button"
-            class="new-session-page__browser-use"
-            ?disabled=${!target || this.usableBrowserPath() === null}
-            @click=${() => {
-              const path = this.usableBrowserPath();
-              if (target && path !== null) {
-                this.applyFolder(path, target.nodeId);
-                this.closeBrowser();
-              }
-            }}
-          >
-            ${t("newSession.browserUse")}
-          </button>
-        </div>
-      </div>
-    `;
-  }
-
-  /** Closes the menu containing the clicked item and hands focus back. */
-  private closeMenuFrom(event: Event) {
-    const details = (event.currentTarget as HTMLElement).closest("details");
-    if (details?.open) {
-      details.open = false;
-      details.querySelector<HTMLElement>("summary")?.focus();
-    }
-  }
-
-  private renderMenuItem(params: {
-    label: string;
-    checked: boolean;
-    disabled?: boolean;
-    title?: string;
-    onSelect: (event: Event) => void;
-  }) {
-    return html`
-      <button
-        type="button"
-        class="session-menu__item"
-        role="menuitemradio"
-        aria-checked=${String(params.checked)}
-        title=${params.title ?? nothing}
-        ?disabled=${this.submitting || (params.disabled ?? false)}
-        @click=${params.onSelect}
-      >
-        <span class="session-menu__check" aria-hidden="true"
-          >${params.checked ? icons.check : nothing}</span
-        >
-        <span class="session-menu__text">${params.label}</span>
-      </button>
-    `;
-  }
-
-  private renderAgentSelect(agents: ReturnType<NewSessionPage["agents"]>) {
-    const selected = this.selectedAgent();
-    const label = selected?.identity?.name ?? selected?.name ?? selected?.id ?? this.agentId;
-    return html`
-      <details class="new-session-page__select" @toggle=${this.handleMenuToggle}>
-        <summary
-          class="new-session-page__trigger"
-          title=${t("newSession.agent")}
-          aria-disabled=${String(this.submitting)}
-          @click=${(event: Event) => {
-            if (this.submitting) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <span class="new-session-page__target-icon" aria-hidden="true">${icons.bot}</span>
-          <span class="new-session-page__trigger-label">${label}</span>
-          <span class="new-session-page__trigger-chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
-          >
-        </summary>
-        <div
-          class="new-session-page__menu"
-          role="menu"
-          aria-label=${t("newSession.agent")}
-          @keydown=${this.handleMenuKeydown}
-        >
-          ${agents.map((option) =>
-            this.renderMenuItem({
-              label: option.identity?.name ?? option.name ?? option.id,
-              checked: normalizeAgentId(option.id) === this.agentId,
-              onSelect: (event) => {
-                this.selectAgentId(option.id);
-                this.closeMenuFrom(event);
-              },
-            }),
-          )}
-        </div>
-      </details>
-    `;
-  }
-
-  /** Where + worktree consolidated into one "run on" menu (Cursor-style). */
-  private renderWhereSelect() {
-    const execNodes = this.execNodes();
-    const showNodes = this.isAdmin() && execNodes.length > 0;
-    const activeNode = execNodes.find((node) => node.nodeId === this.execNode);
-    const whereLabel = this.execNode
-      ? (activeNode?.displayName ?? this.execNode)
-      : t("newSession.gateway");
-    const customFolder = this.usesCustomFolder();
-    const worktreeAvailable = this.worktreeAvailable();
-    const branches = this.branches;
-    return html`
-      <details class="new-session-page__select" @toggle=${this.handleMenuToggle}>
-        <summary
-          class="new-session-page__trigger"
-          title=${t("newSession.where")}
-          data-worktree=${String(this.worktree)}
-          aria-disabled=${String(this.submitting)}
-          @click=${(event: Event) => {
-            if (this.submitting) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <span class="new-session-page__target-icon" aria-hidden="true">${icons.monitor}</span>
-          <span class="new-session-page__trigger-label">${whereLabel}</span>
-          ${this.worktree
-            ? html`<span class="new-session-page__target-icon" aria-hidden="true"
-                >${icons.gitBranch}</span
-              >`
-            : nothing}
-          <span class="new-session-page__trigger-chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
-          >
-        </summary>
-        <div
-          class="new-session-page__menu"
-          role="menu"
-          aria-label=${t("newSession.where")}
-          @keydown=${this.handleMenuKeydown}
-        >
-          ${showNodes
-            ? html`
-                <div class="new-session-page__menu-title">${t("newSession.where")}</div>
-                ${this.renderMenuItem({
-                  label: t("newSession.gateway"),
-                  checked: !this.execNode,
-                  onSelect: (event) => {
-                    this.selectExecNode("");
-                    this.closeMenuFrom(event);
-                  },
-                })}
-                ${execNodes.map((node) =>
-                  this.renderMenuItem({
-                    label: node.displayName,
-                    checked: this.execNode === node.nodeId,
-                    onSelect: (event) => {
-                      this.selectExecNode(node.nodeId);
-                      this.closeMenuFrom(event);
-                    },
-                  }),
-                )}
-              `
-            : nothing}
-          ${!this.execNode
-            ? html`
-                ${showNodes
-                  ? html`<div class="session-menu__separator" role="separator"></div>`
-                  : nothing}
-                ${this.renderMenuItem({
-                  label: t("newSession.worktree"),
-                  checked: this.worktree,
-                  disabled: !worktreeAvailable || customFolder,
-                  title: worktreeAvailable
-                    ? t("chat.runControls.newSessionWorktree")
-                    : t("newSession.worktreeUnavailable"),
-                  onSelect: () => {
-                    // Stays open: enabling reveals the branch/name fields below.
-                    this.worktree = !this.worktree;
-                    if (this.worktree) {
-                      this.maybeLoadBranches();
-                    }
-                  },
-                })}
-                ${this.worktree
-                  ? html`
-                      <label class="new-session-page__menu-field">
-                        <span>${t("newSession.baseBranch")}</span>
-                        <input
-                          type="text"
-                          list="new-session-branches"
-                          ?disabled=${this.submitting}
-                          placeholder=${this.branchesLoading
-                            ? t("common.loading")
-                            : (branches?.defaultBranch ?? t("newSession.baseBranch"))}
-                          .value=${this.baseRef}
-                          @input=${(event: Event) => {
-                            if (this.submitting) {
-                              return;
-                            }
-                            this.baseRefEditGeneration += 1;
-                            this.baseRef = (event.target as HTMLInputElement).value.trim();
-                          }}
-                        />
-                        <datalist id="new-session-branches">
-                          ${(branches?.branches ?? []).map(
-                            (branch) => html`<option value=${branch.name}></option>`,
-                          )}
-                        </datalist>
-                      </label>
-                      <label class="new-session-page__menu-field">
-                        <span>${t("newSession.worktreeName")}</span>
-                        <input
-                          type="text"
-                          ?disabled=${this.submitting}
-                          placeholder=${t("newSession.worktreeNamePlaceholder")}
-                          .value=${this.worktreeName}
-                          @input=${(event: Event) => {
-                            if (this.submitting) {
-                              return;
-                            }
-                            this.worktreeName = (event.target as HTMLInputElement).value.trim();
-                          }}
-                        />
-                      </label>
-                    `
-                  : nothing}
-              `
-            : nothing}
-        </div>
-      </details>
-    `;
-  }
-
-  private renderFolderSelect() {
-    const browseAvailable = this.browseAvailable();
-    const folder = this.folder.trim();
-    // An empty folder on a node session means that node's default directory —
-    // never the Gateway workspace, so no local-workspace fallback there.
-    const label = folder
-      ? folderDisplayName(folder)
-      : this.execNode
-        ? t("newSession.folderPlaceholder")
-        : folderDisplayName(this.workspacePath()) || t("newSession.folderPlaceholder");
-    return html`
-      <details
-        class="new-session-page__select new-session-page__select--folder"
-        @toggle=${(event: Event) => {
-          // Browser state first: handleMenuToggle captures updateComplete for
-          // its focus hook, which must wait for the render these setters
-          // schedule (a bare details-attribute flip schedules none).
-          const details = event.currentTarget as HTMLDetailsElement;
-          if (details.open) {
-            this.browserOpen = true;
-            this.showBrowserRoot();
-          } else if (this.browserOpen) {
-            this.closeBrowser();
-          }
-          this.handleMenuToggle(event);
-        }}
-      >
-        <summary
-          class="new-session-page__trigger ${browseAvailable
-            ? ""
-            : "new-session-page__trigger--disabled"}"
-          title=${browseAvailable ? t("newSession.browse") : t("newSession.browseRequiresAdmin")}
-          aria-disabled=${String(this.submitting || !browseAvailable)}
-          @click=${(event: Event) => {
-            if (this.submitting || !browseAvailable) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
-          <span class="new-session-page__trigger-label">${label}</span>
-          <span class="new-session-page__trigger-chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
-          >
-        </summary>
-        <div
-          class="new-session-page__menu new-session-page__menu--browser"
-          @keydown=${this.handleMenuKeydown}
-        >
-          ${this.renderBrowser()}
-        </div>
-      </details>
-    `;
+  private renderAgentSelect() {
+    return renderAgentSelect({
+      agents: this.place.agents(),
+      agentId: this.place.agentId,
+      agentIdentity: this.context?.agentIdentity,
+      disabled: this.submission.submitting || Boolean(this.submission.pendingCloud.sessionKey),
+      onSelect: (agentId) => this.place.selectAgentId(agentId),
+    });
   }
 
   private renderTargetBar() {
-    const agents = this.agents();
-    return html`
-      <div class="new-session-page__triggers">
-        ${agents.length > 1 ? this.renderAgentSelect(agents) : nothing} ${this.renderFolderSelect()}
-        ${this.renderWhereSelect()}
-      </div>
-    `;
+    const agents = this.place.agents();
+    const sessions = this.context?.sessions;
+    return catalog.renderBar({
+      data: this.data,
+      groupPending: catalog.isGroupRoutePending(this.data, sessions),
+      agentSelect: agents.length > 1 ? this.renderAgentSelect() : nothing,
+      placeSelect: this.renderPlaceChips(),
+      retrying:
+        this.gateway.catalogRetrying ||
+        Boolean(this.data?.group && sessions?.groupsStatus() === "loading"),
+      onRetry: this.gateway.handleCatalogRetry,
+    });
   }
 
-  /** Target row + composer, rendered mid-screen between the hero and recents. */
+  private renderPlaceChips() {
+    const execNodes = this.place.execNodes();
+    const executionNodes = this.place.executionNodes();
+    const cloudProfiles = catalog.isTarget(this.data) ? [] : this.gateway.cloudProfiles;
+    const branches = this.place.repository.kind === "git" ? this.place.repository : null;
+    const projects = catalog.isTarget(this.data) ? [] : this.browser.projects;
+    const recents = catalog.isTarget(this.data)
+      ? []
+      : this.browser.resolveProjectRecents({
+          sessions: this.context?.sessions.state.result?.sessions ?? [],
+          workspace: this.place.workspacePath(),
+          workspaceRoots: this.place.knownWorkspaceRoots(),
+          execNodes,
+          isAdmin: this.place.isAdmin(),
+        });
+    const whereState = resolveWhereChip({
+      execNodes: this.place.isAdmin() ? executionNodes : [],
+      environments: this.place.isAdmin() ? this.gateway.environments : [],
+      cloudProfiles: this.place.isAdmin() ? cloudProfiles : [],
+      cloudProfileId: this.place.cloudProfileId,
+      execNode: this.place.execNode,
+    });
+    const projectState = resolveProjectChip({
+      folder: this.place.folder,
+      workspace: this.place.workspacePath(),
+      projectId: this.browser.projectId,
+      selectedRemoteProject: this.browser.remoteProject,
+      projects,
+      recents,
+      projectQuery: this.browser.projectQuery,
+      execNode: this.place.execNode,
+    });
+    const detailState = resolveDetailChip({
+      execNode: this.place.execNode,
+      cloudProfileId: this.place.cloudProfileId,
+      worktree: this.place.worktree,
+      repository: this.place.repository,
+    });
+    const gatewayLabel = this.gateway.gatewayName
+      ? t("newSession.gatewayNamed", { name: this.gateway.gatewayName })
+      : t("newSession.gateway");
+    const commonPopover = (kind: "where" | "project" | "detail") => ({
+      popoverOpen: this.browser.popoverOpen(kind),
+      popoverHiding: this.browser.popoverHiding(kind),
+      onGuardTransition: (event: MouseEvent) => this.browser.guardPopoverTransition(event, kind),
+      onPopoverShow: () => this.browser.onPopoverShow(kind),
+      onPopoverHide: () => this.browser.onPopoverHide(kind),
+      onPopoverAfterHide: () => this.browser.onPopoverAfterHide(kind),
+    });
+    const submitting = this.submission.submitting;
+    const pendingCloud = Boolean(this.submission.pendingCloud.sessionKey);
+    return html`${renderWhereChip({
+      state: whereState,
+      gatewayName: this.gateway.gatewayName,
+      cloudProfileId: this.place.cloudProfileId,
+      execNode: this.place.execNode,
+      worktreeAvailable: this.place.worktreeAvailable(),
+      cloudDisabledReason: this.submission.cloudDisabledReason(),
+      submitting,
+      pendingCloud,
+      isAdmin: this.place.isAdmin(),
+      ...commonPopover("where"),
+      onSelectExecNode: (nodeId) => this.place.selectExecNode(nodeId),
+      onSelectCloudProfile: (profileId) => this.place.selectCloudProfile(profileId),
+      onConnectMachine: () => this.openConnectMachine(),
+    })}${renderProjectChip({
+      state: projectState,
+      browseAvailable: this.place.browseAvailable(),
+      isAdmin: this.place.isAdmin(),
+      canWrite: this.place.canWrite(),
+      folder: this.place.folder,
+      workspace: this.place.workspacePath(),
+      projects,
+      projectQuery: this.browser.projectQuery,
+      projectSearchAvailable: canCallGatewayMethod(
+        this.context?.gateway.snapshot,
+        "projects.searchRemote",
+        "operator.read",
+      ),
+      projectAddAvailable: canCallGatewayMethod(
+        this.context?.gateway.snapshot,
+        "projects.add",
+        "operator.write",
+      ),
+      remoteProjects: this.browser.projectSearchResult?.projects ?? [],
+      selectedRemoteProject: this.browser.remoteProject,
+      projectSearchCredentialMissing: this.browser.projectSearchResult?.credential === "missing",
+      projectSearchLoading: this.browser.projectSearchLoading,
+      projectSearchError: this.browser.projectSearchError,
+      projectId: this.browser.projectId,
+      execNodes,
+      gatewayLabel,
+      execNode: this.place.execNode,
+      submitting,
+      pendingCloud,
+      ...commonPopover("project"),
+      browserTarget: this.browser.browserTarget,
+      browserListing: this.browser.browserListing,
+      browserLoading: this.browser.browserLoading,
+      browserError: this.browser.browserError,
+      browserPathDraft: this.browser.browserPathDraft,
+      usableBrowserPath: this.browser.usableBrowserPath(),
+      registerProjectPath: this.browser.browserProjectPath,
+      registeringProject: this.browser.browserRegistering,
+      onSelectProject: (projectId) => this.place.selectProjectId(projectId),
+      onProjectQueryInput: (query) => this.browser.changeProjectQuery(query),
+      onSelectRemoteProject: (project) => this.place.selectRemoteProject(project),
+      onApplyFolder: (folder, execNode) =>
+        this.place.applyFolder(
+          folder,
+          execNode,
+          !execNode && this.browser.browserListing?.path === folder,
+        ),
+      onBrowse: (target) => this.browser.selectBrowserTarget(target),
+      onBrowserPathDraftChange: (value) => {
+        this.browser.browserPathDraft = value;
+      },
+      onBrowserNavigate: (path) => this.browser.loadBrowser(path),
+      onBrowserBack: () => this.browser.showRoot(),
+      onRegisterProject: (path) => void this.browser.registerBrowserProject(path),
+      onClose: () => this.browser.close(),
+    })}${renderDetailChip({
+      state: detailState,
+      syncLabel: projectState.label,
+      folder: this.place.folder,
+      execNode: this.place.execNode,
+      worktree: this.place.worktree,
+      worktreeAvailable: this.place.worktreeAvailable(),
+      worktreeDisabledReason:
+        this.place.repository.kind === "checking"
+          ? t("newSession.checkingGit")
+          : this.place.repository.kind === "unavailable"
+            ? t("newSession.gitCheckUnavailable")
+            : undefined,
+      branches,
+      branchesLoading: this.place.repository.kind === "checking",
+      baseRef: this.place.baseRef,
+      worktreeName: this.place.worktreeName,
+      submitting,
+      pendingCloud,
+      ...commonPopover("detail"),
+      onToggleWorktree: () => this.place.toggleWorktree(),
+      onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
+      onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
+      onNodeFolderInput: (folder, execNode) => this.place.applyFolder(folder, execNode),
+    })}`;
+  }
+
+  private openConnectMachine() {
+    if (!this.place.isAdmin()) {
+      return;
+    }
+    this.browser.close();
+    this.connectMachineOpen = true;
+    this.connectMachineError = null;
+    this.connectMachineSetup = null;
+    this.requestUpdate();
+    void this.refreshConnectMachine();
+  }
+
+  private async refreshConnectMachine() {
+    if (!this.connectMachineOpen || this.connectMachineLoading) {
+      return;
+    }
+    const client = this.gateway.connected ? this.gateway.client : null;
+    if (!client) {
+      this.connectMachineError = t("newSession.connectMachineUnavailable");
+      this.requestUpdate();
+      return;
+    }
+    const requestId = ++this.connectMachineRequestId;
+    this.connectMachineLoading = true;
+    this.connectMachineError = null;
+    this.requestUpdate();
+    try {
+      const setup = await requestDevicePairJoinSetup(client);
+      if (
+        requestId !== this.connectMachineRequestId ||
+        client !== this.gateway.client ||
+        !this.gateway.connected ||
+        !this.connectMachineOpen
+      ) {
+        return;
+      }
+      if (!setup.joinUrl?.trim()) {
+        this.connectMachineSetup = null;
+        this.connectMachineError = t("newSession.connectMachineMissingUrl");
+        return;
+      }
+      this.connectMachineSetup = setup;
+    } catch (error) {
+      if (
+        requestId === this.connectMachineRequestId &&
+        client === this.gateway.client &&
+        this.gateway.connected &&
+        this.connectMachineOpen
+      ) {
+        this.connectMachineError = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      if (requestId === this.connectMachineRequestId) {
+        this.connectMachineLoading = false;
+        this.requestUpdate();
+      }
+    }
+  }
+
+  private closeConnectMachine() {
+    this.connectMachineRequestId += 1;
+    this.connectMachineOpen = false;
+    this.connectMachineLoading = false;
+    this.connectMachineError = null;
+    this.connectMachineSetup = null;
+  }
+
   private renderDraftBlock() {
     const worktreeNameInvalid =
-      this.worktree &&
-      this.worktreeName.trim() !== "" &&
-      !WORKTREE_NAME_PATTERN.test(this.worktreeName.trim());
+      this.place.worktree && !isWorktreeNameValid(this.place.worktreeName);
     return html`
-      <div class="new-session-page__draft" aria-busy=${String(this.submitting)}>
+      <div class="new-session-page__draft" aria-busy=${String(this.submission.submitting)}>
         ${this.renderTargetBar()}
-        ${worktreeNameInvalid
-          ? html`<div class="new-session-page__error">${t("newSession.worktreeNameInvalid")}</div>`
+        ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
+        ${this.submission.error ? renderDraftError(this.submission.error) : nothing}
+        ${this.submission.submissionOutcomeUnknown
+          ? renderDraftError(
+              t(
+                this.submission.submissionOutcomeUnknown === "gateway-changed"
+                  ? "newSession.createOutcomeUnknown"
+                  : "newSession.cloudSetupInterrupted",
+              ),
+            )
           : nothing}
-        ${this.error ? html`<div class="new-session-page__error">${this.error}</div>` : nothing}
-        ${this.renderComposer()}
+        ${renderNewSessionDraftComposer({
+          agent: this.place.selectedAgent(),
+          agentId: this.place.agentId,
+          attachmentDraft: this.submission.attachmentDraft,
+          canSubmit: this.submission.canSubmit(),
+          submitDisabledReason: this.submission.submitDisabledReason(),
+          context: this.context,
+          isCatalogTarget: catalog.isTarget(this.data),
+          message: this.submission.message,
+          visibility: this.submission.visibility,
+          draftAvailable: this.submission.canStartAsDraft(),
+          modelControl: this.place.modelControl,
+          requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
+          submitting: this.submission.submitting,
+          textareaController: this.submission.composerTextarea,
+          messageLocked: Boolean(this.submission.pendingCloud.sessionKey),
+          incognitoDisabledReason: this.submission.incognitoDisabledReason(),
+          terminalAction: this.submission.showStartInTerminal()
+            ? {
+                canStart: this.submission.canSubmit("terminal"),
+                disabledReason: this.submission.terminalStartDisabledReason(),
+                onStart: () => void this.submission.startInTerminal(),
+              }
+            : undefined,
+          onInput: (message) => {
+            if (!this.submission.submitting && !this.submission.pendingCloud.sessionKey) {
+              this.setMessageFromUser(message);
+            }
+          },
+          onOpenImage: (item) => {
+            this.imageLightbox = item;
+          },
+          onVisibilityChange: (visibility) => {
+            if (!this.submission.submitting && !this.submission.pendingCloud.sessionKey) {
+              this.submission.setVisibility(visibility);
+            }
+          },
+          onSubmit: () => void this.submission.submit(),
+        })}
       </div>
     `;
   }
 
-  /** Same welcome block as the empty-chat start screen, keyed to the draft's agent. */
   private renderWelcome() {
-    const agent = this.selectedAgent();
-    const identity = agent?.identity;
+    const agent = this.place.selectedAgent();
+    const identity = this.context?.agentIdentity.get(this.place.agentId);
     const gateway = this.context?.gateway.snapshot;
     return renderWelcomeState({
-      assistantName: identity?.name ?? agent?.name ?? agent?.id ?? "",
-      assistantAvatar: identity?.avatar ?? identity?.emoji ?? null,
-      assistantAvatarUrl: identity?.avatarUrl ?? null,
+      assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
+      assistantAvatar: agent?.identity?.avatar ?? agent?.identity?.emoji ?? null,
+      assistantAvatarUrl: agent?.identity?.avatarUrl ?? null,
       hint: t("newSession.hint"),
       composer: this.renderDraftBlock(),
+      modelSetupRequired: this.submission.requiresModelSetup(),
+      onModelSetup: () => this.context?.navigate("model-setup"),
       sessions: this.context?.sessions.state.result,
       sessionKey: buildAgentMainSessionKey({
-        agentId: this.agentId || "main",
+        agentId: this.place.agentId || "main",
         mainKey: this.context?.agents.state.agentsList?.mainKey,
       }),
       sessionHost: {
@@ -1099,17 +652,29 @@ class NewSessionPage extends OpenClawLightDomElement {
         hello: gateway?.hello ?? null,
       },
       onDraftChange: (next) => {
-        if (!this.submitting) {
-          this.message = next;
+        if (!this.submission.submitting && !this.submission.pendingCloud.sessionKey) {
+          this.setMessageFromUser(next);
         }
       },
-      onSend: () => void this.submit(),
+      onSend: () => void this.submission.submit(),
       onOpenSession: (sessionKey) => {
-        if (this.submitting) {
+        if (this.submission.submitting || this.submission.pendingCloud.sessionKey) {
           return;
         }
-        this.context?.gateway.setSessionKey(sessionKey);
-        this.context?.navigate("chat", { search: searchForSession(sessionKey) });
+        const context = this.context;
+        if (!context) {
+          return;
+        }
+        selectApplicationSession({
+          selection: context.agentSelection,
+          gateway: context.gateway,
+          sessionKey,
+          agentId: this.place.agentId,
+        });
+        context.navigate(
+          "chat",
+          sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
+        );
       },
     });
   }
@@ -1119,69 +684,30 @@ class NewSessionPage extends OpenClawLightDomElement {
       <div class="new-session-page">
         <div
           class="new-session-page__scroll"
-          ?inert=${this.submitting}
-          aria-busy=${String(this.submitting)}
+          ?inert=${this.submission.submitting}
+          aria-busy=${String(this.submission.submitting)}
           @mousedown=${beginNativeWindowDragFromTopInset}
         >
           ${this.renderWelcome()}
         </div>
-      </div>
-    `;
-  }
-
-  private handleMessageKeydown(event: KeyboardEvent) {
-    if (this.submitting) {
-      return;
-    }
-    // keyCode 229 mirrors the chat composer's IME guard: some browsers emit
-    // the candidate-confirm Enter with isComposing === false.
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) {
-      return;
-    }
-    // Honor the chat composer's send-shortcut setting so the draft picker
-    // sends exactly like an existing session's composer.
-    const requiresModifier = loadSettings().chatSendShortcut === "modifier-enter";
-    if (!requiresModifier || event.metaKey || event.ctrlKey) {
-      event.preventDefault();
-      void this.submit();
-    }
-  }
-
-  /** Draft message box styled as the chat composer shell so both pickers match. */
-  private renderComposer() {
-    const startLabel = this.submitting ? t("newSession.starting") : t("newSession.start");
-    return html`
-      <div class="agent-chat__input new-session-page__composer">
-        <div class="agent-chat__composer-input-row">
-          <div class="agent-chat__composer-combobox">
-            <textarea
-              class="new-session-page__message"
-              rows="3"
-              ?disabled=${this.submitting}
-              placeholder=${t("newSession.messagePlaceholder")}
-              .value=${this.message}
-              @input=${(event: Event) => {
-                if (!this.submitting) {
-                  this.message = (event.target as HTMLTextAreaElement).value;
-                }
-              }}
-              @keydown=${(event: KeyboardEvent) => this.handleMessageKeydown(event)}
-            ></textarea>
-          </div>
-          <div class="agent-chat__composer-actions">
-            <openclaw-tooltip content=${t("newSession.start")}>
-              <button
-                type="button"
-                class="chat-send-btn"
-                ?disabled=${!this.canSubmit()}
-                aria-label=${startLabel}
-                @click=${() => void this.submit()}
-              >
-                ${this.submitting ? icons.loader : icons.send}
-              </button>
-            </openclaw-tooltip>
-          </div>
-        </div>
+        ${renderConnectMachineDialog({
+          open: this.connectMachineOpen && this.place.isAdmin(),
+          loading: this.connectMachineLoading,
+          error: this.connectMachineError,
+          setup: this.connectMachineSetup,
+          onRefresh: () => void this.refreshConnectMachine(),
+          onClose: () => {
+            this.closeConnectMachine();
+            this.requestUpdate();
+          },
+          onManageDevices: () => {
+            this.closeConnectMachine();
+            this.context?.navigate("devices");
+          },
+        })}
+        ${renderChatImageLightbox(this.imageLightbox, () => {
+          this.imageLightbox = null;
+        })}
       </div>
     `;
   }
@@ -1191,4 +717,5 @@ if (!customElements.get("openclaw-new-session-page")) {
   customElements.define("openclaw-new-session-page", NewSessionPage);
 }
 
-export type { NewSessionPage };
+export const render = (data: unknown) =>
+  html`<openclaw-new-session-page .data=${data}></openclaw-new-session-page>`;

@@ -11,10 +11,7 @@ import {
   ensureConfiguredBindingRouteReady,
   resolveRuntimeConversationBindingRoute,
 } from "./binding-routing.js";
-import {
-  registerStatefulBindingTargetDriver,
-  unregisterStatefulBindingTargetDriver,
-} from "./stateful-target-drivers.js";
+import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
 function createRoute(): ResolvedAgentRoute {
   return {
@@ -147,14 +144,16 @@ describe("runtime conversation binding route", () => {
 });
 
 describe("ensureConfiguredBindingRouteReady", () => {
+  let unregisterDriver: (() => void) | undefined;
+
   afterEach(() => {
     vi.useRealTimers();
-    unregisterStatefulBindingTargetDriver("slow");
+    unregisterDriver?.();
   });
 
   it("returns a bounded failure when target readiness never settles", async () => {
     vi.useFakeTimers();
-    registerStatefulBindingTargetDriver({
+    unregisterDriver = registerStatefulBindingTargetDriver({
       id: "slow",
       ensureReady: async () => await new Promise<never>(() => {}),
       ensureSession: async () => ({

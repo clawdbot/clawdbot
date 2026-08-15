@@ -1,5 +1,5 @@
 // Defines metadata for bundled plugins that are installed externally.
-export type ExternalizedBundledPluginPreferredSource = "npm" | "clawhub";
+type ExternalizedBundledPluginPreferredSource = "npm" | "clawhub";
 
 export type ExternalizedBundledPluginBridge = {
   /** Plugin id used while the plugin was bundled in core. */
@@ -10,6 +10,8 @@ export type ExternalizedBundledPluginBridge = {
   preferredSource?: ExternalizedBundledPluginPreferredSource;
   /** npm spec OpenClaw can install when migrating the bundled plugin out. */
   npmSpec?: string;
+  /** Catalog integrity pin for npmSpec; only valid for that exact spec. */
+  expectedIntegrity?: string;
   /** ClawHub spec OpenClaw can install when migrating the bundled plugin out. */
   clawhubSpec?: string;
   /** Optional ClawHub base URL for non-default registries. */

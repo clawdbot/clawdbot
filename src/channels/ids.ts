@@ -15,6 +15,7 @@ export type ChatChannelId = string;
 type BundledChatChannelEntry = {
   id: ChatChannelId;
   aliases: readonly string[];
+  label?: string;
   order: number;
 };
 
@@ -23,6 +24,7 @@ function listBundledChatChannelEntries(): BundledChatChannelEntry[] {
     .map((entry) => ({
       id: normalizeOptionalLowercaseString(entry.channelId) ?? entry.channelId,
       aliases: entry.aliases ?? [],
+      label: entry.label?.trim() || undefined,
       order: entry.order ?? Number.MAX_SAFE_INTEGER,
     }))
     .toSorted(
@@ -50,13 +52,23 @@ export const CHANNEL_IDS = CHAT_CHANNEL_ORDER;
 /**
  * Maps configured built-in channel aliases to canonical chat channel ids.
  */
-export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
+const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
   Object.fromEntries(
     BUNDLED_CHAT_CHANNEL_ENTRIES.flatMap((entry) =>
       entry.aliases.map((alias) => [alias, entry.id] as const),
     ),
   ),
 ) as Record<string, ChatChannelId>;
+
+/** Finds the generated operator-facing label for a built-in channel id or alias. */
+export function findChatChannelLabel(raw?: string | null): string | undefined {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  const resolved = CHAT_CHANNEL_ALIASES[normalized] ?? normalized;
+  return BUNDLED_CHAT_CHANNEL_ENTRIES.find((entry) => entry.id === resolved)?.label;
+}
 
 function listRuntimeBundledChatChannelEntries(): BundledChatChannelEntry[] {
   // Generated metadata is the hot-path source. The runtime catalog fallback covers

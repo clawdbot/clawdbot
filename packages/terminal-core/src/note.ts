@@ -1,9 +1,9 @@
 // Terminal Core module implements note behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { splitGraphemes, visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
-import { normalizeLowercaseStringOrEmpty } from "./string.js";
 
 const MIN_NOTE_COLUMNS = 80;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
@@ -230,7 +230,6 @@ export function note(message: unknown, title?: string) {
   const wrappedMessage = wrapNoteMessage(message, { columns });
   clackNote(wrappedMessage, stylePromptTitle(title), {
     output: createNoteOutput(resolveNoteOutputColumns(wrappedMessage, columns)),
-    format: (line) => line,
   });
 }
 

@@ -49,6 +49,12 @@ Resource types not listed in a manifest fall back to discovery of conventional `
 - `auto` selects a registered plugin harness that supports the effective provider route, otherwise the built-in OpenClaw runtime. A provider or model prefix alone never selects a harness.
 - OpenAI may select `codex` implicitly only for an exact official HTTPS Platform Responses or ChatGPT Responses route with no authored request override. Completions adapters, custom endpoints, and routes with authored request behavior stay on `openclaw`; plaintext official HTTP endpoints are rejected. See [OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
 
+## Model Runtime Generations
+
+Gateway startup and config, plugin, or auth publication build one prepared model runtime generation per configured agent. Each generation owns the discovered auth template, model registry, and projected model catalog as one atomic snapshot. Agent runs fork mutable auth and registry stores from that snapshot; browse, status, cron, doctor, TUI, PDF, and image paths read the published catalog instead of repeating filesystem discovery.
+
+Standalone embedded runtimes publish the same snapshot shape at their activation boundary. A failed or stale generation is never served alongside a newer partial generation; the lifecycle owner must publish a complete replacement first.
+
 ## Related
 
 - [OpenClaw agent runtime workflow](/openclaw-agent-runtime)

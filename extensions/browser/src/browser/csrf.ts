@@ -31,7 +31,7 @@ function isLoopbackUrl(value: string): boolean {
 }
 
 /** Return true when a request should be rejected as browser-originated CSRF. */
-export function shouldRejectBrowserMutation(params: {
+function shouldRejectBrowserMutation(params: {
   method: string;
   origin?: string;
   referer?: string;

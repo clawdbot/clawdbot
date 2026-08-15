@@ -4,7 +4,9 @@ import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "../errors
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const cdpMocks = vi.hoisted(() => ({
-  getChromeWebSocketUrl: vi.fn(async () => "ws://127.0.0.1:18800/devtools/browser/test"),
+  getChromeWebSocketEndpoint: vi.fn(async () => ({
+    url: "ws://127.0.0.1:18800/devtools/browser/test",
+  })),
   send: vi.fn(
     async (
       _method: string,
@@ -32,14 +34,18 @@ const pwMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../chrome.js", () => ({
-  getChromeWebSocketUrl: cdpMocks.getChromeWebSocketUrl,
+  getChromeWebSocketEndpoint: cdpMocks.getChromeWebSocketEndpoint,
 }));
 
 vi.mock("../cdp.helpers.js", () => ({
   withCdpSocket: cdpMocks.withCdpSocket,
 }));
 
-const { registerBrowserPermissionRoutes, testing } = await import("./permissions.js");
+vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: pwMocks.getPwAiModule,
+}));
+
+const { registerBrowserPermissionRoutes } = await import("./permissions.js");
 
 function createProfileContext(overrides: Record<string, unknown> = {}) {
   return {
@@ -103,10 +109,9 @@ async function callGrant(
 
 describe("browser permission routes", () => {
   beforeEach(() => {
-    cdpMocks.getChromeWebSocketUrl.mockClear();
+    cdpMocks.getChromeWebSocketEndpoint.mockClear();
     cdpMocks.send.mockReset().mockResolvedValue({});
     cdpMocks.withCdpSocket.mockClear();
-    testing.setDepsForTest(null);
     pwMocks.getPwAiModule.mockReset().mockResolvedValue(null);
     pwMocks.getPageForTargetId.mockClear();
     pwMocks.grantPermissions.mockClear();
@@ -116,7 +121,6 @@ describe("browser permission routes", () => {
     pwMocks.getPwAiModule.mockResolvedValue({
       getPageForTargetId: pwMocks.getPageForTargetId,
     } as never);
-    testing.setDepsForTest({ getPwAiModule: pwMocks.getPwAiModule as never });
 
     const { response } = await callGrant({
       origin: "https://meet.google.com/abc-defg-hij",
@@ -161,10 +165,15 @@ describe("browser permission routes", () => {
       grantMethod: "cdp",
     });
     expect(profileCtx.ensureBrowserAvailable).toHaveBeenCalled();
-    expect(cdpMocks.getChromeWebSocketUrl).toHaveBeenCalledWith(
+    expect(cdpMocks.getChromeWebSocketEndpoint).toHaveBeenCalledWith(
       "http://127.0.0.1:18800",
       1234,
       undefined,
+    );
+    expect(cdpMocks.withCdpSocket).toHaveBeenCalledWith(
+      "ws://127.0.0.1:18800/devtools/browser/test",
+      expect.any(Function),
+      { commandTimeoutMs: 1234, lookup: undefined, signal: expect.any(AbortSignal) },
     );
     expect(cdpMocks.send).toHaveBeenCalledWith("Browser.grantPermissions", {
       origin: "https://meet.google.com",
@@ -210,7 +219,7 @@ describe("browser permission routes", () => {
         displayPresent: false,
       },
     });
-    expect(cdpMocks.getChromeWebSocketUrl).not.toHaveBeenCalled();
+    expect(cdpMocks.getChromeWebSocketEndpoint).not.toHaveBeenCalled();
   });
 
   it("rejects loose timeoutMs values before granting permissions", async () => {
@@ -223,7 +232,7 @@ describe("browser permission routes", () => {
     expect(response.statusCode).toBe(400);
     expect(response.body).toStrictEqual({ error: "timeoutMs must be a positive integer." });
     expect(profileCtx.ensureBrowserAvailable).not.toHaveBeenCalled();
-    expect(cdpMocks.getChromeWebSocketUrl).not.toHaveBeenCalled();
+    expect(cdpMocks.getChromeWebSocketEndpoint).not.toHaveBeenCalled();
     expect(cdpMocks.send).not.toHaveBeenCalled();
   });
 
@@ -235,7 +244,7 @@ describe("browser permission routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(cdpMocks.getChromeWebSocketUrl).toHaveBeenCalledWith(
+    expect(cdpMocks.getChromeWebSocketEndpoint).toHaveBeenCalledWith(
       "http://127.0.0.1:18800",
       1000,
       undefined,
@@ -263,13 +272,12 @@ describe("browser permission routes", () => {
     );
 
     expect(response.statusCode).toBe(200);
-    expect(cdpMocks.getChromeWebSocketUrl).toHaveBeenCalledWith(
+    expect(cdpMocks.getChromeWebSocketEndpoint).toHaveBeenCalledWith(
       "https://browser.example:9222",
       5000,
       {
         allowPrivateNetwork: true,
         allowedHostnames: ["browser.example"],
-        hostnameAllowlist: ["browser.example"],
       },
     );
   });

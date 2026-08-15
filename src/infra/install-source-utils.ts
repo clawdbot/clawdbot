@@ -4,11 +4,17 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  gt as gtSemver,
+  satisfies as satisfiesSemver,
+  validRange as validSemverRange,
+} from "semver";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
+import { resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -24,7 +30,7 @@ export type NpmSpecResolution = {
 };
 
 /** Flattened npm resolution fields stored on install results and diagnostics. */
-export type NpmResolutionFields = {
+type NpmResolutionFields = {
   resolvedName?: string;
   resolvedVersion?: string;
   resolvedSpec?: string;
@@ -57,11 +63,42 @@ export function createNpmMetadataEnv(
   return env;
 }
 
-function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
-  // npm 12 always wraps `npm view --json` results in an array, while older
-  // releases unwrap a single match. Multiple matches are ambiguous for
-  // integrity checks, so only normalize the equivalent singleton shapes.
-  const entry = Array.isArray(value) && value.length === 1 ? value[0] : value;
+function resolveNpmSpecVersionSelector(spec: string): string | undefined {
+  const separator = spec.lastIndexOf("@");
+  return separator > 0 ? normalizeOptionalString(spec.slice(separator + 1)) : undefined;
+}
+
+function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  const entries = value.filter((entry) => isRecord(entry) && !Array.isArray(entry));
+  const selector = resolveNpmSpecVersionSelector(spec);
+  const range = selector ? validSemverRange(selector) : null;
+  if (range) {
+    // npm view output order tracks publication, not SemVer (a backport can be
+    // published after a higher release), so pick the max satisfying version.
+    let best: { entry: unknown; version: string } | undefined;
+    for (const entry of entries) {
+      const version = normalizeOptionalString(entry.version);
+      if (!version || !satisfiesSemver(version, range)) {
+        continue;
+      }
+      if (!best || gtSemver(version, best.version)) {
+        best = { entry, version };
+      }
+    }
+    // A recognized range with no satisfying entry must fail the metadata read
+    // rather than silently resolve outside the requested constraint.
+    return best?.entry;
+  }
+  return entries.at(-1);
+}
+
+function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResolution | null {
+  // npm output varies by version, selector, and field projection. npm orders
+  // view arrays ascending, so non-semver selectors intentionally use the last entry.
+  const entry = selectNpmViewMetadataEntry(value, spec);
   if (!isRecord(entry) || Array.isArray(entry)) {
     return null;
   }
@@ -83,7 +120,13 @@ function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
 }
 
 /** Reads npm registry metadata for a package spec without running package scripts. */
-export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
+type NpmMetadataFailureCategory = "metadata-env";
+
+export async function resolveNpmSpecMetadata(params: {
+  spec: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<
   | {
       ok: true;
       metadata: NpmSpecResolution;
@@ -91,6 +134,7 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
   | {
       ok: false;
       error: string;
+      category?: NpmMetadataFailureCategory;
     }
 > {
   const res = await runCommandWithTimeout(
@@ -107,6 +151,8 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
     ],
     {
       timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
+      signal: params.signal,
+      killProcessTree: true,
       env: createNpmMetadataEnv(),
     },
   );
@@ -118,18 +164,29 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
       };
     }
-    return { ok: false, error: `npm view failed: ${raw}` };
+    return { ok: false, error: `npm view failed: ${raw}`, category: "metadata-env" };
   }
 
   try {
     const parsed = JSON.parse(res.stdout.trim()) as unknown;
-    const metadata = normalizeNpmViewMetadata(parsed);
+    const metadata = normalizeNpmViewMetadata(parsed, params.spec);
     if (!metadata?.name || !metadata.version) {
-      return { ok: false, error: "npm view produced incomplete package metadata" };
+      const missingFields = [!metadata?.name ? "name" : null, !metadata?.version ? "version" : null]
+        .filter((field): field is string => field !== null)
+        .join(", ");
+      return {
+        ok: false,
+        error: `npm view produced incomplete package metadata (missing: ${missingFields})`,
+        category: "metadata-env",
+      };
     }
     return { ok: true, metadata };
   } catch (err) {
-    return { ok: false, error: `npm view produced invalid JSON: ${String(err)}` };
+    return {
+      ok: false,
+      error: `npm view produced invalid JSON: ${String(err)}`,
+      category: "metadata-env",
+    };
   }
 }
 
@@ -140,7 +197,7 @@ export type NpmIntegrityDrift = {
 };
 
 /** Runs a callback in a private temp directory and removes it afterward. */
-export async function withTempDir<T>(
+export async function withInstallWorkspace<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
   options?: { rootDir?: string },
@@ -233,7 +290,7 @@ function parseNpmPackJsonOutput(
       continue;
     }
 
-    const entries = Array.isArray(parsed) ? parsed : [parsed];
+    const entries = resolveNpmJsonEntries(parsed);
     let fallback: { filename?: string; metadata: NpmSpecResolution } | null = null;
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const normalized = normalizeNpmPackEntry(entries[i]);
@@ -293,6 +350,7 @@ export async function packNpmSpecToArchive(params: {
   spec: string;
   timeoutMs: number;
   cwd: string;
+  signal?: AbortSignal;
 }): Promise<
   | {
       ok: true;
@@ -308,6 +366,8 @@ export async function packNpmSpecToArchive(params: {
     ["npm", "pack", params.spec, "--ignore-scripts", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs, 300_000),
+      signal: params.signal,
+      killProcessTree: true,
       cwd: params.cwd,
       env: createNpmMetadataEnv({ npmConfigCwd: params.cwd }),
     },
@@ -356,6 +416,7 @@ export async function packNpmSpecToArchive(params: {
 export async function resolveNpmPackArchiveMetadata(params: {
   archivePath: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<
   | {
       ok: true;
@@ -380,6 +441,8 @@ export async function resolveNpmPackArchiveMetadata(params: {
     ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs ?? archiveMetadataTimeoutMs, archiveMetadataTimeoutMs),
+      signal: params.signal,
+      killProcessTree: true,
       env: createNpmMetadataEnv(),
     },
   );

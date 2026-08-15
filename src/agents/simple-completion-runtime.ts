@@ -1,5 +1,10 @@
 import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
-import { resolveClaudeSonnet5ModelIdentity } from "@openclaw/llm-core";
+import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
+import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
+import {
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+} from "@openclaw/llm-core";
 /**
  * Simple completion runtime preparation.
  *
@@ -8,6 +13,7 @@ import { resolveClaudeSonnet5ModelIdentity } from "@openclaw/llm-core";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { bindModelLlmRuntime, getModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import { completeSimple } from "../llm/stream.js";
 import type {
   AssistantMessage,
@@ -19,7 +25,7 @@ import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
-import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
@@ -29,7 +35,8 @@ import {
   applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
-  getApiKeyForModel,
+  getApiKeyForModelCore,
+  resolveApiKeyForProviderCore,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -37,15 +44,20 @@ import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
+  type ModelManifestNormalizationContext,
 } from "./model-selection.js";
+import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "./openai-model-routes.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
-import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import {
-  protectPreparedProviderRuntimeAuth,
-  unwrapSecretSentinelsForProviderEgress,
-} from "./provider-secret-egress.js";
+  buildProviderModelAuthDirectSource,
+  buildProviderModelAuthSourcePlan,
+} from "./provider-model-auth-source-plan.js";
+import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
+import { protectPreparedProviderRuntimeAuth } from "./provider-secret-egress.js";
+import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
+import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
+import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
-import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 type SimpleCompletionAuthStorage = {
@@ -59,7 +71,7 @@ type CompletionRuntimeCredential = {
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 
-export type SimpleCompletionModelOptions = {
+type SimpleCompletionModelOptions = {
   maxTokens?: number;
   temperature?: number;
   reasoning?: ThinkLevel | SimpleCompletionThinkingLevel;
@@ -78,7 +90,7 @@ export type PreparedSimpleCompletionModel =
       auth?: ResolvedProviderAuth;
     };
 
-export type AgentSimpleCompletionSelection = {
+type AgentSimpleCompletionSelection = {
   provider: string;
   modelId: string;
   /** Provider used for auth/transport when runtime policy redirects the logical model ref. */
@@ -87,7 +99,7 @@ export type AgentSimpleCompletionSelection = {
   agentDir: string;
 };
 
-export type PreparedSimpleCompletionModelForAgent =
+type PreparedSimpleCompletionModelForAgent =
   | {
       selection: AgentSimpleCompletionSelection;
       model: Model;
@@ -106,10 +118,12 @@ export function resolveSimpleCompletionSelectionForAgent(params: {
   agentDir?: string;
   modelRef?: string;
   useUtilityModel?: boolean;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): AgentSimpleCompletionSelection | null {
   const fallbackRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
+    manifestPlugins: params.manifestPlugins,
   });
   // Utility routing derives a provider-declared small model when unset and
   // treats an explicit empty utilityModel as "use the primary" (disabled).
@@ -127,12 +141,14 @@ export function resolveSimpleCompletionSelectionForAgent(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
+    manifestPlugins: params.manifestPlugins,
   });
   const resolved = split
     ? resolveModelRefFromString({
         raw: split.model,
         defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
         aliasIndex,
+        manifestPlugins: params.manifestPlugins,
       })
     : null;
   const provider = resolved?.ref.provider ?? fallbackRef.provider;
@@ -181,29 +197,6 @@ async function setRuntimeApiKeyForCompletion(params: {
   workspaceDir?: string;
   profileId?: string;
 }): Promise<CompletionRuntimeCredential> {
-  if (params.model.provider === "github-copilot") {
-    const { resolveCopilotApiToken } = await import("../plugin-sdk/provider-auth.js");
-    const copilotToken = await resolveCopilotApiToken({
-      githubToken: unwrapSecretSentinelsForProviderEgress(
-        params.apiKey,
-        "GitHub Copilot runtime auth exchange",
-      ),
-      config: params.cfg,
-    });
-    const protectedAuth = protectPreparedProviderRuntimeAuth({
-      provider: params.model.provider,
-      preparedAuth: {
-        apiKey: copilotToken.token,
-        baseUrl: copilotToken.baseUrl,
-      },
-    });
-    const runtimeApiKey = protectedAuth?.apiKey ?? copilotToken.token;
-    params.authStorage.setRuntimeApiKey(params.model.provider, runtimeApiKey);
-    return {
-      apiKey: runtimeApiKey,
-      model: { ...params.model, baseUrl: copilotToken.baseUrl },
-    };
-  }
   const preparedAuth = protectPreparedProviderRuntimeAuth({
     provider: params.model.provider,
     preparedAuth: await prepareProviderRuntimeAuth({
@@ -218,10 +211,7 @@ async function setRuntimeApiKeyForCompletion(params: {
         provider: params.model.provider,
         modelId: params.model.id,
         model: params.model,
-        apiKey: unwrapSecretSentinelsForProviderEgress(
-          params.apiKey,
-          "provider runtime auth exchange",
-        ),
+        apiKey: params.apiKey,
         authMode: params.authMode,
         profileId: params.profileId,
       },
@@ -244,6 +234,7 @@ function hasMissingApiKeyAllowance(params: {
 
 export async function prepareSimpleCompletionModel(params: {
   cfg: OpenClawConfig | undefined;
+  agentId?: string;
   provider: string;
   modelId: string;
   agentDir?: string;
@@ -251,39 +242,45 @@ export async function prepareSimpleCompletionModel(params: {
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
-  useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
   const workspaceDir = resolveSimpleCompletionModelResolverWorkspace(params.modelResolver);
-  const resolved =
-    params.useAsyncModelResolution || params.skipAgentDiscovery
-      ? await (params.modelResolver ?? resolveModelAsync)(
-          params.provider,
-          params.modelId,
-          params.agentDir,
-          params.cfg,
-          {
-            ...(params.allowBundledStaticCatalogFallback !== undefined
-              ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
-              : {}),
-            ...(params.skipAgentDiscovery ? { skipAgentDiscovery: true } : {}),
-            workspaceDir,
-            authProfileId: params.profileId,
-            preferredProfile: params.preferredProfile,
-          },
-        )
-      : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
-          workspaceDir,
-          authProfileId: params.profileId,
-          preferredProfile: params.preferredProfile,
-        });
+  const resolved = await (params.modelResolver ?? resolveModelAsync)(
+    params.provider,
+    params.modelId,
+    params.agentDir,
+    params.cfg,
+    {
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.allowBundledStaticCatalogFallback !== undefined
+        ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+        : {}),
+      ...(params.skipAgentDiscovery ? { skipAgentDiscovery: true } : {}),
+      workspaceDir,
+      authProfileId: params.profileId,
+      preferredProfile: params.preferredProfile,
+    },
+  );
   if (!resolved.model) {
     return {
       error: resolved.error ?? `Unknown model: ${params.provider}/${params.modelId}`,
     };
   }
+  const initialModel = resolved.model;
+  let resolvedModel = initialModel;
+
+  const routeResolution = resolveOpenAIModelRoutes({
+    provider: initialModel.provider,
+    modelId: initialModel.id,
+    api: initialModel.api,
+    baseUrl: initialModel.baseUrl,
+    config: params.cfg,
+    env: process.env,
+  });
+  const resolvesAuthBeforePhysicalRoute =
+    routeResolution?.kind === "routes" && routeResolution.routes.length > 1;
 
   let auth: ResolvedProviderAuth;
   const authStore = params.bindAuthOwner
@@ -294,20 +291,125 @@ export async function prepareSimpleCompletionModel(params: {
       })
     : undefined;
   try {
-    auth = await getApiKeyForModel({
-      model: resolved.model,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-      workspaceDir,
-      profileId: params.profileId,
-      preferredProfile: params.preferredProfile,
-      ...(authStore ? { store: authStore } : {}),
-      ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
-      secretSentinels: true,
-    });
+    auth = resolvesAuthBeforePhysicalRoute
+      ? await resolveApiKeyForProviderCore({
+          provider: initialModel.provider,
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+          workspaceDir,
+          profileId: params.profileId,
+          preferredProfile: params.preferredProfile,
+          ...(authStore ? { store: authStore } : {}),
+          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
+          modelId: initialModel.id,
+          secretSentinels: true,
+        })
+      : await getApiKeyForModelCore({
+          model: initialModel,
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+          workspaceDir,
+          profileId: params.profileId,
+          preferredProfile: params.preferredProfile,
+          ...(authStore ? { store: authStore } : {}),
+          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
+          secretSentinels: true,
+        });
+    if (routeResolution?.kind === "routes") {
+      const source = auth.profileId
+        ? {
+            kind: "profile" as const,
+            profileId: auth.profileId,
+            provider: initialModel.provider,
+            mode: auth.mode,
+            readiness: "ready" as const,
+            cooldown: "clear" as const,
+          }
+        : buildProviderModelAuthDirectSource({
+            mode: auth.mode,
+            availability: true,
+            evidence: "runtime",
+            // The credential is already resolved by the caller and wrapped as
+            // required provider-binding ownership below, so it is not an
+            // ambient discovery competing with declared profiles.
+            authorization: "declared",
+          });
+      const routeAuthDecision = selectOpenAIModelRouteAuth({
+        resolution: routeResolution,
+        sourcePlan: buildProviderModelAuthSourcePlan({
+          ownership: { reason: "provider-binding", source },
+          profiles: [],
+        }),
+      });
+      if (routeAuthDecision.kind !== "selected") {
+        throw new Error(
+          routeAuthDecision.kind === "rejected"
+            ? routeAuthDecision.message
+            : "OpenAI route selection unexpectedly deferred after auth was resolved.",
+        );
+      }
+      const route = routeAuthDecision.selection.route;
+      const plan = buildAgentRuntimeAuthPlan({
+        provider: initialModel.provider,
+        modelId: initialModel.id,
+        authProfileProvider: initialModel.provider,
+        authProfileMode: auth.mode,
+        sessionAuthProfileId: auth.profileId,
+        sessionAuthProfileSource: params.profileId ? "user" : "auto",
+        modelRoute: {
+          provider: initialModel.provider,
+          modelId: initialModel.id,
+          api: route.api,
+          baseUrl: route.baseUrl,
+          authRequirement: route.authRequirement,
+          requestTransportOverrides: route.requestTransportOverrides,
+          runtimePolicy: route.runtimePolicy,
+        },
+        config: params.cfg,
+        workspaceDir,
+      });
+      resolvedModel =
+        (await materializePreparedRuntimeModel({
+          plan,
+          provider: initialModel.provider,
+          modelId: initialModel.id,
+          config: params.cfg,
+          model: initialModel,
+          resolveModel: ({ config, authProfileId, authProfileMode }) =>
+            (params.modelResolver ?? resolveModelAsync)(
+              initialModel.provider,
+              initialModel.id,
+              params.agentDir,
+              config,
+              {
+                authStorage: resolved.authStorage,
+                modelRegistry: resolved.modelRegistry,
+                skipAgentDiscovery: true,
+                allowBundledStaticCatalogFallback: true,
+                preferBundledStaticCatalogTransport: true,
+                workspaceDir,
+                authProfileId,
+                authProfileMode,
+              },
+            ),
+        })) ?? initialModel;
+      if (resolvesAuthBeforePhysicalRoute) {
+        auth = await getApiKeyForModelCore({
+          model: resolvedModel,
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+          workspaceDir,
+          profileId: auth.profileId,
+          preferredProfile: params.preferredProfile,
+          ...(authStore ? { store: authStore } : {}),
+          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
+          secretSentinels: true,
+        });
+      }
+    }
   } catch (err) {
     return {
-      error: `Auth lookup failed for provider "${resolved.model.provider}": ${formatErrorMessage(err)}`,
+      error: `Auth lookup failed for provider "${initialModel.provider}": ${formatErrorMessage(err)}`,
     };
   }
   const rawApiKey = auth.apiKey?.trim();
@@ -319,17 +421,16 @@ export async function prepareSimpleCompletionModel(params: {
     })
   ) {
     return {
-      error: formatMissingAuthError(auth, resolved.model.provider),
+      error: formatMissingAuthError(auth, resolvedModel.provider),
       auth,
     };
   }
 
   let authValue = rawApiKey;
-  let resolvedModel = resolved.model;
   if (rawApiKey) {
     const runtimeCredential = await setRuntimeApiKeyForCompletion({
       authStorage: resolved.authStorage,
-      model: resolved.model,
+      model: resolvedModel,
       apiKey: rawApiKey,
       authMode: auth.mode,
       cfg: params.cfg,
@@ -353,11 +454,15 @@ export async function prepareSimpleCompletionModel(params: {
         })
       : fingerprintResolvedProviderAuth(auth)
     : undefined;
+  const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);
 
   return {
-    model: applySecretRefHeaderSentinels(
-      applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
-      params.cfg,
+    model: bindModelLlmRuntime(
+      applySecretRefHeaderSentinels(
+        applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+        params.cfg,
+      ),
+      modelRuntime.llmRuntime,
     ),
     auth: resolvedAuth,
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
@@ -373,6 +478,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
+  /** @deprecated no-op; kept for plugin-SDK source compatibility, remove at next SDK-breaking window. */
   useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
@@ -392,6 +498,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   }
   const prepared = await prepareSimpleCompletionModel({
     cfg: params.cfg,
+    agentId: params.agentId,
     provider: selection.runtimeProvider ?? selection.provider,
     modelId: selection.modelId,
     agentDir: selection.agentDir,
@@ -401,7 +508,6 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     ...(params.allowBundledStaticCatalogFallback !== undefined
       ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
       : {}),
-    useAsyncModelResolution: params.useAsyncModelResolution,
     skipAgentDiscovery: params.skipAgentDiscovery,
     bindAuthOwner: params.bindAuthOwner,
     modelResolver: params.modelResolver,
@@ -429,7 +535,17 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   cfg?: OpenClawConfig;
   options?: SimpleCompletionModelOptions;
 }): Promise<AssistantMessage> {
-  const completionModel = prepareModelForSimpleCompletion({ model: params.model, cfg: params.cfg });
+  const runtime = getModelLlmRuntime(params.model);
+  let completionModel = prepareModelForSimpleCompletion({
+    // Direct SDK callers that did not use the preparation helper keep the shipped
+    // process-default behavior; all prepared host paths carry their lifecycle owner.
+    apiRegistry: runtime?.registry ?? defaultApiRegistry,
+    model: params.model,
+    cfg: params.cfg,
+  });
+  if (runtime) {
+    completionModel = bindModelLlmRuntime(completionModel, runtime);
+  }
   const { reasoning: rawReasoning, ...options } = params.options ?? {};
   const reasoning = normalizeSimpleCompletionReasoning(rawReasoning, completionModel);
   return await completeSimple(completionModel, params.context, {
@@ -447,7 +563,9 @@ function normalizeSimpleCompletionReasoning(
     case undefined:
       return undefined;
     case "off":
-      return resolveClaudeSonnet5ModelIdentity(model) ? "off" : undefined;
+      return resolveClaudeSonnet5ModelIdentity(model) || resolveClaudeOpus5ModelIdentity(model)
+        ? "off"
+        : undefined;
     case "adaptive":
       return "medium";
     case "ultra":

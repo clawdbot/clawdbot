@@ -1,11 +1,12 @@
 // Gateway net tests cover bind-host selection, loopback/private host detection,
 // trusted proxy IP resolution, container defaults, and interface matching.
+import net from "node:net";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
-  __resetContainerCacheForTest,
   defaultGatewayBindMode,
   isContainerEnvironment,
   isLocalishHost,
@@ -19,6 +20,7 @@ import {
   resolveClientIp,
   resolveGatewayBindHost,
   resolveGatewayListenHosts,
+  resolveGatewayRequiredListenHosts,
   resolveHostName,
 } from "./net.js";
 
@@ -418,6 +420,17 @@ describe("resolveGatewayListenHosts", () => {
   });
 });
 
+describe("resolveGatewayRequiredListenHosts", () => {
+  it.each([
+    ["127.0.0.1", ["127.0.0.1"]],
+    ["0.0.0.0", ["0.0.0.0"]],
+    ["::1", ["::1"]],
+    ["100.64.0.1", ["100.64.0.1", "127.0.0.1"]],
+  ])("returns required startup hosts for %s", (host, expected) => {
+    expect(resolveGatewayRequiredListenHosts(host)).toEqual(expected);
+  });
+});
+
 describe("pickPrimaryLanIPv4", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -563,7 +576,7 @@ describe("isContainerEnvironment", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 
@@ -681,12 +694,14 @@ describe("resolveGatewayBindHost", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 
   it("returns 127.0.0.1 for loopback mode", async () => {
+    const createServerSpy = vi.spyOn(net, "createServer");
     expect(await resolveGatewayBindHost("loopback")).toBe("127.0.0.1");
+    expect(createServerSpy).not.toHaveBeenCalled();
   });
 
   it("returns 0.0.0.0 for lan mode", async () => {
@@ -722,7 +737,7 @@ describe("defaultGatewayBindMode", () => {
   useClearedFlyMachineEnv();
 
   afterEach(() => {
-    __resetContainerCacheForTest();
+    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 

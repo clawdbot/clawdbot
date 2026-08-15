@@ -124,6 +124,111 @@ function patternsCouldOverlap(value: string, pattern: string): boolean {
   );
 }
 
+function narrowIncludePatterns(
+  includePatterns: string[],
+  candidatePatterns: string[] | null,
+): string[] | null {
+  if (!candidatePatterns) {
+    return null;
+  }
+
+  return [
+    ...new Set(
+      candidatePatterns.filter((value) =>
+        includePatterns.some((pattern) => patternsCouldOverlap(value, pattern)),
+      ),
+    ),
+  ];
+}
+
+function isPlainRepoRelativePath(value: string): boolean {
+  if (!/^[A-Za-z0-9_./-]+$/u.test(value) || path.isAbsolute(value)) {
+    return false;
+  }
+  return value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+function directoryTestPatternRoot(value: string): string | null {
+  const normalized = value.trim().replaceAll("\\", "/").replace(/^\.\//u, "");
+  if (normalized === "**/*.test.ts") {
+    return "";
+  }
+  const suffix = "/**/*.test.ts";
+  if (!normalized.endsWith(suffix)) {
+    return null;
+  }
+  const root = normalized.slice(0, -suffix.length);
+  return isPlainRepoRelativePath(root) ? root : null;
+}
+
+function isAtOrUnder(value: string, root: string): boolean {
+  return root === "" || value === root || value.startsWith(`${root}/`);
+}
+
+function patternIsFullyUnderDirectory(pattern: string, root: string): boolean {
+  const normalized = pattern.trim().replaceAll("\\", "/").replace(/^\.\//u, "");
+  if (!normalized.endsWith(".test.ts")) {
+    return false;
+  }
+  const literalPrefix = literalPrefixForGlobPattern(normalized).replace(/\/+$/u, "");
+  return isAtOrUnder(literalPrefix, root);
+}
+
+function intersectDirectoryTestPattern(
+  includePatterns: string[],
+  candidatePattern: string,
+): string[] | null {
+  const candidateRoot = directoryTestPatternRoot(candidatePattern);
+  if (candidateRoot === null) {
+    return null;
+  }
+
+  const result: string[] = [];
+  let hasAmbiguousOverlap = false;
+  for (const includePattern of includePatterns) {
+    const includeRoot = directoryTestPatternRoot(includePattern);
+    if (includeRoot !== null && isAtOrUnder(candidateRoot, includeRoot)) {
+      return [candidatePattern];
+    } else if (patternIsFullyUnderDirectory(includePattern, candidateRoot)) {
+      result.push(includePattern);
+    } else if (patternsCouldOverlap(candidatePattern, includePattern)) {
+      hasAmbiguousOverlap = true;
+    }
+  }
+  if (hasAmbiguousOverlap) {
+    return null;
+  }
+  return [...new Set(result)];
+}
+
+export function intersectIncludePatterns(
+  includePatterns: string[],
+  candidatePatterns: string[] | null,
+): string[] | null {
+  if (!candidatePatterns) {
+    return null;
+  }
+
+  const result: string[] = [];
+  for (const candidate of candidatePatterns) {
+    if (!isPlainRepoRelativePath(candidate)) {
+      // Watch directory targets retain their glob so newly added tests appear.
+      // Only generated directory globs have a provable ownership intersection.
+      const intersection = intersectDirectoryTestPattern(includePatterns, candidate);
+      if (!intersection) {
+        throw new Error(`cannot safely intersect non-literal include path: ${candidate}`);
+      }
+      result.push(...intersection);
+      continue;
+    }
+    if (includePatterns.some((include) => path.matchesGlob(candidate, include))) {
+      result.push(candidate);
+    }
+  }
+
+  return [...new Set(result)];
+}
+
 function loadPatternListFile(filePath: string, label: string): string[] {
   const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
   if (!Array.isArray(parsed)) {
@@ -186,9 +291,5 @@ export function narrowIncludePatternsForCli(
     return null;
   }
 
-  const matched = cliPatterns.filter((value) =>
-    includePatterns.some((pattern) => patternsCouldOverlap(value, pattern)),
-  );
-
-  return [...new Set(matched)];
+  return narrowIncludePatterns(includePatterns, cliPatterns);
 }

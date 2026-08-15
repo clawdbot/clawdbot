@@ -6,16 +6,13 @@ import {
   getRegisteredCompactionProvider,
   listRegisteredCompactionProviders,
   registerCompactionProvider,
-  restoreRegisteredCompactionProviders,
   type CompactionProvider,
 } from "./compaction-provider.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { setActivePluginRegistry, withPluginRegistrationContext } from "./runtime.js";
 
-const REGISTRY_KEY = Symbol.for("openclaw.compactionProviderRegistryState");
-
-/** Reset the process-global registry between tests. */
 afterEach(() => {
-  const g = globalThis as Record<symbol, unknown>;
-  delete g[REGISTRY_KEY];
+  clearCompactionProviders();
 });
 
 function makeProvider(id: string, label?: string): CompactionProvider {
@@ -65,6 +62,35 @@ describe("compaction provider registry", () => {
     const entry = getRegisteredCompactionProvider("owned");
     expect(entry?.provider).toBe(p);
     expect(entry?.ownerPluginId).toBe("my-plugin");
+  });
+
+  it("writes direct registration helpers into the synchronous builder context", () => {
+    const active = createEmptyPluginRegistry();
+    const building = createEmptyPluginRegistry();
+    setActivePluginRegistry(active);
+    const provider = makeProvider("builder-owned");
+
+    withPluginRegistrationContext(building, "builder-plugin", () => {
+      registerCompactionProvider(provider);
+    });
+
+    expect(active.compactionProviders).toStrictEqual([]);
+    expect(building.compactionProviders).toEqual([{ provider, ownerPluginId: "builder-plugin" }]);
+  });
+
+  it("does not let a registering plugin displace another owner's provider", () => {
+    const building = createEmptyPluginRegistry();
+    const original = makeProvider("shared", "original");
+    building.compactionProviders.push({ provider: original, ownerPluginId: "first-plugin" });
+
+    expect(() =>
+      withPluginRegistrationContext(building, "failing-plugin", () => {
+        registerCompactionProvider(makeProvider("shared", "replacement"));
+      }),
+    ).toThrow("compaction provider shared already registered by first-plugin");
+    expect(building.compactionProviders).toEqual([
+      { provider: original, ownerPluginId: "first-plugin" },
+    ]);
   });
 
   it("lists registered provider ids", () => {
@@ -118,7 +144,7 @@ describe("compaction provider registry", () => {
     expect(listCompactionProviderIdsForTest()).toEqual(["dup"]);
   });
 
-  describe("lifecycle (clear / restore)", () => {
+  describe("lifecycle", () => {
     it("clear removes all providers", () => {
       registerCompactionProvider(makeProvider("a"));
       registerCompactionProvider(makeProvider("b"));
@@ -127,31 +153,6 @@ describe("compaction provider registry", () => {
       clearCompactionProviders();
       expect(listCompactionProviderIdsForTest()).toStrictEqual([]);
       expect(getCompactionProvider("a")).toBeUndefined();
-    });
-
-    it("restore replaces current entries with snapshot", () => {
-      const provA = makeProvider("a");
-      const provB = makeProvider("b");
-      registerCompactionProvider(provA, { ownerPluginId: "p-a" });
-      registerCompactionProvider(provB, { ownerPluginId: "p-b" });
-
-      const snapshot = listRegisteredCompactionProviders();
-
-      // Register a third provider to change state
-      registerCompactionProvider(makeProvider("c"));
-      expect(listCompactionProviderIdsForTest()).toHaveLength(3);
-
-      // Restore from snapshot — should have only a and b
-      restoreRegisteredCompactionProviders(snapshot);
-      expect(listCompactionProviderIdsForTest()).toEqual(["a", "b"]);
-      expect(getCompactionProvider("c")).toBeUndefined();
-      expect(getRegisteredCompactionProvider("a")?.ownerPluginId).toBe("p-a");
-    });
-
-    it("restore with empty array clears everything", () => {
-      registerCompactionProvider(makeProvider("x"));
-      restoreRegisteredCompactionProviders([]);
-      expect(listCompactionProviderIdsForTest()).toStrictEqual([]);
     });
   });
 });

@@ -1,4 +1,3 @@
-"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw, takvim erişimini etkinleştirdiğinizde etkinlikleri ve planlama bağlamını göstermek için takvimlerinizi kullanır.";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
@@ -19,8 +18,10 @@
 "NSMicrophoneUsageDescription" = "OpenClaw mikrofonu gerçek zamanlı sohbet, sesle uyandırma, bas-konuş ve sesli notlar için kullanır.";
 /* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
 "NSMotionUsageDescription" = "OpenClaw, cihaza duyarlı etkileşimleri ve otomasyonları desteklemek için hareket verilerini kullanabilir.";
-/* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
-"NSHealthShareUsageDescription" = "Sağlık Özetleri'ni etkinleştirdikten sonra OpenClaw, istenen toplu verileri yapılandırdığınız yapay zeka sağlayıcısıyla paylaşmak için adımları, uykuyu, dinlenme kalp atış hızını ve antrenmanları okur.";
+/* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthShareUsageDescription" = "OpenClaw, istediğiniz özetleri oluşturmak ve bunları Gateway üzerinden yapılandırılmış AI sağlayıcınıza göndermek için Apple Sağlık uygulamasındaki adım, uyku, dinlenme kalp atış hızı ve antrenman verilerinizi okur.";
+/* OpenClaw source: "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthUpdateUsageDescription" = "OpenClaw, Apple Sağlık uygulamasına veri yazmaz. İstediğiniz özetleri oluşturmak ve bunları Gateway üzerinden yapılandırılmış AI sağlayıcınıza göndermek için salt okunur verileri kullanır.";
 /* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
 "NSPhotoLibraryUsageDescription" = "OpenClaw, asistanınızın izin verdiğiniz fotoğrafları okumasını sağlar ve paylaşılacak fotoğrafları seçmenize olanak tanır.";
 /* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */

@@ -5,14 +5,16 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { auditDreamingArtifacts, repairDreamingArtifacts } from "./dreaming-repair.js";
 import {
-  configureMemoryCoreDreamingStateForTests,
   DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
-  resetMemoryCoreDreamingStateForTests,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  resetMemoryCoreDreamingStateForTests,
+} from "./test-helpers.js";
 
 const tempDirs: string[] = [];
 

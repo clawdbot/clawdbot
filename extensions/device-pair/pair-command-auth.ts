@@ -9,6 +9,7 @@ type PairingCommandAuthState = {
   isInternalGatewayCaller: boolean;
   isMissingPairingPrivilege: boolean;
   isMissingSetupHandoffPrivilege: boolean;
+  canIssueFullAccessSetup: boolean;
   approvalCallerScopes?: readonly string[];
 };
 
@@ -41,6 +42,7 @@ export function resolvePairingCommandAuthState(
       isInternalGatewayCaller,
       isMissingPairingPrivilege: !hasPairingPrivilege(approvalCallerScopes),
       isMissingSetupHandoffPrivilege: !hasSetupHandoffPrivilege(approvalCallerScopes),
+      canIssueFullAccessSetup: approvalCallerScopes.includes(ADMIN_SCOPE),
       approvalCallerScopes,
     };
   }
@@ -50,6 +52,7 @@ export function resolvePairingCommandAuthState(
       isInternalGatewayCaller,
       isMissingPairingPrivilege: false,
       isMissingSetupHandoffPrivilege: false,
+      canIssueFullAccessSetup: true,
       approvalCallerScopes: COMMAND_OWNER_PAIRING_SCOPES,
     };
   }
@@ -58,6 +61,7 @@ export function resolvePairingCommandAuthState(
     isInternalGatewayCaller,
     isMissingPairingPrivilege: true,
     isMissingSetupHandoffPrivilege: true,
+    canIssueFullAccessSetup: false,
     approvalCallerScopes: undefined,
   };
 }

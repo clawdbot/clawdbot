@@ -7,7 +7,7 @@ import type { TypingPolicy } from "../types.js";
 import type { TypingController } from "./typing.js";
 
 /** Inputs that decide when a channel typing indicator should be shown. */
-export type TypingModeContext = {
+type TypingModeContext = {
   configured?: TypingMode;
   isGroupChat: boolean;
   wasMentioned: boolean;

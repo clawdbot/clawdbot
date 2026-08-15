@@ -22,12 +22,12 @@ import type { PluginBundleFormat } from "./manifest-types.js";
 export type BundleLspServerConfig = Record<string, unknown>;
 
 /** Merged LSP config contributed by enabled plugin bundles. */
-export type BundleLspConfig = {
+type BundleLspConfig = {
   lspServers: Record<string, BundleLspServerConfig>;
 };
 
 /** Runtime support summary for bundle-declared LSP servers. */
-export type BundleLspRuntimeSupport = {
+type BundleLspRuntimeSupport = {
   hasStdioServer: boolean;
   supportedServerNames: string[];
   unsupportedServerNames: string[];

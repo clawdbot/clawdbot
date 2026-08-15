@@ -1,10 +1,13 @@
 /** Regression coverage for ACP background-task summary truncation boundaries. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { AcpRuntimeError } from "../runtime/errors.js";
 import {
   appendBackgroundTaskProgressSummary,
   resolveBackgroundTaskContext,
+  resolveBackgroundTaskFailureStatus,
 } from "./manager.background-task.js";
+import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "./manager.turn-timeout.js";
 import type { AcpSessionManagerDeps } from "./manager.types.js";
 
 // U+1F99E (🦞) is a surrogate pair in UTF-16; a raw .slice() boundary can split it.
@@ -13,11 +16,11 @@ const LOBSTER = "🦞";
 const HIGH_SURROGATE_WITHOUT_LOW = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
 
 function fakeDeps(): AcpSessionManagerDeps {
-  const readSessionEntry = (params: { sessionKey: string }) =>
+  const loadSessionEntry = (params: { sessionKey: string }) =>
     params.sessionKey === "child-session"
       ? { entry: { spawnedBy: "requester-session" } }
       : { entry: {} };
-  return { readSessionEntry } as unknown as AcpSessionManagerDeps;
+  return { loadSessionEntry } as unknown as AcpSessionManagerDeps;
 }
 
 describe("appendBackgroundTaskProgressSummary", () => {
@@ -63,5 +66,22 @@ describe("resolveBackgroundTaskContext", () => {
       text: `summarize ${LOBSTER} feedback`,
     });
     expect(context?.task).toBe(`summarize ${LOBSTER} feedback`);
+  });
+});
+
+describe("resolveBackgroundTaskFailureStatus", () => {
+  it("uses the structured timeout detail instead of message text", () => {
+    expect(
+      resolveBackgroundTaskFailureStatus(
+        new AcpRuntimeError("ACP_TURN_FAILED", "turn deadline reached", {
+          detailCode: ACP_TURN_TIMEOUT_DETAIL_CODE,
+        }),
+      ),
+    ).toBe("timed_out");
+    expect(
+      resolveBackgroundTaskFailureStatus(
+        new AcpRuntimeError("ACP_TURN_FAILED", "backend said the request timed out"),
+      ),
+    ).toBe("failed");
   });
 });

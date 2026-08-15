@@ -17,6 +17,7 @@ describe("telegram transport cache eviction over real sockets", () => {
   let sendMessageCalls = 0;
   let slowMode = false;
   let slowRequestReceived: () => void = () => {};
+  let releaseSlowResponse: (() => void) | undefined;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -34,7 +35,9 @@ describe("telegram transport cache eviction over real sockets", () => {
           sendMessageCalls += 1;
           if (slowMode) {
             slowRequestReceived();
-            setTimeout(() => respond({ message_id: sendMessageCalls, chat: { id: 123 } }), 800);
+            releaseSlowResponse = () => {
+              respond({ message_id: sendMessageCalls, chat: { id: 123 } });
+            };
             return;
           }
           respond({ message_id: sendMessageCalls, chat: { id: 123 } });
@@ -114,12 +117,24 @@ describe("telegram transport cache eviction over real sockets", () => {
     await inFlight;
     slowMode = false;
 
-    // New cache key -> evicts acct-0 while its send holds the lease.
-    const evictor = await sendMessageTelegram("123", "evictor", { cfg, accountId: "acct-64" });
-    expect(evictor.messageId).toBeTruthy();
-    // Deferred close: the evicted transport must NOT be closed mid-request.
-    expect(sockets.closed).toBe(0);
-
+    const releaseResponse = releaseSlowResponse;
+    if (!releaseResponse) {
+      throw new Error("slow Telegram response was not captured");
+    }
+    try {
+      // New cache key -> evicts acct-0 while its send holds the lease.
+      const evictor = await sendMessageTelegram("123", "evictor", {
+        cfg,
+        accountId: "acct-64",
+      });
+      expect(evictor.messageId).toBeTruthy();
+      // Deferred close: the evicted transport must NOT be closed mid-request.
+      expect(sockets.closed).toBe(0);
+    } finally {
+      releaseSlowResponse = undefined;
+      releaseResponse();
+      await slowSend.catch(() => undefined);
+    }
     const slow = await slowSend;
     expect(slow.messageId).toBeTruthy();
     // Lease released -> the retired acct-0 transport closes its real socket.

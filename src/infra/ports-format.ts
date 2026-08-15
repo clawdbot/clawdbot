@@ -1,8 +1,8 @@
 // Formats port probe results for diagnostics and CLI output.
 import net from "node:net";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
+import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
 /** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
@@ -42,35 +42,6 @@ export function classifyPortListener(listener: PortListener, _port: number): Por
   return "unknown";
 }
 
-function parseListenerAddress(address: string): { host: string; port: number } | null {
-  const trimmed = address.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const normalized = trimmed.replace(/^tcp6?\s+/i, "").replace(/\s*\(listen\)\s*$/i, "");
-  const bracketMatch = normalized.match(/^\[([^\]]+)\]:(\d+)$/);
-  if (bracketMatch) {
-    const port = Number.parseInt(
-      expectDefined(bracketMatch[2], "bracket match capture group 2"),
-      10,
-    );
-    return Number.isFinite(port)
-      ? { host: normalizeLowercaseStringOrEmpty(bracketMatch[1]), port }
-      : null;
-  }
-  const lastColon = normalized.lastIndexOf(":");
-  if (lastColon <= 0 || lastColon >= normalized.length - 1) {
-    return null;
-  }
-  const host = normalizeLowercaseStringOrEmpty(normalized.slice(0, lastColon));
-  const portToken = normalized.slice(lastColon + 1).trim();
-  if (!/^\d+$/.test(portToken)) {
-    return null;
-  }
-  const port = Number.parseInt(portToken, 10);
-  return Number.isFinite(port) ? { host, port } : null;
-}
-
 // Dual-stack listener output can include IPv4-mapped IPv6 addresses; keep them
 // in the IPv6 family so the benign loopback-pair detection stays conservative.
 function classifyLoopbackAddressFamily(host: string): "ipv4" | "ipv6" | null {
@@ -107,7 +78,7 @@ function parsePortListeners(
     if (typeof pid !== "number" || !Number.isFinite(pid) || typeof listener.address !== "string") {
       return null;
     }
-    const address = parseListenerAddress(listener.address);
+    const address = parseTcpListenerEndpoint(listener.address);
     if (!address || address.port !== port) {
       return null;
     }
@@ -127,7 +98,7 @@ function parseGatewayListeners(
 }
 
 /** Returns true for one Gateway listener bound to an expected loopback or wildcard address. */
-export function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
+function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
   if (listeners.length !== 1) {
     return false;
   }
@@ -231,7 +202,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
 }
 
 /** Formats one listener row for CLI diagnostics. */
-export function formatPortListener(listener: PortListener): string {
+function formatPortListener(listener: PortListener): string {
   const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
   const user = listener.user ? ` ${listener.user}` : "";
   const command = listener.commandLine || listener.command || "unknown";
@@ -239,10 +210,13 @@ export function formatPortListener(listener: PortListener): string {
   return `${pid}${user}: ${command}${address}`;
 }
 
-/** Formats free/busy port diagnostics into CLI output lines. */
+/** Formats port diagnostics into CLI output lines. */
 export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
-  if (diagnostics.status !== "busy") {
+  if (diagnostics.status === "free") {
     return [`Port ${diagnostics.port} is free.`];
+  }
+  if (diagnostics.status === "unknown") {
+    return [`Port ${diagnostics.port} availability could not be determined.`];
   }
   const lines = [`Port ${diagnostics.port} is already in use.`];
   for (const listener of diagnostics.listeners) {

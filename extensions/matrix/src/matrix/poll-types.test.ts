@@ -6,7 +6,6 @@ import {
   buildPollStartContent,
   formatPollResultsAsText,
   parsePollStart,
-  parsePollResponseAnswerIds,
   parsePollStartContent,
   resolvePollReferenceEventId,
 } from "./poll-types.js";
@@ -101,20 +100,6 @@ describe("buildPollResponseContent", () => {
 });
 
 describe("poll relation parsing", () => {
-  it("parses stable and unstable poll response answer ids", () => {
-    expect(
-      parsePollResponseAnswerIds({
-        "m.poll.response": { answers: ["a1"] },
-        "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-      }),
-    ).toEqual(["a1"]);
-    expect(
-      parsePollResponseAnswerIds({
-        "org.matrix.msc3381.poll.response": { answers: ["a2"] },
-      }),
-    ).toEqual(["a2"]);
-  });
-
   it("extracts poll relation targets", () => {
     expect(
       resolvePollReferenceEventId({
@@ -173,14 +158,24 @@ describe("buildPollResultsSummary", () => {
             "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
           },
         },
+        {
+          event_id: "$vote4",
+          sender: "@dave:example.org",
+          type: "org.matrix.msc3381.poll.response",
+          origin_server_ts: 4,
+          content: {
+            "org.matrix.msc3381.poll.response": { answers: ["a1"] },
+            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
+          },
+        },
       ],
     });
 
     expect(summary?.entries).toEqual([
-      { id: "a1", text: "Pizza", votes: 0 },
+      { id: "a1", text: "Pizza", votes: 1 },
       { id: "a2", text: "Sushi", votes: 1 },
     ]);
-    expect(summary?.totalVotes).toBe(1);
+    expect(summary?.totalVotes).toBe(2);
   });
 
   it("formats disclosed poll results with vote totals", () => {

@@ -8,16 +8,16 @@ import {
   createPluginLoadResult,
   createPluginRecord,
   createTypedHook,
-} from "../plugins/status.test-helpers.js";
+} from "../plugins/status.test-fixtures.js";
 import {
   collectWorkspaceStatusHealthFindings,
   noteWorkspaceStatus,
 } from "./doctor-workspace-status.js";
 
 const mocks = vi.hoisted(() => ({
+  listAgentIds: vi.fn<(_cfg: OpenClawConfig) => string[]>(() => ["default"]),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
-  buildWorkspaceSkillStatus: vi.fn(),
   buildPluginRegistrySnapshotReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
   listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
@@ -25,12 +25,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds: (cfg: OpenClawConfig) => mocks.listAgentIds(cfg),
   resolveAgentWorkspaceDir: (...args: unknown[]) => mocks.resolveAgentWorkspaceDir(...args),
-  resolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
-}));
-
-vi.mock("../skills/discovery/status.js", () => ({
-  buildWorkspaceSkillStatus: (...args: unknown[]) => mocks.buildWorkspaceSkillStatus(...args),
+  tryResolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -40,12 +37,24 @@ vi.mock("../plugins/status.js", () => ({
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
 
-vi.mock("../tasks/task-flow-runtime-internal.js", () => ({
-  listTaskFlowRecords: () => mocks.listTaskFlowRecords(),
+vi.mock("../tasks/task-flow-registry.store.sqlite.js", () => ({
+  loadTaskFlowRegistryStateFromSqliteReadOnly: () => ({
+    flows: new Map(
+      mocks.listTaskFlowRecords().map((flow) => [(flow as { flowId: string }).flowId, flow]),
+    ),
+  }),
 }));
 
-vi.mock("../tasks/runtime-internal.js", () => ({
-  listTasksForFlowId: (flowId: string) => mocks.listTasksForFlowId(flowId),
+vi.mock("../tasks/task-registry.store.sqlite.js", () => ({
+  loadTaskRegistryStateFromSqliteReadOnly: () => ({
+    tasks: new Map(
+      mocks
+        .listTaskFlowRecords()
+        .flatMap((flow) => mocks.listTasksForFlowId((flow as { flowId: string }).flowId))
+        .map((task) => [(task as { taskId: string }).taskId, task]),
+    ),
+    deliveryStates: new Map(),
+  }),
 }));
 
 async function runNoteWorkspaceStatusForTest(
@@ -60,10 +69,8 @@ async function runNoteWorkspaceStatusForTest(
 ) {
   const cfg: OpenClawConfig = opts?.cfg ?? {};
   mocks.resolveDefaultAgentId.mockReturnValue("default");
+  mocks.listAgentIds.mockReturnValue(["default"]);
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
-  mocks.buildWorkspaceSkillStatus.mockReturnValue({
-    skills: [],
-  });
   mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
     workspaceDir: "/workspace",
     ...loadResult,
@@ -93,7 +100,7 @@ describe("noteWorkspaceStatus", () => {
           }),
         ],
         typedHooks: [
-          createTypedHook({ pluginId: "legacy-plugin", hookName: "before_agent_start" }),
+          createTypedHook({ pluginId: "legacy-plugin", hookName: "before_prompt_build" }),
         ],
       }),
     );
@@ -111,7 +118,7 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
-  it("surfaces bundle plugin capabilities in the plugins note", async () => {
+  it("omits healthy plugin inventory", async () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({
         plugins: [
@@ -127,36 +134,52 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
-      expect(pluginCalls).toHaveLength(1);
-      const [body] = expectDefined(pluginCalls[0], "(pluginCalls)[0] test invariant");
-      expect(body).toContain("Bundle plugins: 1");
-      expect(body).toContain("agents, commands, skills");
+      expect(noteSpy.mock.calls.filter(([, title]) => title === "Plugins")).toHaveLength(0);
     } finally {
       noteSpy.mockRestore();
     }
   });
 
-  it("includes imported plugin counts in the plugins note", async () => {
+  it("lists only errored plugin ids in deterministic order with truncation", async () => {
+    const pluginIds = [
+      "zulu",
+      "bravo",
+      "alpha",
+      "lima",
+      "charlie",
+      "kilo",
+      "delta",
+      "juliet",
+      "echo",
+      "india",
+      "foxtrot",
+      "hotel",
+    ];
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({
-        plugins: [
-          createPluginRecord({
-            id: "imported-plugin",
-            imported: true,
-          }),
-          createPluginRecord({
-            id: "cold-plugin",
-            imported: false,
-          }),
-        ],
+        plugins: pluginIds.map((id) => createPluginRecord({ id, status: "error" })),
       }),
     );
     try {
       const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
       expect(pluginCalls).toHaveLength(1);
       const [body] = expectDefined(pluginCalls[0], "(pluginCalls)[0] test invariant");
-      expect(body).toContain("Imported: 1");
+      expect(body).toBe(
+        [
+          "Errors: 12",
+          "- alpha",
+          "- bravo",
+          "- charlie",
+          "- delta",
+          "- echo",
+          "- foxtrot",
+          "- hotel",
+          "- india",
+          "- juliet",
+          "- kilo",
+          "- ...",
+        ].join("\n"),
+      );
     } finally {
       noteSpy.mockRestore();
     }
@@ -222,15 +245,20 @@ describe("noteWorkspaceStatus", () => {
         ],
       }),
     });
-    mocks.buildPluginCompatibilityWarnings.mockReturnValue([
-      "legacy-plugin still uses legacy before_agent_start",
-    ]);
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue(["legacy-plugin is hook-only"]);
     mocks.listTaskFlowRecords.mockReturnValue([
       {
         flowId: "flow-123",
         syncMode: "managed",
         status: "blocked",
         blockedTaskId: "task-missing",
+      },
+      {
+        flowId: "flow-history",
+        syncMode: "task_mirrored",
+        status: "blocked",
+        blockedTaskId: "task-pruned",
+        endedAt: 100,
       },
     ]);
     mocks.listTasksForFlowId.mockReturnValue([]);
@@ -243,7 +271,7 @@ describe("noteWorkspaceStatus", () => {
         severity: "warning",
         path: "plugins",
         requirement: "plugin-compatibility",
-        message: "legacy-plugin still uses legacy before_agent_start",
+        message: "legacy-plugin is hook-only",
       }),
       expect.objectContaining({
         checkId: "core/doctor/workspace-status",
@@ -422,11 +450,9 @@ describe("noteWorkspaceStatus", () => {
           hookCount: 1,
         }),
       ],
-      typedHooks: [createTypedHook({ pluginId: "legacy-plugin", hookName: "before_agent_start" })],
+      typedHooks: [createTypedHook({ pluginId: "legacy-plugin", hookName: "before_prompt_build" })],
     });
-    const noteSpy = await runNoteWorkspaceStatusForTest(loadResult, [
-      "legacy-plugin still uses legacy before_agent_start",
-    ]);
+    const noteSpy = await runNoteWorkspaceStatusForTest(loadResult, ["legacy-plugin is hook-only"]);
     try {
       expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
         config: {},
@@ -445,7 +471,7 @@ describe("noteWorkspaceStatus", () => {
       );
       expect(compatibilityCalls).toHaveLength(1);
       const [body] = expectDefined(compatibilityCalls[0], "(compatibilityCalls)[0] test invariant");
-      expect(body).toContain("legacy-plugin still uses legacy before_agent_start");
+      expect(body).toContain("legacy-plugin is hook-only");
     } finally {
       noteSpy.mockRestore();
     }
@@ -480,61 +506,31 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
-  const makeSkill = (
-    skillKey: string,
-    fields: { eligible: boolean; platformIncompatible: boolean },
-  ) =>
-    ({
-      skillKey,
-      disabled: false,
-      blockedByAllowlist: false,
-      eligible: fields.eligible,
-      platformIncompatible: fields.platformIncompatible,
-    }) as never;
-
-  async function runWithSkills(skills: unknown[]) {
-    mocks.resolveDefaultAgentId.mockReturnValue("default");
-    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
-    mocks.buildWorkspaceSkillStatus.mockReturnValue({ skills });
-    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
-      workspaceDir: "/workspace",
-      ...createPluginLoadResult(),
-    });
+  it("labels workspace diagnostics for the affected secondary agent", () => {
+    mocks.buildPluginRegistrySnapshotReport.mockClear();
+    mocks.listAgentIds.mockReturnValue(["default", "secondary"]);
+    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/${agentId}`);
+    mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => ({
+      workspaceDir,
+      ...createPluginLoadResult({
+        plugins: [],
+        diagnostics:
+          workspaceDir === "/secondary"
+            ? [{ level: "error", pluginId: "broken", message: "load failed" }]
+            : [],
+      }),
+    }));
     mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
     mocks.listTaskFlowRecords.mockReturnValue([]);
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-    noteWorkspaceStatus({});
-    return noteSpy;
-  }
 
-  it("surfaces a platform-incompatible rollup and keeps those skills out of Missing requirements", async () => {
-    const noteSpy = await runWithSkills([
-      makeSkill("mac-only", { eligible: false, platformIncompatible: true }),
-      makeSkill("broken", { eligible: false, platformIncompatible: false }),
-    ]);
-    try {
-      const skillsCall = noteSpy.mock.calls.find(([, title]) => title === "Skills status");
-      expect(skillsCall).toBeDefined();
-      const [body] = skillsCall as [string, string];
-      expect(body).toContain("Incompatible (platform mismatch, auto-skipped): 1");
-      expect(body).toContain("Missing requirements: 1");
-    } finally {
-      noteSpy.mockRestore();
-    }
-  });
+    const findings = collectWorkspaceStatusHealthFindings({});
 
-  it("omits the platform-incompatible rollup when the count is zero", async () => {
-    const noteSpy = await runWithSkills([
-      makeSkill("broken", { eligible: false, platformIncompatible: false }),
+    expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledTimes(2);
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: 'Agent "secondary": load failed',
+        path: "plugins.entries.broken",
+      }),
     ]);
-    try {
-      const skillsCall = noteSpy.mock.calls.find(([, title]) => title === "Skills status");
-      expect(skillsCall).toBeDefined();
-      const [body] = skillsCall as [string, string];
-      expect(body).not.toContain("Incompatible (platform mismatch");
-      expect(body).toContain("Missing requirements: 1");
-    } finally {
-      noteSpy.mockRestore();
-    }
   });
 });

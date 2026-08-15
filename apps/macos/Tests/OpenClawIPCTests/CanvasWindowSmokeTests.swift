@@ -20,13 +20,30 @@ struct CanvasWindowSmokeTests {
             presentation: .panel(anchorProvider: anchor))
 
         #expect(controller.directoryPath.contains("main_invalid__") == true)
+        #expect(controller.webView.configuration.preferences.tabFocusesLinks)
+        #expect(controller._testIsFilePollingActive == false)
 
         controller.applyPreferredPlacement(CanvasPlacement(x: 120, y: 200, width: 520, height: 680))
-        controller.showCanvas(path: "/")
+        controller.load(target: "/")
+        #expect(controller._testIsFilePollingActive == false)
+        let localURL = try #require(CanvasScheme.makeURL(session: "main", path: "/"))
+        controller.updateFilePollingForCommittedNavigation(to: localURL)
+        controller.showCanvas()
+        #expect(controller._testIsFilePollingActive)
+        let remoteURL = try #require(URL(string: "https://example.com"))
+        controller.load(target: remoteURL.absoluteString)
+        #expect(controller._testIsFilePollingActive)
+        controller.updateFilePollingForCommittedNavigation(to: remoteURL)
+        #expect(controller._testIsFilePollingActive == false)
+        controller.load(target: "/")
+        #expect(controller._testIsFilePollingActive == false)
+        controller.updateFilePollingForCommittedNavigation(to: localURL)
+        #expect(controller._testIsFilePollingActive)
         _ = try await controller.eval(javaScript: "1 + 1")
         controller.windowDidMove(Notification(name: NSWindow.didMoveNotification))
         controller.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification))
         controller.hideCanvas()
+        #expect(controller._testIsFilePollingActive == false)
         controller.close()
     }
 
@@ -41,6 +58,7 @@ struct CanvasWindowSmokeTests {
             root: root,
             presentation: .window)
 
+        #expect(controller.window?.isRestorable == false)
         controller.showCanvas(path: "/")
         controller.windowWillClose(Notification(name: NSWindow.willCloseNotification))
         controller.hideCanvas()

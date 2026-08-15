@@ -310,6 +310,41 @@ describe("bench-cli-startup", () => {
     ]);
   });
 
+  it("retains and validates warmup samples separately from measured samples", () => {
+    const passingSample = {
+      ms: 10,
+      firstOutputMs: 5,
+      maxRssMb: 50,
+      exitCode: 0,
+      signal: null,
+      startedAt: "2026-08-01T20:00:00.000Z",
+      endedAt: "2026-08-01T20:00:00.010Z",
+    };
+
+    expect(
+      testing.collectFailedSamples({
+        entry: "dist/entry.js",
+        cases: [
+          {
+            id: "gatewayHealthJsonConnected",
+            name: "gateway health --json (connected)",
+            args: ["gateway", "health", "--json"],
+            contract: null,
+            warmupSamples: [{ ...passingSample, exitCode: 1 }],
+            samples: [passingSample],
+            summary: {
+              sampleCount: 1,
+              durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+              firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
+              maxRssMb: { avg: 50, p50: 50, p95: 50, min: 50, max: 50 },
+              exitSummary: "code:0x1",
+            },
+          },
+        ],
+      }),
+    ).toEqual(["dist/entry.js gatewayHealthJsonConnected warmup 1: exited with code 1"]);
+  });
+
   it("fails reports with samples that did not report RSS", () => {
     expect(
       testing.collectFailedSamples({
@@ -462,6 +497,18 @@ describe("bench-cli-startup", () => {
         args: ["gateway", "health", "--json"],
         presets: ["real"],
       },
+      {
+        id: "gatewayHealthJsonConnected",
+        name: "gateway health --json (connected)",
+        args: ["gateway", "health", "--json"],
+        presets: [],
+      },
+      {
+        id: "gatewayHealthJsonFirstDevice",
+        name: "gateway health --json (first device)",
+        args: ["gateway", "health", "--json"],
+        presets: [],
+      },
       { id: "health", name: "health", args: ["health"], presets: ["startup", "real"] },
       {
         id: "healthJson",
@@ -485,16 +532,22 @@ describe("bench-cli-startup", () => {
     expect(testing.parseGatewayPortEnv("::1")).toBe(32123);
     expect(testing.parseGatewayPortEnv("[::1]")).toBe(32123);
 
-    expect(
-      withEnv({ OPENCLAW_GATEWAY_PORT: "45678" }, () =>
-        testing.buildConfigFixture({
-          id: "gatewayHealthJson",
-          name: "gateway health --json",
-          args: ["gateway", "health", "--json"],
-          presets: ["real"],
-        }),
-      ),
-    ).toMatchObject({ gateway: { port: 45678 } });
+    for (const id of [
+      "gatewayHealthJson",
+      "gatewayHealthJsonConnected",
+      "gatewayHealthJsonFirstDevice",
+    ]) {
+      expect(
+        withEnv({ OPENCLAW_GATEWAY_PORT: "45678" }, () =>
+          testing.buildConfigFixture({
+            id,
+            name: "gateway health --json",
+            args: ["gateway", "health", "--json"],
+            presets: [],
+          }),
+        ),
+      ).toMatchObject({ gateway: { port: 45678 } });
+    }
 
     for (const invalid of ["45678abc", "127.0.0.1:45678abc"]) {
       expect(() =>

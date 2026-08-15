@@ -14,13 +14,13 @@ import type { FleetContainerRuntime } from "./containers.runtime.js";
 import { listFleetCells } from "./registry.js";
 import { probeCellHealth, requireCell } from "./service-support.runtime.js";
 
-export type FleetDoctorFinding = {
+type FleetDoctorFinding = {
   check: string;
   status: "pass" | "warn" | "fail";
   detail: string;
 };
 
-export type FleetDoctorCellReport = { tenant: string; findings: FleetDoctorFinding[] };
+type FleetDoctorCellReport = { tenant: string; findings: FleetDoctorFinding[] };
 
 function finding(
   check: string,

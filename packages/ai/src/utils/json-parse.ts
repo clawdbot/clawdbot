@@ -1,4 +1,5 @@
 // JSON parse helpers recover structured values from partial model output.
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as partialParse } from "partial-json";
 
 const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
@@ -105,22 +106,12 @@ export function repairJson(json: string): string {
 }
 
 export function parseJsonWithRepair(json: string): unknown {
-  const repairedJson = repairJson(json);
-  if (repairedJson !== json) {
-    return JSON.parse(repairedJson) as unknown;
-  }
-  return JSON.parse(json) as unknown;
+  return JSON.parse(repairJson(json)) as unknown;
 }
 
 function looksLikeWindowsPathPrefix(prefix: string): boolean {
   const tail = prefix.slice(-160);
   return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(tail);
-}
-
-function asStreamingJsonRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 }
 
 /**
@@ -136,15 +127,13 @@ export function parseStreamingJson(partialJson: string | undefined): Record<stri
   }
 
   try {
-    return asStreamingJsonRecord(parseJsonWithRepair(partialJson));
+    return asNonArrayRecord(parseJsonWithRepair(partialJson));
   } catch {
     try {
-      const result = partialParse(partialJson);
-      return asStreamingJsonRecord(result);
+      return asNonArrayRecord(partialParse(partialJson));
     } catch {
       try {
-        const result = partialParse(repairJson(partialJson));
-        return asStreamingJsonRecord(result);
+        return asNonArrayRecord(partialParse(repairJson(partialJson)));
       } catch {
         return {};
       }

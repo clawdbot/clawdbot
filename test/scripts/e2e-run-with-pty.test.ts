@@ -194,7 +194,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
       throw new Error("timed out waiting for condition");
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
 }

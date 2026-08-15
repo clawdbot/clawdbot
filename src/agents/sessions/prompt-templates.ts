@@ -1,22 +1,18 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  parseCommandArgs,
+  substituteArgs,
+} from "../../../packages/agent-core/src/harness/prompt-template-arguments.js";
 /**
  * Prompt template discovery and loading.
  *
  * Reads markdown prompt templates from user, project, and package sources with frontmatter metadata.
  */
 import { expandTildePath } from "../../shared/tilde-path.js";
-export {
-  parseCommandArgs,
-  substituteArgs,
-} from "../../../packages/agent-core/src/harness/prompt-template-arguments.js";
-import {
-  parseCommandArgs,
-  substituteArgs,
-} from "../../../packages/agent-core/src/harness/prompt-template-arguments.js";
 import { CONFIG_DIR_NAME } from "../config.js";
-import { parseFrontmatter } from "../utils/frontmatter.js";
+import { parsePromptFrontmatter } from "../utils/frontmatter.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
 /**
@@ -34,7 +30,7 @@ export interface PromptTemplate {
 function loadTemplateFromFile(filePath: string, sourceInfo: SourceInfo): PromptTemplate | null {
   try {
     const rawContent = readFileSync(filePath, "utf-8");
-    const { frontmatter, body } = parseFrontmatter<Record<string, string>>(rawContent);
+    const { frontmatter, body } = parsePromptFrontmatter<Record<string, string>>(rawContent);
 
     const name = basename(filePath).replace(/\.md$/, "");
 

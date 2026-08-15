@@ -27,7 +27,7 @@ type ResponsePrefix = {
 };
 
 /** Read a small collapsed text snippet from a response body. */
-export async function readResponseTextSnippet(
+export async function readMemoryHostResponseTextSnippet(
   res: Response,
   options: ResponseTextSnippetOptions = {},
 ): Promise<string> {
@@ -204,7 +204,7 @@ async function readResponseTextWithLimit(
     } catch {}
   }
 
-  return new TextDecoder().decode(joinChunks(chunks, length));
+  return new TextDecoder("utf-8", { fatal: true }).decode(joinChunks(chunks, length));
 }
 
 async function cancelResponseBody(res: Response): Promise<void> {
@@ -220,7 +220,7 @@ function parseContentLength(raw: string | null, errorPrefix: string): number | u
   if (!trimmed) {
     return undefined;
   }
-  if (!/^(0|[1-9]\d*)$/.test(trimmed)) {
+  if (!/^\d+$/.test(trimmed)) {
     throw new Error(`${errorPrefix}: invalid content-length header: ${raw}`);
   }
   const value = Number(trimmed);

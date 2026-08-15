@@ -3,7 +3,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 
-export type PluginConfigContractMatch = {
+type PluginConfigContractMatch = {
   /** Concrete config path matched by the contract pattern. */
   path: string;
   /** Config value stored at the matched path. */

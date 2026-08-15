@@ -21,6 +21,7 @@ EXPECTED_APP_GROUP="group.ai.openclawfoundation.app.shared"
 EXPECTED_PUSH_MODE="appStore"
 
 PLIST_BUDDY_BIN="${IOS_VALIDATE_PLIST_BUDDY_BIN:-/usr/libexec/PlistBuddy}"
+PLUTIL_BIN="${IOS_VALIDATE_PLUTIL_BIN:-plutil}"
 CODESIGN_BIN="${IOS_VALIDATE_CODESIGN_BIN:-codesign}"
 SECURITY_BIN="${IOS_VALIDATE_SECURITY_BIN:-security}"
 UNZIP_BIN="${IOS_VALIDATE_UNZIP_BIN:-unzip}"
@@ -136,6 +137,18 @@ assert_plist_string() {
   fi
 }
 
+assert_plist_nonempty_string() {
+  local plist="$1"
+  local key_path="$2"
+  local label="$3"
+  local actual
+  actual="$("${PLUTIL_BIN}" -extract "${key_path}" raw -expect string -o - "${plist}" 2>/dev/null || true)"
+  if [[ -z "${actual}" ]]; then
+    echo "Invalid IPA: ${label} must be a non-empty string." >&2
+    exit 1
+  fi
+}
+
 assert_plist_true() {
   local plist="$1"
   local key_path="$2"
@@ -206,9 +219,28 @@ assert_build_provenance() {
   fi
 }
 
+assert_localized_plists_resolve_build_settings() {
+  local localized_plist
+  local rendered
+  while IFS= read -r -d '' localized_plist; do
+    if ! rendered="$("${PLUTIL_BIN}" -convert xml1 -o - "${localized_plist}" 2>/dev/null)"; then
+      echo "Invalid IPA: could not read localized plist ${localized_plist#"${app_path}/"}." >&2
+      exit 1
+    fi
+    if grep -Eq '\$\([A-Za-z0-9_.-]+\)|\$\{[A-Za-z0-9_.-]+\}' <<<"${rendered}"; then
+      echo "Invalid IPA: unresolved build setting in localized plist ${localized_plist#"${app_path}/"}." >&2
+      exit 1
+    fi
+  done < <(find "${app_path}" -type f -path "*.lproj/InfoPlist.strings" -print0)
+}
+
 assert_plist_string "${info_plist}" "CFBundleIdentifier" "${EXPECTED_BUNDLE_ID}" "bundle identifier mismatch"
+assert_plist_string "${info_plist}" "CFBundleDisplayName" "OpenClaw" "display name mismatch"
 assert_plist_string "${info_plist}" "OpenClawPushMode" "${EXPECTED_PUSH_MODE}" "push mode mismatch"
+assert_plist_nonempty_string "${info_plist}" "NSHealthShareUsageDescription" "Health share usage description"
+assert_plist_nonempty_string "${info_plist}" "NSHealthUpdateUsageDescription" "Health update usage description"
 assert_build_provenance
+assert_localized_plists_resolve_build_settings
 assert_plist_empty_or_absent "${info_plist}" "OpenClawPushRelayBaseURL" "push relay URL override"
 assert_plist_key_absent "${info_plist}" "OpenClawPushTransport" "legacy push transport"
 assert_plist_key_absent "${info_plist}" "OpenClawPushDistribution" "legacy push distribution"

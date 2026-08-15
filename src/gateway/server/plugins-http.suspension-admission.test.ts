@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayActiveWorkInspectors } from "../../infra/gateway-active-work.js";
 import {
   prepareGatewaySuspend,
-  resetGatewaySuspendCoordinatorForTest,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
 } from "../../infra/gateway-suspend-coordinator.js";
 import { dispatchGatewayMethod } from "../../plugin-sdk/gateway-method-runtime.js";
 import type { PluginHttpRouteRegistration } from "../../plugins/registry.js";
@@ -14,16 +14,16 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
-import { testing as controlPlaneRateLimitTesting } from "../control-plane-rate-limit.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
-import { createTestRegistry } from "./__tests__/test-utils.js";
+import { createGatewayTestRegistry } from "./__tests__/test-utils.js";
 import {
   createGatewayPluginRequestHandler,
   createGatewayPluginUpgradeHandler,
 } from "./plugins-http.js";
 
 const ROUTE_PATH = "/plugin/suspension-proof";
+let rateLimitEpochMs = Date.now();
 
 function deferred() {
   let resolve = () => {};
@@ -99,7 +99,7 @@ function createRequestHandler(
   getGatewayRequestContext?: () => GatewayRequestContext,
 ) {
   return createGatewayPluginRequestHandler({
-    registry: createTestRegistry({ httpRoutes: routes }),
+    registry: createGatewayTestRegistry({ httpRoutes: routes }),
     log: createLog(),
     ...(getGatewayRequestContext ? { getGatewayRequestContext } : {}),
   });
@@ -107,20 +107,21 @@ function createRequestHandler(
 
 function createUpgradeHandler(routes: PluginHttpRouteRegistration[]) {
   return createGatewayPluginUpgradeHandler({
-    registry: createTestRegistry({ httpRoutes: routes }),
+    registry: createGatewayTestRegistry({ httpRoutes: routes }),
     log: createLog(),
   });
 }
 
 beforeEach(() => {
-  controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
-  resetGatewaySuspendCoordinatorForTest();
+  rateLimitEpochMs += 60_000;
+  vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
 });
 
 afterEach(() => {
-  controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
-  resetGatewaySuspendCoordinatorForTest();
+  vi.restoreAllMocks();
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
 });
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { toQaError } from "../errors.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import {
   type CommandRunner,
@@ -58,7 +59,7 @@ export type MantisVisualDriverOptions = {
   visionTimeoutMs?: number;
 };
 
-export type MantisVisualTaskResult = {
+type MantisVisualTaskResult = {
   outputDir: string;
   reportPath: string;
   screenshotPath?: string;
@@ -229,12 +230,8 @@ async function runCommandWithExternalOutput(params: {
     },
   });
   if (deferredError) {
-    throw toErrorObject(deferredError);
+    throw toQaError(deferredError);
   }
-}
-
-function toErrorObject(error: unknown): Error {
-  return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
 
 function buildVisualDriverArgs(params: {
@@ -818,3 +815,4 @@ export async function runMantisVisualTask(
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

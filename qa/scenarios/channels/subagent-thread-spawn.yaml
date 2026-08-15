@@ -5,8 +5,8 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
-      - agents.subagents
+      - matrix.acp-subagent-spawn-hooks
+      - agent-runtime.subagent-turns-subagents
   objective: Verify sessions_spawn(thread=true, mode=session) creates a persistent Matrix child thread and delivers the child result there.
   gatewayConfigPatch:
     tools:
@@ -33,13 +33,12 @@ scenario:
     - docs/tools/subagents.md
   codeRefs:
     - src/agents/tools/sessions-spawn-tool.ts
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix
     summary: Spawn a bound Matrix child session and require native thread relation evidence on completion.
     config:
-      requiredChannelDriver: live
       conversationId: main
       childMarker: QA-MATRIX-SUBAGENT-THREAD-OK
       prompt: 'Use sessions_spawn for this QA check. task="Finish with exactly QA-MATRIX-SUBAGENT-THREAD-OK." label=qa-thread-subagent thread=true mode=session. After spawn returns status="accepted", wait for the child session reply in the spawned Matrix thread. Do not write QA-MATRIX-SUBAGENT-THREAD-OK in the parent response.'
@@ -48,9 +47,6 @@ flow:
   steps:
     - name: delivers the child result in the spawned Matrix thread
       actions:
-        - assert:
-            expr: transport.id === 'matrix'
-            message: subagent thread spawn requires the live Matrix adapter
         - resetTransport: true
         - sendInbound:
             conversation:

@@ -3,10 +3,10 @@
 // cannot drift apart unnoticed.
 import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createTestRegistry,
-  deliverOutboundPayloads,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,7 +82,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
   });
 
   afterEach(async () => {
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
     vi.restoreAllMocks();
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
@@ -102,7 +102,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
       },
     } as OpenClawConfig;
 
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "tlon",
       to: "~sampel-palnet",
@@ -121,7 +121,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
       skipQueue: true,
     });
 
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "tlon",
       to: "chat/~host-ship/general",
@@ -133,7 +133,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
       skipQueue: true,
     });
 
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "tlon",
       to: "~sampel-palnet",

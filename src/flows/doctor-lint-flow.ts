@@ -18,7 +18,7 @@ export interface DoctorLintRunOptions {
   readonly includeAllChecks?: boolean;
 }
 
-export interface DoctorLintRunResult {
+interface DoctorLintRunResult {
   readonly findings: readonly HealthFinding[];
   readonly checksRun: number;
   readonly checksSkipped: number;
@@ -50,14 +50,20 @@ export async function runDoctorLintChecks(
 
   const findings: HealthFinding[] = [];
   for (const id of only) {
+    let message: string;
     if (!allIds.has(id)) {
-      findings.push({
-        checkId: "core/doctor/lint-selection",
-        severity: "error",
-        message: `Unknown health check id selected by --only: ${id}.`,
-        path: id,
-      });
+      message = `Unknown health check id selected by --only: ${id}.`;
+    } else if (selected.length === 0 && skip.has(id)) {
+      message = `Health check ${id} cannot be selected by --only and excluded by --skip.`;
+    } else {
+      continue;
     }
+    findings.push({
+      checkId: "core/doctor/lint-selection",
+      severity: "error",
+      message,
+      path: id,
+    });
   }
   for (const check of selected) {
     try {

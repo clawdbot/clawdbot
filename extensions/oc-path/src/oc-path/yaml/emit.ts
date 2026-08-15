@@ -2,7 +2,7 @@
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
 import type { YamlAst } from "./ast.js";
 
-export interface YamlEmitOptions {
+interface YamlEmitOptions {
   readonly mode?: "roundtrip" | "render";
   readonly fileNameForGuard?: string;
   readonly acceptPreExistingSentinel?: boolean;

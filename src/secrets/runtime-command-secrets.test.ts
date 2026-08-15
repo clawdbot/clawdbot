@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "./runtime-command-secrets.js";
 import { createEmptyRuntimeWebToolsMetadata } from "./runtime-fast-path.js";
@@ -71,6 +72,7 @@ function activateMinimalSecretsRuntimeSnapshot(params: {
     sourceConfig: structuredClone(params.config),
     config: structuredClone(params.resolvedConfig ?? params.config),
     authStores: [],
+    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
     warnings: [],
     webTools: createEmptyRuntimeWebToolsMetadata(),
   };

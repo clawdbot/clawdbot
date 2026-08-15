@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type AgentRingZeroToolScope = {
@@ -7,13 +8,6 @@ type AgentRingZeroToolScope = {
 };
 
 const activeRingZeroTools = new AsyncLocalStorage<AgentRingZeroToolScope>();
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
-    return false;
-  }
-  return "then" in value && typeof value.then === "function";
-}
 
 class HostScopedAgentToolAuthorizationError extends Error {
   readonly status = 403;
@@ -69,6 +63,17 @@ export function runWithAgentRingZeroTools<T>(tools: readonly AnyAgentTool[], run
 export function getActiveAgentRingZeroTools(): readonly AnyAgentTool[] {
   const scope = activeRingZeroTools.getStore();
   return scope?.active === true ? scope.tools : [];
+}
+
+export function mergeAgentRingZeroTools(
+  ringZeroTools: readonly AnyAgentTool[],
+  tools: AnyAgentTool[],
+): AnyAgentTool[] {
+  if (ringZeroTools.length === 0) {
+    return tools;
+  }
+  const reservedNames = new Set(ringZeroTools.map((tool) => tool.name));
+  return [...ringZeroTools, ...tools.filter((tool) => !reservedNames.has(tool.name))];
 }
 
 /**

@@ -5,27 +5,34 @@ scenario:
   surface: runtime
   coverage:
     primary:
-      - runtime.empty-response-recovery
+      - agent-runtime.failure-recovery-empty-response-recovery
+      - agent-runtime.progress-visibility-failure-recovery
     secondary:
-      - runtime.retry-policy
-  objective: Verify repeated empty GPT turns exhaust the retry budget after one continuation attempt.
+      - agent-runtime.failure-recovery-retry-policy
+  objective: Verify repeated empty GPT turns exhaust each configured model's retry budget after one continuation attempt.
   successCriteria:
     - Scenario is mock-openai only so live lanes do not pick it up implicitly.
-    - The agent performs the replay-safe read that makes retrying allowed.
-    - Mock trace shows the run reaches a terminal post-read turn without ever producing the requested success marker.
+    - Each attempted configured model performs exactly one replay-safe read that makes retrying allowed.
+    - Mock trace contains exactly one replay-safe read, one empty post-read turn, and one empty continuation per attempted configured model.
+    - Exactly one sanitized failure is delivered without producing the requested success marker.
   docsRefs:
     - docs/help/testing.md
   codeRefs:
-    - extensions/qa-lab/src/mock-openai-server.ts
-    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
   execution:
     kind: flow
     summary: Verify empty-response retry exhaustion still surfaces a visible failure.
     config:
+      requiredProviderMode: mock-openai
       requiredProvider: mock-openai
       promptSnippet: Empty response exhaustion QA check
       prompt: "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK."
       retryNeedle: The previous attempt did not produce a user-visible answer.
+      settledToolRetryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      expectedDiagnostic: "⚠️ Agent couldn't generate a response. Please try again."
+      unexpectedSuccessMarker: EMPTY-EXHAUSTED-OK
 
 flow:
   steps:
@@ -39,6 +46,9 @@ flow:
             - ref: env
             - 60000
         - call: reset
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - set: requestCursorBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
@@ -62,16 +72,59 @@ flow:
             expr: "['ok', 'completed', 'succeeded'].includes(String(waited?.status)) || (waited?.status === 'error' && String(waited?.error ?? '').trim().toLowerCase() === 'completed')"
             message:
               expr: "`agent.wait returned ${String(waited?.status ?? 'unknown')}: ${String(waited?.error ?? '')}`"
+        - set: firstScenarioOutbound
+          value:
+            expr: "(async () => { const deadline = Date.now() + liveTurnTimeoutMs(env, 30000); do { const messages = state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).filter((message) => message.conversation.id === 'qa-operator'); if (messages.length > 0) { return messages[0]; } await sleep(100); } while (Date.now() < deadline); throw new Error('timed out waiting for retry-exhaustion failure delivery'); })()"
+        - call: sleep
+          args:
+            - 300
+        - set: scenarioOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).filter((message) => message.conversation.id === 'qa-operator')"
+        - assert:
+            expr: "scenarioOutbound.length === 1"
+            message:
+              expr: "`expected exactly one visible failure after retry exhaustion, saw ${scenarioOutbound.length}: ${JSON.stringify(scenarioOutbound.map((message) => String(message.text ?? '')))}`"
+        - assert:
+            expr: "String(scenarioOutbound[0]?.text ?? '') === config.expectedDiagnostic"
+            message:
+              expr: "`expected sanitized empty-response failure, saw ${String(scenarioOutbound[0]?.text ?? '')}`"
+        - assert:
+            expr: "!scenarioOutbound.some((message) => String(message.text ?? '').includes(config.unexpectedSuccessMarker))"
+            message:
+              expr: "`retry exhaustion delivered its forbidden success marker: ${JSON.stringify(scenarioOutbound.map((message) => String(message.text ?? '')))}`"
         - if:
             expr: "Boolean(env.mock)"
             then:
               - set: scenarioRequests
                 value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))"
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+              - set: expectedModels
+                value:
+                  expr: "Array.from(new Set([splitModelRef(env.primaryModel)?.model, splitModelRef(env.alternateModel)?.model].filter((model) => typeof model === 'string' && model.length > 0)))"
               - assert:
-                  expr: "scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.plannedToolName === 'read')"
-                  message: expected replay-safe read request in mock trace
+                  expr: "expectedModels.length > 0"
+                  message: expected at least one configured mock model
+              - set: modelRequestGroups
+                value:
+                  expr: "expectedModels.map((model, index) => ({ model, requests: scenarioRequests.slice(index * 3, index * 3 + 3) }))"
+              - set: retryRequests
+                value:
+                  expr: "modelRequestGroups.map((group) => group.requests[2]).filter((request) => request && (String(request.allInputText ?? '').includes(config.retryNeedle) || String(request.allInputText ?? '').includes(config.settledToolRetryNeedle)))"
               - assert:
-                  expr: "scenarioRequests.length >= 2"
-                  message: expected at least the replay-safe read request and one terminal post-read turn
-      detailsExpr: "env.mock ? `requests=${String(scenarioRequests?.length ?? 0)}` : String(waited?.status ?? '')"
+                  expr: "scenarioRequests.length === expectedModels.length * 3"
+                  message:
+                    expr: "`expected exactly three requests per attempted model ${JSON.stringify(expectedModels)}, saw ${scenarioRequests.length} scoped requests: ${JSON.stringify(scenarioRequests.map((request) => ({ cursor: request.cursor, model: request.model, tool: request.plannedToolName ?? null, retry: String(request.allInputText ?? '').includes(config.retryNeedle), settledRetry: String(request.allInputText ?? '').includes(config.settledToolRetryNeedle), callId: request.toolOutputCallId ?? null })))}`"
+              - assert:
+                  expr: "modelRequestGroups.every((group) => group.requests.length === 3 && group.requests.every((request) => request.model === group.model))"
+                  message:
+                    expr: "`expected contiguous three-request primary-to-fallback groups ${JSON.stringify(expectedModels)}, saw ${JSON.stringify(scenarioRequests.map((request) => ({ cursor: request.cursor, model: request.model, tool: request.plannedToolName ?? null })))}`"
+              - assert:
+                  expr: "modelRequestGroups.every((group) => group.requests[0]?.plannedToolName === 'read' && !group.requests[1]?.plannedToolName && !group.requests[2]?.plannedToolName && typeof group.requests[1]?.toolOutputCallId === 'string' && group.requests[1].toolOutputCallId.length > 0 && typeof group.requests[2]?.toolOutputCallId === 'string' && group.requests[2].toolOutputCallId.length > 0)"
+                  message:
+                    expr: "`expected exactly one read followed by two empty responses carrying tool output per model, saw ${JSON.stringify(modelRequestGroups.map((group) => ({ model: group.model, requests: group.requests.map((request) => ({ tool: request.plannedToolName ?? null, callId: request.toolOutputCallId ?? null })) })))}`"
+              - assert:
+                  expr: "retryRequests.length === expectedModels.length && modelRequestGroups.every((group, index) => group.requests[2] === retryRequests[index])"
+                  message:
+                    expr: "`expected exactly one final canonical empty-response continuation per attempted model ${JSON.stringify(expectedModels)}, saw ${retryRequests.length} final continuation requests`"
+      detailsExpr: "`requests=${String(scenarioRequests?.length ?? 0)} retries=${String(retryRequests?.length ?? 0)} failure=${String(scenarioOutbound[0]?.text ?? '')}`"

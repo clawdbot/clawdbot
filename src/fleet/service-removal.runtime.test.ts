@@ -6,10 +6,9 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
 import { getFleetCell, reserveFleetCell } from "./registry.js";
-import {
-  createFleetService as createFleetServiceRuntime,
-  type FleetServiceOptions,
-} from "./service.runtime.js";
+import { createFleetService as createFleetServiceRuntime } from "./service.runtime.js";
+
+type FleetServiceOptions = NonNullable<Parameters<typeof createFleetServiceRuntime>[0]>;
 
 let root: string;
 const TEST_ATTEMPT_ID = "22222222222222222222222222222222";
@@ -36,6 +35,7 @@ function runningInspection(
 ): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
     kind: "ok",
+    containerId: "container-id",
     state: "running",
     running: true,
     labels: fleetLabels(),
@@ -91,6 +91,7 @@ function createContainerMock(
         running: start,
         labels: fleetLabels(profile.tenantId, profile.attemptId),
         environment: { ...profile.environment },
+        containerId: `container-${profile.attemptId}`,
         imageId: `sha256:${profile.attemptId}`,
         memory: profile.memory,
         cpus: profile.cpus,

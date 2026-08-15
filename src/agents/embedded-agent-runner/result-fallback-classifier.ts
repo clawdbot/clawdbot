@@ -1,12 +1,9 @@
-/**
- * Classifies embedded-agent run results for model fallback decisions.
- */
-import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-runner-failure-copy.js";
+/** Classifies embedded-agent run results for model fallback decisions. */
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
-import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
-import type { FailoverReason } from "../embedded-agent-helpers/types.js";
-import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
-import type { ModelFallbackResultClassification } from "../model-fallback.js";
+import { classifyFailoverReason } from "../failover/classify.js";
+import type { FailoverReason } from "../failover/signal.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
+import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import {
   hasCommittedOutboundDeliveryEvidence,
   hasVisibleAgentPayload,
@@ -81,17 +78,36 @@ export function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult)
   );
 }
 
+function hasDeliverableAssistantPayload(result: {
+  payloads?: unknown;
+  meta?: { finalAssistantVisibleText?: unknown };
+}): boolean {
+  const finalVisibleText = result.meta?.finalAssistantVisibleText;
+  const payloads = Array.isArray(result.payloads)
+    ? result.payloads.filter((payload) => {
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+          return true;
+        }
+        const record = payload as { isCommentary?: unknown; visible?: unknown };
+        return record.isCommentary !== true && record.visible !== false;
+      })
+    : [];
+  return (
+    (typeof finalVisibleText === "string" &&
+      finalVisibleText.trim().length > 0 &&
+      !isSilentReplyPayloadText(finalVisibleText)) ||
+    hasVisibleAgentPayload(
+      { payloads },
+      { includeErrorPayloads: false, includeReasoningPayloads: false },
+    )
+  );
+}
+
 function hasNonTextVisiblePayloadContent(
   payload: NonNullable<EmbeddedAgentRunResult["payloads"]>[number],
 ): boolean {
-  const { text: _text, ...payloadWithoutText } = payload;
-  return hasVisibleAgentPayload(
-    { payloads: [payloadWithoutText] },
-    {
-      includeErrorPayloads: false,
-      includeReasoningPayloads: false,
-    },
-  );
+  const { isError: _isError, text: _text, ...payloadWithoutText } = payload;
+  return hasDeliverableAssistantPayload({ payloads: [payloadWithoutText] });
 }
 
 function classifyGenericExternalRunFailurePayload(params: {
@@ -216,19 +232,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (genericExternalFailureClassification) {
     return genericExternalFailureClassification;
   }
-  if (
-    typeof params.result.meta.finalAssistantVisibleText === "string" &&
-    params.result.meta.finalAssistantVisibleText.trim().length > 0 &&
-    !isSilentReplyPayloadText(params.result.meta.finalAssistantVisibleText)
-  ) {
-    return null;
-  }
-  if (
-    hasVisibleAgentPayload(params.result, {
-      includeErrorPayloads: false,
-      includeReasoningPayloads: false,
-    })
-  ) {
+  if (hasDeliverableAssistantPayload(params.result)) {
     return null;
   }
   if (fallbackSafeIncompleteTurn) {
@@ -270,29 +274,33 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     };
   }
 
-  if (!isGpt5ModelId(params.model)) {
+  // Once the shared visibility owner finds no deliverable assistant payload,
+  // empty and reasoning-only output must advance fallback for every model.
+  if (hasDeliberateSilentTerminalReply(params.result)) {
     return null;
   }
-
-  // Legacy GPT-5 handling treats empty/reasoning-only payloads as fallback
-  // candidates, while deliberate silent replies remain successful terminal work.
-  if (payloads.length === 0 && hasDeliberateSilentTerminalReply(params.result)) {
+  if (errorText.trim()) {
     return null;
   }
-  if (payloads.length === 0) {
-    return {
-      message: `${params.provider}/${params.model} ended without a visible assistant reply`,
-      reason: "format",
-      code: "empty_result",
-    };
+  if (
+    payloads.some((payload) => payload.isError === true && hasNonTextVisiblePayloadContent(payload))
+  ) {
+    return null;
   }
-  if (payloads.every((payload) => payload.isReasoning === true)) {
+  const assistantPayloads = payloads.filter((payload) => payload.isError !== true);
+  if (
+    assistantPayloads.length > 0 &&
+    assistantPayloads.every((payload) => payload.isReasoning === true)
+  ) {
     return {
       message: `${params.provider}/${params.model} ended with reasoning only`,
       reason: "format",
       code: "reasoning_only_result",
     };
   }
-
-  return null;
+  return {
+    message: `${params.provider}/${params.model} ended without a visible assistant reply`,
+    reason: "format",
+    code: "empty_result",
+  };
 }

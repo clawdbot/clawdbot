@@ -1,9 +1,9 @@
 // Covers native approval runtime delivery and resolution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/types.adapters.js";
-import { clearApprovalNativeRouteStateForTest } from "./approval-native-route-coordinator.js";
 import {
-  createChannelNativeApprovalRuntime,
+  createChannelNativeApprovalRuntime as createChannelNativeApprovalRuntimeRaw,
   deliverApprovalRequestViaChannelNativePlan,
 } from "./approval-native-runtime.js";
 
@@ -45,20 +45,25 @@ const execRequest = {
   expiresAtMs: 120_000,
 };
 
-afterEach(() => {
+const approvalRuntimes: Array<ReturnType<typeof createChannelNativeApprovalRuntimeRaw>> = [];
+
+function createChannelNativeApprovalRuntime(
+  params: Parameters<typeof createChannelNativeApprovalRuntimeRaw>[0],
+) {
+  const runtime = createChannelNativeApprovalRuntimeRaw(params);
+  approvalRuntimes.push(runtime);
+  return runtime;
+}
+
+afterEach(async () => {
+  await Promise.all(approvalRuntimes.splice(0).map((runtime) => runtime.stop()));
   hoisted.callGatewayLeastPrivilege.mockClear();
   hoisted.createOperatorApprovalsGatewayClient.mockClear();
   hoisted.startGatewayClientWhenEventLoopReady.mockClear();
-  clearApprovalNativeRouteStateForTest();
   vi.useRealTimers();
 });
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
   const arg = mock.mock.calls[index]?.[0];

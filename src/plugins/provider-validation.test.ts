@@ -1,7 +1,8 @@
 /** Covers provider registration validation for ids, duplicates, and required hooks. */
 import { describe, expect, it } from "vitest";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
-import type { PluginDiagnostic, ProviderPlugin } from "./types.js";
+import type { ProviderPlugin } from "./types.js";
 
 function collectDiagnostics() {
   const diagnostics: PluginDiagnostic[] = [];
@@ -86,7 +87,7 @@ function expectProviderNormalizationResult(params: {
 describe("normalizeRegisteredProvider", () => {
   const primaryAuthRun = async () => ({ profiles: [] });
 
-  it.each([
+  const cases = [
     {
       name: "drops invalid and duplicate auth methods, and clears bad wizard method bindings",
       provider: makeProvider({
@@ -210,88 +211,11 @@ describe("normalizeRegisteredProvider", () => {
         ]);
       },
     },
-    {
-      name: "prefers catalog when a provider registers both catalog and discovery",
-      provider: makeProvider({
-        catalog: {
-          run: async () => null,
-        },
-        discovery: {
-          run: async () => ({
-            provider: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              models: [],
-            },
-          }),
-        },
-      }),
-      expectedDiagnosticText: [
-        'provider "demo" registered both catalog and discovery; using catalog',
-      ],
-      assert: (
-        provider: ReturnType<typeof normalizeRegisteredProvider>,
-        _diagnostics: PluginDiagnostic[],
-        inputProvider: ProviderPlugin,
-      ) => {
-        if (!provider) {
-          throw new Error("expected provider");
-        }
-        expect(provider).toEqual({
-          id: "demo",
-          label: "Demo",
-          auth: [],
-          catalog: inputProvider.catalog,
-        });
-      },
-    },
-    {
-      name: "warns for legacy discovery-only providers",
-      provider: makeProvider({
-        id: "legacy-discovery-only",
-        discovery: {
-          run: async () => ({
-            provider: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              models: [],
-            },
-          }),
-        },
-      }),
-      expectedDiagnosticText: [
-        'provider "legacy-discovery-only" uses deprecated discovery; use catalog',
-      ],
-      assert: (
-        provider: ReturnType<typeof normalizeRegisteredProvider>,
-        _diagnostics: PluginDiagnostic[],
-        inputProvider: ProviderPlugin,
-      ) => {
-        if (!provider) {
-          throw new Error("expected provider");
-        }
-        expect(provider).toEqual({
-          id: "legacy-discovery-only",
-          label: "Demo",
-          auth: [],
-          discovery: inputProvider.discovery,
-        });
-      },
-    },
-  ] as const)(
-    "$name",
-    ({
-      provider: inputProvider,
-      expectedProvider,
-      expectedDiagnostics,
-      expectedDiagnosticText,
-      assert,
-    }) => {
-      expectProviderNormalizationResult({
-        provider: inputProvider,
-        ...(expectedProvider ? { expectedProvider } : {}),
-        ...(expectedDiagnostics ? { expectedDiagnostics } : {}),
-        ...(expectedDiagnosticText ? { expectedDiagnosticText } : {}),
-        ...(assert ? { assert } : {}),
-      });
-    },
-  );
+  ] satisfies readonly (Parameters<typeof expectProviderNormalizationResult>[0] & {
+    name: string;
+  })[];
+
+  it.each(cases)("$name", (testCase) => {
+    expectProviderNormalizationResult(testCase);
+  });
 });

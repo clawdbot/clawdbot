@@ -14,13 +14,6 @@ public struct ToolDisplaySummary: Sendable, Equatable {
         if let detail, !detail.isEmpty { parts.append(detail) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
-
-    public var summaryLine: String {
-        if let detailLine {
-            return "\(self.emoji) \(self.label): \(detailLine)"
-        }
-        return "\(self.emoji) \(self.label)"
-    }
 }
 
 public enum ToolDisplayRegistry {

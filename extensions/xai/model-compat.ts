@@ -17,7 +17,6 @@ function resolveXaiModelCompatPatch(): ModelCompatConfig {
   return {
     toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
     unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),
-    nativeWebSearchTool: true,
     toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
   };
 }

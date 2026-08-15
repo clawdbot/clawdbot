@@ -10,11 +10,13 @@ import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
@@ -33,8 +35,19 @@ type CurrentConversationBindingDatabase = Pick<
   "current_conversation_bindings"
 >;
 
-let bindingsLoaded = false;
-let bindingsByConversationKey = new Map<string, SessionBindingRecord>();
+type CurrentConversationBindingsState = {
+  loaded: boolean;
+  byConversationKey: Map<string, SessionBindingRecord>;
+};
+
+const currentConversationBindingsState = resolveGlobalSingleton<CurrentConversationBindingsState>(
+  Symbol.for("openclaw.currentConversationBindings"),
+  () => ({ loaded: false, byConversationKey: new Map() }),
+  (state) => {
+    state.loaded = false;
+    state.byConversationKey.clear();
+  },
+);
 
 function buildConversationKey(ref: ConversationRef): string {
   const normalized = normalizeConversationRef(ref);
@@ -167,19 +180,19 @@ function commitBindings(nextBindings: Map<string, SessionBindingRecord>): void {
   // SQLite is canonical: publish the prepared map only after its transaction
   // commits, so a storage error cannot leave runtime routing ahead of disk.
   writePersistedBindings(nextBindings);
-  bindingsByConversationKey = nextBindings;
+  currentConversationBindingsState.byConversationKey = nextBindings;
 }
 
 function loadBindingsIntoMemory(): void {
-  if (bindingsLoaded) {
+  if (currentConversationBindingsState.loaded) {
     return;
   }
   const nextBindings = new Map<string, SessionBindingRecord>();
   for (const record of readPersistedBindings()) {
     nextBindings.set(buildConversationKey(record.conversation), record);
   }
-  bindingsByConversationKey = nextBindings;
-  bindingsLoaded = true;
+  currentConversationBindingsState.byConversationKey = nextBindings;
+  currentConversationBindingsState.loaded = true;
 }
 
 function resolveChannelSupportsCurrentConversationBinding(params: {
@@ -223,6 +236,9 @@ function supportsGenericCurrentConversationBinding(ref: {
     ...ref,
     conversationId: "capability-check",
   });
+  if (normalized.channel === INTERNAL_MESSAGE_CHANNEL) {
+    return true;
+  }
   return resolveChannelSupportsCurrentConversationBinding({
     channel: normalized.channel,
     accountId: normalized.accountId,
@@ -289,7 +305,7 @@ export async function bindGenericCurrentConversation(
     return null;
   }
   const key = buildConversationKey(conversation);
-  const existing = bindingsByConversationKey.get(key);
+  const existing = currentConversationBindingsState.byConversationKey.get(key);
   const activeExisting = existing && !isBindingExpired(existing) ? existing : undefined;
   const record: SessionBindingRecord = {
     bindingId: buildBindingId(conversation),
@@ -305,7 +321,7 @@ export async function bindGenericCurrentConversation(
       lastActivityAt: now,
     },
   };
-  const nextBindings = new Map(bindingsByConversationKey);
+  const nextBindings = new Map(currentConversationBindingsState.byConversationKey);
   nextBindings.set(key, record);
   commitBindings(nextBindings);
   return record;
@@ -320,11 +336,11 @@ export function resolveGenericCurrentConversationBinding(
   }
   loadBindingsIntoMemory();
   const key = buildConversationKey(ref);
-  const record = bindingsByConversationKey.get(key) ?? null;
+  const record = currentConversationBindingsState.byConversationKey.get(key) ?? null;
   if (!record || !isBindingExpired(record)) {
     return record;
   }
-  const nextBindings = new Map(bindingsByConversationKey);
+  const nextBindings = new Map(currentConversationBindingsState.byConversationKey);
   nextBindings.delete(key);
   commitBindings(nextBindings);
   return null;
@@ -337,9 +353,9 @@ export function listGenericCurrentConversationBindingsBySession(
   loadBindingsIntoMemory();
   const results: SessionBindingRecord[] = [];
   let nextBindings: Map<string, SessionBindingRecord> | undefined;
-  for (const [key, record] of bindingsByConversationKey) {
+  for (const [key, record] of currentConversationBindingsState.byConversationKey) {
     if (isBindingExpired(record)) {
-      nextBindings ??= new Map(bindingsByConversationKey);
+      nextBindings ??= new Map(currentConversationBindingsState.byConversationKey);
       nextBindings.delete(key);
       continue;
     }
@@ -365,11 +381,11 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
   }
   loadBindingsIntoMemory();
   const key = bindingId.slice(CURRENT_BINDINGS_ID_PREFIX.length);
-  const record = bindingsByConversationKey.get(key);
+  const record = currentConversationBindingsState.byConversationKey.get(key);
   if (!record) {
     return;
   }
-  const nextBindings = new Map(bindingsByConversationKey);
+  const nextBindings = new Map(currentConversationBindingsState.byConversationKey);
   if (isBindingExpired(record)) {
     nextBindings.delete(key);
   } else {
@@ -398,9 +414,9 @@ export async function unbindGenericCurrentConversationBindings(
     }
     loadBindingsIntoMemory();
     const key = normalizedBindingId.slice(CURRENT_BINDINGS_ID_PREFIX.length);
-    const record = bindingsByConversationKey.get(key);
+    const record = currentConversationBindingsState.byConversationKey.get(key);
     if (record) {
-      const nextBindings = new Map(bindingsByConversationKey);
+      const nextBindings = new Map(currentConversationBindingsState.byConversationKey);
       nextBindings.delete(key);
       if (!isBindingExpired(record)) {
         removed.push(record);
@@ -413,8 +429,8 @@ export async function unbindGenericCurrentConversationBindings(
     return removed;
   }
   loadBindingsIntoMemory();
-  const nextBindings = new Map(bindingsByConversationKey);
-  for (const [key, record] of bindingsByConversationKey) {
+  const nextBindings = new Map(currentConversationBindingsState.byConversationKey);
+  for (const [key, record] of currentConversationBindingsState.byConversationKey) {
     if (isBindingExpired(record)) {
       nextBindings.delete(key);
       continue;
@@ -428,7 +444,7 @@ export async function unbindGenericCurrentConversationBindings(
     nextBindings.delete(key);
     removed.push(record);
   }
-  if (nextBindings.size !== bindingsByConversationKey.size) {
+  if (nextBindings.size !== currentConversationBindingsState.byConversationKey.size) {
     commitBindings(nextBindings);
   }
   return removed;
@@ -439,8 +455,8 @@ export const testing = {
     deletePersistedFile?: boolean;
     env?: NodeJS.ProcessEnv;
   }) {
-    bindingsLoaded = false;
-    bindingsByConversationKey = new Map();
+    currentConversationBindingsState.loaded = false;
+    currentConversationBindingsState.byConversationKey.clear();
     if (params?.deletePersistedFile) {
       runOpenClawStateWriteTransaction(
         ({ db }) => {

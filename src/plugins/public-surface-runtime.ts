@@ -42,7 +42,7 @@ export function normalizeBundledPluginArtifactSubpath(artifactBasename: string):
 }
 
 /** Normalizes a bundled plugin directory name and rejects path-like values. */
-export function normalizeBundledPluginDirName(dirName: string): string {
+function normalizeBundledPluginDirName(dirName: string): string {
   const normalized = dirName.trim();
   if (
     !normalized ||

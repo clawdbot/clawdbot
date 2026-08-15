@@ -14,11 +14,15 @@ transport plus RPC methods. Use it when a script, dashboard, CI job, IDE
 extension, or another process wants to start agent runs, stream events, wait
 for results, cancel work, or inspect Gateway resources.
 
-<Warning>
-  There is no public npm client package yet. Do not add OpenClaw client package
-  names as application dependencies until release notes announce a published
-  package and this page includes install instructions.
-</Warning>
+<Note>
+  For npm packages, device pairing, reconnect recovery, history, subscriptions,
+  and approvals, start with
+  [Building a Gateway client](https://docs.openclaw.ai/gateway/clients). If your
+  app supervises the Gateway as a child process, also read
+  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding). During the
+  initial package rollout, npm may return `E404` until the first package-bearing
+  OpenClaw release is published.
+</Note>
 
 <Note>
   This page is for code outside the OpenClaw process. Plugin code that runs
@@ -27,16 +31,14 @@ for results, cancel work, or inspect Gateway resources.
 
 ## What is available today
 
-| Surface                                 | Status | Use it for                                                                                    |
-| --------------------------------------- | ------ | --------------------------------------------------------------------------------------------- |
-| [Gateway protocol](/gateway/protocol)   | Ready  | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc) | Ready  | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
-| [`openclaw agent`](/cli/agent)          | Ready  | One-shot script integration when shelling out to the CLI is enough.                           |
-| [`openclaw message`](/cli/message)      | Ready  | Sending messages or channel actions from scripts.                                             |
-
-A future client library package is in progress internally, but it is not a
-public install surface yet. Treat it as preview implementation detail until a
-release announces a published, versioned package.
+| Surface                                                          | Status        | Use it for                                                                                    |
+| ---------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------- |
+| [Gateway client guide](https://docs.openclaw.ai/gateway/clients) | Release train | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
+| [Embedding guide](https://docs.openclaw.ai/gateway/embedding)    | Release train | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
+| [Gateway protocol](/gateway/protocol)                            | Ready         | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
+| [Gateway RPC reference](/reference/rpc)                          | Ready         | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [`openclaw agent`](/cli/agent)                                   | Ready         | One-shot script integration when shelling out to the CLI is enough.                           |
+| [`openclaw message`](/cli/message)                               | Ready         | Sending messages or channel actions from scripts.                                             |
 
 ## Recommended path
 
@@ -62,24 +64,34 @@ host-neutral suspension handshake:
 4. If it is `ready`, save the returned `suspensionId`, then freeze or snapshot
    the process before `expiresAtMs`.
 5. After thaw, or if suspension is abandoned, call `gateway.suspend.resume`
-   with that `suspensionId` over the existing WebSocket or Admin HTTP control
-   path.
+   with that `suspensionId` over the existing or a newly authenticated
+   WebSocket. The CLI equivalents are `openclaw gateway suspend` and
+   `openclaw gateway resume <suspensionId>`.
 
-A prepared Gateway rejects new WebSocket handshakes. A WebSocket controller
-must keep its authenticated connection open across the host operation. If that
-cannot be guaranteed, enable and use the
-[Admin HTTP RPC plugin](/plugins/admin-http-rpc) before preparing. If the
-control path is lost, wait for the two-minute lease to expire before
-reconnecting; expiry reopens admission automatically.
+A prepared Gateway accepts authenticated WebSocket connects, but fences every
+method except `gateway.suspend.*` and one exact predecessor-bound restart. That
+exception requires a non-safe `gateway.restart.request` whose `target` matches
+the live Gateway lock; safe and untargeted restart requests remain fenced.
+Controllers may reconnect after thaw and call resume. The
+[Admin HTTP RPC plugin](/plugins/admin-http-rpc) remains available for hosts
+that cannot speak WebSocket at all. If every control path is lost, the
+two-minute lease expiry reopens admission automatically.
 
 The RPC contract is:
 
 - `gateway.suspend.prepare` — `operator.admin`; params
-  `{ "requestId": "stable-host-operation-id" }`
+  `{ "requestId": "stable-host-operation-id", "terminalPolicy": "preserve" }`
 - `gateway.suspend.status` — `operator.read`; params
   `{ "suspensionId": "id-from-prepare" }`
 - `gateway.suspend.resume` — `operator.admin`; params
   `{ "suspensionId": "id-from-prepare" }`
+
+`terminalPolicy` is optional and accepts only `"preserve"` or `"terminate"`.
+Omitting it defaults to `"preserve"`, so open terminal sessions block normal
+host suspension. A caller preparing an update that will terminate the Gateway
+may explicitly use `"terminate"`; this ignores open process-local terminal
+sessions only. Terminal persistence activity and all other tracked work still
+block preparation.
 
 IDs are trimmed, must contain a non-whitespace character, and are limited to
 128 characters. A busy prepare result has `status: "busy"`, `reason`,
@@ -176,6 +188,8 @@ plugins loaded by OpenClaw.
 
 ## Related
 
+- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
+- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
 - [Gateway protocol](/gateway/protocol)
 - [Gateway RPC reference](/reference/rpc)
 - [CLI agent command](/cli/agent)

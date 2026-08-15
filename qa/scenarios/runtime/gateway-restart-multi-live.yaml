@@ -3,13 +3,13 @@ title: Live OpenAI multi-restart task recovery
 scenario:
   id: gateway-restart-multi-live
   surface: runtime
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
-      - runtime.restart-recovery
+      - session-memory.recovery-restart-recovery
     secondary:
-      - runtime.gateway-restart
-      - runtime.delivery
+      - gateway.restart-and-stop-gateway-restart
+      - session-memory.recovery-delivery
   gatewayRuntime:
     preserveDebugArtifacts: true
   gatewayConfigPatch:
@@ -26,12 +26,12 @@ scenario:
     - The Gateway child and qa-channel recover after every replacement without a user follow-up.
     - Restart-safe policy remains active, the unsafe probe stays unavailable, and the completed audit is delivered exactly once.
   docsRefs:
-    - docs/reference/code-mode.md
+    - docs/tools/code-mode.md
     - docs/channels/qa-channel.md
   codeRefs:
     - extensions/qa-lab/src/suite-runtime-agent-session.ts
     - extensions/qa-lab/src/suite-runtime-gateway.ts
-    - src/agents/main-session-restart-recovery.ts
+    - src/agents/main-session-recovery/main-session-restart-recovery.ts
   execution:
     kind: flow
     summary: Run a fixture-backed audit with GPT-5.4 while replacing the Gateway child three times at durable wait checkpoints.

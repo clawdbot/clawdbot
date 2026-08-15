@@ -1,72 +1,58 @@
-import type { ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SCP_STDERR_TAIL_CHARS, testing } from "./stage-sandbox-media.js";
+import { testing } from "./stage-sandbox-media.test-support.js";
+
+const SCP_STDERR_TAIL_CHARS = 16_384;
 
 const hasUnpairedUtf16Surrogate = (text: string): boolean =>
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const { runCommandWithTimeoutMock } = vi.hoisted(() => ({
+  runCommandWithTimeoutMock: vi.fn(),
+}));
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    spawn: spawnMock,
-  };
-});
+vi.mock("../../process/exec.js", () => ({
+  runCommandWithTimeout: runCommandWithTimeoutMock,
+}));
 
 describe("scpFile", () => {
   beforeEach(() => {
-    spawnMock.mockReset();
+    runCommandWithTimeoutMock.mockReset();
   });
 
-  function createChild() {
-    const stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
-    const kill = vi.fn(() => true);
-    const child = Object.assign(new EventEmitter(), { kill, stderr });
-    spawnMock.mockReturnValue(child as unknown as ChildProcess);
-    return { child, kill, stderr };
-  }
+  it("runs scp through the canonical bounded wrapper", async () => {
+    runCommandWithTimeoutMock.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
 
-  it("keeps child close authoritative when stderr emits an error", async () => {
-    const { child, kill, stderr } = createChild();
-
-    const resultPromise = testing.scpFile("host", "/remote/path", "/local/path");
-
-    expect(() => stderr.emit("error", new Error("stderr EPIPE"))).not.toThrow();
-    expect(kill).not.toHaveBeenCalled();
-    child.emit("close", 0);
-
-    await expect(resultPromise).resolves.toBeUndefined();
-  });
-
-  it("includes the stderr stream error when scp exits unsuccessfully", async () => {
-    const { child, stderr } = createChild();
-
-    const resultPromise = testing.scpFile("host", "/remote/path", "/local/path");
-    stderr.emit("error", new Error("stderr EPIPE"));
-    child.emit("close", 1);
-
-    await expect(resultPromise).rejects.toThrow("scp failed (1): stderr EPIPE");
+    await expect(testing.scpFile("host", "/remote/path", "/local/path")).resolves.toBeUndefined();
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      [
+        "scp",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "--",
+        "host:/remote/path",
+        "/local/path",
+      ],
+      { maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 } },
+    );
   });
 
   it("surfaces UTF-16 safe scp stderr when transfer fails with emoji at tail boundary", async () => {
-    const { child, stderr } = createChild();
     // Place the retained tail window on the emoji's low surrogate so raw slicing
     // would keep a lone surrogate half before the thrown error is built.
     const lowSurrogateTailStart = 100;
     const padding = "n".repeat(lowSurrogateTailStart - 1);
     const recent = "🤖" + "n".repeat(SCP_STDERR_TAIL_CHARS - 5) + "fail";
-
-    const resultPromise = testing.scpFile("host", "/remote/path", "/local/path");
-    stderr.emit("data", padding);
-    stderr.emit("data", recent);
-    child.emit("close", 1);
+    runCommandWithTimeoutMock.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr: `${padding}${recent}`,
+    });
 
     let message = "";
     try {
-      await resultPromise;
+      await testing.scpFile("host", "/remote/path", "/local/path");
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -76,13 +62,10 @@ describe("scpFile", () => {
     expect(hasUnpairedUtf16Surrogate(message)).toBe(false);
   });
 
-  it("does not terminate scp again when spawning fails", async () => {
-    const { child, kill } = createChild();
+  it("preserves wrapper execution errors", async () => {
+    const spawnError = new Error("spawn failed");
+    runCommandWithTimeoutMock.mockRejectedValue(spawnError);
 
-    const resultPromise = testing.scpFile("host", "/remote/path", "/local/path");
-    child.emit("error", new Error("spawn failed"));
-
-    await expect(resultPromise).rejects.toThrow("spawn failed");
-    expect(kill).not.toHaveBeenCalled();
+    await expect(testing.scpFile("host", "/remote/path", "/local/path")).rejects.toBe(spawnError);
   });
 });

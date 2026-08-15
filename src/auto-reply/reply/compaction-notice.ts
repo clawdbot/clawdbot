@@ -1,4 +1,6 @@
-// Shared user-facing compaction notice payload helpers.
+// Shared compaction formatting and user-facing notice payload helpers.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -17,17 +19,33 @@ const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
   memory_flush_degraded: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
 };
 
+export function formatCompactionModelRef(provider?: string, model?: string): string {
+  const normalizedProvider = normalizeOptionalString(provider);
+  const normalizedModel = normalizeOptionalString(model);
+  if (normalizedProvider && normalizedModel) {
+    return `${sanitizeForLog(normalizedProvider)}/${sanitizeForLog(normalizedModel)}`;
+  }
+  if (normalizedProvider) {
+    return sanitizeForLog(normalizedProvider);
+  }
+  if (normalizedModel) {
+    return sanitizeForLog(normalizedModel);
+  }
+  return "unknown model";
+}
+
 export function shouldNotifyUserAboutCompaction(cfg?: OpenClawConfig): boolean {
   return cfg?.agents?.defaults?.compaction?.notifyUser === true;
 }
 
 export function createCompactionNoticePayload(params: {
   phase: CompactionNoticePhase;
+  text?: string;
   currentMessageId?: string;
   applyReplyToMode?: (payload: ReplyPayload) => ReplyPayload;
 }): ReplyPayload {
   const payload: ReplyPayload = {
-    text: COMPACTION_NOTICE_TEXT[params.phase],
+    text: params.text ?? COMPACTION_NOTICE_TEXT[params.phase],
     ...(params.currentMessageId ? { replyToId: params.currentMessageId } : {}),
     replyToCurrent: true,
     isCompactionNotice: true,

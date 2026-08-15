@@ -18,8 +18,8 @@ import {
 } from "../../net.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
 
-export const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
-export const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
+const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
+const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 type PairingLocalityKind =
   | "direct_local"
   | "cli_container_local"
@@ -42,6 +42,16 @@ type HandshakeConnectAuth = {
   approvalRuntimeToken?: string;
   agentRuntimeIdentityToken?: string;
 };
+
+export function isNativeAppUiClient(client: ConnectParams["client"]): boolean {
+  return (
+    client.mode === GATEWAY_CLIENT_MODES.UI &&
+    (client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.LINUX_APP ||
+      client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.ANDROID_APP)
+  );
+}
 
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
   const trimmedOrigin = requestOrigin?.trim();
@@ -79,6 +89,7 @@ export function resolveHandshakeBrowserSecurityContext(params: {
 }
 
 export function shouldAllowSilentLocalPairing(params: {
+  autoApproveLocal?: boolean;
   locality: PairingLocalityKind;
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
@@ -90,6 +101,12 @@ export function shouldAllowSilentLocalPairing(params: {
     return false;
   }
   if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
+    return false;
+  }
+  // Operators can require explicit approval for pairing and access upgrades.
+  // Metadata-only reconnect refreshes stay automatic to avoid approval churn
+  // after benign client or OS metadata changes.
+  if (params.autoApproveLocal === false && params.reason !== "metadata-upgrade") {
     return false;
   }
   if (

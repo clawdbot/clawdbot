@@ -6,7 +6,7 @@ import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 // Gateway auth mode validation keeps ambiguous token/password configs out of
 // runtime credential resolution. The resolver can preserve precedence only
 // after config names the intended mode.
-export const EXPLICIT_GATEWAY_AUTH_MODE_REQUIRED_ERROR =
+const EXPLICIT_GATEWAY_AUTH_MODE_REQUIRED_ERROR =
   "Invalid config: gateway.auth.token and gateway.auth.password are both configured, but gateway.auth.mode is unset. Set gateway.auth.mode to token or password.";
 
 /** Returns true when local gateway auth config needs an explicit token/password mode. */

@@ -6,9 +6,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  runWithGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   coreDrainPendingDeliveries: vi.fn(async () => {}),
@@ -16,8 +16,8 @@ const mocks = vi.hoisted(() => ({
   deliverRuntimeModuleLoads: 0,
 }));
 
-vi.mock("../infra/outbound/delivery-queue.js", () => ({
-  drainPendingDeliveries: mocks.coreDrainPendingDeliveries,
+vi.mock("../infra/outbound/delivery-queue-recovery.js", () => ({
+  drainPendingDeliveriesCore: mocks.coreDrainPendingDeliveries,
 }));
 
 vi.mock("../infra/outbound/deliver-runtime.js", () => {
@@ -91,7 +91,7 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
     });
     const deliver = vi.fn(async () => []);
 
-    await runWithGatewayRootWorkAdmission(async () => {
+    await runWithGatewayRootWorkAdmissionForTest(async () => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       const pending = drainPendingDeliveries({
         drainKey: "demo:test",

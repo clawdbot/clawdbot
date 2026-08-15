@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAttachGrantsForTest, resolveAttachGrant } from "../mcp-grant-store.js";
+import { resolveAttachGrant } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer } from "../mcp-http.js";
 import { attachHandlers } from "./attach.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -25,14 +25,23 @@ const grantOpts = (sessionKey: string, respond: ReturnType<typeof vi.fn>) =>
     context: { getRuntimeConfig: () => ({}) },
   }) as unknown as GatewayRequestHandlerOptions;
 
+const grantWithAgentOpts = (agentId: string, respond: ReturnType<typeof vi.fn>) =>
+  ({
+    params: { agentId },
+    respond,
+    context: {
+      getRuntimeConfig: () => ({
+        agents: { ownership: "explicit", list: [{ id: agentId }, { id: "other" }] },
+      }),
+    },
+  }) as unknown as GatewayRequestHandlerOptions;
+
 describe("attach gateway methods", () => {
   beforeEach(() => {
-    resetAttachGrantsForTest();
     loadSessionEntryMock.mockReset();
     loadSessionEntryMock.mockReturnValue({ entry: undefined });
   });
   afterEach(async () => {
-    resetAttachGrantsForTest();
     // attach.grant lazily starts the loopback singleton; close it so it doesn't leak across files.
     await closeMcpLoopbackServer();
   });
@@ -64,6 +73,17 @@ describe("attach gateway methods", () => {
     expect(resolveAttachGrant(body.token)?.sessionKey).toBe("agent:main:attach-method");
   });
 
+  it("uses an explicit agent for an omitted session key", async () => {
+    const respond = vi.fn();
+    await expectDefined(
+      attachHandlers["attach.grant"],
+      'attachHandlers["attach.grant"] test invariant',
+    )(grantWithAgentOpts("research", respond));
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    const result = respond.mock.calls[0]?.[1] as { sessionKey?: string } | undefined;
+    expect(result?.sessionKey).toBe("agent:research:main");
+  });
   it("rejects attach grants for reserved harness sessions", async () => {
     const respond = vi.fn();
     await expectDefined(

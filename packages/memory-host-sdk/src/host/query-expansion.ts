@@ -1,12 +1,12 @@
 // Memory Host SDK module implements query expansion behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /**
- * Query expansion for FTS-only search mode.
+ * Query expansion for lexical FTS search.
  *
- * When no embedding provider is available, we fall back to FTS (full-text search).
  * FTS works best with specific keywords, but users often ask conversational queries
- * like "that thing we discussed yesterday" or "之前讨论的那个方案".
+ * like "that thing we discussed yesterday" or "之前讨论的那个方案". This helps both
+ * hybrid retrieval and FTS-only fallback mode find those keywords.
  *
  * This module extracts meaningful keywords from such queries to improve FTS results.
  */

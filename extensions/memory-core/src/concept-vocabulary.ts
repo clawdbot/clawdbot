@@ -247,7 +247,6 @@ const PROTECTED_GLOSSARY = [
   "kv",
   "network",
   "openai",
-  "qmd",
   "router",
   "s3",
   "vlan",
@@ -295,7 +294,7 @@ function containsLetterOrNumber(value: string): boolean {
   return LETTER_OR_NUMBER_RE.test(value);
 }
 
-export function classifyConceptTagScript(tag: string): ConceptTagScriptFamily {
+function classifyConceptTagScript(tag: string): ConceptTagScriptFamily {
   const normalized = tag.normalize("NFKC");
   const hasLatin = LATIN_RE.test(normalized);
   const hasCjk =
@@ -437,7 +436,10 @@ export function deriveConceptTags(params: {
   snippet: string;
   limit?: number;
 }): string[] {
-  const source = `${path.basename(params.path)} ${params.snippet}`;
+  // Recall annotations are control metadata; deriving tags from them can turn
+  // project identities into promoted triggers instead of user-visible concepts.
+  const visibleSnippet = params.snippet.replace(/<!--[\s\S]*?-->/gu, " ");
+  const source = `${path.basename(params.path)} ${visibleSnippet}`;
   const limit = Number.isFinite(params.limit)
     ? Math.max(0, Math.floor(params.limit as number))
     : MAX_CONCEPT_TAGS;

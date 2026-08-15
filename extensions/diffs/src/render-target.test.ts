@@ -1,23 +1,12 @@
 // Diffs tests cover render target plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { preloadFileDiffMock, preloadMultiFileDiffMock } = vi.hoisted(() => ({
-  preloadFileDiffMock: vi.fn(async ({ fileDiff }: { fileDiff: unknown }) => ({
-    prerenderedHTML: "<div>mock diff</div>",
-    fileDiff,
-  })),
-  preloadMultiFileDiffMock: vi.fn(
-    async ({ oldFile, newFile }: { oldFile: unknown; newFile: unknown }) => ({
-      prerenderedHTML: "<div>mock diff</div>",
-      oldFile,
-      newFile,
-    }),
-  ),
+const { preloadDiffHTMLMock } = vi.hoisted(() => ({
+  preloadDiffHTMLMock: vi.fn(async () => "<div>mock diff</div>"),
 }));
 
 vi.mock("@pierre/diffs/ssr", () => ({
-  preloadFileDiff: preloadFileDiffMock,
-  preloadMultiFileDiff: preloadMultiFileDiffMock,
+  preloadDiffHTML: preloadDiffHTMLMock,
 }));
 
 afterAll(() => {
@@ -25,9 +14,10 @@ afterAll(() => {
   vi.resetModules();
 });
 
-import { DEFAULT_DIFFS_TOOL_DEFAULTS, resolveDiffImageRenderOptions } from "./config.js";
+import { resolveDiffImageRenderOptions, resolveDiffsPluginDefaults } from "./config.js";
 import { renderDiffDocument } from "./render.js";
-import { parseViewerPayloadJson } from "./viewer-payload.js";
+
+const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
 
 function createRenderOptions() {
   return {
@@ -39,8 +29,7 @@ function createRenderOptions() {
 
 describe("renderDiffDocument render targets", () => {
   beforeEach(() => {
-    preloadFileDiffMock.mockClear();
-    preloadMultiFileDiffMock.mockClear();
+    preloadDiffHTMLMock.mockClear();
   });
 
   it("renders only the viewer variant for before/after viewer mode", async () => {
@@ -56,7 +45,7 @@ describe("renderDiffDocument render targets", () => {
 
     expect(rendered.html).toContain("mock diff");
     expect(rendered.imageHtml).toBeUndefined();
-    expect(preloadMultiFileDiffMock).toHaveBeenCalledTimes(1);
+    expect(preloadDiffHTMLMock).toHaveBeenCalledTimes(1);
   });
 
   it("renders both variants for before/after both mode", async () => {
@@ -72,7 +61,7 @@ describe("renderDiffDocument render targets", () => {
 
     expect(rendered.html).toContain("mock diff");
     expect(rendered.imageHtml).toContain("mock diff");
-    expect(preloadMultiFileDiffMock).toHaveBeenCalledTimes(1);
+    expect(preloadDiffHTMLMock).toHaveBeenCalledTimes(1);
   });
 
   it("renders only the image variant for patch image mode", async () => {
@@ -94,40 +83,6 @@ describe("renderDiffDocument render targets", () => {
 
     expect(rendered.html).toBeUndefined();
     expect(rendered.imageHtml).toContain("mock diff");
-    expect(preloadFileDiffMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("normalizes stale patch payload languages before serializing viewer output", async () => {
-    preloadFileDiffMock.mockResolvedValueOnce({
-      prerenderedHTML: "<div>mock diff</div>",
-      fileDiff: {
-        name: "a.ts",
-        lang: "not-a-real-language",
-      },
-    });
-
-    const rendered = await renderDiffDocument(
-      {
-        kind: "patch",
-        patch: [
-          "diff --git a/a.ts b/a.ts",
-          "--- a/a.ts",
-          "+++ b/a.ts",
-          "@@ -1 +1 @@",
-          "-a",
-          "+b",
-        ].join("\n"),
-      },
-      createRenderOptions(),
-      "viewer",
-    );
-
-    const payloads = [
-      ...(rendered.html ?? "").matchAll(/data-openclaw-diff-payload>(.*?)<\/script>/g),
-    ].map((match) => parseViewerPayloadJson(match[1] ?? ""));
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.langs).toEqual(["text"]);
-    expect(payloads[0]?.fileDiff?.lang).toBe("text");
+    expect(preloadDiffHTMLMock).toHaveBeenCalledTimes(1);
   });
 });

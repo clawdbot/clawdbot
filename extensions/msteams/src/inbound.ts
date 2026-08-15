@@ -1,4 +1,6 @@
 // Msteams plugin module implements inbound behavior.
+import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
+
 type MSTeamsQuoteInfo = {
   sender: string;
   body: string;
@@ -11,29 +13,13 @@ type MSTeamsQuoteInfo = {
 };
 
 /**
- * Decode common HTML entities to plain text.
- */
-export function decodeHtmlEntities(html: string): string {
-  return html
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&"); // must be last to prevent double-decoding (e.g. &amp;lt; → &lt; not <)
-}
-
-/**
  * Strip HTML tags, preserving text content.
  */
-export function htmlToPlainText(html: string): string {
-  return decodeHtmlEntities(
-    html
-      .replace(/<[^>]*>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim(),
-  );
+function htmlToPlainText(html: string): string {
+  return decodeHtmlEntities(html.replace(/<[^>]*>/g, " "))
+    .replaceAll("\u00a0", " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**

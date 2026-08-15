@@ -4,7 +4,7 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
-import { createPluginRecord } from "./status.test-helpers.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 describe("plugin registry Control UI descriptors", () => {
   it("keeps legacy flat descriptors loadable for shipped JavaScript plugins", () => {
@@ -67,6 +67,34 @@ describe("plugin registry Control UI descriptors", () => {
           group: "control",
           order: 5,
           requiredScopes: ["operator.read"],
+        }),
+      }),
+    ]);
+  });
+
+  it("accepts trusted dashboard widget descriptors", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "workboard", name: "Workboard" }),
+      register(api) {
+        api.session.controls.registerControlUiDescriptor({
+          surface: "widget",
+          id: "card",
+          label: "Workboard card",
+          requiredScopes: ["operator.read"],
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiDescriptors).toEqual([
+      expect.objectContaining({
+        pluginId: "workboard",
+        descriptor: expect.objectContaining({
+          id: "card",
+          surface: "widget",
+          label: "Workboard card",
         }),
       }),
     ]);

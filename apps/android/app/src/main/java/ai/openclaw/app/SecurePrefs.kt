@@ -5,6 +5,7 @@ package ai.openclaw.app
 import ai.openclaw.app.gateway.GatewayCustomHeaders
 import ai.openclaw.app.gateway.GatewayRegistryStore
 import ai.openclaw.app.gateway.GatewayStoreMigration
+import ai.openclaw.app.voice.VoiceWakePreferences
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
@@ -61,8 +62,13 @@ class SecurePrefs(
     private const val installedAppsDisclosureConsentVersionKey =
       "device.apps.prominentDisclosure.consentVersion"
     private const val currentInstalledAppsDisclosureConsentVersion = 1
+    private const val accessibilityControlEnabledKey = "mobileUi.accessibilityControl.enabled"
     private const val cameraEnabledKey = "camera.enabled"
+    private const val preferredCameraFacingKey = "camera.preferredFacing"
     private const val voiceMicEnabledKey = "voice.micEnabled"
+    private const val preferredAudioInputDeviceKey = "voice.preferredAudioInputDevice"
+    private const val voiceWakeEnabledKey = "voiceWake.enabled"
+    private const val voiceWakeWordsKey = "voiceWake.triggerWords"
     private const val appearanceThemeModeKey = "appearance.themeMode"
     private const val chatModelFavoritesKey = "chat.modelFavorites"
     private const val chatModelRecentsKey = "chat.modelRecents"
@@ -150,6 +156,10 @@ class SecurePrefs(
     MutableStateFlow(loadInstalledAppsSharingEnabled())
   val installedAppsSharingEnabled: StateFlow<Boolean> = _installedAppsSharingEnabled
 
+  private val _accessibilityControlEnabled =
+    MutableStateFlow(plainPrefs.getBoolean(accessibilityControlEnabledKey, false))
+  val accessibilityControlEnabled: StateFlow<Boolean> = _accessibilityControlEnabled
+
   private val _notificationForwardingEnabled =
     MutableStateFlow(plainPrefs.getBoolean(notificationsForwardingEnabledKey, defaultNotificationForwardingEnabled))
   val notificationForwardingEnabled: StateFlow<Boolean> = _notificationForwardingEnabled
@@ -198,8 +208,22 @@ class SecurePrefs(
   private val _voiceMicEnabled = MutableStateFlow(plainPrefs.getBoolean(voiceMicEnabledKey, false))
   val voiceMicEnabled: StateFlow<Boolean> = _voiceMicEnabled
 
+  private val _voiceWakeEnabled = MutableStateFlow(plainPrefs.getBoolean(voiceWakeEnabledKey, false))
+  val voiceWakeEnabled: StateFlow<Boolean> = _voiceWakeEnabled
+
+  private val _voiceWakeWords = MutableStateFlow(loadVoiceWakeWords())
+  val voiceWakeWords: StateFlow<List<String>> = _voiceWakeWords
+
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
+
+  private val _preferredCameraFacing =
+    MutableStateFlow(plainPrefs.getString(preferredCameraFacingKey, null).takeIf { it == "back" } ?: "front")
+  val preferredCameraFacing: StateFlow<String> = _preferredCameraFacing
+
+  private val _preferredAudioInputDevice =
+    MutableStateFlow(plainPrefs.getString(preferredAudioInputDeviceKey, null)?.takeIf(String::isNotBlank))
+  val preferredAudioInputDevice: StateFlow<String?> = _preferredAudioInputDevice
 
   private val _appearanceThemeMode =
     MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
@@ -293,6 +317,11 @@ class SecurePrefs(
       remove(installedAppsDisclosureConsentVersionKey)
     }
     _installedAppsSharingEnabled.value = false
+  }
+
+  fun setAccessibilityControlEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(accessibilityControlEnabledKey, value) }
+    _accessibilityControlEnabled.value = value
   }
 
   private fun loadInstalledAppsSharingEnabled(): Boolean {
@@ -518,6 +547,13 @@ class SecurePrefs(
     securePrefs.edit { putString(key, value) }
   }
 
+  // KTX edit(commit = true) discards commit's Boolean; the identity migration fails closed on it.
+  @Suppress("UseKtx")
+  internal fun putStringSynchronously(
+    key: String,
+    value: String,
+  ): Boolean = securePrefs.edit().putString(key, value).commit()
+
   fun remove(key: String) {
     securePrefs.edit { remove(key) }
   }
@@ -621,9 +657,44 @@ class SecurePrefs(
     _voiceMicEnabled.value = value
   }
 
+  fun setVoiceWakeEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(voiceWakeEnabledKey, value) }
+    _voiceWakeEnabled.value = value
+  }
+
+  fun setVoiceWakeWords(words: List<String>) {
+    val sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
+    plainPrefs.edit { putString(voiceWakeWordsKey, JsonArray(sanitized.map(::JsonPrimitive)).toString()) }
+    _voiceWakeWords.value = sanitized
+  }
+
   fun setSpeakerEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
     _speakerEnabled.value = value
+  }
+
+  fun setPreferredCameraFacing(value: String) {
+    val facing = value.takeIf { it == "back" } ?: "front"
+    plainPrefs.edit { putString(preferredCameraFacingKey, facing) }
+    _preferredCameraFacing.value = facing
+  }
+
+  fun setPreferredAudioInputDevice(value: String?) {
+    val key = value?.takeIf(String::isNotBlank)
+    plainPrefs.edit {
+      if (key == null) remove(preferredAudioInputDeviceKey) else putString(preferredAudioInputDeviceKey, key)
+    }
+    _preferredAudioInputDevice.value = key
+  }
+
+  private fun loadVoiceWakeWords(): List<String> {
+    val stored = plainPrefs.getString(voiceWakeWordsKey, null) ?: return VoiceWakePreferences.defaultTriggerWords
+    val decoded =
+      runCatching {
+        (json.parseToJsonElement(stored) as? JsonArray)
+          ?.mapNotNull { (it as? JsonPrimitive)?.content }
+      }.getOrNull()
+    return VoiceWakePreferences.sanitizeTriggerWords(decoded.orEmpty())
   }
 
   fun setAppearanceThemeMode(mode: AppearanceThemeMode) {

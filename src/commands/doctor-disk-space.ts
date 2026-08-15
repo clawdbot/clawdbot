@@ -40,9 +40,8 @@ export function formatBytes(bytes: number): string {
 
 /**
  * Build warning lines based on available disk space.
- * Pure function — exported for testing without FS side effects.
  */
-export function buildDiskSpaceWarnings(params: {
+function buildDiskSpaceWarnings(params: {
   availableBytes: number;
   displayStateDir: string;
 }): string[] {

@@ -10,7 +10,7 @@ import OSLog
 /// silently failing playback can never hang the talk loop. Shared by the iOS
 /// and macOS talk runtimes.
 @MainActor
-public final class TalkBufferedAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
+public final class TalkBufferedAudioPlayer: NSObject {
     public static let shared = TalkBufferedAudioPlayer()
 
     override public init() {
@@ -168,4 +168,12 @@ public final class TalkBufferedAudioPlayer: NSObject, @preconcurrency AVAudioPla
         })
     }
 }
+
+// SDK 27 imports AVAudioPlayerDelegate with compatible isolation. Older SDKs
+// still need the preconcurrency bridge for this main-actor implementation.
+#if compiler(>=6.4)
+extension TalkBufferedAudioPlayer: AVAudioPlayerDelegate {}
+#else
+extension TalkBufferedAudioPlayer: @preconcurrency AVAudioPlayerDelegate {}
+#endif
 #endif

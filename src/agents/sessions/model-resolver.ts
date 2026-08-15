@@ -330,9 +330,10 @@ export interface ResolveCliModelResult {
 export function resolveCliModel(options: {
   cliProvider?: string;
   cliModel?: string;
+  cliThinking?: ThinkingLevel;
   modelRegistry: ModelRegistry;
 }): ResolveCliModelResult {
-  const { cliProvider, cliModel, modelRegistry } = options;
+  const { cliProvider, cliModel, cliThinking, modelRegistry } = options;
 
   if (!cliModel) {
     return { model: undefined, warning: undefined, error: undefined };
@@ -443,14 +444,32 @@ export function resolveCliModel(options: {
   }
 
   if (provider) {
-    const fallbackModel = buildFallbackModel(provider, pattern, availableModels);
+    let fallbackPattern = pattern;
+    let fallbackThinking: ThinkingLevel | undefined;
+    if (!cliThinking) {
+      const lastColon = pattern.lastIndexOf(":");
+      if (lastColon !== -1) {
+        const suffix = pattern.slice(lastColon + 1);
+        if (isValidThinkingLevel(suffix)) {
+          fallbackPattern = pattern.slice(0, lastColon);
+          fallbackThinking = suffix;
+        }
+      }
+    }
+
+    const fallbackModel = buildFallbackModel(provider, fallbackPattern, availableModels);
     if (fallbackModel) {
+      const requestedThinking = cliThinking ?? fallbackThinking;
+      const resolvedModel =
+        requestedThinking && requestedThinking !== "off"
+          ? { ...fallbackModel, reasoning: true }
+          : fallbackModel;
       const fallbackWarning = warning
-        ? `${warning} Model "${pattern}" not found for provider "${provider}". Using custom model id.`
-        : `Model "${pattern}" not found for provider "${provider}". Using custom model id.`;
+        ? `${warning} Model "${fallbackPattern}" not found for provider "${provider}". Using custom model id.`
+        : `Model "${fallbackPattern}" not found for provider "${provider}". Using custom model id.`;
       return {
-        model: fallbackModel,
-        thinkingLevel: undefined,
+        model: resolvedModel,
+        thinkingLevel: requestedThinking,
         warning: fallbackWarning,
         error: undefined,
       };
@@ -518,7 +537,7 @@ export async function findInitialModel(options: {
     if (resolved.model) {
       return {
         model: resolved.model,
-        thinkingLevel: DEFAULT_THINKING_LEVEL,
+        thinkingLevel: resolved.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
         fallbackMessage: undefined,
       };
     }
@@ -537,10 +556,10 @@ export async function findInitialModel(options: {
     };
   }
 
-  // 3. Try saved default from settings
+  // 3. Try saved default from settings when its auth is configured
   if (defaultProvider && defaultModelId) {
     const found = modelRegistry.find(defaultProvider, defaultModelId);
-    if (found) {
+    if (found && modelRegistry.hasConfiguredAuth(found)) {
       model = found;
       if (defaultThinkingLevel) {
         thinkingLevel = defaultThinkingLevel;

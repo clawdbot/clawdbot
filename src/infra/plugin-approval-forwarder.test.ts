@@ -1,6 +1,6 @@
 // Covers plugin approval forwarding through channel capabilities.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -427,6 +427,7 @@ describe("plugin approval forwarding", () => {
       await registerPendingApproval(forwarder, deliver);
 
       await forwarder.handlePluginApprovalResolved!(makePluginResolved());
+      await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
       const text = firstDeliveredPayload(deliver)?.text ?? "";
       expect(text).toContain("Plugin approval");

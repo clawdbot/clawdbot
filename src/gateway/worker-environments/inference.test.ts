@@ -4,14 +4,33 @@ import type {
   WorkerInferenceTerminalFrame,
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerInferenceSessionDrain } from "./inference-control-internal.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import {
   createWorkerInferenceManager,
   type WorkerInferenceExecutor,
   type WorkerInferenceSink,
 } from "./inference.js";
+
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
+function beginSessionDrain(
+  manager: ReturnType<typeof createWorkerInferenceManager>,
+  sessionId: string,
+): WorkerInferenceSessionDrain {
+  return (
+    manager as typeof manager & {
+      beginSessionDrain(sessionId: string): WorkerInferenceSessionDrain;
+    }
+  ).beginSessionDrain(sessionId);
+}
 
 const REQUEST: WorkerInferenceStartParams = {
   runEpoch: 3,
@@ -27,6 +46,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialHash: "d",
   bundleHash: "b",
   sessionId: REQUEST.sessionId,
+  runId: REQUEST.runId,
   ownerEpoch: REQUEST.runEpoch,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
@@ -36,6 +56,26 @@ const ERROR: WorkerInferenceTerminalOutcome = {
   type: "error",
   reason: "provider-error",
   message: "Provider request failed",
+};
+const DONE: WorkerInferenceTerminalOutcome = {
+  type: "done",
+  message: {
+    role: "assistant",
+    content: [{ type: "text", text: "done" }],
+    api: "openai-responses",
+    provider: REQUEST.modelRef.provider,
+    model: REQUEST.modelRef.model,
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  },
 };
 const CANCEL = {
   runEpoch: REQUEST.runEpoch,
@@ -142,7 +182,7 @@ describe("worker inference manager", () => {
     }, store);
     const sink = createSink();
     accept(instance, { sink: sink.sink });
-    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    await waitForFast(() => expect(signals).toHaveLength(1));
     for (let index = 0; index < 2; index += 1) {
       expect(instance.cancel({ identity: IDENTITY, request: CANCEL })).toEqual({
         ok: true,
@@ -151,9 +191,56 @@ describe("worker inference manager", () => {
     }
     expect(signals[0]?.aborted).toBe(true);
     accept(instance, { request: { ...REQUEST, runId: "new-run", turnId: "new-turn" } });
-    await vi.waitFor(() => expect(signals).toHaveLength(2));
+    await waitForFast(() => expect(signals).toHaveLength(2));
     expect(instance.cancelSession(REQUEST.sessionId, "new-run")).toEqual(["new-run"]);
     expect(signals[1]?.aborted).toBe(true);
+    await instance.stop();
+  });
+
+  it("blocks replacement inference until an exact session drain settles", async () => {
+    const pending = createDeferred<WorkerInferenceTerminalOutcome>();
+    const execute = vi.fn<WorkerInferenceExecutor>(async () => await pending.promise);
+    const instance = makeManager(execute);
+    accept(instance);
+    await waitForFast(() => expect(execute).toHaveBeenCalledOnce());
+
+    const drain = beginSessionDrain(instance, REQUEST.sessionId);
+    expect(drain.hasWork()).toBe(true);
+    expect(
+      instance.start({
+        identity: IDENTITY,
+        request: { ...REQUEST, runId: "replacement", turnId: "replacement" },
+        sink: createSink().sink,
+      }),
+    ).toEqual({ ok: false, reason: "cancelled" });
+
+    pending.resolve(ERROR);
+    await drain.drained;
+    expect(drain.hasWork()).toBe(false);
+    drain.release();
+    expect(
+      instance.start({
+        identity: IDENTITY,
+        request: { ...REQUEST, runId: "replacement", turnId: "replacement" },
+        sink: createSink().sink,
+      }),
+    ).toMatchObject({ ok: true });
+    await instance.stop();
+  });
+
+  it("rejects an inference drain when terminal persistence fails", async () => {
+    const store = createMemoryStore();
+    vi.spyOn(store, "complete").mockImplementation(() => {
+      throw new Error("write failed");
+    });
+    const pending = createDeferred<WorkerInferenceTerminalOutcome>();
+    const instance = makeManager(async () => await pending.promise, store);
+    accept(instance);
+
+    const drain = beginSessionDrain(instance, REQUEST.sessionId);
+    pending.resolve(ERROR);
+    await expect(drain.drained).rejects.toThrow("terminal persistence failed");
+    drain.release();
     await instance.stop();
   });
 
@@ -180,8 +267,8 @@ describe("worker inference manager", () => {
     });
     const sink = createSink();
     accept(instance, { sink: sink.sink });
-    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
-    await vi.waitFor(() =>
+    await waitForFast(() => expect(signal?.aborted).toBe(true));
+    await waitForFast(() =>
       expect(terminalFrames(sink.frames)[0]?.payload.outcome).toMatchObject({
         reason: "provider-error",
       }),
@@ -202,8 +289,65 @@ describe("worker inference manager", () => {
     const sink = createSink();
     const instance = makeManager(async () => ERROR, store);
     accept(instance, { sink: sink.sink });
-    await vi.waitFor(() => expect(store.complete).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(store.complete).toHaveBeenCalledOnce());
     expect(terminalFrames(sink.frames)).toEqual([]);
+    await instance.stop();
+  });
+
+  it("rebinds an active stream on reconnect without a second provider call", async () => {
+    const release = createDeferred();
+    const execute = vi.fn<WorkerInferenceExecutor>(async ({ emit }) => {
+      emit({ type: "text_delta", contentIndex: 0, delta: "first" });
+      await release.promise;
+      emit({ type: "text_delta", contentIndex: 0, delta: "second" });
+      return ERROR;
+    });
+    const instance = makeManager(execute);
+    const first = createSink("first");
+    accept(instance, { sink: first.sink });
+    await waitForFast(() => expect(first.frames).toHaveLength(1));
+
+    const second = createSink("second");
+    expect(accept(instance, { sink: second.sink }).result.status).toBe("accepted");
+    release.resolve();
+
+    await waitForFast(() => expect(terminalFrames(second.frames)).toHaveLength(1));
+    expect(execute).toHaveBeenCalledOnce();
+    expect(terminalFrames(first.frames)).toEqual([]);
+    expect(second.frames[0]).toMatchObject({
+      event: "worker.inference.event",
+      payload: { seq: 2, event: { type: "text_delta", delta: "second" } },
+    });
+    await instance.stop();
+  });
+
+  it("fences an epoch flip between acceptance and the terminal outcome", async () => {
+    let current = true;
+    let signal: AbortSignal | undefined;
+    const pending = createDeferred<WorkerInferenceTerminalOutcome>();
+    const execute = vi.fn<WorkerInferenceExecutor>(({ signal: nextSignal }) => {
+      signal = nextSignal;
+      return pending.promise;
+    });
+    const instance = makeManager(execute);
+    const sink = createSink("epoch-flip");
+    const accepted = accept(
+      instance,
+      { sink: sink.sink, revalidate: () => (current ? null : "epoch-mismatch") },
+      false,
+    );
+    accepted.launch();
+    await waitForFast(() => expect(execute).toHaveBeenCalledOnce());
+
+    current = false;
+    pending.resolve(DONE);
+
+    await waitForFast(() => expect(terminalFrames(sink.frames)).toHaveLength(1));
+    expect(terminalFrames(sink.frames)[0]?.payload.outcome).toMatchObject({
+      reason: "epoch-mismatch",
+    });
+    expect(signal?.aborted).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
     await instance.stop();
   });
 
@@ -234,7 +378,7 @@ describe("worker inference manager", () => {
         throw new Error("revalidation failed");
       },
     });
-    await vi.waitFor(() => expect(terminalFrames(sink.frames)).toHaveLength(1));
+    await waitForFast(() => expect(terminalFrames(sink.frames)).toHaveLength(1));
     expect(terminalFrames(sink.frames)[0]?.payload.outcome).toMatchObject({
       reason: "provider-error",
     });

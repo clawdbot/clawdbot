@@ -65,7 +65,12 @@ export type TranscriptStartRequest = {
   onStatus?: (status: TranscriptSourceStatus) => void | Promise<void>;
 };
 
-/** Result from starting a transcript source provider. */
+/**
+ * Result from starting a transcript source provider.
+ *
+ * Providers retain cleanup ownership until they return `ok: true`. A failed or
+ * rejected start must release any partial capture before it settles.
+ */
 export type TranscriptsStartResult =
   | {
       ok: true;

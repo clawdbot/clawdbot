@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   clearMemoryPluginState,
@@ -12,11 +12,12 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildCodexOpenClawPromptContext,
+  buildCodexWatchedSessionsContext,
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
-  remapCodexContextFilePath,
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
@@ -93,8 +94,6 @@ describe("Codex app-server attempt context", () => {
         bootstrapFiles: [],
         contextFiles: [],
         promptContextFiles: [],
-        developerInstructionFiles: [],
-        heartbeatReferenceFiles: [],
       },
       skillsPrompt: "",
       tools,
@@ -181,12 +180,14 @@ describe("Codex app-server attempt context", () => {
         sessionKey: "agent:marketing-agent:session-1",
         sessionAgentId: "marketing-agent",
         memoryToolNames: ["memory_search", "memory_get"],
+        sandboxed: true,
       });
 
       expect(context.memoryToolRouted).toBe(true);
       expect(observedContext).toMatchObject({
         agentId: "marketing-agent",
         agentSessionKey: "agent:marketing-agent:session-1",
+        sandboxed: true,
       });
       expect(context.memoryCollaborationInstructions).toContain(
         "agent=marketing-agent session=agent:marketing-agent:session-1",
@@ -194,35 +195,6 @@ describe("Codex app-server attempt context", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
-  });
-
-  it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
-    expect(
-      remapCodexContextFilePath({
-        file: {
-          path: "/real/workspace/..context/SOUL.md",
-          content: "Soul voice goes here.",
-        },
-        sourceWorkspaceDir: "/real/workspace",
-        targetWorkspaceDir: "/sandbox/workspace",
-      }),
-    ).toEqual({
-      path: "/sandbox/workspace/..context/SOUL.md",
-      content: "Soul voice goes here.",
-    });
-    expect(
-      remapCodexContextFilePath({
-        file: {
-          path: "/outside/SOUL.md",
-          content: "outside",
-        },
-        sourceWorkspaceDir: "/real/workspace",
-        targetWorkspaceDir: "/sandbox/workspace",
-      }),
-    ).toEqual({
-      path: "/outside/SOUL.md",
-      content: "outside",
-    });
   });
 
   it("reads and compares thread-bootstrap context-engine projections", () => {
@@ -278,5 +250,48 @@ describe("Codex app-server attempt context", () => {
       project: true,
       reason: "dynamic-tools-mismatch",
     });
+  });
+
+  it("stitches watched-session context into the per-turn OpenClaw prompt context", () => {
+    const attempt = { config: {} } as EmbeddedRunAttemptParams;
+
+    expect(
+      buildCodexOpenClawPromptContext({
+        params: attempt,
+        watchedSessionsContext: [
+          "## Watched Sessions",
+          "- agent:main:telegram:group:beta — Family group",
+        ].join("\n"),
+      }),
+    ).toContain("## Watched Sessions");
+
+    // No ambient watches (and no state) must render nothing, not an empty section.
+    expect(
+      buildCodexWatchedSessionsContext({
+        attempt,
+        dynamicTools: [
+          {
+            type: "function",
+            name: "sessions_history",
+            description: "history",
+            inputSchema: {},
+          },
+        ],
+        sessionKey: "agent:codex-test:main",
+      }),
+    ).toBe(undefined);
+
+    // Lightweight cron turns keep the runtime context byte-for-byte untouched.
+    expect(
+      buildCodexWatchedSessionsContext({
+        attempt: {
+          config: {},
+          bootstrapContextMode: "lightweight",
+          bootstrapContextRunKind: "cron",
+        } as EmbeddedRunAttemptParams,
+        dynamicTools: [],
+        sessionKey: "agent:codex-test:main",
+      }),
+    ).toBe(undefined);
   });
 });

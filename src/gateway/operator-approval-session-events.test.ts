@@ -12,7 +12,6 @@ import { createOperatorApprovalSessionEventRuntime } from "./operator-approval-s
 import {
   insertOperatorApproval,
   resolveOperatorApproval,
-  type NewOperatorApproval,
   type OperatorApprovalRecord,
 } from "./operator-approval-store.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
@@ -23,6 +22,7 @@ const SOURCE_SESSION_KEY = "agent:main:child";
 const PARENT_SESSION_KEY = "agent:main:parent";
 const SIBLING_SESSION_KEY = "agent:main:parent:sibling";
 const tempDirs: string[] = [];
+type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
 
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-events-"));
@@ -541,12 +541,14 @@ describe("operator approval session events", () => {
         managerHolder.current?.reconcileDurableTerminal(record) ?? false,
     });
     const runtime = harness.runtime;
+    const onExpired = vi.fn();
     const manager = new ExecApprovalManager({
       approvalKind: "exec",
       persistence: { runtimeEpoch: "session-events", databaseOptions },
       resolveAllowedDecisions: () => ["allow-once", "deny"],
       resolveAudienceSessionKeys: () => [SOURCE_SESSION_KEY, PARENT_SESSION_KEY],
       onLifecycle: (event) => runtime.publish(event),
+      onExpired,
     });
     managerHolder.current = manager;
     harness.subscribers.subscribe("parent-reviewer", PARENT_SESSION_KEY, {
@@ -572,6 +574,14 @@ describe("operator approval session events", () => {
       truncated: false,
     });
     await expect(decisionPromise).resolves.toBeNull();
+    expect(onExpired).toHaveBeenCalledOnce();
+    expect(onExpired).toHaveBeenCalledWith(
+      expect.objectContaining({ id: record.id, status: "expired" }),
+      expect.objectContaining({
+        id: record.id,
+        request: expect.objectContaining({ command: "printf replay-expiry" }),
+      }),
+    );
     expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
     expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
       "session.approval",

@@ -1,9 +1,8 @@
 /**
- * Activates curated Codex marketplace plugins and keeps require-active
- * marketplaces outside OpenClaw's install authority.
+ * Activates legacy curated Codex plugins while requiring owner-managed
+ * installation for every other marketplace.
  */
-import fs from "node:fs/promises";
-import path from "node:path";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { CodexAppInventoryCache, CodexAppInventoryRequest } from "./app-inventory-cache.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -11,25 +10,30 @@ import {
   type ResolvedCodexPluginPolicy,
 } from "./config.js";
 import {
-  findOpenAiCuratedPluginSummary,
+  findCodexMarketplacePluginSummary,
+  isOpenAiCuratedMarketplace,
+  isOpenAiCuratedMarketplaceName,
   pluginReadParams,
   type CodexPluginMarketplaceRef,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
-import type { v2 } from "./protocol.js";
+import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import type { CodexAppServerRequestResult, v2 } from "./protocol.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 
 /** Terminal reason reported after trying to activate one Codex plugin policy. */
-export type CodexPluginActivationReason =
+type CodexPluginActivationReason =
   | "already_active"
   | "installed"
   | "disabled"
   | "marketplace_missing"
   | "plugin_missing"
+  | "install_failed"
   | "auth_required"
   | "refresh_failed";
 
 /** Human-readable diagnostic emitted during Codex plugin activation. */
-export type CodexPluginActivationDiagnostic = {
+type CodexPluginActivationDiagnostic = {
   message: string;
 };
 
@@ -45,21 +49,25 @@ export type CodexPluginActivationResult = {
 };
 
 /** Inputs for activating one resolved Codex plugin policy. */
-export type EnsureCodexPluginActivationParams = {
+type EnsureCodexPluginActivationParams = {
   identity: ResolvedCodexPluginPolicy;
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  configCwd?: string;
+  metadataCache?: CodexPluginMetadataCache;
   installEvenIfActive?: boolean;
+  /** Thread setup batches app refresh once after all plugin activations. */
+  deferAppInventoryRefresh?: boolean;
   targetAppIds?: readonly string[];
 };
 
 /** Diagnostics from refreshing Codex runtime surfaces after plugin activation. */
-export type CodexPluginRuntimeRefreshResult = {
+type CodexPluginRuntimeRefreshResult = {
   diagnostics: CodexPluginActivationDiagnostic[];
 };
 
-/** Activates a curated plugin or rejects a workspace plugin that is not already active. */
+/** Activates legacy curated plugins without granting install authority to other marketplaces. */
 export async function ensureCodexPluginActivation(
   params: EnsureCodexPluginActivationParams,
 ): Promise<CodexPluginActivationResult> {
@@ -69,14 +77,26 @@ export async function ensureCodexPluginActivation(
         "workspace-directory plugins must be installed and enabled outside OpenClaw before use.",
     });
   }
+  if (!isOpenAiCuratedMarketplaceName(params.identity.marketplaceName)) {
+    const target = params.identity.pluginName.endsWith(`@${params.identity.marketplaceName}`)
+      ? params.identity.pluginName
+      : `${params.identity.pluginName}@${params.identity.marketplaceName}`;
+    return activationFailure(params.identity, "disabled", {
+      message:
+        `${params.identity.marketplaceName} plugins must be installed and enabled by an owner ` +
+        `before use. Run /codex plugins install ${target}.`,
+    });
+  }
 
-  const listed = (await params.request("plugin/list", {
-    cwds: [],
-  } satisfies v2.PluginListParams)) as v2.PluginListResponse;
-  const resolved = findOpenAiCuratedPluginSummary(listed, params.identity.pluginName);
+  const listed = await listCuratedCodexPluginMetadata(params);
+  const resolved = findCodexMarketplacePluginSummary(
+    listed,
+    params.identity.marketplaceName,
+    params.identity.pluginName,
+  );
   if (!resolved) {
-    const hasCuratedMarketplace = listed.marketplaces.some(
-      (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
+    const hasCuratedMarketplace = listed.marketplaces.some((marketplace) =>
+      isOpenAiCuratedMarketplace(marketplace),
     );
     if (!hasCuratedMarketplace) {
       return activationFailure(params.identity, "marketplace_missing", {
@@ -85,6 +105,21 @@ export async function ensureCodexPluginActivation(
     }
     return activationFailure(params.identity, "plugin_missing", {
       message: `${params.identity.pluginName} was not found in ${CODEX_PLUGINS_MARKETPLACE_NAME}.`,
+    });
+  }
+
+  if (resolved.marketplace.remoteMarketplaceName && !resolved.summary.remotePluginId) {
+    return activationFailure(params.identity, "plugin_missing", {
+      message: `${params.identity.pluginName} detail unavailable: Codex did not return a remote plugin id.`,
+    });
+  }
+
+  if (
+    resolved.summary.availability === "DISABLED_BY_ADMIN" ||
+    resolved.summary.installPolicy === "NOT_AVAILABLE"
+  ) {
+    return activationFailure(params.identity, "disabled", {
+      message: `${params.identity.pluginName} was disabled or made unavailable by its marketplace administrator.`,
     });
   }
 
@@ -99,15 +134,46 @@ export async function ensureCodexPluginActivation(
     };
   }
 
-  const installResponse = (await params.request(
-    "plugin/install",
-    pluginReadParams(
-      resolved.marketplace,
-      resolved.marketplace.remoteMarketplaceName && resolved.summary.remotePluginId
-        ? resolved.summary.remotePluginId
-        : params.identity.pluginName,
-    ) satisfies v2.PluginInstallParams,
-  )) as v2.PluginInstallResponse;
+  const remotePluginId = resolved.marketplace.remoteMarketplaceName
+    ? resolved.summary.remotePluginId
+    : undefined;
+  let installResponse: v2.PluginInstallResponse;
+  try {
+    installResponse = (await params.request(
+      "plugin/install",
+      pluginReadParams(
+        resolved.marketplace,
+        remotePluginId ?? params.identity.pluginName,
+      ) satisfies v2.PluginInstallParams,
+    )) as v2.PluginInstallResponse;
+  } catch (error) {
+    if (
+      !(error instanceof CodexAppServerRpcError) ||
+      error.code !== -32600 ||
+      !remotePluginId ||
+      (error.message !== `remote plugin ${remotePluginId} is disabled by admin` &&
+        error.message !== `remote plugin ${remotePluginId} is not available for install`)
+    ) {
+      throw error;
+    }
+    // The catalog can be stale by install time. Isolate only Codex's exact
+    // terminal remote-install contract; unrelated RPC failures abort the turn.
+    return {
+      identity: params.identity,
+      ok: false,
+      reason: "install_failed",
+      installAttempted: true,
+      marketplace: resolved.marketplace,
+      diagnostics: [
+        {
+          message: `Codex plugin install failed: ${coerceErrorMessage(error)}`,
+        },
+      ],
+    };
+  }
+  if (params.metadataCache && params.appCacheKey) {
+    params.metadataCache.invalidate(params.appCacheKey);
+  }
   const refreshDiagnostics: CodexPluginActivationDiagnostic[] = [];
   let refreshFailed = false;
   try {
@@ -115,15 +181,16 @@ export async function ensureCodexPluginActivation(
       request: params.request,
       appCache: params.appCache,
       appCacheKey: params.appCacheKey,
+      configCwd: params.configCwd,
+      metadataCache: params.metadataCache,
+      deferAppInventoryRefresh: params.deferAppInventoryRefresh,
       targetAppIds: params.targetAppIds,
     });
     refreshDiagnostics.push(...refreshResult.diagnostics);
   } catch (error) {
     refreshFailed = true;
     refreshDiagnostics.push({
-      message: `Codex plugin runtime refresh failed after install: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      message: `Codex plugin runtime refresh failed after install: ${coerceErrorMessage(error)}`,
     });
   }
   const authRequired = installResponse.appsNeedingAuth.length > 0;
@@ -154,31 +221,42 @@ export async function refreshCodexPluginRuntimeState(params: {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  configCwd?: string;
+  metadataCache?: CodexPluginMetadataCache;
+  deferAppInventoryRefresh?: boolean;
   targetAppIds?: readonly string[];
 }): Promise<CodexPluginRuntimeRefreshResult> {
   const diagnostics: CodexPluginActivationDiagnostic[] = [];
-  await params.request("plugin/list", {
-    cwds: [],
-  } satisfies v2.PluginListParams);
-  await params.request("skills/list", {
-    cwds: [],
+  await listCuratedCodexPluginMetadata(params, { forceRefetch: true });
+  await (params.request("skills/list", {
+    cwds: params.configCwd ? [params.configCwd] : [],
     forceReload: true,
-  } satisfies v2.SkillsListParams);
+  } satisfies v2.SkillsListParams) as Promise<v2.SkillsListResponse>);
   try {
-    await params.request("hooks/list", {
-      cwds: [],
-    } satisfies v2.HooksListParams);
+    await (params.request("hooks/list", {
+      cwds: params.configCwd ? [params.configCwd] : [],
+    } satisfies v2.HooksListParams) as Promise<v2.HooksListResponse>);
   } catch (error) {
     diagnostics.push({
-      message: `Codex hooks refresh skipped: ${error instanceof Error ? error.message : String(error)}`,
+      message: `Codex hooks refresh skipped: ${coerceErrorMessage(error)}`,
     });
   }
   await params.request("config/mcpServer/reload", undefined);
 
   if (params.appCache && params.appCacheKey) {
-    params.appCache.invalidate(params.appCacheKey, "Codex plugin activation changed app inventory");
+    // Scope the invalidation to the activated plugin's apps so the follow-up
+    // targeted refresh (immediate or deferred union) can revalidate the entry.
+    params.appCache.invalidate(
+      params.appCacheKey,
+      "Codex plugin activation changed app inventory",
+      undefined,
+      params.targetAppIds,
+    );
+    if (params.deferAppInventoryRefresh) {
+      return { diagnostics };
+    }
     const request: CodexAppInventoryRequest = async (method, requestParams) =>
-      (await params.request(method, requestParams)) as v2.AppsListResponse;
+      (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
     try {
       await params.appCache.refreshNow({
         key: params.appCacheKey,
@@ -188,9 +266,7 @@ export async function refreshCodexPluginRuntimeState(params: {
       });
     } catch (error) {
       diagnostics.push({
-        message: `Codex app inventory refresh skipped: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        message: `Codex app inventory refresh skipped: ${coerceErrorMessage(error)}`,
       });
     }
   }
@@ -198,87 +274,35 @@ export async function refreshCodexPluginRuntimeState(params: {
   return { diagnostics };
 }
 
-/** Ensures the Codex config enables app substrate support needed by plugin-owned apps. */
-export async function ensureCodexAppsSubstrateConfig(params: {
-  codexHome: string;
-  readFile?: (filePath: string, encoding: "utf8") => Promise<string>;
-  writeFile?: (filePath: string, content: string, encoding: "utf8") => Promise<void>;
-  mkdir?: (dirPath: string, options: { recursive: true }) => Promise<unknown>;
-}): Promise<{ changed: boolean; configPath: string }> {
-  const readFile = params.readFile ?? ((filePath, encoding) => fs.readFile(filePath, encoding));
-  const writeFile =
-    params.writeFile ??
-    ((filePath, content, encoding) => fs.writeFile(filePath, content, encoding));
-  const mkdir = params.mkdir ?? ((dirPath, options) => fs.mkdir(dirPath, options));
-  const configPath = path.join(params.codexHome, "config.toml");
-  let current = "";
-  try {
-    current = await readFile(configPath, "utf8");
-  } catch (error) {
-    if (!isEnoent(error)) {
-      throw error;
-    }
+async function listCuratedCodexPluginMetadata(
+  params: {
+    request: CodexPluginRuntimeRequest;
+    metadataCache?: CodexPluginMetadataCache;
+    appCacheKey?: string;
+    configCwd?: string;
+  },
+  options: { forceRefetch?: boolean } = {},
+): Promise<v2.PluginListResponse> {
+  const requestParams = {
+    ...(params.configCwd ? { cwds: [params.configCwd] } : {}),
+    ...(options.forceRefetch ? { forceRefetch: true } : {}),
+  } satisfies v2.PluginListParams;
+  if (!params.metadataCache || !params.appCacheKey) {
+    return (await params.request("plugin/list", requestParams)) as v2.PluginListResponse;
   }
-
-  const next = upsertTomlBoolean(
-    upsertTomlBoolean(current, "features", "apps", true),
-    "apps._default",
-    "enabled",
-    true,
-  );
-  if (next === current) {
-    return { changed: false, configPath };
-  }
-  await mkdir(path.dirname(configPath), { recursive: true });
-  await writeFile(configPath, next, "utf8");
-  return { changed: true, configPath };
-}
-
-/** Upserts a boolean key in a TOML section while preserving the rest of the file. */
-export function upsertTomlBoolean(
-  source: string,
-  section: string,
-  key: string,
-  value: boolean,
-): string {
-  const lines = source.replace(/\r\n/g, "\n").split("\n");
-  if (lines.length > 0 && lines.at(-1) === "") {
-    lines.pop();
-  }
-  const sectionHeaderPattern = new RegExp(`^\\s*\\[${escapeRegExp(section)}\\]\\s*(?:#.*)?$`);
-  const anySectionPattern = /^\s*\[[^\]]+\]\s*(?:#.*)?$/;
-  const keyPattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`);
-  const desiredLine = `${key} = ${value ? "true" : "false"}`;
-  const sectionStart = lines.findIndex((line) => sectionHeaderPattern.test(line));
-  if (sectionStart === -1) {
-    const nextLines = [...lines];
-    if (nextLines.length > 0 && nextLines.at(-1)?.trim()) {
-      nextLines.push("");
-    }
-    nextLines.push(`[${section}]`, desiredLine);
-    return `${nextLines.join("\n")}\n`;
-  }
-
-  let sectionEnd = lines.length;
-  for (let index = sectionStart + 1; index < lines.length; index += 1) {
-    if (anySectionPattern.test(lines[index] ?? "")) {
-      sectionEnd = index;
-      break;
-    }
-  }
-  for (let index = sectionStart + 1; index < sectionEnd; index += 1) {
-    if (keyPattern.test(lines[index] ?? "")) {
-      if (lines[index] === desiredLine) {
-        return `${lines.join("\n")}\n`;
-      }
-      const nextLines = [...lines];
-      nextLines[index] = desiredLine;
-      return `${nextLines.join("\n")}\n`;
-    }
-  }
-  const nextLines = [...lines];
-  nextLines.splice(sectionEnd, 0, desiredLine);
-  return `${nextLines.join("\n")}\n`;
+  const snapshot = await params.metadataCache.load({
+    appCacheKey: params.appCacheKey,
+    queryKind: "curated-global",
+    requestParams,
+    request: async (method, listedParams) =>
+      (await params.request(method, listedParams)) as v2.PluginListResponse,
+    // Fail-open guard: never settle a curated snapshot that lacks the curated
+    // marketplace itself (upstream returns local-only on remote fetch failure
+    // without a load error). See listCodexPluginMetadata in plugin-inventory.
+    cacheable: (response: v2.PluginListResponse) =>
+      response.marketplaces.some((marketplace) => isOpenAiCuratedMarketplace(marketplace)),
+  });
+  return snapshot.response;
 }
 
 function activationFailure(
@@ -294,12 +318,4 @@ function activationFailure(
     installAttempted: false,
     diagnostics: [diagnostic, ...extraDiagnostics],
   };
-}
-
-function isEnoent(error: unknown): boolean {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

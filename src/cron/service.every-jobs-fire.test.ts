@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
-  resetGatewaySuspendCoordinatorForTest,
 } from "../infra/gateway-suspend-coordinator.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -184,7 +183,6 @@ describe("CronService interval/cron jobs fire on time", () => {
       storePath: store.storePath,
       logger,
     });
-    resetGatewaySuspendCoordinatorForTest();
     resetGatewayWorkAdmission();
 
     try {
@@ -221,7 +219,6 @@ describe("CronService interval/cron jobs fire on time", () => {
       expectMainSystemEvent(enqueueSystemEvent, "recovered-tick", job.id);
     } finally {
       cron.stop();
-      resetGatewaySuspendCoordinatorForTest();
       resetGatewayWorkAdmission();
       await store.cleanup();
     }
@@ -247,11 +244,12 @@ describe("CronService interval/cron jobs fire on time", () => {
       });
 
       const pendingSignal = beginGatewayRestartSignalAdmission();
+      expect(pendingSignal).not.toBeNull();
       const finishedRun = finished.waitForOk(job.id);
       await vi.advanceTimersByTimeAsync(10_005);
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
 
-      expect(pendingSignal.rollback()).toBe(true);
+      expect(pendingSignal?.rollback()).toBe(true);
       await finishedRun;
       expectMainSystemEvent(enqueueSystemEvent, "rollback-tick", job.id);
     } finally {

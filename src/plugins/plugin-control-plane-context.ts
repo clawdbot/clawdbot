@@ -7,13 +7,13 @@ import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-reg
 import { resolvePluginCacheInputs, type PluginSourceRoots } from "./roots.js";
 
 /** Discovery inputs that affect plugin source resolution. */
-export type PluginDiscoveryContext = {
+type PluginDiscoveryContext = {
   roots: PluginSourceRoots;
   loadPaths: readonly string[];
 };
 
 /** Control-plane fingerprint inputs that affect installed plugin activation. */
-export type PluginControlPlaneContext = {
+type PluginControlPlaneContext = {
   discovery: PluginDiscoveryContext;
   policyFingerprint: string;
   inventoryFingerprint?: string;
@@ -21,7 +21,7 @@ export type PluginControlPlaneContext = {
 };
 
 /** Parameters used to resolve plugin discovery roots and load paths. */
-export type ResolvePluginDiscoveryContextParams = {
+type ResolvePluginDiscoveryContextParams = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
@@ -53,21 +53,13 @@ export function resolvePluginDiscoveryContext(
     loadPaths: [...(params.loadPaths ?? resolveConfiguredPluginLoadPaths(params.config) ?? [])],
   });
 }
-
-/** Resolves a stable fingerprint for plugin discovery inputs. */
-export function resolvePluginDiscoveryFingerprint(
-  params: ResolvePluginDiscoveryContextParams = {},
-): string {
-  return fingerprintPluginDiscoveryContext(resolvePluginDiscoveryContext(params));
-}
-
 /** Hashes an already resolved plugin discovery context. */
 export function fingerprintPluginDiscoveryContext(context: PluginDiscoveryContext): string {
   return hashJson(context);
 }
 
 /** Resolves all inputs that determine plugin control-plane activation state. */
-export function resolvePluginControlPlaneContext(
+function resolvePluginControlPlaneContext(
   params: ResolvePluginControlPlaneContextParams = {},
 ): PluginControlPlaneContext {
   const inventoryFingerprint =

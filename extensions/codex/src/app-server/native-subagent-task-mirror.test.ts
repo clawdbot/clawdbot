@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   codexNativeSubagentRunId,
   CodexNativeSubagentTaskMirror,
-  type TaskLifecycleRuntime,
 } from "./native-subagent-task-mirror.js";
+
+type TaskLifecycleRuntime = ConstructorParameters<typeof CodexNativeSubagentTaskMirror>[1];
 
 function createRuntime() {
   return {
@@ -405,15 +406,12 @@ describe("CodexNativeSubagentTaskMirror", () => {
       lastEventAt: 41_000,
       progressSummary: "Codex native subagent received more input.",
     });
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
       runId: "codex-thread:child-v2",
-      status: "cancelled",
-      endedAt: 41_000,
       lastEventAt: 41_000,
-      error: "Codex native subagent was interrupted.",
       progressSummary: "Codex native subagent was interrupted.",
-      terminalSummary: "Codex native subagent was interrupted.",
     });
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
   });
 
   it("uses the notification thread id when collab agent items omit sender thread id", () => {

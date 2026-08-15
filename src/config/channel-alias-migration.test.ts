@@ -8,19 +8,19 @@ function cfgWith(channelId: string, entry: Record<string, unknown>): OpenClawCon
 }
 
 describe("defineChannelAliasMigration message generation", () => {
-  it("generates preview-chunk channel messages (discord shape)", () => {
+  it("generates preview-chunk channel messages with an absent-object default", () => {
     const migration = defineChannelAliasMigration({
-      channelId: "discord",
+      channelId: "preview",
       streaming: { defaultMode: "off", absentObjectDefault: "progress", includePreviewChunk: true },
     });
 
     expect(migration.legacyConfigRules.map((rule) => rule.message)).toEqual([
-      'channels.discord.streamMode, channels.discord.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
-      'channels.discord.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
+      'channels.preview.streamMode, channels.preview.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.preview.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
+      'channels.preview.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.preview.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
     ]);
     expect(migration.legacyConfigRules.map((rule) => rule.path)).toEqual([
-      ["channels", "discord"],
-      ["channels", "discord", "accounts"],
+      ["channels", "preview"],
+      ["channels", "preview", "accounts"],
     ]);
   });
 
@@ -98,12 +98,25 @@ describe("defineChannelAliasMigration rule matching", () => {
     expect(migration.hasLegacyAliases({ streaming: "partial" })).toBe(false);
     expect(migration.hasLegacyAliases({ streaming: false })).toBe(false);
   });
+
+  it("matches nested DM aliases at root and account scope", () => {
+    const migration = defineChannelAliasMigration({
+      channelId: "googlechat",
+      streaming: { defaultMode: "partial", deliveryOnly: true },
+      dm: { root: true, accounts: true },
+    });
+    const [rootDmRule, accountDmRule] = migration.legacyConfigRules.slice(2);
+
+    expect(rootDmRule?.match?.({ dm: { policy: "open" } }, {})).toBe(true);
+    expect(accountDmRule?.match?.({ work: { dm: { allowFrom: ["users/1"] } } }, {})).toBe(true);
+    expect(rootDmRule?.match?.({ dmPolicy: "open" }, {})).toBe(false);
+  });
 });
 
 describe("defineChannelAliasMigration normalizeChannelConfig", () => {
-  it("migrates root and account aliases with dm normalization", () => {
+  it("migrates preview root and account aliases with dm normalization", () => {
     const migration = defineChannelAliasMigration({
-      channelId: "discord",
+      channelId: "preview",
       streaming: { defaultMode: "off", absentObjectDefault: "progress", includePreviewChunk: true },
       accountStreamingReplacesRoot: true,
       dm: { root: true, accounts: true },
@@ -111,7 +124,7 @@ describe("defineChannelAliasMigration normalizeChannelConfig", () => {
 
     const changes: string[] = [];
     const result = migration.normalizeChannelConfig({
-      cfg: cfgWith("discord", {
+      cfg: cfgWith("preview", {
         streamMode: "block",
         dm: { policy: "open" },
         accounts: { work: { draftChunk: { minChars: 9 } } },
@@ -120,7 +133,7 @@ describe("defineChannelAliasMigration normalizeChannelConfig", () => {
     });
 
     expect(result.changes).toBe(changes);
-    expect((result.config.channels as Record<string, unknown>).discord).toEqual({
+    expect((result.config.channels as Record<string, unknown>).preview).toEqual({
       dmPolicy: "open",
       streaming: { mode: "block" },
       accounts: {
@@ -130,11 +143,11 @@ describe("defineChannelAliasMigration normalizeChannelConfig", () => {
       },
     });
     expect(changes).toEqual([
-      "Moved channels.discord.dm.policy → channels.discord.dmPolicy.",
-      "Removed empty channels.discord.dm after migration.",
-      "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
-      "Moved channels.discord.accounts.work.draftChunk → channels.discord.accounts.work.streaming.preview.chunk.",
-      "Copied channels.discord.streaming into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
+      "Moved channels.preview.dm.policy → channels.preview.dmPolicy.",
+      "Removed empty channels.preview.dm after migration.",
+      "Moved channels.preview.streamMode → channels.preview.streaming.mode (block).",
+      "Moved channels.preview.accounts.work.draftChunk → channels.preview.accounts.work.streaming.preview.chunk.",
+      "Copied channels.preview.streaming into channels.preview.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 
@@ -193,6 +206,62 @@ describe("defineChannelAliasMigration normalizeChannelConfig", () => {
     });
     expect(result.changes).toEqual([
       "Moved channels.imessage.accounts.work.chunkMode → channels.imessage.accounts.work.streaming.chunkMode.",
+    ]);
+  });
+
+  it("migrates DM aliases even when a delivery-only channel has no streaming aliases", () => {
+    const migration = defineChannelAliasMigration({
+      channelId: "googlechat",
+      streaming: { defaultMode: "partial", deliveryOnly: true },
+      dm: { root: true, accounts: true },
+    });
+
+    const result = migration.normalizeChannelConfig({
+      cfg: cfgWith("googlechat", {
+        dm: { enabled: false, policy: "allowlist", allowFrom: ["users/root"] },
+        accounts: { work: { dm: { policy: "open", allowFrom: ["*"] } } },
+      }),
+    });
+
+    expect((result.config.channels as Record<string, unknown>).googlechat).toEqual({
+      dmPolicy: "allowlist",
+      allowFrom: ["users/root"],
+      dm: { enabled: false },
+      accounts: { work: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+  });
+
+  it("materializes root and default-account streaming inheritance", () => {
+    const migration = defineChannelAliasMigration({
+      channelId: "layered",
+      streaming: { defaultMode: "partial", deliveryOnly: true },
+      accountStreamingInheritsDefaultAccount: true,
+    });
+    const result = migration.normalizeChannelConfig({
+      cfg: cfgWith("layered", {
+        streaming: { block: { enabled: true } },
+        accounts: {
+          Default: { chunkMode: "newline" },
+          work: { blockStreamingCoalesce: { minChars: 20 } },
+        },
+      }),
+    });
+
+    expect((result.config.channels as Record<string, unknown>).layered).toEqual({
+      streaming: { block: { enabled: true } },
+      accounts: {
+        Default: { streaming: { block: { enabled: true }, chunkMode: "newline" } },
+        work: {
+          streaming: {
+            block: { enabled: true, coalesce: { minChars: 20 } },
+            chunkMode: "newline",
+          },
+        },
+      },
+    });
+    expect(result.changes.slice(-2)).toEqual([
+      "Copied channels.layered.streaming into channels.layered.accounts.Default.streaming to keep inherited settings while migrating flat streaming keys.",
+      "Copied channels.layered.accounts.Default.streaming into channels.layered.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 });

@@ -1,31 +1,27 @@
 // Stores and verifies web push subscriptions and delivery payloads.
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, normalizeOptionalString } from "@openclaw/normalization-core";
 import { resolveStateDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { sha256HexPrefix } from "./crypto-digest.js";
-import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
+import {
+  createWebPushVapidKeyPair,
+  deleteWebPushSubscriptionByEndpoint,
+  deleteWebPushSubscriptionIfCurrent,
+  hashWebPushEndpoint,
+  insertVapidKeyPairIfAbsent,
+  isValidWebPushEndpoint,
+  isValidWebPushKey,
+  listWebPushSubscriptions,
+  readPersistedVapidKeyPair,
+  upsertWebPushSubscription,
+  DEFAULT_WEB_PUSH_VAPID_SUBJECT,
+  type VapidKeyPair,
+  type WebPushSubscription,
+} from "./push-web-store.js";
 
 // --- Types ---
-
-type WebPushSubscription = {
-  subscriptionId: string;
-  endpoint: string;
-  keys: { p256dh: string; auth: string };
-  createdAtMs: number;
-  updatedAtMs: number;
-};
-
-type WebPushRegistrationState = {
-  subscriptionsByEndpointHash: Record<string, WebPushSubscription>;
-};
-
-type VapidKeyPair = {
-  publicKey: string;
-  privateKey: string;
-  subject: string;
-};
 
 type WebPushSendResult = {
   ok: boolean;
@@ -36,13 +32,7 @@ type WebPushSendResult = {
 
 // --- Constants ---
 
-const WEB_PUSH_STATE_FILENAME = "push/web-push-subscriptions.json";
-const VAPID_KEYS_FILENAME = "push/vapid-keys.json";
-const MAX_ENDPOINT_LENGTH = 2048;
-const MAX_KEY_LENGTH = 512;
-const DEFAULT_VAPID_SUBJECT = "https://openclaw.ai";
-
-const withLock = createAsyncLock();
+const LEGACY_WEB_PUSH_PATHS = ["push/web-push-subscriptions.json", "push/vapid-keys.json"] as const;
 
 type WebPushRuntime = typeof import("web-push");
 type WebPushRuntimeModule = WebPushRuntime & { default?: WebPushRuntime };
@@ -51,54 +41,40 @@ const loadWebPushRuntime = createLazyRuntimeModule(() =>
   import("web-push").then((mod: WebPushRuntimeModule) => mod.default ?? mod),
 );
 
-// --- Helpers ---
-
-function resolveWebPushStatePath(baseDir?: string): string {
-  const root = baseDir ?? resolveStateDir();
-  return path.join(root, WEB_PUSH_STATE_FILENAME);
-}
-
-function resolveVapidKeysPath(baseDir?: string): string {
-  const root = baseDir ?? resolveStateDir();
-  return path.join(root, VAPID_KEYS_FILENAME);
-}
-
-function hashEndpoint(endpoint: string): string {
-  return sha256HexPrefix(endpoint, 32);
-}
-
-function isValidEndpoint(endpoint: string): boolean {
-  if (!endpoint || endpoint.length > MAX_ENDPOINT_LENGTH) {
-    return false;
-  }
+function legacyWebPushPathMayExist(filePath: string): boolean {
   try {
-    const url = new URL(endpoint);
-    return url.protocol === "https:";
-  } catch {
-    return false;
+    fs.lstatSync(filePath);
+    return true;
+  } catch (error) {
+    // Only a definite absence permits creating a new signing identity.
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
   }
 }
 
-function isValidKey(key: string): boolean {
-  return typeof key === "string" && key.length > 0 && key.length <= MAX_KEY_LENGTH;
-}
-
-// --- State persistence ---
-
-async function loadState(baseDir?: string): Promise<WebPushRegistrationState> {
-  const filePath = resolveWebPushStatePath(baseDir);
-  const state = await tryReadJson<WebPushRegistrationState>(filePath);
-  return state ?? { subscriptionsByEndpointHash: {} };
-}
-
-async function persistState(state: WebPushRegistrationState, baseDir?: string): Promise<void> {
-  const filePath = resolveWebPushStatePath(baseDir);
-  await writeJson(filePath, state, { trailingNewline: true });
+// Production callers run under the Gateway's lifetime state/config lock. Doctor must
+// acquire those same locks before claiming legacy files, so this check remains stable
+// through the following SQLite operation or asynchronous delivery fan-out.
+function assertLegacyWebPushMigrationComplete(baseDir?: string): void {
+  const stateDir = baseDir ?? resolveStateDir();
+  const pendingLegacyPath = LEGACY_WEB_PUSH_PATHS.find((relativePath) => {
+    const sourcePath = path.join(stateDir, relativePath);
+    return (
+      legacyWebPushPathMayExist(sourcePath) ||
+      legacyWebPushPathMayExist(`${sourcePath}.doctor-importing`)
+    );
+  });
+  if (pendingLegacyPath) {
+    throw new Error(
+      `legacy Web Push state requires migration; run \`openclaw doctor --fix\` before using Web Push`,
+    );
+  }
 }
 
 // --- VAPID keys ---
 
 export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> {
+  assertLegacyWebPushMigrationComplete(baseDir);
+
   // Env vars take precedence — allows operators to share a stable VAPID
   // identity across multiple gateway instances.
   const envPublic = resolveVapidPublicKeyFromEnv();
@@ -111,42 +87,39 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
     };
   }
 
-  // Fall back to persisted keys, generating on first use under a lock to
-  // prevent concurrent bootstraps from writing different keypairs.
-  return await withLock(async () => {
-    const filePath = resolveVapidKeysPath(baseDir);
-    const existing = await tryReadJson<VapidKeyPair>(filePath);
-    if (existing?.publicKey && existing?.privateKey) {
-      return {
-        publicKey: existing.publicKey,
-        privateKey: existing.privateKey,
-        // Env var always wins so operators can change subject without deleting vapid-keys.json.
-        subject: resolveVapidSubjectFromEnv(),
-      };
-    }
+  const existing = readPersistedVapidKeyPair(baseDir);
+  if (existing) {
+    return { ...existing, subject: resolveVapidSubjectFromEnv() };
+  }
 
-    const webPush = await loadWebPushRuntime();
-    const keys = webPush.generateVAPIDKeys();
-    const pair: VapidKeyPair = {
-      publicKey: keys.publicKey,
-      privateKey: keys.privateKey,
-      subject: resolveVapidSubjectFromEnv(),
-    };
-    await writeJson(filePath, pair, { trailingNewline: true });
-    return pair;
+  // Generation can race across gateway processes. SQLite selects one durable
+  // identity, then every contender returns that committed keypair.
+  const webPush = await loadWebPushRuntime();
+  const keys = webPush.generateVAPIDKeys();
+  const pair = insertVapidKeyPairIfAbsent({
+    candidate: createWebPushVapidKeyPair(
+      keys.publicKey,
+      keys.privateKey,
+      resolveVapidSubjectFromEnv(),
+    ),
+    nowMs: Date.now(),
+    stateDir: baseDir,
   });
+  return { ...pair, subject: resolveVapidSubjectFromEnv() };
 }
 
 function resolveVapidSubjectFromEnv(): string {
-  return process.env.OPENCLAW_VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT;
+  return (
+    normalizeOptionalString(process.env.OPENCLAW_VAPID_SUBJECT) ?? DEFAULT_WEB_PUSH_VAPID_SUBJECT
+  );
 }
 
 function resolveVapidPublicKeyFromEnv(): string | undefined {
-  return process.env.OPENCLAW_VAPID_PUBLIC_KEY || undefined;
+  return normalizeOptionalString(process.env.OPENCLAW_VAPID_PUBLIC_KEY);
 }
 
 function resolveVapidPrivateKeyFromEnv(): string | undefined {
-  return process.env.OPENCLAW_VAPID_PRIVATE_KEY || undefined;
+  return normalizeOptionalString(process.env.OPENCLAW_VAPID_PRIVATE_KEY);
 }
 
 // --- Subscription CRUD ---
@@ -162,51 +135,33 @@ export async function registerWebPushSubscription(
 ): Promise<WebPushSubscription> {
   const { endpoint, keys, baseDir } = params;
 
-  if (!isValidEndpoint(endpoint)) {
+  if (!isValidWebPushEndpoint(endpoint)) {
     throw new Error("invalid push subscription endpoint: must be an HTTPS URL under 2048 chars");
   }
-  if (!isValidKey(keys.p256dh) || !isValidKey(keys.auth)) {
+  if (!isValidWebPushKey(keys.p256dh) || !isValidWebPushKey(keys.auth)) {
     throw new Error("invalid push subscription keys: must be non-empty strings under 512 chars");
   }
+  assertLegacyWebPushMigrationComplete(baseDir);
 
-  return await withLock(async () => {
-    const state = await loadState(baseDir);
-    const hash = hashEndpoint(endpoint);
-    const now = Date.now();
-
-    const existing = state.subscriptionsByEndpointHash[hash];
-    const subscription: WebPushSubscription = {
-      subscriptionId: existing?.subscriptionId ?? randomUUID(),
-      endpoint,
-      keys: { p256dh: keys.p256dh, auth: keys.auth },
-      createdAtMs: existing?.createdAtMs ?? now,
-      updatedAtMs: now,
-    };
-
-    state.subscriptionsByEndpointHash[hash] = subscription;
-    await persistState(state, baseDir);
-    return subscription;
+  return upsertWebPushSubscription({
+    endpointHash: hashWebPushEndpoint(endpoint),
+    endpoint,
+    keys: { p256dh: keys.p256dh, auth: keys.auth },
+    candidateSubscriptionId: randomUUID(),
+    nowMs: Date.now(),
+    stateDir: baseDir,
   });
-}
-
-export async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
-  const state = await loadState(baseDir);
-  return Object.values(state.subscriptionsByEndpointHash);
 }
 
 export async function clearWebPushSubscriptionByEndpoint(
   endpoint: string,
   baseDir?: string,
 ): Promise<boolean> {
-  return await withLock(async () => {
-    const state = await loadState(baseDir);
-    const hash = hashEndpoint(endpoint);
-    if (state.subscriptionsByEndpointHash[hash]) {
-      delete state.subscriptionsByEndpointHash[hash];
-      await persistState(state, baseDir);
-      return true;
-    }
-    return false;
+  assertLegacyWebPushMigrationComplete(baseDir);
+  return deleteWebPushSubscriptionByEndpoint({
+    endpointHash: hashWebPushEndpoint(endpoint),
+    endpoint,
+    stateDir: baseDir,
   });
 }
 
@@ -265,7 +220,8 @@ export async function broadcastWebPush(
   payload: WebPushPayload,
   baseDir?: string,
 ): Promise<WebPushSendResult[]> {
-  const subscriptions = await listWebPushSubscriptions(baseDir);
+  assertLegacyWebPushMigrationComplete(baseDir);
+  const subscriptions = listWebPushSubscriptions(baseDir);
   if (subscriptions.length === 0) {
     return [];
   }
@@ -292,15 +248,22 @@ export async function broadcastWebPush(
   );
 
   // Clean up expired subscriptions (HTTP 410 Gone or 404 Not Found) per Web Push spec.
-  const expiredEndpoints = mapped
+  const expiredSubscriptions = mapped
     .map((result, i) => ({ result, sub: subscriptions[i] }))
     .filter(({ result }) => !result.ok && (result.statusCode === 410 || result.statusCode === 404))
-    .map(({ sub }) => expectDefined(sub, "push web sub").endpoint);
+    .map(({ sub }) => expectDefined(sub, "push web sub"));
 
-  if (expiredEndpoints.length > 0) {
-    await Promise.allSettled(
-      expiredEndpoints.map((endpoint) => clearWebPushSubscriptionByEndpoint(endpoint, baseDir)),
-    );
+  for (const subscription of expiredSubscriptions) {
+    try {
+      assertLegacyWebPushMigrationComplete(baseDir);
+      deleteWebPushSubscriptionIfCurrent({
+        endpointHash: hashWebPushEndpoint(subscription.endpoint),
+        subscription,
+        stateDir: baseDir,
+      });
+    } catch {
+      // Delivery already completed. Cleanup stays best-effort so callers do not retry valid sends.
+    }
   }
 
   return mapped;

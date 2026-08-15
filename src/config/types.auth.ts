@@ -21,42 +21,4 @@ export type AuthConfig = {
   profiles?: Record<string, AuthProfileConfig>;
   /** Preferred profile order per provider id. */
   order?: Record<string, string[]>;
-  /** Backoff and same-provider rotation policy for auth/profile failures. */
-  cooldowns?: {
-    /** Default billing backoff (hours). Default: 5. */
-    billingBackoffHours?: number;
-    /** Optional per-provider billing backoff (hours). */
-    billingBackoffHoursByProvider?: Record<string, number>;
-    /** Billing backoff cap (hours). Default: 24. */
-    billingMaxHours?: number;
-    /**
-     * Base backoff for high-confidence permanent-auth failures (minutes).
-     * Default: 10.
-     */
-    authPermanentBackoffMinutes?: number;
-    /**
-     * Cap for high-confidence permanent-auth backoff (minutes). Default: 60.
-     */
-    authPermanentMaxMinutes?: number;
-    /**
-     * Failure window for backoff counters (hours). If no failures occur within
-     * this window, counters reset. Default: 24.
-     */
-    failureWindowHours?: number;
-    /**
-     * Maximum same-provider auth-profile rotations to allow for overloaded
-     * errors before escalating to cross-provider model fallback. Default: 1.
-     */
-    overloadedProfileRotations?: number;
-    /**
-     * Fixed delay before retrying an overloaded provider/profile rotation.
-     * Default: 0.
-     */
-    overloadedBackoffMs?: number;
-    /**
-     * Maximum same-provider auth-profile rotations to allow for rate-limit
-     * errors before escalating to cross-provider model fallback. Default: 1.
-     */
-    rateLimitedProfileRotations?: number;
-  };
 };

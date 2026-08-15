@@ -8,9 +8,11 @@
  * labels.
  */
 
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { resolveToolCallKind, unwrapShellWrapperCommand } from "../../lib/chat/tool-call-view.ts";
+import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 
 const MAX_TITLE_INPUT_CHARS = 2_000;
 const MAX_ITEMS_PER_REQUEST = 24;
@@ -56,12 +58,7 @@ let notifyUpdate: (() => void) | null = null;
 /** FNV-1a over name + serialized args; stable across renders of one call. */
 function digest(name: string, input: string): string {
   const source = `${name}\u0000${input}`;
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `t${(hash >>> 0).toString(36)}${source.length.toString(36)}`;
+  return `t${fnv1aUtf16(source).toString(36)}${source.length.toString(36)}`;
 }
 
 function serializeArgs(args: unknown): string | null {
@@ -78,22 +75,18 @@ function serializeArgs(args: unknown): string | null {
     return null;
   }
 }
-
 /**
  * Only calls where a purpose summary beats the deterministic label qualify:
  * shell commands and arg-heavy generic/MCP tools. File reads/edits/writes
  * already render precise labels.
  */
-export function resolveToolTitleRequest(
+function resolveToolTitleRequest(
   name: string,
   args: unknown,
 ): { key: string; input: string } | null {
   const kind = resolveToolCallKind(name, args);
   if (kind === "command") {
-    const record =
-      args && typeof args === "object" && !Array.isArray(args)
-        ? (args as Record<string, unknown>)
-        : null;
+    const record = asNullableRecord(args);
     const rawCommand = typeof record?.command === "string" ? record.command.trim() : "";
     const command = unwrapShellWrapperCommand(rawCommand).trim();
     if (command.length < MIN_COMMAND_CHARS_FOR_TITLE) {
@@ -132,6 +125,17 @@ export function configureToolTitleFetcher(params: {
   agentId?: string | null;
   onTitlesChanged: (() => void) | null;
 }): void {
+  if (!params.client) {
+    titlesDisabledByGateway = false;
+    titlesByKey.clear();
+    pendingKeys.clear();
+    failedKeys.clear();
+    queue = new Map();
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+  }
   if (params.client !== activeClient) {
     titlesDisabledByGateway = false;
   }
@@ -244,20 +248,4 @@ async function flushTitleQueue(): Promise<void> {
       }, REQUEST_DEBOUNCE_MS);
     }
   }
-}
-
-export function resetToolTitlesForTest(): void {
-  titlesDisabledByGateway = false;
-  titlesByKey.clear();
-  pendingKeys.clear();
-  failedKeys.clear();
-  queue = new Map();
-  if (flushTimer) {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-}
-
-export function setToolTitleForTest(key: string, title: string): void {
-  titlesByKey.set(key, title);
 }

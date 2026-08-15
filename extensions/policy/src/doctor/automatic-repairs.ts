@@ -1,12 +1,14 @@
 // Policy automatic repairs apply only deterministic narrowing config changes.
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type {
   HealthFinding,
   HealthRepairContext,
   HealthRepairResult,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/health";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
-import { CHECK_IDS, type POLICY_CHECK_IDS } from "./metadata.js";
 
 type PolicyCheckId = (typeof POLICY_CHECK_IDS)[number];
 type ConfigRecord = Record<string, unknown>;
@@ -25,7 +27,6 @@ const AUTOMATIC_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
   CHECK_IDS.policyGatewayRemoteEnabled,
   CHECK_IDS.policyIngressOpenGroupsDenied,
   CHECK_IDS.policyIngressGroupMentionRequired,
-  CHECK_IDS.policyDataHandlingRedactionDisabled,
   CHECK_IDS.policyDataHandlingTelemetryContentCapture,
 ]);
 
@@ -104,14 +105,6 @@ function applyAutomaticPatch(
       return setFindingConfigValues(cfg, findings, "groupPolicy", "allowlist");
     case CHECK_IDS.policyIngressGroupMentionRequired:
       return setFindingConfigValues(cfg, findings, "requireMention", true);
-    case CHECK_IDS.policyDataHandlingRedactionDisabled:
-      if (hasScopedPolicyRequirement(findings)) {
-        return skippedUnsafeScopedRepair(
-          cfg,
-          "Skipped scoped data-handling repair. The finding reports shared logging config, so changing it would affect more than the scoped policy target.",
-        );
-      }
-      return enableSensitiveLoggingRedaction(cfg);
     case CHECK_IDS.policyDataHandlingTelemetryContentCapture:
       if (hasScopedPolicyRequirement(findings)) {
         return skippedUnsafeScopedRepair(
@@ -186,7 +179,6 @@ function disableInsecureControlUi(
   const controlUi = ensureRecord(gateway, "controlUi");
   const changes: string[] = [];
   const fields = [
-    ["allowInsecureAuth", "oc://openclaw.config/gateway/controlUi/allowInsecureAuth"],
     [
       "dangerouslyDisableDeviceAuth",
       "oc://openclaw.config/gateway/controlUi/dangerouslyDisableDeviceAuth",
@@ -225,19 +217,6 @@ function disableRemoteGatewayMode(
   return changes.length > 0
     ? { config: next as OpenClawConfig, changes }
     : { config: cfg, changes };
-}
-
-function enableSensitiveLoggingRedaction(cfg: OpenClawConfig): RepairPatch {
-  const next = cloneConfig(cfg);
-  const logging = ensureRecord(next, "logging");
-  if (logging.redactSensitive !== "off") {
-    return { config: cfg, changes: [] };
-  }
-  logging.redactSensitive = "tools";
-  return {
-    config: next as OpenClawConfig,
-    changes: ["Set logging.redactSensitive=tools for policy conformance."],
-  };
 }
 
 function disableTelemetryContentCapture(cfg: OpenClawConfig): RepairPatch {
@@ -468,12 +447,4 @@ function ensureRecord(parent: ConfigRecord, key: string): ConfigRecord {
   const next: ConfigRecord = {};
   parent[key] = next;
   return next;
-}
-
-function isRecord(value: unknown): value is ConfigRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function uniqueStrings(values: readonly string[]): readonly string[] {
-  return [...new Set(values)];
 }

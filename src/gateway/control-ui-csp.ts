@@ -37,10 +37,11 @@ function hasScriptSrcAttribute(openTag: string): boolean {
 /** Build the CSP header applied to Gateway-served Control UI HTML. */
 export function buildControlUiCspHeader(opts?: {
   inlineScriptHashes?: string[];
+  /** Current document Host header, used only to permit cross-port portal probes. */
+  portalHost?: string;
   /**
-   * Relax the policy just enough for the embedded terminal's ghostty-web engine:
-   * `'wasm-unsafe-eval'` permits WebAssembly compilation and `data:` in
-   * connect-src lets it fetch its inlined WASM binary. Gated on the terminal
+   * Relax the policy just enough for the embedded terminal's ghostty-web engine.
+   * `'wasm-unsafe-eval'` permits WebAssembly compilation. Gated on the terminal
    * being enabled so the baseline Control UI CSP stays tight otherwise.
    */
   allowWasm?: boolean;
@@ -53,9 +54,31 @@ export function buildControlUiCspHeader(opts?: {
   if (opts?.allowWasm) {
     scriptTokens.push("'wasm-unsafe-eval'");
   }
-  const connectTokens = ["'self'", "ws:", "wss:", "https://api.openai.com", "https://tweakcn.com"];
-  if (opts?.allowWasm) {
-    connectTokens.push("data:");
+  // Web Awesome resolves its bundled system icons to data: SVGs, then fetches
+  // them before rendering. This allows local bytes only, not another origin.
+  const connectTokens = [
+    "'self'",
+    "ws:",
+    "wss:",
+    "data:",
+    "https://api.openai.com",
+    "https://tweakcn.com",
+  ];
+  if (opts?.portalHost) {
+    try {
+      const parsed = new URL(`http://${opts.portalHost}`);
+      const isHostOnly =
+        !parsed.username &&
+        !parsed.password &&
+        parsed.pathname === "/" &&
+        !parsed.search &&
+        !parsed.hash;
+      if (isHostOnly && parsed.hostname) {
+        connectTokens.push(`http://${parsed.hostname}:*`, `https://${parsed.hostname}:*`);
+      }
+    } catch {
+      // Invalid Host headers do not relax the baseline policy.
+    }
   }
   return [
     "default-src 'self'",
@@ -67,7 +90,7 @@ export function buildControlUiCspHeader(opts?: {
     "frame-src 'self' http: https:",
     `script-src ${scriptTokens.join(" ")}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: blob:",
+    "img-src 'self' data: blob: https://gravatar.com",
     "media-src 'self' data: blob:",
     "font-src 'self' https://fonts.gstatic.com",
     "worker-src 'self'",

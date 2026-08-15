@@ -1,16 +1,43 @@
 // Verifies CLI runtime alias resolution and runtime model-ref equivalence.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { testing as cliBackendsTesting } from "./cli-backends.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   createModelPickerVisibleProviderPredicate,
   isRetiredModelPickerProvider,
-} from "./model-picker-visibility.js";
+} from "./model-runtime-aliases.js";
 import {
   areRuntimeModelRefsEquivalent,
   isCliRuntimeProvider,
-  resolveCliRuntimeExecutionProvider,
+  resolveCliRuntimeExecutionProvider as resolveCliRuntimeExecutionProviderBase,
 } from "./model-runtime-aliases.js";
+
+const anthropicAuthAliasMetadata = {
+  plugins: [
+    {
+      id: "anthropic",
+      origin: "bundled",
+      providerAuthChoices: [
+        {
+          provider: "anthropic",
+          method: "cli",
+          choiceId: "anthropic-cli",
+          deprecatedChoiceIds: ["claude-cli"],
+          choiceLabel: "Anthropic Claude CLI",
+        },
+      ],
+    },
+  ],
+} as never;
+
+function resolveCliRuntimeExecutionProvider(
+  params: Omit<Parameters<typeof resolveCliRuntimeExecutionProviderBase>[0], "metadataSnapshot">,
+) {
+  return resolveCliRuntimeExecutionProviderBase({
+    ...params,
+    metadataSnapshot: anthropicAuthAliasMetadata,
+  });
+}
 
 function createAnthropicAuthConfig(params: {
   order?: string[];
@@ -37,6 +64,7 @@ function createAnthropicAuthConfig(params: {
 describe("resolveCliRuntimeExecutionProvider", () => {
   beforeEach(() => {
     cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
       resolvePluginSetupRegistry: () => ({
         providers: [],
         cliBackends: [],
@@ -252,15 +280,7 @@ describe("areRuntimeModelRefsEquivalent", () => {
 
     expect(
       areRuntimeModelRefsEquivalent("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7", {
-        config: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                "claude-cli": { command: "claude" },
-              },
-            },
-          },
-        },
+        config: {},
       }),
     ).toBe(true);
   });

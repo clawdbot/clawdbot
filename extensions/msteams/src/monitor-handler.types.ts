@@ -4,7 +4,6 @@ import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import type { MSTeamsApp } from "./sdk.js";
-import type { MSTeamsSsoDeps } from "./sso.js";
 
 export type MSTeamsMessageHandlerDeps = {
   cfg: OpenClawConfig;
@@ -19,10 +18,4 @@ export type MSTeamsMessageHandlerDeps = {
   conversationStore: MSTeamsConversationStore;
   pollStore: MSTeamsPollStore;
   log: MSTeamsMonitorLogger;
-  /**
-   * Optional Bot Framework OAuth SSO deps. When omitted the plugin
-   * does not handle `signin/tokenExchange` or `signin/verifyState`
-   * invokes, matching the pre-SSO behavior.
-   */
-  sso?: MSTeamsSsoDeps;
 };

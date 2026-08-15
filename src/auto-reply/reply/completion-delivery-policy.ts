@@ -1,18 +1,20 @@
 // Resolves whether completed replies should send visibly or stay tool-only.
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { SourceReplyDeliveryMode } from "../source-reply-delivery-mode.types.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
 type CompletionChatType = ChatType | "unknown";
 
-type CompletionDeliverySessionEntry = {
-  chatType?: string | null;
-  origin?: { chatType?: string | null } | null;
-};
+type DurableCompletionDeliveryMode = "automatic" | "host_owned";
 
-export function resolveCompletionChatType(params: {
+type CompletionDeliverySessionEntry = Pick<SessionEntry, "chatType" | "delivery">;
+
+function resolveCompletionChatType(params: {
   requesterSessionKey?: string | null;
   targetRequesterSessionKey?: string | null;
   requesterEntry?: CompletionDeliverySessionEntry;
@@ -20,7 +22,7 @@ export function resolveCompletionChatType(params: {
   requesterSessionOrigin?: DeliveryContext;
 }): CompletionChatType {
   const explicit = normalizeChatType(
-    params.requesterEntry?.chatType ?? params.requesterEntry?.origin?.chatType ?? undefined,
+    params.requesterEntry?.chatType ?? sessionDeliveryOrigin(params.requesterEntry)?.chatType,
   );
   if (explicit) {
     return explicit;
@@ -56,6 +58,15 @@ export function completionRequiresMessageToolDelivery(params: {
       messageToolAvailable: params.messageToolAvailable,
     }) === "message_tool_only"
   );
+}
+
+/** Resolve transport authority for a durable, fixed-route agent completion. */
+export function resolveDurableCompletionDeliveryMode(
+  sourceReplyDeliveryMode: SourceReplyDeliveryMode,
+): DurableCompletionDeliveryMode {
+  // Message-tool-only blocks ambient model replies. A durable completion is an
+  // explicit system send: the host fixes route/payload and withholds the message tool.
+  return sourceReplyDeliveryMode === "message_tool_only" ? "host_owned" : "automatic";
 }
 
 export function shouldRouteCompletionThroughRequesterSession(

@@ -4,14 +4,13 @@ import { createQaLabWebSearchProvider as createQaLabWebSearchContractProvider } 
 import {
   createQaLabWebSearchProvider,
   QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY,
-  QA_LAB_WEB_SEARCH_PROVIDER_ID,
 } from "./qa-web-search-provider.js";
 
 describe("qa-lab web search provider", () => {
   it("exposes a credential-free QA-only provider", () => {
     const provider = createQaLabWebSearchProvider();
 
-    expect(provider.id).toBe(QA_LAB_WEB_SEARCH_PROVIDER_ID);
+    expect(provider.id).toBe("qa-lab-search");
     expect(provider.requiresCredential).toBe(false);
     expect(provider.envVars).toEqual([]);
     expect(provider.credentialPath).toBe("");
@@ -45,6 +44,19 @@ describe("qa-lab web search provider", () => {
       ],
     });
     expect(JSON.stringify(result)).toContain("Deterministic QA Lab web_search result");
+  });
+
+  it("preserves caller cancellation instead of returning a fixture result", async () => {
+    const tool = createQaLabWebSearchProvider().createTool({});
+    if (!tool) {
+      throw new Error("expected QA Lab web search tool");
+    }
+    const controller = new AbortController();
+    controller.abort(new Error("QA Lab caller canceled"));
+
+    await expect(
+      tool.execute({ query: "qa pre-canceled" }, { signal: controller.signal }),
+    ).rejects.toThrow("QA Lab caller canceled");
   });
 
   it("keeps malformed failure-path calls as tool failures", async () => {

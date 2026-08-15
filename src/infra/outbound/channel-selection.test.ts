@@ -1,6 +1,7 @@
 // Covers message channel selection from explicit input, tool context fallback,
 // configured accounts, and missing official external plugin repair hints.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
@@ -31,6 +32,10 @@ vi.mock("../../utils/message-channel.js", () => ({
 }));
 
 vi.mock("./channel-resolution.js", () => ({
+  normalizeDeliverableOutboundChannel: (value?: string | null) => {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : undefined;
+    return normalized && deliverableChannelIds.includes(normalized) ? normalized : undefined;
+  },
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
 }));
 
@@ -47,19 +52,35 @@ vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
           repairHint: `Install the official external plugin with: openclaw plugins install @openclaw/${channelId}, or run: openclaw doctor --fix.`,
         }
       : null,
+  resolveMissingOfficialExternalChannelPluginRepairHints: ({
+    channelIds,
+  }: {
+    channelIds: string[];
+  }) =>
+    channelIds.flatMap((channelId) =>
+      mocks.missingOfficialExternalChannels.has(channelId)
+        ? [
+            {
+              pluginId: channelId,
+              channelId,
+              label: channelId === "whatsapp" ? "WhatsApp" : "Feishu",
+              installSpec: `@openclaw/${channelId}`,
+              installCommand: `openclaw plugins install @openclaw/${channelId}`,
+              doctorFixCommand: "openclaw doctor --fix",
+              repairHint: `Install the official external plugin with: openclaw plugins install @openclaw/${channelId}, or run: openclaw doctor --fix.`,
+            },
+          ]
+        : [],
+    ),
 }));
 
 type ChannelSelectionModule = typeof import("./channel-selection.js");
-type RuntimeModule = typeof import("../../runtime.js");
 
-let testing: ChannelSelectionModule["testing"];
 let listConfiguredMessageChannels: ChannelSelectionModule["listConfiguredMessageChannels"];
 let resolveMessageChannelSelection: ChannelSelectionModule["resolveMessageChannelSelection"];
-let runtimeModule: RuntimeModule;
 
 beforeAll(async () => {
-  runtimeModule = await import("../../runtime.js");
-  ({ testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
+  ({ listConfiguredMessageChannels, resolveMessageChannelSelection } =
     await import("./channel-selection.js"));
 });
 
@@ -92,15 +113,17 @@ describe("listConfiguredMessageChannels", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    errorSpy = vi.spyOn(runtimeModule.defaultRuntime, "error").mockImplementation(() => undefined);
+    errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
     mocks.resolveOutboundChannelPlugin.mockReset();
     mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
       id: channel,
     }));
-    testing.resetLoggedChannelSelectionErrors();
-    errorSpy.mockClear();
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
   });
 
   it.each([
@@ -160,6 +183,34 @@ describe("listConfiguredMessageChannels", () => {
     mocks.listChannelPlugins.mockReturnValue(plugins);
     await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual(expected);
     expect(errorSpy).toHaveBeenCalledTimes(expectedErrors);
+  });
+
+  it("refreshes recent errors and re-logs errors evicted from the bounded dedupe", async () => {
+    const listWithAccounts = async (accountIds: string[]) => {
+      mocks.listChannelPlugins.mockReturnValue([
+        makePlugin({
+          id: "alpha",
+          accountIds,
+          resolveAccount: () => {
+            throw new Error("boom");
+          },
+        }),
+      ]);
+      await listConfiguredMessageChannels({} as never);
+    };
+
+    await listWithAccounts(Array.from({ length: 1024 }, (_, index) => `account-${index}`));
+    expect(errorSpy).toHaveBeenCalledTimes(1024);
+
+    await listWithAccounts(["account-0"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1024);
+
+    await listWithAccounts(["account-overflow"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1025);
+    await listWithAccounts(["account-0"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1025);
+    await listWithAccounts(["account-1"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1026);
   });
 });
 
@@ -243,27 +294,46 @@ describe("resolveMessageChannelSelection", () => {
     },
   ])("resolves message channel selection for %j", async ({ setup, params, expected, verify }) => {
     const setupResult = setup?.();
-    await expect(expectResolvedSelection(params)).resolves.toEqual(expected);
+    await expect(expectResolvedSelection(params)).resolves.toMatchObject(expected);
     verify?.(setupResult as never);
+  });
+
+  it("returns the exact bootstrapped plugin used to prove availability", async () => {
+    const plugin = { id: "alpha" };
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
+
+    const selection = await expectResolvedSelection({ cfg: {} as never, channel: "alpha" });
+
+    expect(selection.plugin).toBe(plugin);
+  });
+
+  it("returns the exact configured plugin used for single-channel selection", async () => {
+    const plugin = makePlugin({ id: "delta", isConfigured: async () => true });
+    mocks.listChannelPlugins.mockReturnValue([plugin]);
+
+    const selection = await expectResolvedSelection({ cfg: {} as never });
+
+    expect(selection.plugin).toBe(plugin);
   });
 
   it("allows bootstrap while checking explicit and fallback channels", async () => {
     const cfg = {} as never;
+    const fallbackPlugin = { id: "beta" };
     mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
-      channel === "beta" ? { id: "beta" } : undefined,
+      channel === "beta" ? fallbackPlugin : undefined,
     );
 
-    await expect(
-      expectResolvedSelection({
-        cfg,
-        channel: "alpha",
-        fallbackChannel: "beta",
-      }),
-    ).resolves.toEqual({
+    const selection = await expectResolvedSelection({
+      cfg,
+      channel: "alpha",
+      fallbackChannel: "beta",
+    });
+    expect(selection).toMatchObject({
       channel: "beta",
       configured: [],
       source: "tool-context-fallback",
     });
+    expect(selection.plugin).toBe(fallbackPlugin);
 
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(1, {
       channel: "alpha",
@@ -273,6 +343,19 @@ describe("resolveMessageChannelSelection", () => {
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(2, {
       channel: "beta",
       cfg,
+      allowBootstrap: true,
+    });
+  });
+
+  it("carries the admitted agent into channel bootstrap", async () => {
+    const cfg = {} as never;
+
+    await expectResolvedSelection({ cfg, channel: "alpha", agentId: "ops" });
+
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "alpha",
+      cfg,
+      agentId: "ops",
       allowBootstrap: true,
     });
   });

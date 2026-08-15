@@ -26,7 +26,7 @@ function isTailnetIPv6(address: string): boolean {
 }
 
 /** Lists unique Tailscale IPv4/IPv6 addresses from local external interfaces. */
-export function listTailnetAddresses(): TailnetAddresses {
+function listTailnetAddresses(): TailnetAddresses {
   const ipv4: string[] = [];
   const ipv6: string[] = [];
 

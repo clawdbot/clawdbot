@@ -35,7 +35,7 @@ OpenClaw bundles it as the `together` provider.
       agents: {
         defaults: {
           model: {
-            primary: "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            primary: "together/moonshotai/Kimi-K2.6",
           },
         },
       },
@@ -47,28 +47,27 @@ OpenClaw bundles it as the `together` provider.
 ### Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice together-api-key \
   --together-api-key "$TOGETHER_API_KEY"
 ```
 
 <Note>
-Onboarding sets `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` as the
-default model.
+Onboarding sets Together's recommended chat model,
+`together/moonshotai/Kimi-K2.6`, as the default.
 </Note>
 
 ## Built-in catalog
 
 Cost is USD per million tokens.
 
-| Model ref                                          | Name                         | Input       | Context | Max output | Cost (in/out) | Notes               |
-| -------------------------------------------------- | ---------------------------- | ----------- | ------- | ---------- | ------------- | ------------------- |
-| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | Llama 3.3 70B Instruct Turbo | text        | 131,072 | 8,192      | 0.88 / 0.88   | Default model       |
-| `together/moonshotai/Kimi-K2.6`                    | Kimi K2.6 FP4                | text, image | 262,144 | 32,768     | 1.20 / 4.50   | Reasoning model     |
-| `together/deepseek-ai/DeepSeek-V4-Pro`             | DeepSeek V4 Pro              | text        | 512,000 | 8,192      | 2.10 / 4.40   | Reasoning model     |
-| `together/Qwen/Qwen2.5-7B-Instruct-Turbo`          | Qwen2.5 7B Instruct Turbo    | text        | 32,768  | 8,192      | 0.30 / 0.30   | Fast, non-reasoning |
-| `together/zai-org/GLM-5.1`                         | GLM 5.1 FP4                  | text        | 202,752 | 8,192      | 1.40 / 4.40   | Reasoning model     |
+| Model ref                                          | Name                         | Input       | Context | Max output | Cost (in/out) | Notes           |
+| -------------------------------------------------- | ---------------------------- | ----------- | ------- | ---------- | ------------- | --------------- |
+| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | Llama 3.3 70B Instruct Turbo | text        | 131,072 | 8,192      | 1.04 / 1.04   | General model   |
+| `together/moonshotai/Kimi-K2.6`                    | Kimi K2.6 FP4                | text, image | 262,144 | 32,768     | 1.20 / 4.50   | Default model   |
+| `together/deepseek-ai/DeepSeek-V4-Pro`             | DeepSeek V4 Pro              | text        | 512,000 | 384,000    | 1.74 / 3.48   | Reasoning model |
+| `together/zai-org/GLM-5.2`                         | GLM 5.2 FP4                  | text        | 262,144 | 131,072    | 1.40 / 4.40   | Reasoning model |
 
 ## Video generation
 
@@ -78,7 +77,7 @@ shared `video_generate` tool.
 | Property             | Value                                                                                     |
 | -------------------- | ----------------------------------------------------------------------------------------- |
 | Default video model  | `Wan-AI/Wan2.2-T2V-A14B`                                                                  |
-| Other models         | `Wan-AI/Wan2.2-I2V-A14B`, `minimax/Hailuo-02`, `Kwai/Kling-2.1-Master`                    |
+| Other models         | `Wan-AI/Wan2.2-I2V-A14B`, `minimax/hailuo-02`, `kwaivgI/kling-2.1-master`                 |
 | Modes                | text-to-video; image-to-video only with `Wan-AI/Wan2.2-I2V-A14B` (single reference image) |
 | Duration             | 1-10 seconds                                                                              |
 | Supported parameters | `size` (parsed as `<width>x<height>`); `aspectRatio`/`resolution` are not read            |
@@ -89,8 +88,10 @@ To use Together as the default video provider:
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "together/Wan-AI/Wan2.2-T2V-A14B",
+      mediaModels: {
+        video: {
+          primary: "together/Wan-AI/Wan2.2-T2V-A14B",
+        },
       },
     },
   },

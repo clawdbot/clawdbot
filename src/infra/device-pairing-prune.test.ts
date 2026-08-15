@@ -10,10 +10,12 @@ import {
   pruneSupersededSilentPairedDevices,
   requestDevicePairing,
   withPairedDeviceRecords,
-  type PairedDeviceApprovalKind,
 } from "./device-pairing.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-device-pairing-prune-" });
+type PairedDeviceApprovalKind = NonNullable<
+  Parameters<typeof approveDevicePairing>[1]["approvedVia"]
+>;
 
 async function makeBaseDir(): Promise<string> {
   return await suiteRootTracker.make("case");

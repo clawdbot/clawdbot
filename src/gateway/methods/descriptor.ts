@@ -20,7 +20,7 @@ export type GatewayMethodOwner =
   | { kind: "aux"; area: string };
 
 /** Startup availability flag exposed to clients as retryable startup-unavailable errors. */
-export type GatewayMethodStartupAvailability = "available" | "unavailable-until-sidecars";
+type GatewayMethodStartupAvailability = "available" | "unavailable-until-sidecars";
 
 export type GatewayMethodHandler = (opts: never) => unknown;
 
@@ -30,6 +30,7 @@ export type GatewayMethodDescriptor = {
   handler: GatewayMethodHandler;
   scope: GatewayMethodScope;
   owner: GatewayMethodOwner;
+  since?: string;
   startup?: GatewayMethodStartupAvailability;
   controlPlaneWrite?: boolean;
   advertise?: boolean;
@@ -43,6 +44,8 @@ export type GatewayMethodDescriptorInput = Omit<GatewayMethodDescriptor, "name">
 
 /** Read-only method registry view used by request dispatch and method listing. */
 export type GatewayMethodRegistryView = {
+  /** Opaque registry handle carried into request scope by the gateway composition root. */
+  pluginRegistry?: object;
   getHandler: (name: string) => GatewayMethodHandler | undefined;
   listMethods: () => string[];
   listAdvertisedMethods: () => string[];

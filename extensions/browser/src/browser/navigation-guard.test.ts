@@ -6,7 +6,6 @@ import {
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
-  requiresInspectableBrowserNavigationRedirects,
 } from "./navigation-guard.js";
 
 function createLookupFn(address: string): LookupFn {
@@ -163,7 +162,7 @@ describe("browser navigation guard", () => {
         lookupFn,
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.example.com"],
+          allowedHostnames: ["*.example.com"],
         },
       }),
     ).resolves.toBeUndefined();
@@ -177,7 +176,7 @@ describe("browser navigation guard", () => {
         lookupFn,
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.example.com"],
+          allowedHostnames: ["*.example.com"],
         },
       }),
     ).rejects.toThrow(/dns rebinding protections are unavailable/i);
@@ -192,7 +191,7 @@ describe("browser navigation guard", () => {
         lookupFn,
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.example.com"],
+          allowedHostnames: ["*.example.com"],
         },
       }),
     ).rejects.toThrow(/dns rebinding protections are unavailable/i);
@@ -344,15 +343,5 @@ describe("browser navigation guard", () => {
         lookupFn,
       }),
     ).resolves.toBeUndefined();
-  });
-
-  it("requires redirect-hop inspection only in explicit strict mode", () => {
-    expect(requiresInspectableBrowserNavigationRedirects()).toBe(false);
-    expect(
-      requiresInspectableBrowserNavigationRedirects({ dangerouslyAllowPrivateNetwork: false }),
-    ).toBe(true);
-    expect(requiresInspectableBrowserNavigationRedirects({ allowPrivateNetwork: true })).toBe(
-      false,
-    );
   });
 });

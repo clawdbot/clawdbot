@@ -25,12 +25,6 @@ extension LocationServiceCommon {
     public func accuracyAuthorization() -> CLAccuracyAuthorization {
         LocationServiceSupport.accuracyAuthorization(manager: self.locationManager)
     }
-
-    public func requestLocationOnce() async throws -> CLLocation {
-        try await LocationServiceSupport.requestLocation(manager: self.locationManager) { continuation in
-            self.locationRequestContinuation = continuation
-        }
-    }
 }
 
 extension ConcurrentLocationServiceCommon {
@@ -61,8 +55,8 @@ extension ConcurrentLocationServiceCommon {
     }
 }
 
-public enum LocationServiceSupport {
-    public static func accuracyAuthorization(manager: CLLocationManager) -> CLAccuracyAuthorization {
+enum LocationServiceSupport {
+    static func accuracyAuthorization(manager: CLLocationManager) -> CLAccuracyAuthorization {
         if #available(iOS 14.0, macOS 11.0, *) {
             return manager.accuracyAuthorization
         }
@@ -70,7 +64,7 @@ public enum LocationServiceSupport {
     }
 
     @MainActor
-    public static func requestLocation(
+    static func requestLocation(
         manager: CLLocationManager,
         setContinuation: @escaping (CheckedContinuation<CLLocation, Error>) -> Void) async throws -> CLLocation
     {

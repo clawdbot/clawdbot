@@ -9,6 +9,7 @@ type TestRateLimiter = AuthRateLimiter & {
   check: ReturnType<typeof vi.fn<AuthRateLimiter["check"]>>;
   reset: ReturnType<typeof vi.fn<AuthRateLimiter["reset"]>>;
   recordFailure: ReturnType<typeof vi.fn<AuthRateLimiter["recordFailure"]>>;
+  recordFailureAndDelay: ReturnType<typeof vi.fn<AuthRateLimiter["recordFailureAndDelay"]>>;
 };
 
 const CLIENT_IP = "203.0.113.20";
@@ -19,10 +20,16 @@ function createLimiter(params?: { allowed?: boolean; retryAfterMs?: number }): T
   const check = vi.fn<AuthRateLimiter["check"]>(() => ({ allowed, remaining: 10, retryAfterMs }));
   const reset = vi.fn<AuthRateLimiter["reset"]>();
   const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>();
+  const recordFailureAndDelay = vi.fn<AuthRateLimiter["recordFailureAndDelay"]>(
+    async (ip, scope) => {
+      recordFailure(ip, scope);
+    },
+  );
   return {
     check,
     reset,
     recordFailure,
+    recordFailureAndDelay,
     size: vi.fn(() => 0),
     prune: vi.fn(),
     dispose: vi.fn(),

@@ -7,13 +7,10 @@ import { isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import { isRecord } from "../utils.js";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
-import {
-  clearPluginCommands,
-  clearPluginCommandsForPlugin,
-  isPluginCommandRegistryLocked,
-  pluginCommands,
-  type RegisteredPluginCommand,
-} from "./command-registry-state.js";
+import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
+import { clearPluginCommands } from "./command-registry-state.js";
+import type { PluginRegistry } from "./registry-types.js";
+import { getPluginRegistrationContext, requireActivePluginRegistry } from "./runtime.js";
 import {
   AGENT_PROMPT_SURFACE_KINDS,
   type AgentPromptGuidance,
@@ -32,6 +29,11 @@ import {
  */
 let reservedCommands: Set<string> | undefined;
 let agentPromptSurfaces: Set<string> | undefined;
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
 
 function getReservedCommands(): Set<string> {
   reservedCommands ??= new Set([
@@ -54,6 +56,7 @@ function getReservedCommands(): Set<string> {
     "activation",
     "skill",
     "learn",
+    "loop",
     "subagents",
     "kill",
     "steer",
@@ -79,7 +82,7 @@ function getAgentPromptSurfaces(): Set<string> {
 }
 
 /** Result returned when a plugin command registration succeeds or fails validation. */
-export type CommandRegistrationResult = {
+type CommandRegistrationResult = {
   ok: boolean;
   error?: string;
 };
@@ -91,7 +94,7 @@ export function isReservedCommandName(name: string): boolean {
 }
 
 /** Validates user-visible command names before plugin registration accepts them. */
-export function validateCommandName(
+function validateCommandName(
   name: string,
   opts?: { allowReservedCommandNames?: boolean },
 ): string | null {
@@ -119,7 +122,7 @@ export function validateCommandName(
  * Returns an error message if invalid, or null if valid.
  * Shared by both the global registration path and snapshot (non-activating) loads.
  */
-export function validatePluginCommandDefinition(
+function validatePluginCommandDefinition(
   command: OpenClawPluginCommandDefinition,
   opts?: { allowReservedCommandNames?: boolean },
 ): string | null {
@@ -163,6 +166,26 @@ export function validatePluginCommandDefinition(
       return typeof unknownScope === "string"
         ? `Command requiredScopes contains unknown operator scope: ${unknownScope}`
         : "Command requiredScopes contains unknown operator scope";
+    }
+  }
+  if (command.clientPresentation !== undefined) {
+    if (!isRecord(command.clientPresentation)) {
+      return "Command clientPresentation must be an object";
+    }
+    if (!hasExactKeys(command.clientPresentation, ["when", "action"])) {
+      return "Command clientPresentation must contain only when and action";
+    }
+    if (command.clientPresentation.when !== "no-arguments") {
+      return 'Command clientPresentation when must be "no-arguments"';
+    }
+    if (!isRecord(command.clientPresentation.action)) {
+      return "Command clientPresentation action must be an object";
+    }
+    if (!hasExactKeys(command.clientPresentation.action, ["kind"])) {
+      return "Command clientPresentation action must contain only kind";
+    }
+    if (command.clientPresentation.action.kind !== "device-pairing") {
+      return "Command clientPresentation action kind is not supported";
     }
   }
   if (
@@ -283,7 +306,7 @@ function normalizeAgentPromptGuidance(
   });
 }
 
-export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
+function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
   const keys = new Set<string>();
   const push = (value: string | undefined) => {
     const normalized = normalizeOptionalLowercaseString(value);
@@ -303,19 +326,6 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
   return [...keys];
 }
 
-export function pluginCommandSupportsChannel(
-  command: OpenClawPluginCommandDefinition,
-  channel?: string,
-): boolean {
-  if (!command.channels || command.channels.length === 0 || !channel) {
-    return true;
-  }
-  const normalizedChannel = normalizeLowercaseStringOrEmpty(channel);
-  return command.channels.some(
-    (entry) => normalizeLowercaseStringOrEmpty(entry) === normalizedChannel,
-  );
-}
-
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
@@ -326,8 +336,23 @@ export function registerPluginCommand(
     allowOwnerStatusExposure?: boolean;
   },
 ): CommandRegistrationResult {
+  const context = getPluginRegistrationContext();
+  return registerPluginCommandInRegistry(
+    context?.registry ?? requireActivePluginRegistry(),
+    context?.pluginId ?? pluginId,
+    command,
+    opts,
+  );
+}
+
+export function registerPluginCommandInRegistry(
+  registry: PluginRegistry,
+  pluginId: string,
+  command: OpenClawPluginCommandDefinition,
+  opts?: Parameters<typeof registerPluginCommand>[2],
+): CommandRegistrationResult {
   // Prevent registration while commands are being processed
-  if (isPluginCommandRegistryLocked()) {
+  if (getPluginCommandExecutionCount(registry) > 0) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
   if (command.ownership === "reserved") {
@@ -355,17 +380,23 @@ export function registerPluginCommand(
     ...(command.agentPromptGuidance
       ? { agentPromptGuidance: normalizeAgentPromptGuidance(command.agentPromptGuidance) }
       : {}),
+    ...(command.clientPresentation
+      ? {
+          clientPresentation: {
+            when: "no-arguments" as const,
+            action: { kind: "device-pairing" as const },
+          },
+        }
+      : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
   const key = `/${normalizedName}`;
 
   // Check for duplicate registration
   for (const invocationKey of invocationKeys) {
-    const existing =
-      pluginCommands.get(invocationKey) ??
-      Array.from(pluginCommands.values()).find((candidate) =>
-        listPluginInvocationKeys(candidate).includes(invocationKey),
-      );
+    const existing = registry.commands.find((entry) =>
+      listPluginInvocationKeys(entry.command).includes(invocationKey),
+    );
     if (existing) {
       return {
         ok: false,
@@ -374,11 +405,12 @@ export function registerPluginCommand(
     }
   }
 
-  pluginCommands.set(key, {
-    ...normalizedCommand,
+  registry.commands.push({
     pluginId,
     pluginName: opts?.pluginName,
-    pluginRoot: opts?.pluginRoot,
+    rootDir: opts?.pluginRoot,
+    source: opts?.pluginRoot ?? "runtime",
+    command: normalizedCommand,
     ...(opts?.allowOwnerStatusExposure === true && normalizedCommand.exposeSenderIsOwner === true
       ? { trustedOwnerStatusExposure: true as const }
       : {}),
@@ -387,5 +419,4 @@ export function registerPluginCommand(
   return { ok: true };
 }
 
-export { clearPluginCommands, clearPluginCommandsForPlugin };
-export type { RegisteredPluginCommand };
+export { clearPluginCommands };

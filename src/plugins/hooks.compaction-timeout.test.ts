@@ -10,7 +10,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
+import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type { PluginHookRegistration } from "./types.js";
 

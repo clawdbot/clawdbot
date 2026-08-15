@@ -11,12 +11,8 @@ import {
   sendJson,
   sendMethodNotAllowed,
   sendRateLimited,
-  sendText,
-  sendUnauthorized,
   setDefaultSecurityHeaders,
-  setSseHeaders,
   watchClientDisconnect,
-  writeDone,
 } from "./http-common.js";
 import { makeMockHttpReqRes, makeMockHttpResponse } from "./test-http-response.js";
 
@@ -157,21 +153,6 @@ describe("fuzz: sendJson", () => {
   });
 });
 
-describe("fuzz: sendText", () => {
-  it("propagates status, sets plain-text content type, and forwards the body", () => {
-    const rng = makeRng(0xfeed);
-    for (let i = 0; i < ITERATIONS; i += 1) {
-      const { res, setHeader, end } = makeMockHttpResponse();
-      const status = randInt(rng, 100, 599);
-      const body = randString(rng, 64);
-      sendText(res, status, body);
-      expect(res.statusCode).toBe(status);
-      expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
-      expect(end).toHaveBeenCalledWith(body);
-    }
-  });
-});
-
 describe("fuzz: sendMethodNotAllowed", () => {
   it("always responds 405 with the supplied Allow header (or POST when omitted)", () => {
     const rng = makeRng(0x405);
@@ -188,20 +169,6 @@ describe("fuzz: sendMethodNotAllowed", () => {
       }
       expect(res.statusCode).toBe(405);
       expect(end).toHaveBeenCalledWith("Method Not Allowed");
-    }
-  });
-});
-
-describe("fuzz: sendUnauthorized", () => {
-  it("is deterministic: always 401 with the canonical error payload", () => {
-    const expected = JSON.stringify({
-      error: { message: "Unauthorized", type: "unauthorized" },
-    });
-    for (let i = 0; i < ITERATIONS; i += 1) {
-      const { res, end } = makeMockHttpResponse();
-      sendUnauthorized(res);
-      expect(res.statusCode).toBe(401);
-      expect(end).toHaveBeenCalledWith(expected);
     }
   });
 });
@@ -330,42 +297,6 @@ describe("fuzz: readJsonBodyOrError", () => {
         expect(end).toHaveBeenCalledWith(expectedBody);
       }
       expect(readJsonBodyMock).toHaveBeenLastCalledWith(req, maxBytes);
-    }
-  });
-});
-
-describe("fuzz: writeDone", () => {
-  it("always writes the DONE sentinel exactly once per call", () => {
-    for (let i = 0; i < ITERATIONS; i += 1) {
-      const { res } = makeMockHttpResponse();
-      const write = vi.spyOn(res, "write");
-      writeDone(res);
-      expect(write).toHaveBeenCalledTimes(1);
-      expect(write).toHaveBeenCalledWith("data: [DONE]\n\n");
-    }
-  });
-});
-
-describe("fuzz: setSseHeaders", () => {
-  it("sets SSE headers and invokes flushHeaders when present", () => {
-    const rng = makeRng(0x55e);
-    for (let i = 0; i < ITERATIONS; i += 1) {
-      const { res, setHeader } = makeMockHttpResponse();
-      const hasFlush = rng() < 0.5;
-      const flushHeaders = vi.fn();
-      if (hasFlush) {
-        (res as unknown as { flushHeaders: () => void }).flushHeaders = flushHeaders;
-      }
-      setSseHeaders(res);
-      expect(res.statusCode).toBe(200);
-      expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/event-stream; charset=utf-8");
-      expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
-      expect(setHeader).toHaveBeenCalledWith("Connection", "keep-alive");
-      if (hasFlush) {
-        expect(flushHeaders).toHaveBeenCalledTimes(1);
-      } else {
-        expect(flushHeaders).not.toHaveBeenCalled();
-      }
     }
   });
 });

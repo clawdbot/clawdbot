@@ -1,7 +1,11 @@
 // Agent command-list tests cover provider metadata and command output for configured agents.
+import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const {
   buildProviderStatusIndexMock,
@@ -28,7 +32,7 @@ const {
   summarizeBindingsMock: vi.fn(),
 }));
 
-vi.mock("./agents.command-shared.js", () => ({
+vi.mock("./config-validation.js", () => ({
   requireValidConfig: requireValidConfigMock,
 }));
 
@@ -127,8 +131,8 @@ describe("agentsListCommand", () => {
         [
           "Agents:",
           "- main (default)",
-          "  Workspace: ~/.openclaw/workspace",
-          "  Agent dir: ~/.openclaw/agents/main/agent",
+          `  Workspace: ~${path.sep}.openclaw${path.sep}workspace`,
+          `  Agent dir: ~${path.sep}.openclaw${path.sep}agents${path.sep}main${path.sep}agent`,
           "  Routing rules: 1",
           "  Routing: Telegram default",
           "  Providers:",
@@ -139,4 +143,85 @@ describe("agentsListCommand", () => {
       ],
     ]);
   });
+
+  it("sanitizes configured agent text without changing JSON summaries", async () => {
+    const control = "\u001B]0;agents-list-injection\u0007";
+    const identityName = `${control}Operator 🦞\r\nforged-row`;
+    const workspace = `/tmp/workspace-${control}\tpath`;
+    const model = `${control}provider/model\nvariant`;
+    const cfg = {
+      agents: {
+        entries: {
+          main: {
+            name: `${control}Main\nAlias`,
+            workspace,
+            agentDir: `/tmp/agent-${control}\npath`,
+            model,
+            identity: { name: identityName },
+          },
+        },
+      },
+      bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+    } satisfies OpenClawConfig;
+    requireValidConfigMock.mockResolvedValue(cfg);
+    summarizeBindingsMock.mockReturnValue([`${control}Telegram\nroute`]);
+    listProvidersForAgentMock.mockReturnValue([`${control}Telegram\tconfigured`]);
+
+    const textRuntime = createRuntime();
+    await agentsListCommand({ bindings: true }, textRuntime);
+
+    const textOutput = vi.mocked(textRuntime.log).mock.calls.flat().join("\n");
+    expect(textOutput).not.toContain("\u001B");
+    expect(textOutput).not.toContain("\nforged-row");
+    expect(textOutput).toContain("Operator 🦞\\r\\nforged-row");
+    expect(textOutput).toContain("provider/model\\nvariant");
+    expect(textOutput).toContain("Telegram\\nroute");
+
+    const jsonRuntime = createRuntime();
+    await agentsListCommand({ json: true }, jsonRuntime);
+
+    // Workspace paths are platform-normalized before JSON, so assert the
+    // non-sanitization invariant on it rather than byte equality.
+    expect(jsonRuntime.json[0]).toEqual([expect.objectContaining({ identityName, model })]);
+    expect((jsonRuntime.json[0] as Array<{ workspace: string }>)[0]?.workspace).toContain(control);
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "shortens real Windows home casing aliases in human output",
+    async () => {
+      await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
+        const workspace = path.join(home, "workspace");
+        const agentDir = path.join(home, "agents", "main", "agent");
+        await fs.promises.mkdir(workspace, { recursive: true });
+        await fs.promises.mkdir(agentDir, { recursive: true });
+        const homeAlias = home.toUpperCase();
+        expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
+
+        requireValidConfigMock.mockResolvedValueOnce({
+          agents: {
+            list: [
+              {
+                id: "main",
+                default: true,
+                workspace: path.join(homeAlias, "workspace"),
+                agentDir: path.join(homeAlias, "agents", "main", "agent"),
+              },
+            ],
+          },
+        } satisfies OpenClawConfig);
+        const runtime = createRuntime();
+
+        await withEnvAsync({ OPENCLAW_HOME: home }, async () => {
+          await agentsListCommand({}, runtime);
+        });
+
+        const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+        expect(output).toContain(`Workspace: $OPENCLAW_HOME${path.sep}workspace`);
+        expect(output).toContain(
+          `Agent dir: $OPENCLAW_HOME${path.sep}agents${path.sep}main${path.sep}agent`,
+        );
+        expect(output).not.toContain(homeAlias);
+      });
+    },
+  );
 });

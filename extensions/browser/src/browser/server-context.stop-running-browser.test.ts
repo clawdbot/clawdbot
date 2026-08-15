@@ -18,7 +18,7 @@ const pwAiMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./pw-ai.js", () => pwAiMocks);
+vi.mock("./pw-ai.js", () => ({ pwAi: pwAiMocks }));
 vi.mock("./chrome.js", () => ({
   isChromeCdpOwnedByPid: vi.fn(async () => true),
   isChromeCdpReady: vi.fn(async () => true),

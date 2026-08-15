@@ -1,27 +1,45 @@
 // Tests CLI dispatch arguments and runtime selection for agent runner turns.
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
   onAgentEvent,
   resetAgentEventsForTest,
 } from "../../infra/agent-events.js";
-import type {
-  ReasoningProgressPayload,
-  ReasoningTextPayload,
-} from "./agent-runner-cli-dispatch.js";
 import {
+  clearCliSessionBindingForRun,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
-  runCliAgentWithLifecycle,
+  runCliAgentWithLifecycle as runCliAgentWithLifecycleProduction,
 } from "./agent-runner-cli-dispatch.js";
+
+type ProductionLifecycleParams = Parameters<typeof runCliAgentWithLifecycleProduction>[0];
+type RunCliAgentWithLifecycleParams = Omit<ProductionLifecycleParams, "runParams"> & {
+  runParams: Omit<ProductionLifecycleParams["runParams"], "admittedRunContext">;
+};
+const runCliAgentWithLifecycle = (params: RunCliAgentWithLifecycleParams) =>
+  runCliAgentWithLifecycleProduction({
+    ...params,
+    runParams: withTestAdmittedRunContext(params.runParams),
+  });
+type ReasoningTextPayload = Parameters<
+  NonNullable<RunCliAgentWithLifecycleParams["onReasoningText"]>
+>[0];
+type ReasoningProgressPayload = Parameters<
+  NonNullable<RunCliAgentWithLifecycleParams["onReasoningProgress"]>
+>[0];
 
 const cliDispatchState = vi.hoisted(() => ({
   runCliAgentMock: vi.fn(),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => cliDispatchState.runCliAgentMock(...args),
@@ -34,6 +52,97 @@ afterEach(() => {
 });
 
 describe("runCliAgentWithLifecycle", () => {
+  it("bridges typed CLI plan events", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "codex-exec",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "pending" },
+          ],
+        },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onPlanUpdate = vi.fn(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-plan-bridge",
+      provider: "codex-cli",
+      onPlanUpdate,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "codex-cli",
+        model: "codex",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-plan-bridge",
+      },
+    });
+
+    expect(onPlanUpdate).toHaveBeenCalledWith({
+      phase: "update",
+      title: "Plan updated",
+      explanation: undefined,
+      source: "codex-exec",
+      steps: [
+        { step: "Inspect", status: "completed" },
+        { step: "Patch", status: "pending" },
+      ],
+    });
+  });
+
+  it("normalizes shipped string-step plan events to pending typed steps", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "codex-exec",
+          steps: ["Inspect", "  ", "Patch"],
+        },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onPlanUpdate = vi.fn(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-plan-legacy",
+      provider: "codex-cli",
+      onPlanUpdate,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "codex-cli",
+        model: "codex",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-plan-legacy",
+      },
+    });
+
+    expect(onPlanUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        steps: [
+          { step: "Inspect", status: "pending" },
+          { step: "Patch", status: "pending" },
+        ],
+      }),
+    );
+  });
+
   it("bridges thinking events to reasoning text and dedupes identical snapshots", async () => {
     cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
       emitAgentEvent({
@@ -562,6 +671,62 @@ describe("keepCliSessionBindingOnlyWhenReused", () => {
   });
 });
 
+describe("clearCliSessionBindingForRun", () => {
+  it("clears the expected binding from active and stored session entries", async () => {
+    const activeEntry = {
+      sessionId: "openclaw-active",
+      updatedAt: 1,
+      cliSessionBindings: { "claude-cli": { sessionId: "stale-session" } },
+      cliSessionIds: { "claude-cli": "stale-session" },
+      claudeCliSessionId: "stale-session",
+    };
+    const storedEntry = structuredClone(activeEntry);
+    const storePath = path.join(tempDirs.make("cli-session-cleanup-"), "sessions.json");
+    await replaceSessionEntry({ storePath, sessionKey: "main" }, structuredClone(activeEntry));
+
+    await clearCliSessionBindingForRun({
+      provider: "claude-cli",
+      expectedSessionId: "stale-session",
+      sessionKey: "main",
+      sessionStore: { main: storedEntry },
+      storePath,
+      activeSessionEntry: activeEntry,
+    });
+
+    for (const entry of [activeEntry, storedEntry]) {
+      expect(entry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(entry.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(entry.claudeCliSessionId).toBeUndefined();
+      expect(entry.updatedAt).toBeGreaterThan(1);
+    }
+    const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
+    expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(persisted?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("does not clear a replacement binding adopted by another turn", async () => {
+    const entry = {
+      sessionId: "openclaw-active",
+      updatedAt: 1,
+      cliSessionBindings: { "claude-cli": { sessionId: "replacement-session" } },
+      cliSessionIds: { "claude-cli": "replacement-session" },
+      claudeCliSessionId: "replacement-session",
+    };
+
+    await clearCliSessionBindingForRun({
+      provider: "claude-cli",
+      expectedSessionId: "stale-session",
+      activeSessionEntry: entry,
+    });
+
+    expect(entry.cliSessionBindings["claude-cli"].sessionId).toBe("replacement-session");
+    expect(entry.cliSessionIds["claude-cli"]).toBe("replacement-session");
+    expect(entry.claudeCliSessionId).toBe("replacement-session");
+    expect(entry.updatedAt).toBe(1);
+  });
+});
+
 describe("createCliToolSummaryTracker", () => {
   const startEvent = {
     name: "exec",
@@ -578,25 +743,32 @@ describe("createCliToolSummaryTracker", () => {
     result: { content: [{ type: "text", text: "Wed Jun 10 2026" }] },
   };
 
-  it("delivers a tool summary for a result using meta captured at start", async () => {
-    const deliver = vi.fn();
-    const tracker = createCliToolSummaryTracker({
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      deliver,
-    });
-    await tracker.noteToolEvent(startEvent);
-    await tracker.noteToolEvent(resultEvent);
-    expect(deliver).toHaveBeenCalledTimes(1);
-    const payload = deliver.mock.calls[0]?.[0] as { text: string; isError?: boolean };
-    expect(payload.text).toContain("date -u");
-    expect(payload.text).not.toContain("Wed Jun 10 2026");
-    expect(payload.isError).toBeUndefined();
-  });
+  it.each(["exec", "server.exec"])(
+    "delivers a safe %s summary using metadata captured at start",
+    async (name) => {
+      const deliver = vi.fn();
+      const tracker = createCliToolSummaryTracker({
+        commandDetailsVisible: false,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        deliver,
+      });
+      await tracker.noteToolEvent({ ...startEvent, name });
+      const commandBearing = await tracker.noteToolEvent({ ...resultEvent, name });
+      expect(commandBearing).toBe(true);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      const payload = deliver.mock.calls[0]?.[0] as { text: string; isError?: boolean };
+      expect(payload.text).toContain(name === "exec" ? "Exec" : "Server.exec");
+      expect(payload.text).not.toContain("date -u");
+      expect(payload.text).not.toContain("Wed Jun 10 2026");
+      expect(payload.isError).toBeUndefined();
+    },
+  );
 
   it("appends the tool output block when full verbose output is enabled", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: true,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => true,
       deliver,
@@ -611,6 +783,7 @@ describe("createCliToolSummaryTracker", () => {
   it("renders top-level structured CLI results in full verbose output", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: true,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => true,
       deliver,
@@ -629,6 +802,7 @@ describe("createCliToolSummaryTracker", () => {
   it("emits nothing while tool summaries are disabled", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: false,
       shouldEmitToolResult: () => false,
       shouldEmitToolOutput: () => false,
       deliver,
@@ -641,6 +815,7 @@ describe("createCliToolSummaryTracker", () => {
   it("propagates tool errors on the summary payload", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: false,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       deliver,
@@ -654,6 +829,7 @@ describe("createCliToolSummaryTracker", () => {
   it("summarizes results without a tracked start event", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: false,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       deliver,

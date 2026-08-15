@@ -7,13 +7,13 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const fixtureTempDirs: string[] = [];
 const fixtureRoot = makeTrackedTempDir("openclaw-plugin-graceful", fixtureTempDirs);
 let tempDirIndex = 0;
-const { loadOpenClawPlugins, clearPluginLoaderCache } = await import("./loader.js");
+const { loadOpenClawPlugins, clearPluginLoaderCache } = await import("./loader.test-fixtures.js");
 
 afterAll(() => {
   cleanupTrackedTempDirs(fixtureTempDirs);
 });
 
-function makeTempDir() {
+function makePluginLoaderTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
@@ -24,7 +24,7 @@ function writePlugin(params: { id: string; body: string; dir?: string }): {
   file: string;
   dir: string;
 } {
-  const dir = params.dir ?? makeTempDir();
+  const dir = params.dir ?? makePluginLoaderTempDir();
   fs.mkdirSync(dir, { recursive: true });
   const filename = `${params.id}.cjs`;
   const file = path.join(dir, filename);
@@ -135,6 +135,40 @@ describe("graceful plugin initialization failure", () => {
     expect(failed.failedAt).toBeInstanceOf(Date);
     expect(failed.failedAt?.getTime()).toBeGreaterThanOrEqual(before.getTime());
     expect(failed.failedAt?.getTime()).toBeLessThanOrEqual(after.getTime());
+  });
+
+  it("rolls back partial metadata without breaking an earlier class-backed service", async () => {
+    const stable = writePlugin({
+      id: "a-stable-service-plugin",
+      body: `class StableService {
+        constructor() { this.id = "stable-service"; }
+        start() {}
+        ping() { return "still-alive"; }
+      }
+      module.exports = { id: "a-stable-service-plugin", register(api) {
+        api.registerService(new StableService());
+      } };`,
+    });
+    const failing = writePlugin({
+      id: "z-partial-register-failure",
+      body: `module.exports = { id: "z-partial-register-failure", register(api) {
+        api.registerService({ id: "failed-service", start() {} });
+        api.registerHttpRoute({ path: "/failed", auth: "plugin", handler: async () => true });
+        throw new Error("fail after partial registration");
+      } };`,
+    });
+
+    const registry = await loadPlugins([stable.file, failing.file]);
+    const failed = requirePluginEntry(registry, "z-partial-register-failure");
+    const stableService = registry.services.find((entry) => entry.service.id === "stable-service")
+      ?.service as { ping?: () => string } | undefined;
+
+    expect(failed.status).toBe("error");
+    expect(failed.services).toEqual([]);
+    expect(failed.httpRoutes).toBe(0);
+    expect(registry.services.map((entry) => entry.service.id)).toEqual(["stable-service"]);
+    expect(registry.httpRoutes).toEqual([]);
+    expect(stableService?.ping?.()).toBe("still-alive");
   });
 
   it("records validation failures before register", async () => {

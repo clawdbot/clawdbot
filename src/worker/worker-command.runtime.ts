@@ -1,0 +1,94 @@
+import type { Readable, Writable } from "node:stream";
+import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { parseWorkerLaunchDescriptor, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import { runWorkerDescriptor } from "./worker.runtime.js";
+
+type RunWorkerCommandOptions = {
+  input: Readable;
+  lifetime?: WorkerCommandLifetime;
+  output: Writable;
+};
+
+export type WorkerCommandLifetime = {
+  dispose: () => void;
+  reportConnectionFailure: (cause: string | undefined) => void;
+  signal: AbortSignal;
+  started: Promise<boolean>;
+  terminateOwnedTree: () => void;
+};
+
+async function readLaunchDescriptor(input: Readable): Promise<WorkerLaunchDescriptor> {
+  const chunks: Buffer[] = [];
+  let byteLength = 0;
+  for await (const rawChunk of input as AsyncIterable<unknown>) {
+    const chunk =
+      typeof rawChunk === "string"
+        ? Buffer.from(rawChunk)
+        : rawChunk instanceof Uint8Array
+          ? Buffer.from(rawChunk)
+          : undefined;
+    if (!chunk) {
+      throw new Error("worker launch descriptor input must be bytes");
+    }
+    byteLength += chunk.byteLength;
+    if (byteLength > WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
+      throw new Error("worker launch descriptor exceeds the protocol payload limit");
+    }
+    chunks.push(chunk);
+  }
+  if (byteLength === 0) {
+    throw new Error("worker launch descriptor is required on stdin");
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  } catch (error) {
+    throw new Error("worker launch descriptor is not valid JSON", { cause: error });
+  }
+  return parseWorkerLaunchDescriptor(decoded);
+}
+
+/** Process shell for `openclaw worker`: stdin descriptor in, JSON result out, signals abort the run. */
+export async function runWorkerCommand(options: RunWorkerCommandOptions): Promise<void> {
+  const abortController = new AbortController();
+  const stop = () => abortController.abort(new Error("worker interrupted"));
+  let lifetimeEnded = false;
+  const stopForLifetime = () => {
+    if (lifetimeEnded || !options.lifetime) {
+      return;
+    }
+    lifetimeEnded = true;
+    abortController.abort(
+      options.lifetime.signal.reason ?? new Error("worker supervisor lifetime ended"),
+    );
+    options.lifetime.terminateOwnedTree();
+  };
+  try {
+    const [descriptor, started] = await Promise.all([
+      readLaunchDescriptor(options.input),
+      options.lifetime?.started ?? Promise.resolve(true),
+    ]);
+    if (!started) {
+      return;
+    }
+    options.lifetime?.signal.addEventListener("abort", stopForLifetime, { once: true });
+    if (options.lifetime?.signal.aborted) {
+      stopForLifetime();
+    }
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+    const result = await runWorkerDescriptor(descriptor, {
+      signal: abortController.signal,
+      ...(options.lifetime
+        ? { onConnectionFailure: options.lifetime.reportConnectionFailure }
+        : {}),
+    });
+    const encoded = `${JSON.stringify(result)}\n`;
+    options.output.write(encoded);
+  } finally {
+    options.lifetime?.signal.removeEventListener("abort", stopForLifetime);
+    options.lifetime?.dispose();
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
+}

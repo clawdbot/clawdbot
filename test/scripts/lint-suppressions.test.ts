@@ -3,6 +3,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  collectLintDisableDirectives,
+  isMaxLinesRule,
+} from "../../scripts/check-max-lines-ratchet.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 
@@ -10,7 +14,6 @@ const repoRoot = path.resolve(import.meta.dirname, "../..");
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 const IGNORED_DIRS = new Set([".cache", ".git", "build", "coverage", "dist", "node_modules"]);
 const ROOTS = ["src", "extensions", "scripts", "ui"] as const;
-const SUPPRESSION_PATTERN = /(?:oxlint|eslint)-disable(?:-next-line)?\s+([@/\w-]+)(?:\s+--|$)/u;
 
 type SuppressionEntry = {
   file: string;
@@ -19,6 +22,12 @@ type SuppressionEntry = {
 
 let productionLintSuppressionsCache: SuppressionEntry[] | null = null;
 let productionCodeFilesCache: string[] | null = null;
+
+function collectFileSuppressions(file: string, source: string): SuppressionEntry[] {
+  return collectLintDisableDirectives(source, file).flatMap((rules) =>
+    rules.filter((rule) => !isMaxLinesRule(rule)).map((rule) => ({ file, rule })),
+  );
+}
 
 function isProductionCodeFile(relativePath: string): boolean {
   const basename = path.posix.basename(relativePath);
@@ -89,20 +98,7 @@ function collectProductionLintSuppressions(): SuppressionEntry[] {
   const files = listProductionCodeFiles();
   for (const relativePath of files) {
     const source = fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
-    for (const line of source.split("\n")) {
-      const match = line.match(SUPPRESSION_PATTERN);
-      if (!match) {
-        continue;
-      }
-      const rule = match[1];
-      if (rule === undefined) {
-        continue;
-      }
-      entries.push({
-        file: relativePath,
-        rule,
-      });
-    }
+    entries.push(...collectFileSuppressions(relativePath, source));
   }
   productionLintSuppressionsCache = entries;
   return [...entries];
@@ -111,14 +107,7 @@ function collectProductionLintSuppressions(): SuppressionEntry[] {
 function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
   const result = spawnSync(
     "git",
-    [
-      "grep",
-      "-n",
-      "-E",
-      String.raw`(oxlint|eslint)-disable(-next-line)?[[:space:]]+[@/[:alnum:]_-]+`,
-      "--",
-      ...ROOTS,
-    ],
+    ["grep", "-z", "-l", "-e", "oxlint-disable", "-e", "eslint-disable", "--", ...ROOTS],
     {
       cwd: repoRoot,
       encoding: "utf8",
@@ -133,24 +122,13 @@ function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
     return null;
   }
   const entries: SuppressionEntry[] = [];
-  for (const line of result.stdout.split("\n")) {
-    const match = /^([^:]+):\d+:(.*)$/u.exec(line);
-    if (!match) {
+  for (const file of result.stdout.split("\0").filter(Boolean)) {
+    if (!isProductionCodeFile(file) || !fs.existsSync(path.join(repoRoot, file))) {
       continue;
     }
-    const file = match[1];
-    const sourceLine = match[2];
-    if (file === undefined || sourceLine === undefined || !isProductionCodeFile(file)) {
-      continue;
-    }
-    const suppression = sourceLine.match(SUPPRESSION_PATTERN);
-    if (!suppression) {
-      continue;
-    }
-    const rule = suppression[1];
-    if (rule !== undefined) {
-      entries.push({ file, rule });
-    }
+    entries.push(
+      ...collectFileSuppressions(file, fs.readFileSync(path.join(repoRoot, file), "utf8")),
+    );
   }
   return entries;
 }
@@ -181,6 +159,22 @@ function filterExpectedSuppressionsForPresentFiles(entries: readonly string[]): 
 collectProductionLintSuppressions();
 
 describe("production lint suppressions", () => {
+  it("keeps companion rules visible beside max-lines suppressions", () => {
+    expect(
+      collectFileSuppressions(
+        "src/example.ts",
+        "/* oxlint-disable\nmax-lines, no-console\n-- TODO: split this file. */",
+      ),
+    ).toEqual([{ file: "src/example.ts", rule: "no-console" }]);
+    expect(
+      collectFileSuppressions(
+        "src/example.ts",
+        "/* oxlint-disable eslint/max-lines, no-debugger */",
+      ),
+    ).toEqual([{ file: "src/example.ts", rule: "no-debugger" }]);
+    expect(collectFileSuppressions("src/example.ts", "/* oxlint-disable - reason */")).toEqual([]);
+  });
+
   it("lists production files from git without walking source roots", () => {
     expectNoReaddirSyncDuring(() => {
       const files = listProductionCodeFiles();
@@ -193,7 +187,8 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual(
       filterExpectedSuppressionsForPresentFiles([
-        "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|3",
+        "extensions/browser/src/browser/pw-tools-core.interactions.actions.ts|@typescript-eslint/no-implied-eval|2",
+        "extensions/browser/src/browser/pw-tools-core.interactions.content.ts|@typescript-eslint/no-implied-eval|1",
         "extensions/browser/src/cli/browser-cli-actions-input/register.files-downloads.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/browser/src/node-host/invoke-browser.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
@@ -201,8 +196,11 @@ describe("production lint suppressions", () => {
         "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/qa-lab/src/gateway-child.ts|preserve-caught-error|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
+        "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
+        "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
         "src/audit/audit-event-writer.ts|unicorn/require-post-message-target-origin|2",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
@@ -211,8 +209,6 @@ describe("production lint suppressions", () => {
         "src/cli/command-options.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/crestodian/setup-inference.ts|no-unsafe-finally|1",
-        "src/crestodian/setup-inference.ts|preserve-caught-error|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
@@ -227,7 +223,6 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/facade-runtime.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugin-sdk/json-store.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/qa-runner-runtime.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/plugin-sdk/test-helpers/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
@@ -236,12 +231,18 @@ describe("production lint suppressions", () => {
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
+        // Raw PowerShell errors carry the -EncodedCommand argv; only the sanitized cause may escape.
+        "src/secrets/private-plan-file.ts|preserve-caught-error|1",
+        "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/system-agent/setup-inference-activate.ts|no-unsafe-finally|1",
+        "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/version.ts|eslint/no-underscore-dangle|1",
         "ui/public/sw.js|unicorn/require-post-message-target-origin|1",
+        // oxlint misreads CanvasRenderingContext2D.fill(path) as Array.fill.
+        "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
       ]),
     );
   });

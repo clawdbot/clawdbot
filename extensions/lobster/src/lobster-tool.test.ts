@@ -1,5 +1,6 @@
-// Lobster tests cover lobster tool plugin behavior.
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+// Lobster tests cover lobster tool plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../runtime-api.js";
 import { createLobsterTool } from "./lobster-tool.js";
@@ -10,7 +11,7 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
     id: "lobster",
     name: "lobster",
     source: "test",
-    runtime: { version: "test" } as any,
+    runtime: { version: "test" } as OpenClawPluginApi["runtime"],
     resolvePath: (p) => p,
     ...overrides,
   });
@@ -30,12 +31,7 @@ function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPl
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 describe("lobster plugin tool", () => {
   it("returns the Lobster envelope in details", async () => {

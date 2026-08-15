@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../config/sessions.js";
 
 /** User or automatic model/provider override selection for a session entry. */
-export type ModelOverrideSelection = {
+type ModelOverrideSelection = {
   provider: string;
   model: string;
   isDefault?: boolean;
@@ -26,7 +26,7 @@ export function isModelSelectionLocked(entry: SessionEntry | undefined): boolean
 }
 
 /** Enforces the durable model-selection lock before any session model fields change. */
-export function assertModelSelectionUnlocked(entry: SessionEntry): void {
+function assertModelSelectionUnlocked(entry: SessionEntry): void {
   if (isModelSelectionLocked(entry)) {
     throw new ModelSelectionLockedError();
   }
@@ -78,6 +78,10 @@ export function applyModelOverrideToSessionEntry(params: {
       delete entry.modelOverrideSource;
       updated = true;
     }
+    if (entry.modelOverrideRouteResolution) {
+      delete entry.modelOverrideRouteResolution;
+      updated = true;
+    }
     updated = clearFallbackOrigin(entry) || updated;
   } else {
     if (entry.providerOverride !== selection.provider) {
@@ -92,6 +96,10 @@ export function applyModelOverrideToSessionEntry(params: {
     }
     if (entry.modelOverrideSource !== selectionSource) {
       entry.modelOverrideSource = selectionSource;
+      updated = true;
+    }
+    if (entry.modelOverrideRouteResolution !== "resolved") {
+      entry.modelOverrideRouteResolution = "resolved";
       updated = true;
     }
     updated = clearFallbackOrigin(entry) || updated;
@@ -183,9 +191,7 @@ export function applyModelOverrideToSessionEntry(params: {
       // runtime model fields so live-switch resolution lands on the default.
       entry.liveModelSwitchPending = true;
     }
-    delete entry.fallbackNoticeSelectedModel;
-    delete entry.fallbackNoticeActiveModel;
-    delete entry.fallbackNoticeReason;
+    delete entry.fallbackNotice;
     entry.updatedAt = Date.now();
   }
 

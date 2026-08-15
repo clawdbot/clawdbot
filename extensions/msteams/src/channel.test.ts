@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { msteamsPlugin } from "./channel.js";
+import { msteamsSetupPlugin } from "./channel.setup.js";
 
 function createConfiguredMSTeamsCfg(): OpenClawConfig {
   return {
@@ -18,6 +19,73 @@ function createConfiguredMSTeamsCfg(): OpenClawConfig {
 }
 
 describe("msteamsPlugin", () => {
+  it("distinguishes users from channel and group conversations", () => {
+    const infer = msteamsPlugin.messaging?.inferTargetChatType;
+    const ownerId = "00000000-0000-0000-0000-000000000001";
+    expect(infer?.({ to: ownerId })).toBe("direct");
+    expect(infer?.({ to: "19:channel@thread.tacv2" })).toBe("channel");
+    expect(infer?.({ to: "19:group@thread.v2" })).toBe("group");
+    expect(
+      msteamsPlugin.messaging?.resolveOutboundSessionRoute?.({
+        cfg: {},
+        agentId: "main",
+        target: ownerId,
+      }),
+    ).toMatchObject({ chatType: "direct" });
+  });
+
+  it("shares account and metadata contracts with the lightweight setup plugin", () => {
+    expect(msteamsSetupPlugin.meta).toEqual(msteamsPlugin.meta);
+
+    for (const key of [
+      "listAccountIds",
+      "resolveAccount",
+      "defaultAccountId",
+      "setAccountEnabled",
+      "deleteAccount",
+      "resolveAllowFrom",
+      "formatAllowFrom",
+      "resolveDefaultTo",
+    ] as const) {
+      expect(msteamsSetupPlugin.config[key]).toBe(msteamsPlugin.config[key]);
+    }
+  });
+
+  it("preserves the default account and allowlist across runtime and setup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          ...createConfiguredMSTeamsCfg().channels?.msteams,
+          allowFrom: ["OWNER", "  Team.Member  "],
+          defaultTo: "19:team@thread.tacv2",
+        },
+      },
+    };
+
+    for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
+      expect(plugin.config.defaultAccountId?.(cfg)).toBe("default");
+      expect(plugin.config.resolveAccount(cfg, "ignored")).toEqual({
+        accountId: "default",
+        enabled: true,
+        configured: true,
+      });
+      expect(plugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+        "OWNER",
+        "  Team.Member  ",
+      ]);
+      expect(
+        plugin.config.formatAllowFrom?.({
+          cfg,
+          accountId: "default",
+          allowFrom: ["OWNER", "  Team.Member  "],
+        }),
+      ).toEqual(["owner", "team.member"]);
+      expect(plugin.config.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe(
+        "19:team@thread.tacv2",
+      );
+    }
+  });
+
   it("exposes approval auth through approvalCapability", () => {
     expect(msteamsPlugin.approvalCapability).toBe(msTeamsApprovalAuth);
   });
@@ -54,6 +122,26 @@ describe("msteamsPlugin", () => {
     expect(looksLikeId?.("29:1a2b3c4d5e6f")).toBe(true);
     expect(looksLikeId?.("a:1bfPersonalChat")).toBe(true);
     expect(looksLikeId?.("user:Jane Doe")).toBe(false);
+  });
+
+  it("recognizes provider-prefixed explicit targets without claiming display names", () => {
+    const messaging = msteamsPlugin.messaging;
+    const aadUserId = "40a1a0ed-4ff2-4164-a219-55518990c197";
+
+    expect(
+      ["teams", "msteams"].map((provider) => {
+        const target = `${provider}:user:${aadUserId}`;
+        return {
+          explicit: messaging?.targetResolver?.looksLikeId?.(target),
+          normalized: messaging?.normalizeTarget?.(target),
+        };
+      }),
+    ).toEqual([
+      { explicit: true, normalized: `user:${aadUserId}` },
+      { explicit: true, normalized: `user:${aadUserId}` },
+    ]);
+    expect(messaging?.targetResolver?.looksLikeId?.("teams:user:Jane Doe")).toBe(false);
+    expect(messaging?.targetResolver?.looksLikeId?.("msteams:user:Jane Doe")).toBe(false);
   });
 });
 
@@ -180,31 +268,45 @@ describe("msteams config schema", () => {
 });
 
 describe("msTeamsApprovalAuth", () => {
-  it("authorizes stable Teams user ids and ignores display-name allowlists", () => {
-    expect(
-      msTeamsApprovalAuth.authorizeActorAction({
-        cfg: {
-          channels: {
-            msteams: {
-              allowFrom: ["user:123e4567-e89b-12d3-a456-426614174000"],
-            },
-          },
-        },
-        senderId: "123e4567-e89b-12d3-a456-426614174000",
-        action: "approve",
-        approvalKind: "exec",
-      }),
-    ).toEqual({ authorized: true });
+  const ownerId = "123e4567-e89b-12d3-a456-426614174000";
+  const otherUserId = "22222222-2222-4222-8222-222222222222";
 
-    expect(
-      msTeamsApprovalAuth.authorizeActorAction({
-        cfg: {
-          channels: { msteams: { allowFrom: ["Owner Display"] } },
-        },
-        senderId: "attacker-aad",
-        action: "approve",
-        approvalKind: "exec",
-      }),
-    ).toEqual({ authorized: true });
+  function authorizeApproval(allowFrom: string[], senderId: string) {
+    return msTeamsApprovalAuth.authorizeActorAction({
+      cfg: { channels: { msteams: { allowFrom } } },
+      senderId,
+      action: "approve",
+      approvalKind: "exec",
+    });
+  }
+
+  it.each([
+    ["bare", ownerId],
+    ["user-prefixed", `user:${ownerId}`],
+    ["provider-prefixed", `msteams:user:${ownerId}`],
+    ["provider-prefixed bare", `teams:${ownerId}`],
+    ["uppercase", `MSTEAMS:USER:${ownerId.toUpperCase()}`],
+  ])("authorizes only the configured owner for %s AAD object IDs", (_label, allowFrom) => {
+    expect(authorizeApproval([allowFrom], ownerId)).toEqual({ authorized: true });
+    expect(authorizeApproval([allowFrom], otherUserId)).toMatchObject({ authorized: false });
+  });
+
+  it.each([
+    ["conversation", `conversation:${otherUserId}`],
+    ["provider-prefixed conversation", `msteams:conversation:${otherUserId}`],
+    ["chat", `chat:${otherUserId}`],
+    ["email", "owner@example.com"],
+    ["display name", "Owner Display"],
+    ["access group", "accessGroup:operators"],
+    ["wildcard", "*"],
+    ["braced UUID", `{${otherUserId}}`],
+  ])("does not treat %s entries as stable approval principals", (_label, invalidPrincipal) => {
+    expect(authorizeApproval([ownerId, invalidPrincipal], otherUserId)).toMatchObject({
+      authorized: false,
+    });
+  });
+
+  it("preserves implicit same-chat fallback for display-name-only allowlists", () => {
+    expect(authorizeApproval(["Owner Display"], "attacker-aad")).toEqual({ authorized: true });
   });
 });

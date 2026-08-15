@@ -2,25 +2,27 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { confirm, select, text } from "@clack/prompts";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type {
-  ManualExecSecretProviderConfig,
-  SecretProviderConfig,
-  SecretRef,
-  SecretRefSource,
+import {
+  isValidEnvSecretRefId,
+  type ManualExecSecretProviderConfig,
+  type SecretProviderConfig,
+  type SecretRef,
+  type SecretRefSource,
 } from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
 import { createSecretsConfigIO } from "./config-io.js";
@@ -49,12 +51,11 @@ import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
 /** Result returned after interactive secrets configure builds and preflights an apply plan. */
-export type SecretsConfigureResult = {
+type SecretsConfigureResult = {
   plan: SecretsApplyPlan;
   preflight: SecretsApplyResult;
 };
 
-const ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -64,13 +65,6 @@ function isAbsolutePathValue(value: string): boolean {
     WINDOWS_ABS_PATH_PATTERN.test(value) ||
     WINDOWS_UNC_PATH_PATTERN.test(value)
   );
-}
-
-function parseCsv(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
 }
 
 function parseOptionalPositiveInt(value: string, max: number): number | undefined {
@@ -131,11 +125,15 @@ function removeSecretProvider(config: OpenClawConfig, providerAlias: string): bo
     if (defaults?.exec === providerAlias) {
       delete defaults.exec;
     }
+    if (defaults?.store === providerAlias) {
+      delete defaults.store;
+    }
     if (
       defaults &&
       defaults.env === undefined &&
       defaults.file === undefined &&
-      defaults.exec === undefined
+      defaults.exec === undefined &&
+      defaults.store === undefined
     ) {
       delete config.secrets?.defaults;
     }
@@ -149,6 +147,9 @@ function providerHint(provider: SecretProviderConfig): string {
   }
   if (provider.source === "file") {
     return `file (${provider.mode ?? "json"})`;
+  }
+  if (provider.source === "store") {
+    return "store";
   }
   if ("pluginIntegration" in provider) {
     const { pluginId, integrationId } = provider.pluginIntegration;
@@ -169,7 +170,7 @@ function loadSecretProviderIntegrationPresets(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): SecretProviderIntegrationPreset[] {
-  const manifestRegistry = loadPluginManifestRegistry({
+  const manifestRegistry = loadPluginManifestRegistryCore({
     config: params.config,
     env: params.env,
   });
@@ -188,6 +189,7 @@ function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource
       value: "env",
       label: "env",
     },
+    { value: "store", label: "store" },
   ];
   if (hasSource("file")) {
     choices.push({ value: "file", label: "file" });
@@ -208,9 +210,9 @@ function assertNoCancel<T>(value: T | symbol, message: string): T {
 const AUTH_PROFILE_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
 
 function validateEnvNameCsv(value: string): string | undefined {
-  const entries = parseCsv(value);
+  const entries = normalizeCsvOrLooseStringList(value);
   for (const entry of entries) {
-    if (!ENV_NAME_PATTERN.test(entry)) {
+    if (!isValidEnvSecretRefId(entry)) {
       return `Invalid env name: ${entry}`;
     }
   }
@@ -229,7 +231,7 @@ async function promptEnvNameCsv(params: {
     }),
     "Secrets configure cancelled.",
   );
-  return parseCsv(raw ?? "");
+  return normalizeCsvOrLooseStringList(raw ?? "");
 }
 
 async function promptOptionalPositiveInt(params: {
@@ -422,6 +424,7 @@ async function promptProviderSource(initial?: SecretRefSource): Promise<SecretRe
         { value: "env", label: "env" },
         { value: "file", label: "file" },
         { value: "exec", label: "exec" },
+        { value: "store", label: "store" },
       ],
       initialValue: initial,
     }),
@@ -486,21 +489,12 @@ async function promptFileProvider(
     initialValue: base?.maxBytes,
     max: 20 * 1024 * 1024,
   });
-  const allowInsecurePath = assertNoCancel(
-    await confirm({
-      message: "Allow insecure file path checks?",
-      initialValue: base?.allowInsecurePath ?? false,
-    }),
-    "Secrets configure cancelled.",
-  );
-
   return {
     source: "file",
     path: normalizeStringifiedOptionalString(filePath) ?? "",
     mode,
     ...(timeoutMs ? { timeoutMs } : {}),
     ...(maxBytes ? { maxBytes } : {}),
-    ...(allowInsecurePath ? { allowInsecurePath: true } : {}),
   };
 }
 
@@ -599,7 +593,7 @@ async function promptExecProvider(
       message: "Trusted dirs (comma-separated absolute paths, blank for none)",
       initialValue: base?.trustedDirs?.join(",") ?? "",
       validate: (value) => {
-        const entries = parseCsv(value ?? "");
+        const entries = normalizeCsvOrLooseStringList(value ?? "");
         for (const entry of entries) {
           if (!isAbsolutePathValue(entry)) {
             return `Trusted dir must be absolute: ${entry}`;
@@ -611,23 +605,8 @@ async function promptExecProvider(
     "Secrets configure cancelled.",
   );
 
-  const allowInsecurePath = assertNoCancel(
-    await confirm({
-      message: "Allow insecure command path checks?",
-      initialValue: base?.allowInsecurePath ?? false,
-    }),
-    "Secrets configure cancelled.",
-  );
-  const allowSymlinkCommand = assertNoCancel(
-    await confirm({
-      message: "Allow symlink command path?",
-      initialValue: base?.allowSymlinkCommand ?? false,
-    }),
-    "Secrets configure cancelled.",
-  );
-
   const args = await parseArgsInput(normalizeStringifiedOptionalString(argsRaw) ?? "");
-  const trustedDirs = parseCsv(trustedDirsRaw ?? "");
+  const trustedDirs = normalizeCsvOrLooseStringList(trustedDirsRaw ?? "");
 
   return {
     source: "exec",
@@ -639,8 +618,6 @@ async function promptExecProvider(
     ...(jsonOnly ? { jsonOnly } : { jsonOnly: false }),
     ...(passEnv.length > 0 ? { passEnv } : {}),
     ...(trustedDirs.length > 0 ? { trustedDirs } : {}),
-    ...(allowInsecurePath ? { allowInsecurePath: true } : {}),
-    ...(allowSymlinkCommand ? { allowSymlinkCommand: true } : {}),
     ...(isRecord(base?.env) ? { env: base.env } : {}),
   };
 }
@@ -654,6 +631,9 @@ async function promptProviderConfig(
   }
   if (source === "file") {
     return await promptFileProvider(current?.source === "file" ? current : undefined);
+  }
+  if (source === "store") {
+    return { source: "store" };
   }
   return await promptExecProvider(
     current?.source === "exec" && "command" in current ? current : undefined,
@@ -679,7 +659,7 @@ async function configureProvidersInteractive(
       {
         value: "add",
         label: "Add provider",
-        hint: "Define a new env/file/exec provider",
+        hint: "Define a new env/file/exec/store provider",
       },
     ];
     if (presetEntries.length > 0) {
@@ -712,7 +692,7 @@ async function configureProvidersInteractive(
         message:
           providerEntries.length > 0
             ? "Configure secret providers"
-            : "Configure secret providers (only env refs are available until file/exec providers are added)",
+            : "Configure secret providers (env/store refs are built in; add file/exec providers as needed)",
         options: actionOptions,
       }),
       "Secrets configure cancelled.",
@@ -986,7 +966,7 @@ export async function runSecretsConfigureInteractive(
       const suggestedIdFromExistingRef =
         existingRef?.source === source ? existingRef.id : undefined;
       let suggestedId = suggestedIdFromExistingRef;
-      if (!suggestedId && source === "env") {
+      if (!suggestedId && (source === "env" || source === "store")) {
         suggestedId = resolveSuggestedEnvSecretId(candidate);
       }
       if (!suggestedId && source === "file") {
@@ -1003,6 +983,9 @@ export async function runSecretsConfigureInteractive(
             const trimmed = normalizeStringifiedOptionalString(value) ?? "";
             if (!trimmed) {
               return "Required";
+            }
+            if ((source === "env" || source === "store") && !isValidEnvSecretRefId(trimmed)) {
+              return `${source} ids must match /^[A-Z][A-Z0-9_]{0,127}$/`;
             }
             if (source === "exec" && !isValidExecSecretRefId(trimmed)) {
               return formatExecSecretRefIdValidationMessage();
@@ -1077,3 +1060,4 @@ export async function runSecretsConfigureInteractive(
 
   return { plan, preflight };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

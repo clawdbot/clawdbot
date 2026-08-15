@@ -1,6 +1,6 @@
 /** Tests bundle-MCP resume hash stability across loopback endpoint changes. */
 import { describe, expect, it } from "vitest";
-import { buildCrestodianToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
+import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { resolveCliSessionReuse } from "../cli-session.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
@@ -83,14 +83,14 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
     await second.cleanup?.();
   });
 
-  it("keeps Crestodian approval state out of the resume identity", async () => {
-    const prepare = async (options: Parameters<typeof buildCrestodianToolsMcpServerConfig>[0]) =>
+  it("keeps OpenClaw approval state out of the resume identity", async () => {
+    const prepare = async (options: Parameters<typeof buildSystemAgentToolsMcpServerConfig>[0]) =>
       await prepareCliBundleMcpConfig({
         enabled: true,
         mode: "claude-config-file",
         backend: { command: "node", args: ["./fake-claude.mjs"] },
         workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
-        exclusiveConfig: buildCrestodianToolsMcpServerConfig(options),
+        exclusiveConfig: buildSystemAgentToolsMcpServerConfig(options),
       });
     const proposed = "proposal-sha256";
     const first = await prepare({ surface: "cli", proposalRef: {} });

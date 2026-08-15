@@ -10,7 +10,7 @@ vi.mock("../config/sessions/delivery-info.js", () => ({
   extractDeliveryInfo: extractDeliveryInfoMock,
 }));
 
-import { cronDeliveryFromContext, resolveCronCreationDelivery } from "./delivery-context.js";
+import { resolveCronCreationDelivery } from "./delivery-context.js";
 
 describe("cron delivery context", () => {
   const cfg = {} as OpenClawConfig;
@@ -22,11 +22,14 @@ describe("cron delivery context", () => {
 
   it("builds announce delivery from deliveryContext without changing target casing", () => {
     expect(
-      cronDeliveryFromContext({
-        channel: " Matrix ",
-        to: "  !AbCdEf1234567890:Example.Org  ",
-        accountId: " Bot-A ",
-        threadId: "  $RootEvent:Example.Org  ",
+      resolveCronCreationDelivery({
+        cfg,
+        currentDeliveryContext: {
+          channel: " Matrix ",
+          to: "  !AbCdEf1234567890:Example.Org  ",
+          accountId: " Bot-A ",
+          threadId: "  $RootEvent:Example.Org  ",
+        },
       }),
     ).toEqual({
       mode: "announce",
@@ -107,7 +110,12 @@ describe("cron delivery context", () => {
   });
 
   it("does not create delivery without a concrete target", () => {
-    expect(cronDeliveryFromContext({ channel: "matrix", to: "   " })).toBeNull();
+    expect(
+      resolveCronCreationDelivery({
+        cfg,
+        currentDeliveryContext: { channel: "matrix", to: "   " },
+      }),
+    ).toBeNull();
     expect(
       resolveCronCreationDelivery({
         cfg,

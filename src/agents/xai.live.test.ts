@@ -3,16 +3,13 @@
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import {
-  isBillingErrorMessage,
-  isOverloadedErrorMessage,
-} from "./embedded-agent-helpers/failover-matches.js";
-import { applyExtraParamsToAgent } from "./embedded-agent-runner.js";
+import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-transport-stream.js";
 import { createWebSearchTool } from "./tools/web-search.js";
 
@@ -20,8 +17,15 @@ const XAI_KEY = process.env.XAI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["XAI_LIVE_TEST"]);
 const XAI_COMPLETE_LIVE_TIMEOUT_MS = 90_000;
 const XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS = 60;
+const XAI_LIVE_COMPLETION_CASES = [
+  { modelId: "grok-4.3", completionReasoning: undefined },
+  { modelId: "grok-4.5", completionReasoning: undefined },
+  { modelId: "grok-4.6", completionReasoning: "xhigh" },
+] as const;
 
 const describeLive = LIVE && XAI_KEY ? describe : describe.skip;
+
+type XaiLiveModelId = (typeof XAI_LIVE_COMPLETION_CASES)[number]["modelId"];
 
 type AssistantLikeMessage = {
   content: Array<{
@@ -46,28 +50,30 @@ function getToolFunction(tool: Record<string, unknown>): Record<string, unknown>
   return undefined;
 }
 
-function resolveLiveXaiModel(modelId: "grok-4.3" | "grok-4.5") {
+function resolveLiveXaiModel(modelId: XaiLiveModelId) {
   const isGrok45 = modelId === "grok-4.5";
+  const isGrok46 = modelId === "grok-4.6";
+  const isFrontier = isGrok45 || isGrok46;
   return {
     id: modelId,
-    name: isGrok45 ? "Grok 4.5" : "Grok 4.3",
+    name: isGrok46 ? "Grok 4.6" : isGrok45 ? "Grok 4.5" : "Grok 4.3",
     api: "openai-responses",
     provider: "xai",
     baseUrl: "https://api.x.ai/v1",
     reasoning: true,
     input: ["text", "image"],
-    cost: isGrok45
-      ? { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 }
+    cost: isFrontier
+      ? { input: 2, output: 6, cacheRead: isGrok46 ? 0.5 : 0.3, cacheWrite: 0 }
       : { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
-    contextWindow: isGrok45 ? 500_000 : 1_000_000,
+    contextWindow: isFrontier ? 500_000 : 1_000_000,
     maxTokens: 64_000,
     thinkingLevelMap: {
-      off: isGrok45 ? null : "none",
+      off: isFrontier ? null : "none",
       minimal: "low",
       low: "low",
       medium: "medium",
       high: "high",
-      xhigh: "high",
+      xhigh: isGrok46 ? "xhigh" : "high",
     },
   } satisfies Model<"openai-responses">;
 }
@@ -86,12 +92,13 @@ async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<
     await run();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (isBillingErrorMessage(message)) {
-      console.warn(`[xai:live] skip ${label}: billing drift: ${message}`);
-      return;
-    }
-    if (isOverloadedErrorMessage(message)) {
-      console.warn(`[xai:live] skip ${label}: temporary provider capacity: ${message}`);
+    const drift = shouldSkipLiveProviderDrift({
+      error,
+      allowBilling: true,
+      allowProviderUnavailable: true,
+    });
+    if (drift) {
+      console.warn(`[xai:live] skip ${label}: ${drift.label}: ${message}`);
       return;
     }
     if (/\b403\b/.test(message) && /model .+ is not available in your region/i.test(message)) {
@@ -125,7 +132,7 @@ async function collectDoneMessage(
 }
 
 describeLive("xai live", () => {
-  for (const modelId of ["grok-4.3", "grok-4.5"] as const) {
+  for (const { modelId, completionReasoning } of XAI_LIVE_COMPLETION_CASES) {
     it(
       `returns assistant text for ${modelId}`,
       async () => {
@@ -139,6 +146,7 @@ describeLive("xai live", () => {
             {
               apiKey: XAI_KEY,
               maxTokens: 64,
+              ...(completionReasoning ? { reasoning: completionReasoning } : {}),
             },
           );
 
@@ -226,12 +234,20 @@ describeLive("xai live", () => {
     await runXaiLiveCase("web-search", async () => {
       const tool = createWebSearchTool({
         config: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: { model: "grok-4.3" },
+                },
+              },
+            },
+          },
           tools: {
             web: {
               search: {
                 provider: "grok",
                 timeoutSeconds: XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS,
-                grok: { model: "grok-4.3" },
               },
             },
           },
@@ -245,11 +261,10 @@ describeLive("xai live", () => {
       });
 
       const details = (result.details ?? {}) as {
+        kind?: "answer" | "error";
         provider?: string;
-        model?: string;
         content?: string;
-        citations?: string[];
-        inlineCitations?: Array<unknown>;
+        citations?: Array<{ url: string; title?: string }>;
         error?: string;
         message?: string;
       };
@@ -258,20 +273,21 @@ describeLive("xai live", () => {
         details.error && details.message
           ? `${details.error} ${details.message}`
           : details.error || details.message || "";
-      if (isBillingErrorMessage(errorMessage)) {
-        console.warn(`[xai:live] skip web-search: billing drift: ${errorMessage}`);
+      const drift = shouldSkipLiveProviderDrift({
+        error: errorMessage,
+        allowBilling: true,
+        allowProviderUnavailable: true,
+      });
+      if (drift) {
+        console.warn(`[xai:live] skip web-search: ${drift.label}: ${errorMessage}`);
         return;
       }
 
       expect(details.error, details.message).toBeUndefined();
+      expect(details.kind).toBe("answer");
       expect(details.provider).toBe("grok");
-      expect(details.model).toBe("grok-4.3");
       expect(details.content?.trim().length ?? 0).toBeGreaterThan(0);
-
-      const citationCount =
-        (Array.isArray(details.citations) ? details.citations.length : 0) +
-        (Array.isArray(details.inlineCitations) ? details.inlineCitations.length : 0);
-      expect(citationCount).toBeGreaterThan(0);
+      expect(details.citations?.length ?? 0).toBeGreaterThan(0);
     });
   }, 90_000);
 });

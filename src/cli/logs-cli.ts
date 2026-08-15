@@ -1,6 +1,14 @@
 // Gateway logs CLI with RPC tailing, local file fallback, and systemd journal fallback.
 import { setTimeout as delay } from "node:timers/promises";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import {
+  coerceErrorMessage as normalizeErrorMessage,
+  toStringifiedError,
+} from "@openclaw/normalization-core/error-coercion";
+import {
+  parseStrictPositiveInteger,
+  resolveIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
@@ -17,14 +25,15 @@ import {
   isGatewayTransportError,
   type GatewayConnectionDetails,
 } from "../gateway/call.js";
+import { projectGatewayConnectionDetailsForDiagnostics } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
 import { formatTimestamp } from "../logging/timestamps.js";
+import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -199,17 +208,6 @@ async function fetchLogs(
       localFallback: true,
     };
   }
-}
-
-function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
-function normalizeError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
@@ -493,9 +491,11 @@ async function emitGatewayError(
 ) {
   const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
-  const errorText = formatErrorMessage(err);
+  const errorText = redactSensitiveUrlLikeString(formatErrorMessage(err));
 
-  const details = buildGatewayConnectionDetails({ url: opts.url });
+  const details = projectGatewayConnectionDetailsForDiagnostics(
+    buildGatewayConnectionDetails({ url: opts.url }),
+  );
   if (mode === "json") {
     if (
       !emitJsonLine(
@@ -613,9 +613,9 @@ export function registerLogsCli(program: Command) {
           return { payload: result.payload, gatewayPollStartedAt: result.startedAt };
         }
         if (!shouldUseLocalLogsFallback(opts, result.error)) {
-          throw normalizeError(result.error);
+          throw toStringifiedError(result.error);
         }
-        fallbackError = normalizeError(result.error);
+        fallbackError = toStringifiedError(result.error);
       }
 
       const activeProbe = gatewayRecovery.kind === "probing" ? gatewayRecovery.promise : undefined;
@@ -634,7 +634,7 @@ export function registerLogsCli(program: Command) {
         if (result.ok) {
           return { payload: result.payload, gatewayPollStartedAt: result.startedAt };
         }
-        throw normalizeError(result.error);
+        throw toStringifiedError(result.error);
       }
       throw fallbackError ?? new Error("Active systemd journal unavailable for logs follow");
     };
@@ -682,7 +682,11 @@ export function registerLogsCli(program: Command) {
           emitJsonLine,
           errorLine,
         );
-        process.exit(1);
+        // Route terminal reset to stderr in JSON mode so structured
+        // stdout stays parseable. Text mode resets to stdout by default.
+        defaultRuntime.exit(1, {
+          resetStream: jsonMode ? process.stderr : undefined,
+        });
         return;
       }
       if (followRetryAttempt > 0) {
@@ -721,7 +725,7 @@ export function registerLogsCli(program: Command) {
           if (
             !emitJsonLine({
               type: "notice",
-              message: "Log tail truncated (increase --max-bytes).",
+              message: "Log tail truncated (increase --limit or --max-bytes).",
             })
           ) {
             return;
@@ -781,7 +785,7 @@ export function registerLogsCli(program: Command) {
           }
         }
         if (payload.truncated) {
-          if (!errorLine("Log tail truncated (increase --max-bytes).")) {
+          if (!errorLine("Log tail truncated (increase --limit or --max-bytes).")) {
             return;
           }
         }
@@ -827,3 +831,4 @@ export function registerLogsCli(program: Command) {
     }
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

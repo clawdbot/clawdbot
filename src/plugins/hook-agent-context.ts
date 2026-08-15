@@ -41,6 +41,7 @@ function stripConversationPrefix(
 function resolveAgentHookChannel(params: {
   messageChannel?: string | null;
   messageProvider?: string | null;
+  agentAccountId?: string | null;
 }): string | undefined {
   const messageChannel = normalizeOptionalString(params.messageChannel);
   const provider = normalizeOptionalString(params.messageProvider);
@@ -67,7 +68,7 @@ function resolveAgentHookChannel(params: {
 }
 
 /** Resolves the channel id exposed to plugin agent hooks. */
-export function resolveAgentHookChannelId(params: {
+function resolveAgentHookChannelId(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
   messageProvider?: string | null;
@@ -107,14 +108,17 @@ export function buildAgentHookContextChannelFields(params: {
   currentChannelId?: string | null;
   messageTo?: string | null;
   senderId?: string | null;
+  agentAccountId?: string | null;
 }): Pick<
   PluginHookAgentContext,
-  "channel" | "channelId" | "chatId" | "messageProvider" | "senderId"
+  "accountId" | "channel" | "channelId" | "chatId" | "messageProvider" | "senderId"
 > {
   const channel = resolveAgentHookChannel(params);
   const channelId = resolveAgentHookChannelId(params);
+  const accountId = normalizeOptionalString(params.agentAccountId);
   return {
     channel,
+    ...(accountId ? { accountId } : {}),
     messageProvider: normalizeOptionalString(params.messageProvider),
     channelId,
     chatId: channelId,

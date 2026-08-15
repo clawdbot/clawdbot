@@ -9,12 +9,14 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 const LOBSTERDEX_KEY = "openclaw.control.lobsterdex.v1";
 const FAMILIARITY_KEY = "openclaw.control.lobsterpet.familiarity.v1";
 
-export type LobsterdexEntry = {
+type LobsterdexEntry = {
   firstSeenAt: number | null;
   name: string | null;
+  // When a shiny of this palette first sparkled by; null until one does.
+  shinySeenAt: number | null;
 };
 
-type PersistedDex = Record<string, { firstSeenAt?: number; name?: string }>;
+type PersistedDex = Record<string, { firstSeenAt?: number; name?: string; shinySeenAt?: number }>;
 
 function readDex(): Map<string, LobsterdexEntry> {
   try {
@@ -25,7 +27,7 @@ function readDex(): Map<string, LobsterdexEntry> {
       // v1 stored a bare palette-id array; carry ids over without memories.
       for (const value of parsed) {
         if (typeof value === "string" && value) {
-          entries.set(value, { firstSeenAt: null, name: null });
+          entries.set(value, { firstSeenAt: null, name: null, shinySeenAt: null });
         }
       }
       return entries;
@@ -38,6 +40,7 @@ function readDex(): Map<string, LobsterdexEntry> {
         entries.set(id, {
           firstSeenAt: typeof value?.firstSeenAt === "number" ? value.firstSeenAt : null,
           name: typeof value?.name === "string" && value.name ? value.name : null,
+          shinySeenAt: typeof value?.shinySeenAt === "number" ? value.shinySeenAt : null,
         });
       }
     }
@@ -53,6 +56,7 @@ function writeDex(entries: Map<string, LobsterdexEntry>): void {
     persisted[id] = {
       ...(entry.firstSeenAt !== null ? { firstSeenAt: entry.firstSeenAt } : {}),
       ...(entry.name !== null ? { name: entry.name } : {}),
+      ...(entry.shinySeenAt !== null ? { shinySeenAt: entry.shinySeenAt } : {}),
     };
   }
   getSafeLocalStorage()?.setItem(LOBSTERDEX_KEY, JSON.stringify(persisted));
@@ -66,22 +70,31 @@ export function getLobsterdexEntries(): ReadonlyMap<string, LobsterdexEntry> {
   return readDex();
 }
 
-export function recordLobsterVisit(paletteId: string, details: { name?: string } = {}): void {
+export function recordLobsterVisit(
+  paletteId: string,
+  details: { name?: string; shiny?: boolean } = {},
+): void {
   try {
     const entries = readDex();
     const existing = entries.get(paletteId);
     if (existing) {
       // First-visitor memories are immutable; later visits only backfill
-      // fields the v1 schema never had.
-      if (existing.firstSeenAt !== null && existing.name !== null) {
+      // fields older schemas never had (and the first shiny sighting).
+      const shinyNews = details.shiny === true && existing.shinySeenAt === null;
+      if (existing.firstSeenAt !== null && existing.name !== null && !shinyNews) {
         return;
       }
       entries.set(paletteId, {
         firstSeenAt: existing.firstSeenAt ?? Date.now(),
         name: existing.name ?? details.name ?? null,
+        shinySeenAt: existing.shinySeenAt ?? (details.shiny === true ? Date.now() : null),
       });
     } else {
-      entries.set(paletteId, { firstSeenAt: Date.now(), name: details.name ?? null });
+      entries.set(paletteId, {
+        firstSeenAt: Date.now(),
+        name: details.name ?? null,
+        shinySeenAt: details.shiny === true ? Date.now() : null,
+      });
     }
     writeDex(entries);
   } catch {
@@ -91,7 +104,7 @@ export function recordLobsterVisit(paletteId: string, details: { name?: string }
 
 // ---- Familiarity ----
 
-export type LobsterFamiliarityTier = "shy" | "regular" | "friend";
+type LobsterFamiliarityTier = "shy" | "regular" | "friend";
 
 export type LobsterFamiliarity = {
   tier: LobsterFamiliarityTier;

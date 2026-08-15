@@ -1,12 +1,12 @@
 // Agent run control tests cover talk-driven agent pause and resume behavior.
 import { describe, expect, it, vi } from "vitest";
+import type { RealtimeVoiceAgentRunActivity } from "./agent-run-control-shared.js";
 import {
   classifyRealtimeVoiceAgentControlText,
   controlRealtimeVoiceAgentRun,
   parseRealtimeVoiceAgentControlToolArgs,
   resolveRealtimeVoiceAgentControlIntent,
   shouldAutoControlRealtimeVoiceAgentText,
-  type RealtimeVoiceAgentRunActivity,
 } from "./agent-run-control.js";
 import type { TalkEvent } from "./talk-events.js";
 
@@ -23,7 +23,11 @@ function createDeps(options: {
       async (
         sessionId: string,
         _text: string,
-        _options?: { steeringMode?: "all"; taskSuggestionDeliveryMode?: undefined },
+        _options?: {
+          steeringMode?: "all";
+          isInboundUserMessage?: boolean;
+          taskSuggestionDeliveryMode?: undefined;
+        },
       ) =>
         options.queued === false
           ? {
@@ -147,7 +151,12 @@ describe("controlRealtimeVoiceAgentRun", () => {
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
       "session-active",
       "use the safer path",
-      { steeringMode: "all", debounceMs: 0, taskSuggestionDeliveryMode: undefined },
+      {
+        steeringMode: "all",
+        debounceMs: 0,
+        isInboundUserMessage: true,
+        taskSuggestionDeliveryMode: undefined,
+      },
     );
   });
 

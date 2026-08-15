@@ -5,9 +5,9 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.streaming
+      - channels.streaming-final-reply
     secondary:
-      - runtime.delivery
+      - agent-runtime.streaming-replies-delivery
   objective: Verify streaming channel replies produce visible previews that resolve to one final answer.
   gatewayConfigPatch:
     channels:
@@ -29,7 +29,10 @@ scenario:
     - extensions/telegram/src/draft-stream.ts
   execution:
     kind: flow
-    channel: telegram
+    retryCount: 0
+    channels:
+      - qa-channel
+      - telegram
     summary: Stream a deterministic answer through QA Channel or Crabline Telegram and assert its preview lifecycle.
     config:
       requiredProviderMode: mock-openai

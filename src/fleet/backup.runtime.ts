@@ -5,6 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
+import {
+  ARCHIVE_LIMIT_ERROR_CODE,
+  ArchiveFormatError,
+  ArchiveLimitError,
+  ArchiveSecurityError,
+  extractArchive,
+} from "../infra/archive.js";
+import { createBackupLinkCache } from "../infra/backup-volatile-stat-cache.js";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {
   cellAuthSecretDir,
@@ -29,28 +38,17 @@ import {
   type HostIdentity,
 } from "./service-support.runtime.js";
 
-export const DEFAULT_FLEET_BACKUP_MAX_BYTES = 16 * 1024 ** 3;
+const DEFAULT_FLEET_BACKUP_MAX_BYTES = 16 * 1024 ** 3;
 // Byte caps alone do not stop metadata-only archive bombs: millions of empty
 // files stay under --max-bytes but can exhaust host inodes during extraction.
-export const FLEET_BACKUP_MAX_ENTRIES = 1_000_000;
+const FLEET_BACKUP_MAX_ENTRIES = 1_000_000;
 const MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 // Well under the 5-minute lease TTL so a stalled archive stream cannot outlive
 // the lease by more than one probe interval before the backup aborts.
 const BACKUP_LEASE_PROBE_INTERVAL_MS = 30_000;
 const RESTORE_VERIFY_TIMEOUT_MS = 60_000;
 const RESTORE_VERIFY_POLL_MS = 1_000;
-
-type BackupLinkCacheKey = `${number}:${number}`;
-
-class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
-  override get(_key: BackupLinkCacheKey): undefined {
-    return undefined;
-  }
-
-  override set(_key: BackupLinkCacheKey, _value: string): this {
-    return this;
-  }
-}
+const RESTORE_EXTRACT_TIMEOUT_MS = 30 * 60_000;
 
 type FleetBackupManifest = {
   schemaVersion: 1;
@@ -62,7 +60,7 @@ type FleetBackupManifest = {
   runtime: "docker" | "podman";
 };
 
-export type FleetBackupResult = {
+type FleetBackupResult = {
   tenant: string;
   archivePath: string;
   fileCount: number;
@@ -71,7 +69,7 @@ export type FleetBackupResult = {
   note: string;
 };
 
-export type FleetRestoreResult = {
+type FleetRestoreResult = {
   tenant: string;
   archivePath: string;
   token: string;
@@ -79,10 +77,6 @@ export type FleetRestoreResult = {
   started: boolean;
   url: string;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function timestampBasename(tenant: string, nowMs: number): string {
   const stamp = new Date(nowMs)
@@ -311,7 +305,7 @@ export async function backupFleetCell(params: {
           gzip: true,
           portable: true,
           preservePaths: true,
-          linkCache: new BackupLinkCache(),
+          linkCache: createBackupLinkCache(),
           filter,
           onWriteEntry: (entry) => {
             entry.path = remapArchivePath(entry.path, manifestPath, dataTarget, authTarget);
@@ -417,19 +411,12 @@ function isAllowedRestorePath(rawPath: string): boolean {
   );
 }
 
-function restoreEntryKind(entry: Stats | tar.ReadEntry): "file" | "directory" | "other" {
-  if ("isFile" in entry) {
-    return entry.isFile() ? "file" : entry.isDirectory() ? "directory" : "other";
-  }
-  return entry.type === "File" ? "file" : entry.type === "Directory" ? "directory" : "other";
-}
-
 // Extraction runs as the invoking user, so a root-invoked restore must repair
 // ownership for whichever identity the cell container actually runs as: the
 // explicit non-root user mapping when one exists, else the image default
 // (uid 1000). Rootless mappings (uid 0) keep root ownership, which the user
 // namespace translates to the daemon user.
-export function resolveRestoreOwner(
+function resolveRestoreOwner(
   hostIdentity: HostIdentity | undefined,
   containerUser: CellContainerProfile["containerUser"],
 ): { uid: number; gid: number } | undefined {
@@ -499,7 +486,7 @@ export async function restoreFleetCell(params: {
   );
   if (inspectionResult.kind === "missing") {
     throw new Error(
-      `Fleet cell container is missing for ${params.record.tenantId}; create the cell (openclaw fleet create ${params.record.tenantId}) and then restore into it.`,
+      `Fleet cell container is missing for ${params.record.tenantId}; remove the stale registration without purging data (openclaw fleet rm ${params.record.tenantId} --force), recreate a stopped cell with the intended image (openclaw fleet create ${params.record.tenantId} --no-start --image <image>), then retry fleet restore.`,
     );
   }
   const inspection = assertManagedInspection(params.record, inspectionResult);
@@ -526,61 +513,78 @@ export async function restoreFleetCell(params: {
   let replacementAttemptId = "";
   try {
     let invalidArchive = false;
-    let totalBytes = 0;
-    let totalEntries = 0;
-    let exceeded = false;
-    let tooManyEntries = false;
+    let totalPathComponents = 0;
+    let tooManyPathComponents = false;
     const maxBytes = params.maxBytes ?? DEFAULT_FLEET_BACKUP_MAX_BYTES;
     const maxEntries = params.maxEntries ?? FLEET_BACKUP_MAX_ENTRIES;
-    await tar.x({
-      file: archivePath,
-      cwd: tempDir,
-      preservePaths: false,
-      preserveOwner: false,
-      strict: true,
-      onwarn: () => {
-        invalidArchive = true;
-      },
-      filter: (entryPath, entry) => {
-        if (exceeded || tooManyEntries) {
-          return false;
-        }
-        // Entry cap complements the byte cap: metadata-only archive bombs stay
-        // under --max-bytes but can exhaust host inodes during extraction.
-        // Count path segments, not entries, so deep paths whose intermediate
-        // directories are created implicitly cannot bypass the budget.
-        totalEntries += entryPath.split("/").filter(Boolean).length;
-        if (totalEntries > maxEntries) {
-          tooManyEntries = true;
-          return false;
-        }
-        const kind = restoreEntryKind(entry);
-        if (kind === "other" || !isAllowedRestorePath(entryPath)) {
-          invalidArchive = true;
-          return false;
-        }
-        if (kind === "file") {
-          totalBytes += entry.size;
-          if (totalBytes > maxBytes) {
-            exceeded = true;
-            return false;
+    try {
+      await extractArchive({
+        archivePath,
+        destDir: tempDir,
+        kind: "tar",
+        tarGzip: true,
+        timeoutMs: RESTORE_EXTRACT_TIMEOUT_MS,
+        entryModes: "clamp",
+        entryFilter: (entry) => {
+          // Preserve Fleet's aggregate component budget in addition to the
+          // per-entry preflight enforced by maxEntryPathComponents.
+          totalPathComponents += entry.path.split("/").filter(Boolean).length;
+          if (totalPathComponents > maxEntries) {
+            tooManyPathComponents = true;
+            return "skip";
           }
-        }
-        return true;
-      },
-    });
-    if (exceeded) {
-      throw new Error(
-        `Fleet restore exceeds the ${maxBytes}-byte limit; raise --max-bytes or use a smaller archive.`,
-      );
-    }
-    if (tooManyEntries) {
-      throw new Error(
-        `Fleet restore exceeds the ${maxEntries}-entry limit; the archive is not a usable fleet cell backup.`,
-      );
-    }
-    if (invalidArchive) {
-      throw new Error("Archive is not a fleet cell backup or was tampered with.");
+          if (
+            (entry.kind !== "file" && entry.kind !== "directory") ||
+            !isAllowedRestorePath(entry.path)
+          ) {
+            invalidArchive = true;
+            return "skip";
+          }
+          return "extract";
+        },
+        onFiltered: "reject-archive",
+        limits: {
+          // The caller already pinned this exact archive path and size; setting
+          // the observed size avoids fs-safe's smaller generic upload default.
+          maxArchiveBytes: Math.max(1, archiveStat.size),
+          maxEntries,
+          maxExtractedBytes: maxBytes,
+          maxEntryBytes: maxBytes,
+          maxEntryPathComponents: maxEntries,
+        },
+      });
+    } catch (error) {
+      if (
+        tooManyPathComponents ||
+        (error instanceof ArchiveLimitError &&
+          (error.code === ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT ||
+            error.code === ARCHIVE_LIMIT_ERROR_CODE.ENTRY_PATH_COMPONENTS_EXCEEDS_LIMIT))
+      ) {
+        throw new Error(
+          `Fleet restore exceeds the ${maxEntries}-entry limit; the archive is not a usable fleet cell backup.`,
+          { cause: error },
+        );
+      }
+      if (
+        error instanceof ArchiveLimitError &&
+        (error.code === ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT ||
+          error.code === ARCHIVE_LIMIT_ERROR_CODE.ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT)
+      ) {
+        throw new Error(
+          `Fleet restore exceeds the ${maxBytes}-byte limit; raise --max-bytes or use a smaller archive.`,
+          { cause: error },
+        );
+      }
+      if (
+        invalidArchive ||
+        error instanceof ArchiveSecurityError ||
+        error instanceof ArchiveFormatError
+      ) {
+        throw new Error("Archive is not a fleet cell backup or was tampered with.", {
+          cause: error,
+        });
+      }
+      throw error;
     }
     const safeRoot = await fsSafeRoot(tempDir, {
       symlinks: "reject",
@@ -814,3 +818,4 @@ export async function restoreFleetCell(params: {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

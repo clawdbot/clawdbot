@@ -7,8 +7,9 @@ import { resolveEffectiveToolFsRootExpansionAllowed } from "../agents/tool-fs-po
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { createBoundedOutboundMediaReadFile } from "./bounded-read-file.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
+import { readLocalMediaFile } from "./local-media-access.js";
 import {
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
@@ -62,10 +63,11 @@ function isAgentScopedHostMediaReadAllowed(
 }
 
 /** Creates a host reader bound to the agent workspace and configured local-file safety checks. */
-export function createAgentScopedHostMediaReadFile(
+function createAgentScopedHostMediaReadFile(
   params: {
     cfg: OpenClawConfig;
     agentId?: string;
+    localRoots: readonly string[];
     workspaceDir?: string;
   } & OutboundHostMediaPolicyContext,
 ): OutboundMediaReadFile | undefined {
@@ -76,10 +78,12 @@ export function createAgentScopedHostMediaReadFile(
     params.workspaceDir ??
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   const workspaceRoot = resolveWorkspaceRoot(inferredWorkspaceDir);
-  return async (filePath: string) => {
+  return createBoundedOutboundMediaReadFile(async (filePath, options) => {
     const resolvedPath = resolvePathFromInput(filePath, workspaceRoot);
-    return (await readLocalFileSafely({ filePath: resolvedPath })).buffer;
-  };
+    return await readLocalMediaFile(resolvedPath, params.localRoots, {
+      maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
+    });
+  });
 }
 
 function appendWorkspaceDirToLocalRoots(
@@ -133,6 +137,7 @@ export function resolveAgentScopedOutboundMediaAccess(
       ? createAgentScopedHostMediaReadFile({
           cfg: params.cfg,
           agentId: params.agentId,
+          localRoots: localRoots ?? [],
           workspaceDir: resolvedWorkspaceDir,
           sessionKey: params.sessionKey,
           messageProvider: params.messageProvider,

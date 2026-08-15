@@ -1,35 +1,22 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
-import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGateway,
-  type ApplicationGatewaySnapshot,
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationGatewaySnapshot,
 } from "../app/context.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { CommandPalette } from "./command-palette.ts";
-
-const PROVIDER_ELEMENT_NAME = "test-command-palette-context-provider";
-
-class CommandPaletteContextProvider extends LitElement {
-  private readonly contextProvider = new ContextProvider(this, {
-    context: applicationContext,
-  });
-
-  setContext(context: ApplicationContext<RouteId>) {
-    this.contextProvider.setValue(context);
-  }
-}
-
-if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
-  customElements.define(PROVIDER_ELEMENT_NAME, CommandPaletteContextProvider);
-}
+import {
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  type DesktopPanelToggleDetail,
+} from "./panel-toggle-contract.ts";
 
 type GatewayHarness = {
   gateway: ApplicationGateway;
@@ -40,8 +27,9 @@ function createGateway(connected: boolean): GatewayHarness {
   const client = {} as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: !connected,
+    phase: connected ? "connected" : "reconnecting",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",
@@ -71,8 +59,7 @@ function createGateway(connected: boolean): GatewayHarness {
     setConnected(nextConnected) {
       snapshot = {
         ...snapshot,
-        connected: nextConnected,
-        reconnecting: !nextConnected,
+        phase: nextConnected ? "connected" : "reconnecting",
       };
       for (const listener of listeners) {
         listener(snapshot);
@@ -103,20 +90,11 @@ function createSessionResult(key: string, displayName: string): SessionsListResu
   } as SessionsListResult;
 }
 
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
-
 async function mountPalette(context: ApplicationContext<RouteId>) {
-  const provider = document.createElement(PROVIDER_ELEMENT_NAME) as CommandPaletteContextProvider;
+  const provider = createApplicationContextProvider(context);
   const palette = document.createElement("openclaw-command-palette") as CommandPalette;
   palette.onNavigate = vi.fn();
   palette.onSelectSession = vi.fn();
-  provider.setContext(context);
   provider.append(palette);
   document.body.append(provider);
   await palette.updateComplete;
@@ -161,7 +139,11 @@ describe("CommandPalette lifecycle", () => {
 
     palette.remove();
     provider.append(palette);
-    expect(palette.querySelector("dialog")?.open).toBe(false);
+    const modal = palette.querySelector("openclaw-modal-dialog");
+    const dialog = modal?.shadowRoot
+      ?.querySelector("wa-dialog")
+      ?.shadowRoot?.querySelector("dialog");
+    expect(dialog?.open).toBe(false);
     await palette.updateComplete;
 
     expect(palette.querySelector("dialog")).toBeNull();
@@ -237,5 +219,50 @@ describe("CommandPalette lifecycle", () => {
     item?.click();
 
     expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
+  });
+
+  it.each([
+    { available: true, expectedCount: 1 },
+    { available: false, expectedCount: 0 },
+  ])(
+    "shows the desktop action only when availability is $available",
+    async ({ available, expectedCount }) => {
+      const { gateway } = createGateway(true);
+      const { palette } = await mountPalette(
+        createContext(
+          gateway,
+          vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+        ),
+      );
+      palette.desktopAvailable = available;
+      await enterQuery(palette, "desktop");
+
+      expect(palette.querySelectorAll("#cmd-palette-option-panel-desktop")).toHaveLength(
+        expectedCount,
+      );
+    },
+  );
+
+  it("opens the desktop panel from its palette action", async () => {
+    const { gateway } = createGateway(true);
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+      ),
+    );
+    palette.desktopAvailable = true;
+    await enterQuery(palette, "desktop");
+    const events: CustomEvent<DesktopPanelToggleDetail>[] = [];
+    const listener = (event: Event) => events.push(event as CustomEvent<DesktopPanelToggleDetail>);
+    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
+    try {
+      palette.querySelector<HTMLElement>("#cmd-palette-option-panel-desktop")?.click();
+    } finally {
+      window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.detail).toEqual({ open: true });
   });
 });

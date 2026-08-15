@@ -15,32 +15,23 @@ import {
   MINIMAX_CLI_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
-import { log } from "./constants.js";
+import { authProfilesLog } from "./constants.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
   areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-export {
-  areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
-  isSafeToAdoptBootstrapOAuthIdentity,
-  isSafeToOverwriteStoredOAuthIdentity,
-  shouldBootstrapFromExternalCliCredential,
-  shouldReplaceStoredOAuthCredential,
-} from "./oauth-shared.js";
-
-export type ExternalCliResolvedProfile = {
+type ExternalCliResolvedProfile = {
   profileId: string;
   credential: OAuthCredential;
   persistence?: "runtime-only" | "persisted";
 };
 
-export type ExternalCliAuthProfileOptions = {
+type ExternalCliAuthProfileOptions = {
   allowKeychainPrompt?: boolean;
   providerIds?: Iterable<string>;
   profileIds?: Iterable<string>;
@@ -63,6 +54,8 @@ type ExternalCliSyncProvider = {
 };
 
 // Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
+// Also the passthrough gate in cli-runner/prepare.ts: a live CLI login that
+// this sync would refuse to import must not authenticate a run either.
 /** Return true when imported CLI credentials match an existing profile identity. */
 export function isSafeToUseExternalCliCredential(
   existing: OAuthCredential | undefined,
@@ -137,6 +130,11 @@ function listExternalCliProfileIds(providerConfig: ExternalCliSyncProvider): str
 
 function listExternalCliProviderIds(providerConfig: ExternalCliSyncProvider): string[] {
   return [providerConfig.provider, ...(providerConfig.aliases ?? [])];
+}
+
+/** Provider ids whose external CLI credentials can be refreshed by this owner. */
+export function listExternalCliSyncProviderIds(): string[] {
+  return [...new Set(EXTERNAL_CLI_SYNC_PROVIDERS.flatMap(listExternalCliProviderIds))];
 }
 
 function normalizeExternalCliCredentialProvider(
@@ -268,6 +266,30 @@ function isExternalCliProviderInScope(params: {
   });
 }
 
+/** True when a previously resolved built-in CLI profile belongs to this refresh scope. */
+export function isExternalCliAuthProfileInScope(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  providerIds?: Iterable<string>;
+  profileIds?: Iterable<string>;
+}): boolean {
+  const credential = params.store.profiles[params.profileId];
+  const providerConfig = resolveExternalCliSyncProvider({
+    profileId: params.profileId,
+    ...(credential?.type === "oauth" ? { credential } : {}),
+  });
+  return providerConfig
+    ? isExternalCliProviderInScope({
+        providerConfig,
+        store: params.store,
+        options: {
+          ...(params.providerIds ? { providerIds: params.providerIds } : {}),
+          ...(params.profileIds ? { profileIds: params.profileIds } : {}),
+        },
+      })
+    : false;
+}
+
 function listScopedExternalCliProfileIds(params: {
   providerConfig: ExternalCliSyncProvider;
   store: AuthProfileStore;
@@ -283,12 +305,11 @@ function listScopedExternalCliProfileIds(params: {
   const requestedProfileIds = Array.from(options?.profileIds ?? [])
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
-  if (requestedProfileIds.length > 0) {
-    return requestedProfileIds.filter((profileId) =>
-      externalCliProfileIdMatches(providerConfig, profileId, {
-        allowLegacyNamespace: true,
-      }),
-    );
+  const matchingRequestedProfileIds = requestedProfileIds.filter((profileId) =>
+    externalCliProfileIdMatches(providerConfig, profileId, { allowLegacyNamespace: true }),
+  );
+  if (matchingRequestedProfileIds.length > 0) {
+    return matchingRequestedProfileIds;
   }
 
   const existingProfileIds = Object.keys(store.profiles).filter((profileId) =>
@@ -299,6 +320,26 @@ function listScopedExternalCliProfileIds(params: {
   }
 
   return options?.providerIds ? [providerConfig.profileId] : [];
+}
+
+function backfillExternalCliIdentity(params: {
+  providerConfig: ExternalCliSyncProvider;
+  existingOAuth: OAuthCredential;
+  allowKeychainPrompt?: boolean;
+}): OAuthCredential | null {
+  if (params.existingOAuth.email) {
+    return null;
+  }
+  const creds = params.providerConfig.readCredentials({
+    allowKeychainPrompt: params.allowKeychainPrompt,
+  });
+  // Matching token material is the only proof the stored profile IS the CLI
+  // login; identity fields are absent on the stored side by definition here.
+  const sameLogin =
+    creds?.email &&
+    (creds.refresh === params.existingOAuth.refresh ||
+      creds.access === params.existingOAuth.access);
+  return sameLogin ? { ...params.existingOAuth, email: creds.email } : null;
 }
 
 /** Resolve scoped external CLI auth profiles available to overlay or persist. */
@@ -325,7 +366,7 @@ export function resolveExternalCliAuthProfiles(
           ? existing
           : undefined;
       if (existing && !existingOAuth) {
-        log.debug("kept explicit local auth over external cli bootstrap", {
+        authProfilesLog.debug("kept explicit local auth over external cli bootstrap", {
           profileId,
           provider: providerConfig.provider,
           localType: existing.type,
@@ -338,7 +379,7 @@ export function resolveExternalCliAuthProfiles(
         existingOAuth &&
         hasInlineOAuthTokenMaterial(existingOAuth)
       ) {
-        log.debug("kept local oauth over external cli bootstrap-only provider", {
+        authProfilesLog.debug("kept local oauth over external cli bootstrap-only provider", {
           profileId,
           provider: providerConfig.provider,
         });
@@ -347,8 +388,18 @@ export function resolveExternalCliAuthProfiles(
       if (
         existingOAuth &&
         !providerConfig.bootstrapOnly &&
-        hasUsableOAuthCredential(existingOAuth, now)
+        hasUsableOAuthCredential(existingOAuth, { now })
       ) {
+        // Profiles synced before identity capture carry no email; backfill the
+        // non-secret metadata once the CLI read proves it is the same login.
+        const backfilled = backfillExternalCliIdentity({
+          providerConfig,
+          existingOAuth,
+          allowKeychainPrompt: options?.allowKeychainPrompt,
+        });
+        if (backfilled) {
+          profiles.push({ profileId, credential: backfilled, persistence: "persisted" });
+        }
         continue;
       }
       const creds = normalizeExternalCliCredentialProvider(
@@ -361,7 +412,7 @@ export function resolveExternalCliAuthProfiles(
         continue;
       }
       if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {
-        log.warn("refused external cli oauth bootstrap: identity mismatch", {
+        authProfilesLog.warn("refused external cli oauth bootstrap: identity mismatch", {
           profileId,
           provider: providerConfig.provider,
         });
@@ -372,10 +423,13 @@ export function resolveExternalCliAuthProfiles(
         !isSafeToAdoptBootstrapOAuthIdentity(existingOAuth, creds) &&
         !areOAuthCredentialsEquivalent(existingOAuth, creds)
       ) {
-        log.warn("refused external cli oauth bootstrap: identity mismatch or missing binding", {
-          profileId,
-          provider: providerConfig.provider,
-        });
+        authProfilesLog.warn(
+          "refused external cli oauth bootstrap: identity mismatch or missing binding",
+          {
+            profileId,
+            provider: providerConfig.provider,
+          },
+        );
         continue;
       }
       if (
@@ -386,7 +440,7 @@ export function resolveExternalCliAuthProfiles(
         })
       ) {
         if (existingOAuth) {
-          log.debug("kept usable local oauth over external cli bootstrap", {
+          authProfilesLog.debug("kept usable local oauth over external cli bootstrap", {
             profileId,
             provider: providerConfig.provider,
             localExpires: existingOAuth.expires,
@@ -395,12 +449,15 @@ export function resolveExternalCliAuthProfiles(
         }
         continue;
       }
-      log.debug("used external cli oauth bootstrap because local oauth was missing or unusable", {
-        profileId,
-        provider: providerConfig.provider,
-        localExpires: existingOAuth?.expires,
-        externalExpires: creds.expires,
-      });
+      authProfilesLog.debug(
+        "used external cli oauth bootstrap because local oauth was missing or unusable",
+        {
+          profileId,
+          provider: providerConfig.provider,
+          localExpires: existingOAuth?.expires,
+          externalExpires: creds.expires,
+        },
+      );
       profiles.push({
         profileId,
         credential: creds,

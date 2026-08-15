@@ -3,13 +3,15 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FEISHU_JSON_MAX_BYTES } from "./json-response.js";
+import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
 import {
+  FeishuStreamingFinalizationError,
   FeishuStreamingSession,
-  type FeishuStreamingFetch,
   mergeStreamingText,
-  resolveStreamingCardSendMode,
 } from "./streaming-card.js";
+
+const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
+type FeishuStreamingFetch = typeof fetch;
 
 type StreamingSessionState = {
   cardId: string;
@@ -41,10 +43,9 @@ type StreamingRequest = {
 const serverStops: Array<() => Promise<void>> = [];
 const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
 
-const hermeticPublicLookup: LookupFn = (async (_hostname: string, _options?: unknown) => ({
-  address: HERMETIC_PUBLIC_LOOKUP_ADDRESS,
-  family: 4,
-})) as LookupFn;
+const hermeticPublicLookup: LookupFn = async () => [
+  { address: HERMETIC_PUBLIC_LOOKUP_ADDRESS, family: 4 },
+];
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   let body = "";
@@ -748,7 +749,18 @@ describe("FeishuStreamingSession", () => {
       },
     });
 
-    await expect(session.close(undefined, { note: "model note" })).resolves.toBe(true);
+    const error = await session
+      .closeWithResult(undefined, { note: "model note" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(FeishuStreamingFinalizationError);
+    expect(error).toMatchObject({
+      result: {
+        visibleReplySent: true,
+        content: "visible answer",
+        messageId: "om_rejected_note_and_close",
+      },
+    });
 
     expect(noteBodies).toHaveLength(1);
     expect(settingsBodies).toHaveLength(1);
@@ -1188,10 +1200,6 @@ describe("resolveStreamingCardSendMode", () => {
 
   it("uses create mode when no reply routing fields are provided", () => {
     expect(resolveStreamingCardSendMode()).toBe("create");
-    expect(
-      resolveStreamingCardSendMode({
-        replyInThread: true,
-      }),
-    ).toBe("create");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

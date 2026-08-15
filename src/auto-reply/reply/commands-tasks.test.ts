@@ -2,13 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
-  completeTaskRunByRunId,
-  createQueuedTaskRun,
-  createRunningTaskRun,
-  failTaskRunByRunId,
+  completeTaskRunByRunIdCore,
+  createQueuedTaskRunCore,
+  createRunningTaskRunCore,
+  failTaskRunByRunIdCore,
 } from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
-import { buildTasksReply, handleTasksCommand } from "./commands-tasks.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { handleTasksCommand } from "./commands-tasks.js";
 import {
   baseCommandTestConfig,
   buildCommandTestParams,
@@ -27,15 +27,23 @@ vi.mock("../../agents/agent-scope.js", async () => {
 
 const baseCfg = baseCommandTestConfig;
 
-async function buildTasksReplyForTest(params: { sessionKey?: string } = {}) {
+async function buildTasksReplyForTest(params: { agentId?: string; sessionKey?: string } = {}) {
   const commandParams = buildCommandTestParams("/tasks", baseCfg);
-  return await buildTasksReply({
-    ...commandParams,
-    sessionKey: params.sessionKey ?? commandParams.sessionKey,
-  });
+  const result = await handleTasksCommand(
+    {
+      ...commandParams,
+      agentId: params.agentId ?? commandParams.agentId,
+      sessionKey: params.sessionKey ?? commandParams.sessionKey,
+    },
+    true,
+  );
+  if (!result?.reply) {
+    throw new Error("expected /tasks reply");
+  }
+  return result.reply;
 }
 
-describe("buildTasksReply", () => {
+describe("handleTasksCommand task board", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetTaskRegistryForTests({ persist: false });
@@ -47,7 +55,7 @@ describe("buildTasksReply", () => {
   });
 
   it("lists active and recent tasks for the current session", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:tasks-running",
@@ -55,21 +63,21 @@ describe("buildTasksReply", () => {
       task: "active background task",
       progressSummary: "still working",
     });
-    createQueuedTaskRun({
+    createQueuedTaskRunCore({
       runtime: "cron",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:tasks-queued",
       runId: "run-tasks-queued",
       task: "queued background task",
     });
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:acp:tasks-failed",
       runId: "run-tasks-failed",
       task: "failed background task",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId: "run-tasks-failed",
       endedAt: Date.now(),
       error: "approval denied",
@@ -86,7 +94,7 @@ describe("buildTasksReply", () => {
   });
 
   it("lists session-backed video generation tasks for the current session", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "cli",
       taskKind: "video_generation",
       sourceId: "video_generate:openai",
@@ -109,7 +117,7 @@ describe("buildTasksReply", () => {
   });
 
   it("lists session-backed image generation tasks for the current session", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "cli",
       taskKind: "image_generation",
       sourceId: "image_generate:openai",
@@ -132,7 +140,7 @@ describe("buildTasksReply", () => {
   });
 
   it("sanitizes leaked internal runtime context from visible task details", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:acp:tasks-sanitized-failed",
@@ -140,7 +148,7 @@ describe("buildTasksReply", () => {
       task: "Visible failed task",
       progressSummary: "still working",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId: "run-tasks-sanitized-failed",
       endedAt: Date.now(),
       error: [
@@ -162,7 +170,7 @@ describe("buildTasksReply", () => {
   });
 
   it("sanitizes inline internal runtime fences from visible task titles", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "cli",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:main",
@@ -174,7 +182,7 @@ describe("buildTasksReply", () => {
       ].join("\n"),
       progressSummary: "done",
     });
-    completeTaskRunByRunId({
+    completeTaskRunByRunIdCore({
       runId: "run-tasks-inline-fence",
       endedAt: Date.now(),
       terminalSummary: "Finished.",
@@ -190,14 +198,14 @@ describe("buildTasksReply", () => {
   });
 
   it("hides stale completed tasks from the task board", async () => {
-    createQueuedTaskRun({
+    createQueuedTaskRunCore({
       runtime: "cron",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:tasks-stale",
       runId: "run-tasks-stale",
       task: "stale completed task",
     });
-    completeTaskRunByRunId({
+    completeTaskRunByRunIdCore({
       runId: "run-tasks-stale",
       endedAt: Date.now() - 10 * 60_000,
       terminalSummary: "done a while ago",
@@ -211,7 +219,7 @@ describe("buildTasksReply", () => {
   });
 
   it("falls back to agent-local counts when the current session has no visible tasks", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:other-session",
       childSessionKey: "agent:main:subagent:tasks-agent-fallback",
@@ -232,7 +240,7 @@ describe("buildTasksReply", () => {
   });
 
   it("counts session-backed video generation tasks in agent-local fallback", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "cli",
       taskKind: "video_generation",
       sourceId: "video_generate:openai",
@@ -257,7 +265,7 @@ describe("buildTasksReply", () => {
   });
 
   it("uses the canonical target session agent for agent-local fallback counts", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:target:other-session",
       childSessionKey: "agent:target:subagent:tasks-target-fallback",
@@ -268,9 +276,7 @@ describe("buildTasksReply", () => {
     });
     vi.mocked(resolveSessionAgentId).mockReturnValue("target");
 
-    const commandParams = buildCommandTestParams("/tasks", baseCfg);
-    const reply = await buildTasksReply({
-      ...commandParams,
+    const reply = await buildTasksReplyForTest({
       agentId: "main",
       sessionKey: "agent:target:empty-session",
     });

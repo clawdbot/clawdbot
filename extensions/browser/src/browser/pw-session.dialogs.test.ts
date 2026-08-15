@@ -2,15 +2,17 @@
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { Dialog, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  armObservedDialogResponseOnPage,
+import { pwAi } from "./pw-ai.js";
+import { armObservedDialogResponseOnPage } from "./pw-session.js";
+
+const {
   createObservedDialogAbortSignalForPage,
   ensurePageState,
   getObservedBrowserStateForPage,
   isBrowserObservedDialogBlockedError,
   markObservedDialogsHandledRemotelyForPage,
   respondToObservedDialogOnPage,
-} from "./pw-session.js";
+} = pwAi;
 
 type Handler = (arg: unknown) => void;
 

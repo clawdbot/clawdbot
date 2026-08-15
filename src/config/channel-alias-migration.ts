@@ -9,17 +9,24 @@ import {
   type LegacyStreamingAliasOptions,
   type NormalizeLegacyChannelAccountParams,
 } from "./channel-compat-normalization.js";
+import { materializeInheritedAccountStreaming } from "./channel-doctor-helpers.js";
 import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 export type StreamingAliasMode = "off" | "partial" | "block" | "progress";
 
-/** Streaming half of a channel alias-migration spec. */
-type StreamingAliasSpec = {
+/**
+ * Streaming half of a channel alias-migration spec.
+ *
+ * TMode widens the migrated `streaming.mode` value set for channels whose
+ * nested schema keeps channel-local modes (Matrix adds "quiet"); the generic
+ * default keeps the shared four-mode contract for everyone else.
+ */
+type StreamingAliasSpec<TMode extends string = StreamingAliasMode> = {
   /** Default passed to resolveLegacyAliasStreamingMode for mode-source migration. */
   defaultMode: StreamingAliasMode;
   /** Channel-specific mode resolver override (Slack maps legacy draft stream modes). */
-  resolveMode?: (entry: Record<string, unknown>) => StreamingAliasMode;
+  resolveMode?: (entry: Record<string, unknown>) => TMode;
   /**
    * The channel's runtime default when `streaming` is entirely absent, if it
    * differs from the object-without-mode default (Discord: progress vs off).
@@ -40,10 +47,10 @@ type StreamingAliasSpec = {
   deliveryOnly?: boolean;
 };
 
-export type ChannelAliasMigrationSpec = {
+export type ChannelAliasMigrationSpec<TMode extends string = StreamingAliasMode> = {
   /** Channel id under `channels.<id>`; also the doctor message path prefix. */
   channelId: string;
-  streaming: StreamingAliasSpec;
+  streaming: StreamingAliasSpec<TMode>;
   /**
    * Set when the channel's runtime account merge replaces the root `streaming`
    * object wholesale (Discord). Migration then seeds account objects it
@@ -52,6 +59,8 @@ export type ChannelAliasMigrationSpec = {
    * would freeze inheritance into the account config.
    */
   accountStreamingReplacesRoot?: boolean;
+  /** Account resolution layers accounts.default between root and named accounts. */
+  accountStreamingInheritsDefaultAccount?: boolean;
   dm?: {
     root?: boolean;
     accounts?: boolean;
@@ -62,7 +71,7 @@ export type ChannelAliasMigrationSpec = {
 };
 
 function buildAliasRuleMessage(params: {
-  streaming: StreamingAliasSpec;
+  streaming: StreamingAliasSpec<string>;
   prefix: string;
   root: boolean;
 }): string {
@@ -93,12 +102,19 @@ function buildAliasRuleMessage(params: {
   return `${keyList} are legacy; use ${prefix}.streaming.{${nested.join(",")}}. Run "openclaw doctor --fix".`;
 }
 
+function hasLegacyDmAliases(value: unknown): boolean {
+  const dm = asObjectRecord(asObjectRecord(value)?.dm);
+  return dm !== null && (Object.hasOwn(dm, "policy") || Object.hasOwn(dm, "allowFrom"));
+}
+
 /**
  * Builds the standard channel doctor alias-migration surface from a small spec:
  * detection rules (root + accounts), the per-entry matcher, and the config
  * normalizer. Channels with additional migrations compose around these pieces.
  */
-export function defineChannelAliasMigration(spec: ChannelAliasMigrationSpec): {
+export function defineChannelAliasMigration<TMode extends string = StreamingAliasMode>(
+  spec: ChannelAliasMigrationSpec<TMode>,
+): {
   legacyConfigRules: LegacyConfigRule[];
   hasLegacyAliases: (value: unknown) => boolean;
   normalizeChannelConfig: (params: { cfg: OpenClawConfig; changes?: string[] }) => {
@@ -143,10 +159,15 @@ export function defineChannelAliasMigration(spec: ChannelAliasMigrationSpec): {
     if (!entry) {
       return { config: params.cfg, changes };
     }
+    const accountsBefore = spec.accountStreamingInheritsDefaultAccount
+      ? asObjectRecord(entry.accounts)
+      : null;
     if (
       streaming.deliveryOnly === true &&
       !hasLegacyAliases(entry) &&
-      !hasLegacyAccountStreamingAliases(entry.accounts, hasLegacyAliases)
+      !hasLegacyAccountStreamingAliases(entry.accounts, hasLegacyAliases) &&
+      !(spec.dm?.root && hasLegacyDmAliases(entry)) &&
+      !(spec.dm?.accounts && hasLegacyAccountStreamingAliases(entry.accounts, hasLegacyDmAliases))
     ) {
       return { config: params.cfg, changes };
     }
@@ -164,32 +185,56 @@ export function defineChannelAliasMigration(spec: ChannelAliasMigrationSpec): {
     if (!result.changed) {
       return { config: params.cfg, changes };
     }
+    const config = {
+      ...params.cfg,
+      channels: { ...channels, [spec.channelId]: result.entry },
+    } as OpenClawConfig;
     return {
-      config: {
-        ...params.cfg,
-        channels: { ...channels, [spec.channelId]: result.entry },
-      } as OpenClawConfig,
+      config: spec.accountStreamingInheritsDefaultAccount
+        ? materializeInheritedAccountStreaming({
+            cfg: config,
+            channelId: spec.channelId,
+            accountsBefore,
+            changes,
+          })
+        : config,
       changes,
     };
   };
 
+  const legacyConfigRules: LegacyConfigRule[] = [
+    {
+      path: ["channels", spec.channelId],
+      message: buildAliasRuleMessage({ streaming, prefix: pathPrefix, root: true }),
+      match: hasLegacyAliases,
+    },
+    {
+      path: ["channels", spec.channelId, "accounts"],
+      message: buildAliasRuleMessage({
+        streaming,
+        prefix: `${pathPrefix}.accounts.<id>`,
+        root: false,
+      }),
+      match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyAliases),
+    },
+  ];
+  if (spec.dm?.root) {
+    legacyConfigRules.push({
+      path: ["channels", spec.channelId],
+      message: `${pathPrefix}.dm.policy and ${pathPrefix}.dm.allowFrom are legacy; use ${pathPrefix}.dmPolicy and ${pathPrefix}.allowFrom. Run "openclaw doctor --fix".`,
+      match: hasLegacyDmAliases,
+    });
+  }
+  if (spec.dm?.accounts) {
+    legacyConfigRules.push({
+      path: ["channels", spec.channelId, "accounts"],
+      message: `${pathPrefix}.accounts.<id>.dm.policy and dm.allowFrom are legacy; use ${pathPrefix}.accounts.<id>.dmPolicy and allowFrom. Run "openclaw doctor --fix".`,
+      match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyDmAliases),
+    });
+  }
+
   return {
-    legacyConfigRules: [
-      {
-        path: ["channels", spec.channelId],
-        message: buildAliasRuleMessage({ streaming, prefix: pathPrefix, root: true }),
-        match: hasLegacyAliases,
-      },
-      {
-        path: ["channels", spec.channelId, "accounts"],
-        message: buildAliasRuleMessage({
-          streaming,
-          prefix: `${pathPrefix}.accounts.<id>`,
-          root: false,
-        }),
-        match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyAliases),
-      },
-    ],
+    legacyConfigRules,
     hasLegacyAliases,
     normalizeChannelConfig,
   };

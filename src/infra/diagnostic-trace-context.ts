@@ -242,8 +242,3 @@ export function runWithDiagnosticTraceContext<T>(
 ): T {
   return getDiagnosticTraceScopeState().storage.run(freezeDiagnosticTraceContext(trace), callback);
 }
-
-/** Clears async-local trace context state between tests. */
-export function resetDiagnosticTraceContextForTest(): void {
-  getDiagnosticTraceScopeState().storage.disable();
-}

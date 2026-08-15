@@ -1,3 +1,4 @@
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 // Resolves filesystem policy for exec and sandbox tool use.
 import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
@@ -9,7 +10,7 @@ const MUTATING_FS_TOOLS = ["write", "edit", "apply_patch"] as const;
 const RUNTIME_TOOLS = ["exec", "process"] as const;
 
 /** Scope where exec-like tools remain available while mutating filesystem tools are disabled. */
-export type ExecFilesystemPolicyDriftHit = {
+type ExecFilesystemPolicyDriftHit = {
   scopeLabel: string;
   runtimeTools: string[];
   disabledFilesystemTools: string[];
@@ -51,12 +52,12 @@ export function collectExecFilesystemPolicyDriftHits(
     tools?: AgentToolsConfig;
   }> = [{ scopeLabel: "tools" }];
 
-  for (const agent of cfg.agents?.list ?? []) {
+  for (const agent of listAgentEntries(cfg)) {
     if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
       continue;
     }
     contexts.push({
-      scopeLabel: `agents.list.${agent.id}.tools`,
+      scopeLabel: `agents.entries.${agent.id}.tools`,
       agentId: agent.id,
       tools: agent.tools,
     });

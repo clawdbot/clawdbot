@@ -1,3 +1,4 @@
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 // Nostr tests cover channel.lifecycle plugin behavior.
 import {
   createStartAccountContext,
@@ -23,12 +24,25 @@ vi.mock("./nostr-bus.js", () => ({
 function createMockBus() {
   return {
     sendDm: vi.fn(async () => {}),
-    close: vi.fn(),
+    close: vi.fn(async () => {}),
     getMetrics: vi.fn(() => ({ counters: {} })),
     publishProfile: vi.fn(),
     getProfileState: vi.fn(async () => null),
   };
 }
+
+function bindChannelRuntime(
+  context: Parameters<typeof startNostrGatewayAccount>[0],
+): Parameters<typeof startNostrGatewayAccount>[0] {
+  context.channelRuntime = {
+    inbound: { buildContext: buildChannelInboundEventContext },
+  } as never;
+  return context;
+}
+
+const startAccountWithChannelRuntime: typeof startNostrGatewayAccount = async (context) => {
+  await startNostrGatewayAccount(bindChannelRuntime(context));
+};
 
 describe("nostr gateway lifecycle", () => {
   beforeEach(() => {
@@ -44,7 +58,7 @@ describe("nostr gateway lifecycle", () => {
     mocks.startNostrBus.mockResolvedValueOnce(bus as never);
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: startNostrGatewayAccount,
+      startAccount: startAccountWithChannelRuntime,
       account: buildResolvedNostrAccount(),
     });
 
@@ -62,7 +76,7 @@ describe("nostr gateway lifecycle", () => {
     mocks.startNostrBus.mockResolvedValueOnce(bus as never);
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: startNostrGatewayAccount,
+      startAccount: startAccountWithChannelRuntime,
       account: buildResolvedNostrAccount(),
     });
 
@@ -85,13 +99,76 @@ describe("nostr gateway lifecycle", () => {
     abort.abort();
 
     await startNostrGatewayAccount(
-      createStartAccountContext({
-        account: buildResolvedNostrAccount(),
-        abortSignal: abort.signal,
-      }),
+      bindChannelRuntime(
+        createStartAccountContext({
+          account: buildResolvedNostrAccount(),
+          abortSignal: abort.signal,
+        }),
+      ),
     );
 
     expect(mocks.startNostrBus).toHaveBeenCalledOnce();
     expect(bus.close).toHaveBeenCalledOnce();
+  });
+
+  it("describes configured relays without claiming they are already connected", async () => {
+    const bus = createMockBus();
+    mocks.startNostrBus.mockResolvedValueOnce(bus as never);
+    const abort = new AbortController();
+    const account = buildResolvedNostrAccount({ relays: ["wss://relay.example.com"] });
+    const context = bindChannelRuntime(
+      createStartAccountContext({ account, abortSignal: abort.signal }),
+    );
+
+    const task = startNostrGatewayAccount(context);
+    await vi.waitFor(() => expect(mocks.startNostrBus).toHaveBeenCalledOnce());
+
+    expect(context.log?.info).toHaveBeenCalledWith(
+      "[default] Nostr provider started with 1 configured relay(s)",
+    );
+
+    abort.abort();
+    await task;
+  });
+
+  it("publishes ready with one relay and recovering only after the last relay disconnects", async () => {
+    const bus = createMockBus();
+    mocks.startNostrBus.mockResolvedValueOnce(bus as never);
+    const abort = new AbortController();
+    const statusEvents: Array<Record<string, unknown>> = [];
+    const context = bindChannelRuntime(
+      createStartAccountContext({
+        account: buildResolvedNostrAccount(),
+        abortSignal: abort.signal,
+        statusPatchSink: (patch) => statusEvents.push(patch as Record<string, unknown>),
+      }),
+    );
+
+    const task = startNostrGatewayAccount(context);
+    await vi.waitFor(() => expect(mocks.startNostrBus).toHaveBeenCalledOnce());
+    const options = mocks.startNostrBus.mock.calls[0]?.[0] as
+      | { onConnect?: (relay: string) => void; onDisconnect?: (relay: string) => void }
+      | undefined;
+    expect(statusEvents[0]).toMatchObject({ lifecycle: "starting" });
+
+    options?.onConnect?.("wss://relay-one.example/");
+    expect(statusEvents.at(-1)).toMatchObject({
+      running: true,
+      lifecycle: "ready",
+      connected: true,
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
+      terminalDisconnect: undefined,
+    });
+    options?.onConnect?.("wss://relay-two.example/");
+    const afterTwoConnected = statusEvents.length;
+    options?.onDisconnect?.("wss://relay-one.example");
+    expect(statusEvents).toHaveLength(afterTwoConnected);
+
+    options?.onDisconnect?.("wss://relay-two.example");
+    expect(statusEvents.at(-1)).toMatchObject({ lifecycle: "recovering", connected: false });
+
+    abort.abort();
+    await task;
   });
 });

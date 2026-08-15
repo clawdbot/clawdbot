@@ -2,19 +2,13 @@
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 import { XIAOMI_PROVIDER_ID, XIAOMI_TOKEN_PLAN_PROVIDER_ID } from "./provider-catalog.js";
 
-const MIMO_REASONING_MODEL_IDS = new Set([
-  "mimo-v2-pro",
-  "mimo-v2-omni",
-  "mimo-v2.5",
-  "mimo-v2.5-pro",
-  "mimo-v2.6-pro",
-]);
+const MIMO_REASONING_MODEL_IDS = new Set(["mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-pro"]);
 
 function isMiMoReasoningModelId(modelId: string): boolean {
   return MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase());
 }
 
-export function isMiMoProviderId(providerId: unknown): boolean {
+function isMiMoProviderId(providerId: unknown): boolean {
   return providerId === XIAOMI_PROVIDER_ID || providerId === XIAOMI_TOKEN_PLAN_PROVIDER_ID;
 }
 

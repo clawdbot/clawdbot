@@ -30,9 +30,9 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
           token: "test-token",
           allowFrom: ["*"],
           heartbeat: { showOk: false },
+          responsePrefix: params.responsePrefix,
         },
       } as never,
-      messages: { responsePrefix: params.responsePrefix },
       session: { store: params.storePath },
     };
   }

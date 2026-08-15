@@ -29,7 +29,7 @@ const inboundDedupeInFlight = resolveGlobalSingleton(
   () => new Set<string>(),
 );
 
-export type InboundDedupeClaimResult =
+type InboundDedupeClaimResult =
   | { status: "invalid" }
   | { status: "duplicate"; key: string }
   | { status: "inflight"; key: string }
@@ -53,7 +53,7 @@ function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   return `agent:${parsed.agentId}`;
 }
 
-export function buildInboundDedupeKey(ctx: MsgContext): string | null {
+function buildInboundDedupeKey(ctx: MsgContext): string | null {
   const provider =
     normalizeOptionalLowercaseString(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface) || "";
   const messageId = normalizeOptionalString(ctx.MessageSid);

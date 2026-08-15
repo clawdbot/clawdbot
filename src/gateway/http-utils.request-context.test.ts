@@ -3,13 +3,12 @@
  */
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveHttpSenderIsOwner } from "./http-auth-utils.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
-  GatewaySessionKeyOverrideError,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveGatewayRequestContext,
-  resolveHttpSenderIsOwner,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 
@@ -99,7 +98,7 @@ describe("resolveGatewayRequestContext", () => {
         sessionPrefix: "openai",
         defaultMessageChannel: "webchat",
       }),
-    ).toThrow(GatewaySessionKeyOverrideError);
+    ).toThrow(/reserved internal session namespaces/u);
   });
 
   it("preserves an existing unlocked legacy harness-prefixed override", () => {
@@ -131,7 +130,7 @@ describe("resolveGatewayRequestContext", () => {
         sessionPrefix: "openai",
         defaultMessageChannel: "webchat",
       }),
-    ).toThrow(GatewaySessionKeyOverrideError);
+    ).toThrow(/reserved internal session namespaces/u);
   });
 
   it("does not build session state for explicit unknown agent ids", () => {
@@ -161,6 +160,17 @@ describe("resolveGatewayRequestContext", () => {
         defaultMessageChannel: "webchat",
       }),
     ).toThrow("Unknown agent '!!!'.");
+  });
+
+  it("rejects invalid model syntax before accepting an explicit agent header", () => {
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-agent-id": "main" }),
+        model: "gpt-4o",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    ).toThrow("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
   });
 });
 
@@ -251,6 +261,7 @@ describe("resolveOpenAiCompatibleHttpOperatorScopes", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);

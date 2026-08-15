@@ -10,7 +10,11 @@ openclaw_node_version_matches() {
     *x)
       [[ "${actual%%.*}" == "${requested%%.*}" ]] || return 1
       if [[ "${requested%%.*}" == "22" ]]; then
-        openclaw_node_version_at_least "$actual" "22.19.0"
+        openclaw_node_version_at_least "$actual" "22.22.3"
+      elif [[ "${requested%%.*}" == "24" ]]; then
+        openclaw_node_version_at_least "$actual" "24.15.0"
+      elif [[ "${requested%%.*}" == "25" ]]; then
+        openclaw_node_version_at_least "$actual" "25.9.0"
       fi
       ;;
     *.*.*)
@@ -118,7 +122,8 @@ openclaw_resolve_node_download_version() {
   prefix="${prefix%%[xX]*}"
   prefix="v${prefix}"
   [[ "$prefix" == *. ]] || prefix="${prefix}."
-  curl -fsSL https://nodejs.org/dist/index.json |
+  curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
+    https://nodejs.org/dist/index.json |
     OPENCLAW_NODE_PREFIX="$prefix" python3 -c 'import json, os, sys
 prefix = os.environ["OPENCLAW_NODE_PREFIX"]
 for item in json.load(sys.stdin):
@@ -150,7 +155,7 @@ openclaw_node_download_platform() {
 
 openclaw_download_node() {
   local requested_node="$1"
-  local version platform archive_url install_root temp_root
+  local version platform archive_url archive_path install_root temp_root
   version="$(openclaw_resolve_node_download_version "$requested_node")"
   platform="$(openclaw_node_download_platform)" || return 1
   temp_root="${RUNNER_TEMP:-/tmp}"
@@ -159,13 +164,14 @@ openclaw_download_node() {
   fi
   install_root="${temp_root}/openclaw-node-${version}-${platform}"
   if [[ "$platform" == win-* ]]; then
-    local archive_path ps_archive_path ps_install_root ps_bin_dir node_bin_dir
+    local ps_archive_path ps_install_root ps_bin_dir node_bin_dir
     archive_path="${temp_root}/node-${version}-${platform}.zip"
     archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.zip"
     rm -rf "$install_root"
     mkdir -p "$install_root"
     echo "Downloading Node ${version} from ${archive_url}"
-    curl -fsSL -o "$archive_path" "$archive_url"
+    curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
+      -o "$archive_path" "$archive_url"
     ps_archive_path="$archive_path"
     ps_install_root="$install_root"
     if command -v cygpath >/dev/null 2>&1; then
@@ -186,9 +192,20 @@ openclaw_download_node() {
     fi
   else
     archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
+    archive_path="${temp_root}/node-${version}-${platform}.tar.xz"
     mkdir -p "$install_root"
     echo "Downloading Node ${version} from ${archive_url}"
-    curl -fsSL "$archive_url" | tar -xJ -C "$install_root" --strip-components=1
+    rm -f "$archive_path"
+    if ! curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
+      -o "$archive_path" "$archive_url"; then
+      rm -f "$archive_path"
+      return 1
+    fi
+    if ! tar -xJf "$archive_path" -C "$install_root" --strip-components=1; then
+      rm -f "$archive_path"
+      return 1
+    fi
+    rm -f "$archive_path"
     openclaw_prepend_node_bin "$install_root/bin"
   fi
 }

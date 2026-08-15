@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { getChatChannelMeta } from "../channels/chat-meta.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
-import type { PluginDiagnostic } from "./types.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 
 function collectDiagnostics() {
   const diagnostics: PluginDiagnostic[] = [];

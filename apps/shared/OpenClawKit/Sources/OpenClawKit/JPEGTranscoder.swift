@@ -3,13 +3,13 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-public enum JPEGTranscodeError: LocalizedError, Sendable {
+enum JPEGTranscodeError: LocalizedError, Sendable {
     case decodeFailed
     case propertiesMissing
     case encodeFailed
     case sizeLimitExceeded(maxBytes: Int, actualBytes: Int)
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .decodeFailed:
             "Failed to decode image data"
@@ -23,8 +23,8 @@ public enum JPEGTranscodeError: LocalizedError, Sendable {
     }
 }
 
-public struct JPEGTranscoder: Sendable {
-    public static func clampQuality(_ quality: Double) -> Double {
+struct JPEGTranscoder: Sendable {
+    static func clampQuality(_ quality: Double) -> Double {
         min(1.0, max(0.05, quality))
     }
 
@@ -32,7 +32,7 @@ public struct JPEGTranscoder: Sendable {
     ///
     /// - Important: This normalizes EXIF orientation (the output pixels are rotated if needed; orientation tag is not
     ///   relied on).
-    public static func transcodeToJPEG(
+    static func transcodeToJPEG(
         imageData: Data,
         maxWidthPx: Int?,
         quality: Double,
@@ -51,7 +51,7 @@ public struct JPEGTranscoder: Sendable {
     /// When `maxLongEdgePx` is provided it takes precedence over `maxWidthPx`.
     /// - Important: This normalizes EXIF orientation (the output pixels are rotated if needed; orientation tag is not
     ///   relied on).
-    public static func transcodeToJPEG(
+    static func transcodeToJPEG(
         imageData: Data,
         maxWidthPx: Int? = nil,
         maxLongEdgePx: Int?,

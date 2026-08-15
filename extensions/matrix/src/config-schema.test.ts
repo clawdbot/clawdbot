@@ -1,6 +1,11 @@
 // Matrix tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
-import { MatrixConfigSchema } from "./config-schema.js";
+import { MatrixChannelConfigSchema } from "./config-schema.js";
+
+const MatrixConfigSchema = MatrixChannelConfigSchema.runtime;
+if (!MatrixConfigSchema) {
+  throw new Error("expected Matrix runtime config schema");
+}
 
 describe("MatrixConfigSchema SecretInput", () => {
   it("accepts SecretRef accessToken at top-level", () => {
@@ -68,7 +73,9 @@ describe("MatrixConfigSchema SecretInput", () => {
     if (!result.success) {
       throw new Error("expected schema parse to succeed");
     }
-    expect(result.data.groups?.["!room:example.org"]?.account).toBe("axis");
+    expect(result.data).toMatchObject({
+      groups: { "!room:example.org": { account: "axis" } },
+    });
   });
 
   it("accepts legacy room-level account assignments", () => {
@@ -86,25 +93,48 @@ describe("MatrixConfigSchema SecretInput", () => {
     if (!result.success) {
       throw new Error("expected schema parse to succeed");
     }
-    expect(result.data.rooms?.["!room:example.org"]?.account).toBe("axis");
+    expect(result.data).toMatchObject({
+      rooms: { "!room:example.org": { account: "axis" } },
+    });
   });
 
-  it("accepts quiet Matrix streaming mode", () => {
+  it.each(["groups", "rooms"] as const)("rejects unknown %s entry fields", (scope) => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
       accessToken: "token",
-      streaming: "quiet",
+      [scope]: {
+        "!room:example.org": {
+          enabled: true,
+          unknownSetting: true,
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts nested quiet Matrix streaming mode with delivery controls", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      streaming: {
+        mode: "quiet",
+        chunkMode: "newline",
+        block: { enabled: true, coalesce: { idleMs: 100 } },
+      },
     });
     expect(result.success).toBe(true);
   });
 
-  it("accepts scalar progress Matrix streaming mode", () => {
+  it.each([
+    ["scalar streaming mode", { streaming: "quiet" }],
+    ["boolean streaming", { streaming: true }],
+  ])("rejects legacy %s spelling", (_name, overrides) => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
       accessToken: "token",
-      streaming: "progress",
+      ...overrides,
     });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 
   it("accepts Matrix streaming preview tool progress config", () => {
@@ -117,6 +147,7 @@ describe("MatrixConfigSchema SecretInput", () => {
           label: "Shelling",
           maxLines: 4,
           toolProgress: false,
+          commandText: "status",
         },
         preview: {
           toolProgress: true,
@@ -124,5 +155,103 @@ describe("MatrixConfigSchema SecretInput", () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["boolean streaming", { streaming: true }],
+    ["mode string streaming", { streaming: "progress" }],
+    ["streamMode", { streamMode: "progress" }],
+    ["chunkMode", { chunkMode: "newline" }],
+    ["blockStreaming", { blockStreaming: true }],
+    ["blockStreamingCoalesce", { blockStreamingCoalesce: { idleMs: 5 } }],
+    ["draftChunk", { draftChunk: { minChars: 10 } }],
+  ])("rejects retired account streaming input (%s) with a doctor pointer", (_name, input) => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      accounts: { work: input },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      // The channel-config wrapper reshapes failures into { issues }.
+      expect(JSON.stringify(result.issues)).toContain("doctor --fix");
+    }
+  });
+
+  it("keeps schema-open account entries with nested streaming objects", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      accounts: { work: { streaming: { mode: "progress" }, customField: 1 } },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("MatrixConfigSchema exec approvals", () => {
+  it.each([true, false, "auto"] as const)("accepts the shipped enabled mode %s", (enabled) => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: {
+        enabled,
+        approvers: ["@owner:example.org"],
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({ execApprovals: { enabled } });
+    }
+  });
+
+  it("preserves omitted approval enablement without introducing a default", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: { approvers: ["@owner:example.org"] },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        execApprovals: { approvers: ["@owner:example.org"] },
+      });
+      expect(result.data).not.toMatchObject({
+        execApprovals: { enabled: expect.anything() },
+      });
+    }
+  });
+
+  it("preserves the existing non-strict approval object", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: {
+        enabled: "auto",
+        approvers: ["@owner:example.org"],
+        unknownApprovalField: true,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        execApprovals: { enabled: "auto", approvers: ["@owner:example.org"] },
+      });
+      expect(result.data).not.toMatchObject({
+        execApprovals: { unknownApprovalField: true },
+      });
+    }
+  });
+
+  it.each(["on", "AUTO", 1, null])("rejects the invalid enabled mode %s", (enabled) => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: { enabled, approvers: ["@owner:example.org"] },
+    });
+
+    expect(result.success).toBe(false);
   });
 });

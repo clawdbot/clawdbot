@@ -1,8 +1,8 @@
 // Verifies OpenAI strict tool schema normalization and cache behavior.
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { projectOpenAITools } from "./openai-tool-projection.js";
 import {
-  clearOpenAIToolSchemaCacheForTest,
+  findOpenAIStrictSchemaViolations,
   findOpenAIStrictToolProjectionDiagnostics,
   isStrictOpenAIJsonSchemaCompatible,
   normalizeOpenAIStrictToolParameters,
@@ -11,10 +11,6 @@ import {
 } from "./openai-tool-schema.js";
 
 describe("OpenAI strict tool schema normalization", () => {
-  beforeEach(() => {
-    clearOpenAIToolSchemaCacheForTest();
-  });
-
   it("repairs top-level object schemas with missing or invalid properties", () => {
     const schemas = [
       { type: "object" },
@@ -61,6 +57,54 @@ describe("OpenAI strict tool schema normalization", () => {
         true,
       ),
     ).toBe(false);
+  });
+
+  it("walks named schema maps without treating definition names as keywords", () => {
+    const schema = {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+      $defs: {
+        anyOf: { type: "string" },
+      },
+      examples: [{ anyOf: [{ type: "string" }] }],
+    };
+
+    expect(
+      findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true }),
+    ).toEqual([]);
+  });
+
+  it("walks legacy and content schema applicators", () => {
+    const nestedObject = {
+      type: "object",
+      properties: { value: { type: "string" } },
+    };
+    const schema = {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+      dependencies: {
+        mode: ["payload"],
+        payload: nestedObject,
+      },
+      additionalItems: nestedObject,
+      contentSchema: nestedObject,
+    };
+
+    expect(
+      findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true }),
+    ).toEqual([
+      "parameters.dependencies.payload.additionalProperties",
+      "parameters.dependencies.payload.required",
+      "parameters.additionalItems.additionalProperties",
+      "parameters.additionalItems.required",
+      "parameters.contentSchema.additionalProperties",
+      "parameters.contentSchema.required",
+    ]);
+    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
   });
 
   it("normalizes truly empty MCP tool schema {} for strict mode", () => {

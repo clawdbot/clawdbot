@@ -29,11 +29,13 @@ import {
 import {
   findProviderBucketLocation,
   loadDiscordModelPickerData,
-  renderDiscordModelPickerModelsView,
   resolveDiscordModelPickerPageForModel,
-  toDiscordModelPickerMessagePayload,
   type DiscordModelPickerCommandContext,
-} from "./model-picker.js";
+} from "./model-picker.state.js";
+import {
+  renderDiscordModelPickerModelsView,
+  toDiscordModelPickerMessagePayload,
+} from "./model-picker.view.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import type { SafeDiscordInteractionCall } from "./native-command-ui.types.js";
 import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
@@ -80,13 +82,6 @@ export function shouldOpenDiscordModelPickerFromCommand(params: {
   }
 
   return serializedArgs ? null : context;
-}
-
-function buildDiscordModelPickerCurrentModel(
-  defaultProvider: string,
-  defaultModel: string,
-): string {
-  return `${defaultProvider}/${defaultModel}`;
 }
 
 export function buildDiscordModelPickerAllowedModelRefs(
@@ -183,7 +178,12 @@ export async function resolveDiscordNativeChoiceContext(params: {
   cfg: OpenClawConfig;
   accountId: string;
   threadBindings: ThreadBindingManager;
-}): Promise<{ provider?: string; model?: string; agentRuntime?: string } | null> {
+}): Promise<{
+  provider?: string;
+  model?: string;
+  agentRuntime?: string;
+  agentId: string;
+} | null> {
   try {
     const resolved = await resolveDiscordModelPickerRouteState({
       interaction: params.interaction,
@@ -215,6 +215,7 @@ export async function resolveDiscordNativeChoiceContext(params: {
     return {
       provider,
       model,
+      agentId: route.agentId,
       agentRuntime: resolveEffectiveAgentRuntime({
         cfg: params.cfg,
         provider,
@@ -234,10 +235,7 @@ export function resolveDiscordModelPickerCurrentModel(params: {
   route: ResolvedAgentRoute;
   data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
 }): string {
-  const fallback = buildDiscordModelPickerCurrentModel(
-    params.data.resolvedDefault.provider,
-    params.data.resolvedDefault.model,
-  );
+  const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,

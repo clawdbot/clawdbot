@@ -10,11 +10,13 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 type PluginUpdateOptions = {
   all?: boolean;
   acknowledgeClawhubRisk?: boolean;
+  acknowledgeInstallPolicyWarning?: boolean;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
 };
 
 type CommanderClawHubRiskOptions = Record<string, unknown> & {
+  acknowledgeClawHubRisk?: boolean;
   acknowledgeClawhubRisk?: boolean;
 };
 
@@ -45,7 +47,7 @@ type PluginSearchOptions = {
   limit?: number;
 };
 
-export type PluginUninstallOptions = {
+type PluginUninstallOptions = {
   keepFiles?: boolean;
   /** @deprecated Use keepFiles. */
   keepConfig?: boolean;
@@ -67,6 +69,11 @@ type PluginAuthoringBuildOptions = {
 type PluginAuthoringValidateOptions = {
   root?: string;
   entry?: string;
+  json?: boolean;
+};
+
+export type PluginDoctorOptions = {
+  json?: boolean;
 };
 
 type PluginAuthoringInitOptions = {
@@ -172,11 +179,20 @@ export function registerPluginsCli(program: Command) {
       "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
     )
     .option("-l, --link", "Link a local path instead of copying", false)
-    .option("--force", "Overwrite an existing installed plugin or hook pack", false)
+    .option(
+      "--force",
+      "Confirm non-ClawHub sources and overwrite an existing plugin or hook pack",
+      false,
+    )
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
       "--dangerously-force-unsafe-install",
       "Deprecated no-op; security.installPolicy may still block",
+      false,
+    )
+    .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
     .option(
@@ -192,6 +208,7 @@ export function registerPluginsCli(program: Command) {
       async (
         raw: string,
         opts: CommanderClawHubRiskOptions & {
+          acknowledgeInstallPolicyWarning?: boolean;
           dangerouslyForceUnsafeInstall?: boolean;
           force?: boolean;
           link?: boolean;
@@ -216,6 +233,11 @@ export function registerPluginsCli(program: Command) {
     .option(
       "--dangerously-force-unsafe-install",
       "Deprecated no-op; security.installPolicy may still block",
+      false,
+    )
+    .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
     .option(
@@ -247,9 +269,10 @@ export function registerPluginsCli(program: Command) {
   plugins
     .command("doctor")
     .description("Report plugin load issues")
-    .action(async () => {
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginDoctorOptions) => {
       const { runPluginsDoctorCommand } = await loadPluginsRuntime();
-      await runPluginsDoctorCommand();
+      await runPluginsDoctorCommand(opts);
     });
 
   plugins
@@ -268,6 +291,7 @@ export function registerPluginsCli(program: Command) {
     .description("Validate simple tool plugin metadata")
     .option("--root <path>", "Plugin package root")
     .option("--entry <path>", "Plugin entry module relative to --root")
+    .option("--json", "Print JSON")
     .action(async (opts: PluginAuthoringValidateOptions) => {
       const { runPluginsValidateCommand } = await loadPluginsAuthoringCommands();
       await runPluginsValidateCommand(opts);
@@ -324,5 +348,6 @@ export function registerPluginsCli(program: Command) {
       await runPluginMarketplaceListCommand(source, opts);
     });
 
+  applyParentDefaultHelpAction(marketplace);
   applyParentDefaultHelpAction(plugins);
 }

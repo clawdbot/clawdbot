@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Telegram tests cover targets plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
@@ -74,6 +75,23 @@ describe("parseTelegramTarget", () => {
     });
   });
 
+  it("parses channel Direct Messages topic markers without forum inference", () => {
+    expect(parseTelegramTarget("telegram:group:-1001234567890:direct-topic:77")).toEqual({
+      chatId: "-1001234567890",
+      directMessagesTopicId: 77,
+      chatType: "group",
+    });
+  });
+
+  it("rejects non-positive and unsafe channel Direct Messages topic ids", () => {
+    for (const target of [
+      "-1001234567890:direct-topic:0",
+      "-1001234567890:direct-topic:9007199254740992",
+    ]) {
+      expect(parseTelegramTarget(target)).toEqual({ chatId: target, chatType: "unknown" });
+    }
+  });
+
   it("trims whitespace", () => {
     expect(parseTelegramTarget("  -1001234567890:99  ")).toEqual({
       chatId: "-1001234567890",
@@ -129,6 +147,9 @@ describe("normalizeTelegramOutboundTarget", () => {
       "-1001234567890:topic:77",
     );
     expect(normalizeTelegramOutboundTarget("group:-1001234567890:77")).toBe("-1001234567890:77");
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890:direct-topic:77")).toBe(
+      "-1001234567890:direct-topic:77",
+    );
   });
 
   it("keeps already-valid numeric and non-numeric targets on the send path", () => {
@@ -200,7 +221,7 @@ describe("telegram group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
     expect(
       resolveTelegramGroupRequireMention({ cfg: telegramCfg, groupId: "-1001:topic:77" }),
     ).toBe(false);
@@ -242,7 +263,7 @@ describe("telegram group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(
       resolveTelegramGroupRequireMention({
@@ -295,6 +316,9 @@ describe("telegram target normalization", () => {
     expect(normalizeTelegramMessagingTarget("tg:group:-100123")).toBe("telegram:group:-100123");
     expect(normalizeTelegramMessagingTarget("telegram:-100123:topic:99")).toBe(
       "telegram:-100123:topic:99",
+    );
+    expect(normalizeTelegramMessagingTarget("telegram:-100123:direct-topic:77")).toBe(
+      "telegram:-100123:direct-topic:77",
     );
   });
 

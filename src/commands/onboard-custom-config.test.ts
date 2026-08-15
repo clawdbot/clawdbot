@@ -6,7 +6,6 @@ import {
   applyCustomApiConfig,
   buildAnthropicVerificationProbeRequest,
   buildOpenAiVerificationProbeRequest,
-  inferCustomModelSupportsImageInput,
   parseNonInteractiveCustomApiFlags,
   resolveCustomModelImageInputInference,
 } from "./onboard-custom-config.js";
@@ -549,21 +548,7 @@ describe("parseNonInteractiveCustomApiFlags", () => {
   });
 });
 
-describe("inferCustomModelSupportsImageInput", () => {
-  it.each(["gpt-4o", "claude-sonnet-4-6", "gemini-3-flash", "qwen2.5-vl", "llava"])(
-    "detects likely vision model %s",
-    (modelId) => {
-      expect(inferCustomModelSupportsImageInput(modelId)).toBe(true);
-    },
-  );
-
-  it.each(["llama3", "deepseek-v3", "evolvable-text-model"])(
-    "does not over-match text model %s",
-    (modelId) => {
-      expect(inferCustomModelSupportsImageInput(modelId)).toBe(false);
-    },
-  );
-
+describe("resolveCustomModelImageInputInference", () => {
   it("reports confidence for known text and unknown custom models", () => {
     expect(resolveCustomModelImageInputInference("llama3")).toEqual({
       supportsImageInput: false,

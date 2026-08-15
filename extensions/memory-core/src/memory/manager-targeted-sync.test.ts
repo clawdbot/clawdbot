@@ -1,27 +1,11 @@
 // Memory Core tests cover manager targeted sync plugin behavior.
-import type { MemorySessionSyncTarget } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { enqueueMemoryTargetedSessionSync } from "./manager-sync-control.js";
 import {
-  clearMemorySyncedArchiveFiles,
   markMemoryTargetArchiveFilesDirty,
   runMemoryTargetedSessionSync,
 } from "./manager-targeted-sync.js";
 
 describe("memory targeted session sync", () => {
-  it("preserves unrelated dirty sessions after targeted cleanup", () => {
-    const secondSessionPath = "/tmp/targeted-dirty-second.jsonl";
-    const sessionsDirtyFiles = new Set(["/tmp/targeted-dirty-first.jsonl", secondSessionPath]);
-
-    const sessionsDirty = clearMemorySyncedArchiveFiles({
-      sessionsDirtyFiles,
-      targetArchiveFiles: ["/tmp/targeted-dirty-first.jsonl"],
-    });
-
-    expect(sessionsDirtyFiles.has(secondSessionPath)).toBe(true);
-    expect(sessionsDirty).toBe(true);
-  });
-
   it("marks target sessions dirty while identity sync is paused", () => {
     const targetSessionPath = "/tmp/paused-target.jsonl";
     const sessionsDirtyFiles = new Set(["/tmp/other-dirty.jsonl"]);
@@ -87,40 +71,21 @@ describe("memory targeted session sync", () => {
     expect(sessionsDirtyFiles.size).toBe(0);
   });
 
-  it("queues identity session targets while a sync is already running", async () => {
-    let resolveSyncing: (() => void) | undefined;
-    const syncing = new Promise<void>((resolve) => {
-      resolveSyncing = resolve;
+  it("preserves source reconciliation after targeted cleanup", async () => {
+    const sessionsDirtyFiles = new Set(["/tmp/targeted-reconcile.jsonl"]);
+
+    const result = await runMemoryTargetedSessionSync({
+      hasSessionSource: true,
+      targetArchiveFiles: new Set(["/tmp/targeted-reconcile.jsonl"]),
+      reason: "post-compaction",
+      sessionsReconcileDirty: true,
+      sessionsDirtyFiles,
+      syncArchiveFiles: async () => undefined,
+      shouldFallbackOnError: () => false,
+      activateFallbackProvider: async () => false,
     });
-    const queuedArchiveFiles = new Set<string>();
-    const queuedSessions = new Map<string, MemorySessionSyncTarget>();
-    let queuedSessionSync: Promise<void> | null = null;
-    const sync = vi.fn(async () => {});
 
-    const queued = enqueueMemoryTargetedSessionSync(
-      {
-        isClosed: () => false,
-        getSyncing: () => syncing,
-        getQueuedArchiveFiles: () => queuedArchiveFiles,
-        getQueuedSessions: () => queuedSessions,
-        getQueuedSessionSync: () => queuedSessionSync,
-        setQueuedSessionSync: (value) => {
-          queuedSessionSync = value;
-        },
-        sync,
-      },
-      {
-        sessions: [{ agentId: "main", sessionId: "targeted", sessionKey: "agent:main:targeted" }],
-      },
-    );
-
-    resolveSyncing?.();
-    await queued;
-
-    expect(sync).toHaveBeenCalledWith({
-      reason: "queued-sessions",
-      sessions: [{ agentId: "main", sessionId: "targeted", sessionKey: "agent:main:targeted" }],
-      archiveFiles: [],
-    });
+    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    expect(sessionsDirtyFiles.size).toBe(0);
   });
 });

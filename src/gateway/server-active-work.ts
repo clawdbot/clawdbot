@@ -1,7 +1,7 @@
 // Adapts server-local chat and terminal state to the shared activity inspector.
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
+import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
-import { getSuspensionVisibleCronTaskRunCount } from "../tasks/cron-task-cancel.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
 export function createGatewayServerActiveWorkInspectors(

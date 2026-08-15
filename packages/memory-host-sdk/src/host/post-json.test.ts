@@ -192,7 +192,7 @@ describe("postJson", () => {
         streamingTextResponse({
           body: "{}",
           status: 200,
-          headers: { "content-length": "32" },
+          headers: { "content-length": "00032" },
           onCancel: () => {
             canceled = true;
           },
@@ -211,6 +211,28 @@ describe("postJson", () => {
       }),
     ).rejects.toThrow("post failed: response body too large: 32 bytes (limit: 8 bytes)");
     expect(canceled).toBe(true);
+  });
+
+  it("accepts leading-zero content-length values on successful JSON responses", async () => {
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        new Response("{}", {
+          status: 200,
+          headers: { "content-length": "0002" },
+        }),
+      );
+    });
+
+    const result = await postJson({
+      url: "https://memory.example/v1/post",
+      headers: {},
+      body: {},
+      errorPrefix: "post failed",
+      maxResponseBytes: 8,
+      parse: (payload) => payload,
+    });
+
+    expect(result).toEqual({});
   });
 
   it("cancels successful JSON responses that exceed the streaming byte cap", async () => {

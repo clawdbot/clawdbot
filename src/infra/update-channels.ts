@@ -1,16 +1,12 @@
 // Resolves OpenClaw update channels from config, tags, and versions.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { parseComparableSemver } from "./semver-compare.js";
+import { parse as parseSemver } from "semver";
+import { normalizeLegacyDotBetaVersion } from "./semver.js";
 
 /** Release stream used to choose registry tags and update policy defaults. */
 export type UpdateChannel = "stable" | "extended-stable" | "beta" | "dev";
 /** Evidence source that decided the effective update channel. */
-export type UpdateChannelSource =
-  | "config"
-  | "git-tag"
-  | "git-branch"
-  | "installed-version"
-  | "default";
+type UpdateChannelSource = "config" | "git-tag" | "git-branch" | "installed-version" | "default";
 
 /** Default channel for npm/package installs when no config or version signal overrides it. */
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
@@ -28,6 +24,14 @@ export const EXTENDED_STABLE_TAG_UNSUPPORTED_REASON = "extended-stable-tag-unsup
 export const UPDATE_EFFECTIVE_CHANNEL_ENV = "OPENCLAW_UPDATE_EFFECTIVE_CHANNEL";
 /** Git branch that represents the development update stream. */
 export const DEV_BRANCH = "main";
+
+/** Resolves current tracking, or the configured Dev branch for detached HEAD. */
+export function resolveDevUpstreamRef(branch?: string | null, detached = false): string | null {
+  if (branch !== "HEAD") {
+    return "@{upstream}";
+  }
+  return detached ? `${DEV_BRANCH}@{upstream}` : null;
+}
 
 /** Normalizes config or CLI channel input to a supported update channel. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
@@ -65,11 +69,26 @@ export function isBetaTag(tag: string): boolean {
   return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
 }
 
+/** Returns whether a final monthly release belongs to the extended-stable line. */
+function isExtendedStableReleaseVersion(version: string): boolean {
+  const parsed = parseSemver(version.trim());
+  return (
+    parsed !== null &&
+    parsed.build.length === 0 &&
+    parsed.prerelease.length === 0 &&
+    parsed.major >= 1000 &&
+    parsed.major <= 9999 &&
+    parsed.minor >= 1 &&
+    parsed.minor <= 12 &&
+    parsed.patch >= 33
+  );
+}
+
 /** Detects prerelease tags, including legacy dot-beta tags and named prerelease channels. */
-export function isPrereleaseTag(tag: string): boolean {
-  const parsed = parseComparableSemver(tag, { normalizeLegacyDotBeta: true });
+function isPrereleaseTag(tag: string): boolean {
+  const parsed = parseSemver(normalizeLegacyDotBetaVersion(tag));
   if (parsed) {
-    return Boolean(parsed.prerelease?.some((part) => !/^[0-9]+$/.test(part)));
+    return parsed.prerelease.some((part) => typeof part === "string");
   }
   return /(?:^|[.-])(alpha|beta|rc|pre|preview|canary|dev|next|nightly|experimental)(?:[.-]|$)/i.test(
     tag,
@@ -119,6 +138,12 @@ export function resolveEffectiveUpdateChannel(params: {
     return { channel: params.configChannel, source: "config" };
   }
 
+  if (params.installKind === "package" && params.currentVersion) {
+    if (isExtendedStableReleaseVersion(params.currentVersion)) {
+      return { channel: "extended-stable", source: "installed-version" };
+    }
+  }
+
   if (params.installKind === "git") {
     const tag = params.git?.tag;
     if (tag) {
@@ -160,7 +185,7 @@ export function formatUpdateChannelLabel(params: {
       : `${params.channel} (branch)`;
   }
   if (params.source === "installed-version") {
-    return "beta (installed version)";
+    return `${params.channel} (installed version)`;
   }
   return `${params.channel} (default)`;
 }

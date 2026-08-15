@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "../../../styles.css";
-import type { FileSidebarContent } from "./chat-sidebar.ts";
 import "./chat-sidebar.ts";
 
 // The root jsdom ui shard also collects *.browser.test.ts files; CodeMirror
@@ -9,6 +8,28 @@ import "./chat-sidebar.ts";
 // Importing vitest/browser statically would throw during jsdom collection.
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];
+
+type FileSidebarContent = {
+  kind: "file";
+  path: string;
+  name: string;
+  content: string;
+  draftKey?: string;
+  language?: string;
+  line?: number | null;
+  edit?: {
+    hash: string;
+    save: (params: {
+      content: string;
+      expectedHash: string;
+    }) => Promise<
+      | { ok: true; hash: string }
+      | { ok: false; code: "conflict"; latest: { content: string; hash: string } }
+      | { ok: false; code: "error"; message: string }
+    >;
+    fetchLatest: () => Promise<{ content: string; hash: string; editable: boolean } | null>;
+  };
+};
 
 beforeAll(async () => {
   if (browserMode) {
@@ -29,7 +50,7 @@ async function mountFile(content: FileSidebarContent): Promise<DetailPanel> {
   document.body.append(panel);
   mounted.push(panel);
   await panel.updateComplete;
-  await expect.poll(() => panel.querySelector(".cm-editor")).not.toBeNull();
+  await expect.poll(() => panel.querySelector(".cm-editor"), { timeout: 5_000 }).not.toBeNull();
   return panel;
 }
 

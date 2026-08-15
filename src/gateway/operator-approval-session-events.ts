@@ -21,7 +21,7 @@ import type { GatewayClient } from "./server-methods/types.js";
 const MAX_SESSION_APPROVAL_REPLAY = 1_000;
 type ApprovalSessionClient = GatewayClient & { invalidated?: boolean };
 
-export type OperatorApprovalSessionEventRuntime = {
+type OperatorApprovalSessionEventRuntime = {
   publish: (event: OperatorApprovalLifecycleEvent) => void;
   replay: (sessionKey: string, client: GatewayClient | null) => SessionApprovalReplay;
 };

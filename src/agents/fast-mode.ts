@@ -14,19 +14,14 @@ import { resolveAgentConfig } from "./agent-scope.js";
 
 export {
   DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
-  formatFastModeAutoLabel,
   formatFastModeAutoProgressText,
   formatFastModeCommandOptions,
   formatFastModeCurrentStatus,
   formatFastModeSourceSuffix,
   formatFastModeStatusValue,
   formatFastModeValue,
-  normalizeFastModeAutoOnSeconds,
-  normalizeFastModeSource,
   resolveFastModeForElapsed,
-  resolveFastModeModelAutoOnSeconds,
 } from "../shared/fast-mode.js";
-export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 
 // Resolves effective fast-mode state from session, agent, model config, then

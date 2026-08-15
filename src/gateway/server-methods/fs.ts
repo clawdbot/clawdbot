@@ -1,29 +1,29 @@
-// Host directory browsing for the new-session folder picker. operator.admin
-// only (see core-descriptors): listing arbitrary host paths carries the same
-// trust as starting a session with an explicit cwd.
+// Host directory browsing for the new-session folder picker. Write-scoped
+// callers stay inside configured agent workspaces; admin retains host access.
+import { safeParseJson } from "@openclaw/normalization-core";
 import {
   ErrorCodes,
   errorShape,
+  missingScopeErrorShape,
   validateFsListDirParams,
   validateFsListDirResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listHostDirectories } from "../../infra/host-directory-listing.js";
 import { NODE_FS_LIST_DIR_COMMAND } from "../../infra/node-commands.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 function parseNodePayload(payload: unknown, payloadJSON?: string | null): unknown {
   if (payloadJSON) {
-    try {
-      return JSON.parse(payloadJSON) as unknown;
-    } catch {
-      return undefined;
-    }
+    return safeParseJson(payloadJSON);
   }
   return payload;
 }
 
 export const fsHandlers: GatewayRequestHandlers = {
-  "fs.listDir": async ({ params, respond, context }) => {
+  "fs.listDir": async ({ params, respond, context, client }) => {
     if (!validateFsListDirParams(params)) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid fs parameters"));
       return;
@@ -43,9 +43,32 @@ export const fsHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        const allowed = isNodeCommandAllowed({
+          command: NODE_FS_LIST_DIR_COMMAND,
+          declaredCommands: node.commands,
+          allowlist: resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
+            ...node,
+            approvedCommands: node.commands,
+          }),
+        });
+        if (!allowed.ok) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `node command not allowed: ${NODE_FS_LIST_DIR_COMMAND} (${allowed.reason})`,
+              {
+                details: { command: NODE_FS_LIST_DIR_COMMAND, reason: allowed.reason },
+              },
+            ),
+          );
+          return;
+        }
         const result = await context.nodeRegistry.invoke({
           nodeId: params.nodeId,
           expectedConnId: node.connId,
+          ...(node.pairingGeneration ? { expectedPairingGeneration: node.pairingGeneration } : {}),
           command: NODE_FS_LIST_DIR_COMMAND,
           params: params.path ? { path: params.path } : {},
         });
@@ -69,7 +92,31 @@ export const fsHandlers: GatewayRequestHandlers = {
         respond(true, payload, undefined);
         return;
       }
-      respond(true, await listHostDirectories(params.path), undefined);
+      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      if (scopes.includes(ADMIN_SCOPE)) {
+        respond(true, await listHostDirectories(params.path), undefined);
+        return;
+      }
+      const containment = await resolveWorkspacePathContainment(
+        params.path?.trim() || undefined,
+        context.getRuntimeConfig(),
+        { allowMissing: true },
+      );
+      if (!containment) {
+        respond(
+          false,
+          undefined,
+          missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+        );
+        return;
+      }
+      const listing = await listHostDirectories(containment.path);
+      if (listing.path === containment.workspaceRoot) {
+        const { parent: _parent, ...clamped } = listing;
+        respond(true, clamped, undefined);
+        return;
+      }
+      respond(true, listing, undefined);
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
     }

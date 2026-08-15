@@ -44,7 +44,7 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     - **OpenAI Code (Codex) subscription (device pairing)**: browser pairing flow with a short-lived device code.
       - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6-sol` through the Codex runtime.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
-      - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6`; the bare direct-API model id resolves to the Sol tier.
+      - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains supported and resolves to the same tier.
     - Adding or reauthenticating OpenAI preserves an existing explicit primary model, including `openai/gpt-5.5`. If the account does not expose GPT-5.6, select `openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade the model.
     - **xAI OAuth**: device-code browser sign-in with no localhost callback required, so it works over SSH/Docker/VPS too (`--auth-choice xai-oauth`).
     - **xAI API key**: prompts for `XAI_API_KEY` (`--auth-choice xai-api-key`).
@@ -96,7 +96,7 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     - In token mode, interactive setup offers:
       - **Generate/store plaintext token** (default)
       - **Use SecretRef** (opt-in)
-      - Quickstart reuses existing `gateway.auth.token` SecretRefs across `env`, `file`, and `exec` providers for onboarding probe/dashboard bootstrap.
+      - Quickstart reuses existing `gateway.auth.token` SecretRefs across `env`, `file`, `exec`, and `store` providers for onboarding probe/dashboard bootstrap.
       - If that SecretRef is configured but cannot be resolved, onboarding fails early with a clear fix message instead of silently degrading runtime auth.
     - In password mode, interactive setup also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
@@ -133,7 +133,7 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
       - Onboarding attempts to enable lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
       - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
     - Native Windows: Scheduled Task first; if task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the Gateway immediately.
-    - **Runtime selection:** Node (recommended; required for WhatsApp/Telegram - Bun can corrupt memory on reconnect). Only Node is offered interactively; `--daemon-runtime bun` is CLI-only.
+    - **Runtime selection:** Node is required because the canonical runtime state store uses `node:sqlite`. Legacy Bun services are migrated to Node during repair.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, daemon install validates it but does not persist resolved plaintext token values into supervisor service environment metadata.
     - If token auth requires a token and the configured token SecretRef is unresolved, daemon install is blocked with actionable guidance.
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, daemon install is blocked until mode is set explicitly.
@@ -186,7 +186,7 @@ Gateway token SecretRef in non-interactive mode:
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-openclaw onboard --non-interactive --accept-risk \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice skip \
   --gateway-auth token \
@@ -227,7 +227,7 @@ Onboarding detects whether `signal-cli` is on `PATH` and, if missing, offers to 
 - Linux x86-64: downloads the official native GraalVM build from the `signal-cli` GitHub releases and stores it under `~/.openclaw/tools/signal-cli/<version>/`.
 - macOS and other architectures: installs via Homebrew instead.
 - Native Windows: not supported yet; run onboarding inside WSL2 to get the Linux install path.
-- Writes `channels.signal.cliPath` to your config either way.
+- Writes `channels.signal.transport.cliPath` with `kind: "managed-native"` either way.
 
 ## What the wizard writes
 
@@ -238,7 +238,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
-- `session.dmScope` (local onboarding defaults this to `"per-channel-peer"` when unset; existing explicit values are preserved. Details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals))
+- `session.dmScope` (onboarding preserves explicit values and otherwise leaves it unset, so the `"main"` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `"per-channel-peer"`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic. Details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals))
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
 - Channel DM allowlists when you opt in during the channel prompts. Discord, Matrix, Microsoft Teams, and Slack resolve names to IDs when possible; other channels take IDs directly (for example numeric Telegram sender IDs or WhatsApp phone numbers).
 - `skills.install.nodeManager`
@@ -251,7 +251,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `wizard.lastRunMode`
 - `wizard.securityAcknowledgedAt`
 
-`openclaw agents add` writes `agents.list[]` and optional `bindings`.
+`openclaw agents add` writes `agents.entries.*` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
 Active sessions and transcripts are stored in

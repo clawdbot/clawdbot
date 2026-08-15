@@ -38,24 +38,24 @@ vi.mock("./register.status-health-sessions.js", () => ({
     program.command("status");
     program.command("health");
     program.command("sessions");
-    program.command("commitments");
     const tasks = program.command("tasks");
     tasks.command("show");
   },
 }));
 
-vi.mock("./register.crestodian.js", () => ({
-  registerCrestodianCommand: (program: Command) => {
-    program.command("crestodian");
+vi.mock("./register.setup.js", () => ({
+  registerSetupCommand: (program: Command) => {
+    program.command("setup");
+    program.command("crestodian", { hidden: true }); // hidden alias
   },
 }));
 
 import {
   getCoreCliCommandNames,
-  getCoreCliCommandsWithSubcommands,
   registerCoreCliByName,
   registerCoreCliCommands,
-} from "./command-registry.js";
+} from "./command-registry-core.js";
+import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
 
 const testProgramContext: ProgramContext = {
   programVersion: "0.0.0-test",
@@ -80,10 +80,23 @@ describe("command-registry", () => {
 
   it("includes both agent and agents in core CLI command names", () => {
     const names = getCoreCliCommandNames();
-    expect(names).toContain("crestodian");
+    expect(names).toContain("setup");
+    expect(names).toContain("crestodian"); // hidden alias
     expect(names).toContain("mcp");
     expect(names).toContain("agent");
     expect(names).toContain("agents");
+  });
+
+  it("only exposes Claws after an explicit process opt-in", () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
+    expect(getCoreCliCommandNames()).not.toContain("claws");
+    expect(getCoreCliCommandsWithSubcommands()).not.toContain("claws");
+
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    expect(getCoreCliCommandNames()).toContain("claws");
+    expect(getCoreCliCommandsWithSubcommands()).toContain("claws");
+
+    vi.unstubAllEnvs();
   });
 
   it("returns only commands that support subcommands", () => {
@@ -93,10 +106,9 @@ describe("command-registry", () => {
     expect(names).toContain("backup");
     expect(names).toContain("mcp");
     expect(names).toContain("sessions");
-    expect(names).toContain("commitments");
     expect(names).toContain("tasks");
-    expect(names).not.toContain("agent");
-    expect(names).not.toContain("crestodian");
+    expect(names).toContain("agent");
+    expect(names).not.toContain("setup");
     expect(names).not.toContain("status");
     expect(names).not.toContain("doctor");
   });
@@ -169,21 +181,19 @@ describe("command-registry", () => {
     expect(names).toContain("status");
     expect(names).toContain("health");
     expect(names).toContain("sessions");
-    expect(names).toContain("commitments");
     expect(names).toContain("tasks");
   });
 
   it("can eagerly register the status/session command group repeatedly for completion", async () => {
     const program = createProgram();
 
-    for (const name of ["status", "health", "sessions", "commitments", "tasks"]) {
+    for (const name of ["status", "health", "sessions", "tasks"]) {
       await expect(registerCoreCliByName(program, testProgramContext, name)).resolves.toBe(true);
     }
 
     const names = namesOf(program);
     const countName = (target: string) =>
       names.reduce((count, name) => count + (name === target ? 1 : 0), 0);
-    expect(countName("commitments")).toBe(1);
     expect(countName("tasks")).toBe(1);
   });
 

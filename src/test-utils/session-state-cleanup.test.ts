@@ -3,14 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetSessionWriteLockStateForTest } from "../agents/session-write-lock.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
-import {
-  clearSessionStoreCacheForTest,
-  getSessionStoreWriterQueueSizeForTest,
-} from "../config/sessions/store.js";
 import { resetFileLockStateForTest } from "../infra/file-lock.js";
-import { createDeferred } from "./deferred.js";
 import {
   cleanupSessionStateForTest,
   resetSessionStateCleanupRuntimeForTests,
@@ -19,7 +15,6 @@ import {
 
 const drainFileLockStateMock = vi.hoisted(() => vi.fn(async () => undefined));
 const drainSessionStoreWriterQueuesMock = vi.hoisted(() => vi.fn(async () => undefined));
-const drainSessionWriteLockStateMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 async function flushMicrotasks(rounds = 3): Promise<void> {
   for (let index = 0; index < rounds; index += 1) {
@@ -32,14 +27,11 @@ describe("cleanupSessionStateForTest", () => {
     vi.useRealTimers();
     clearSessionStoreCacheForTest();
     resetFileLockStateForTest();
-    resetSessionWriteLockStateForTest();
     drainFileLockStateMock.mockClear();
     drainSessionStoreWriterQueuesMock.mockClear();
-    drainSessionWriteLockStateMock.mockClear();
     setSessionStateCleanupRuntimeForTests({
       drainFileLockStateForTest: drainFileLockStateMock,
       drainSessionStoreWriterQueuesForTest: drainSessionStoreWriterQueuesMock,
-      drainSessionWriteLockStateForTest: drainSessionWriteLockStateMock,
     });
   });
 
@@ -47,7 +39,6 @@ describe("cleanupSessionStateForTest", () => {
     vi.useRealTimers();
     clearSessionStoreCacheForTest();
     resetFileLockStateForTest();
-    resetSessionWriteLockStateForTest();
     resetSessionStateCleanupRuntimeForTests();
     vi.restoreAllMocks();
   });
@@ -73,7 +64,6 @@ describe("cleanupSessionStateForTest", () => {
       });
 
       await started.promise;
-      expect(getSessionStoreWriterQueueSizeForTest()).toBe(1);
 
       let settled = false;
       const cleanupPromise = cleanupSessionStateForTest().then(() => {
@@ -85,16 +75,13 @@ describe("cleanupSessionStateForTest", () => {
       expect(settled).toBe(false);
       expect(drainSessionStoreWriterQueuesMock).toHaveBeenCalledTimes(1);
       expect(drainFileLockStateMock).not.toHaveBeenCalled();
-      expect(drainSessionWriteLockStateMock).not.toHaveBeenCalled();
 
       release.resolve();
       await running;
       finishDrain();
       await cleanupPromise;
 
-      expect(getSessionStoreWriterQueueSizeForTest()).toBe(0);
       expect(drainFileLockStateMock).toHaveBeenCalledTimes(1);
-      expect(drainSessionWriteLockStateMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
       finishDrain();

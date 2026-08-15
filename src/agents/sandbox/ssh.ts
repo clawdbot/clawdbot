@@ -7,12 +7,15 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { resolveRootPath } from "../../infra/boundary-path.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
+import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 export type SshSandboxSettings = {
@@ -311,7 +314,7 @@ export function buildValidatedExecRemoteCommand(params: {
   return buildExecRemoteCommand(params);
 }
 
-export const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
+const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
   "set -e",
   'target="$1"',
   'root="$2"',
@@ -578,15 +581,11 @@ export async function createSshSandboxSessionFromConfigText(params: {
   if (!host) {
     throw new Error("Failed to parse SSH config output.");
   }
-  const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
-  const configPath = path.join(configDir, "config");
-  await fs.writeFile(configPath, params.configText, { encoding: "utf8", mode: 0o600 });
-  await fs.chmod(configPath, 0o600);
-  return {
-    command: params.command?.trim() || "ssh",
-    configPath,
+  return await createSshSandboxSession(
+    params.command?.trim() || "ssh",
     host,
-  };
+    () => params.configText,
+  );
 }
 
 /** Create a temporary SSH session from structured sandbox SSH settings. */
@@ -598,68 +597,60 @@ export async function createSshSandboxSessionFromSettings(
     throw new Error(`Invalid sandbox SSH target: ${settings.target}`);
   }
 
-  const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
-  try {
-    // Inline secret material is written into the temp config dir with strict
-    // permissions so ssh can consume it without exposing values in argv/env.
-    const materializedIdentity = settings.identityData
-      ? await writeSecretMaterial(configDir, "identity", settings.identityData)
-      : undefined;
-    const materializedCertificate = settings.certificateData
-      ? await writeSecretMaterial(configDir, "certificate.pub", settings.certificateData)
-      : undefined;
-    const materializedKnownHosts = settings.knownHostsData
-      ? await writeSecretMaterial(configDir, "known_hosts", settings.knownHostsData)
-      : undefined;
-    const identityFile = materializedIdentity ?? resolveOptionalLocalPath(settings.identityFile);
-    const certificateFile =
-      materializedCertificate ?? resolveOptionalLocalPath(settings.certificateFile);
-    const knownHostsFile =
-      materializedKnownHosts ?? resolveOptionalLocalPath(settings.knownHostsFile);
-    const hostAlias = "openclaw-sandbox";
-    const configPath = path.join(configDir, "config");
-    const lines = [
-      `Host ${hostAlias}`,
-      `  HostName ${parsed.host}`,
-      `  Port ${parsed.port}`,
-      "  BatchMode yes",
-      "  ConnectTimeout 5",
-      "  ServerAliveInterval 15",
-      "  ServerAliveCountMax 3",
-      `  StrictHostKeyChecking ${settings.strictHostKeyChecking ? "yes" : "no"}`,
-      `  UpdateHostKeys ${settings.updateHostKeys ? "yes" : "no"}`,
-    ];
-    if (parsed.user) {
-      lines.push(`  User ${parsed.user}`);
-    }
-    if (knownHostsFile) {
-      lines.push(`  UserKnownHostsFile ${knownHostsFile}`);
-    } else if (!settings.strictHostKeyChecking) {
-      lines.push("  UserKnownHostsFile /dev/null");
-    }
-    if (identityFile) {
-      lines.push(`  IdentityFile ${identityFile}`);
-    }
-    if (certificateFile) {
-      lines.push(`  CertificateFile ${certificateFile}`);
-    }
-    if (identityFile || certificateFile) {
-      lines.push("  IdentitiesOnly yes");
-    }
-    await fs.writeFile(configPath, `${lines.join("\n")}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await fs.chmod(configPath, 0o600);
-    return {
-      command: settings.command.trim() || "ssh",
-      configPath,
-      host: hostAlias,
-    };
-  } catch (error) {
-    await fs.rm(configDir, { recursive: true, force: true });
-    throw error;
-  }
+  return await createSshSandboxSession(
+    settings.command.trim() || "ssh",
+    "openclaw-sandbox",
+    async (configDir) => {
+      // Inline secret material is written into the temp config dir with strict
+      // permissions so ssh can consume it without exposing values in argv/env.
+      const materializedIdentity = settings.identityData
+        ? await writeSecretMaterial(configDir, "identity", settings.identityData)
+        : undefined;
+      const materializedCertificate = settings.certificateData
+        ? await writeSecretMaterial(configDir, "certificate.pub", settings.certificateData)
+        : undefined;
+      const materializedKnownHosts = settings.knownHostsData
+        ? await writeSecretMaterial(configDir, "known_hosts", settings.knownHostsData)
+        : undefined;
+      const identityFile = materializedIdentity ?? resolveOptionalLocalPath(settings.identityFile);
+      const certificateFile =
+        materializedCertificate ?? resolveOptionalLocalPath(settings.certificateFile);
+      const knownHostsFile =
+        materializedKnownHosts ?? resolveOptionalLocalPath(settings.knownHostsFile);
+      assertSshConfigLineValue(identityFile, "identityFile");
+      assertSshConfigLineValue(certificateFile, "certificateFile");
+      assertSshConfigLineValue(knownHostsFile, "knownHostsFile");
+      const lines = [
+        "Host openclaw-sandbox",
+        `  HostName ${parsed.host}`,
+        `  Port ${parsed.port}`,
+        "  BatchMode yes",
+        "  ConnectTimeout 5",
+        "  ServerAliveInterval 15",
+        "  ServerAliveCountMax 3",
+        `  StrictHostKeyChecking ${settings.strictHostKeyChecking ? "yes" : "no"}`,
+        `  UpdateHostKeys ${settings.updateHostKeys ? "yes" : "no"}`,
+      ];
+      if (parsed.user) {
+        lines.push(`  User ${parsed.user}`);
+      }
+      if (knownHostsFile) {
+        lines.push(`  UserKnownHostsFile ${quoteSshConfigPath(knownHostsFile)}`);
+      } else if (!settings.strictHostKeyChecking) {
+        lines.push("  UserKnownHostsFile /dev/null");
+      }
+      if (identityFile) {
+        lines.push(`  IdentityFile ${quoteSshConfigPath(identityFile)}`);
+      }
+      if (certificateFile) {
+        lines.push(`  CertificateFile ${quoteSshConfigPath(certificateFile)}`);
+      }
+      if (identityFile || certificateFile) {
+        lines.push("  IdentitiesOnly yes");
+      }
+      return `${lines.join("\n")}\n`;
+    },
+  );
 }
 
 /** Remove temporary SSH config and materialized secret files. */
@@ -681,67 +672,32 @@ export async function runSshSandboxCommand(
     throw new Error("SSH command argv is empty");
   }
   const sshEnv = sanitizeEnvVars(process.env).allowed;
-  return await new Promise<SandboxBackendCommandResult>((resolve, reject) => {
-    const child = spawn(executable, args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: sshEnv,
-      signal: params.signal,
-    });
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let settled = false;
-
-    // Child and stdio errors can race with close. Settle once so an unusable
-    // transport is terminated exactly once and later events stay harmless.
-    const finish = (complete: () => void, terminate = false) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (terminate) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // Preserve the stream error that made the transport unusable.
-        }
-      }
-      complete();
-    };
-    const fail = (error: unknown, terminate = false) => {
-      finish(() => reject(toErrorObject(error, "Non-Error rejection")), terminate);
-    };
-
-    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-    child.stdout.on("error", (error) => fail(error, true));
-    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-    child.stderr.on("error", (error) => fail(error, true));
-    child.on("error", fail);
-    child.on("close", (code) => {
-      finish(() => {
-        const stdout = Buffer.concat(stdoutChunks);
-        const stderr = Buffer.concat(stderrChunks);
-        const exitCode = code ?? 0;
-        if (exitCode !== 0 && !params.allowFailure) {
-          reject(
-            Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
-              code: exitCode,
-              stdout,
-              stderr,
-            }),
-          );
-          return;
-        }
-        resolve({ stdout, stderr, code: exitCode });
-      });
-    });
-
-    child.stdin?.on("error", (error) => fail(error, true));
-    try {
-      child.stdin.end(params.stdin);
-    } catch (error) {
-      fail(error, true);
-    }
+  const result = await spawnCommand([executable, ...args], {
+    baseEnv: sshEnv,
+    cancelSignal: params.signal,
+    encoding: "buffer",
+    input: params.stdin ?? Buffer.alloc(0),
+    maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+    reject: false,
+    stripFinalNewline: false,
   });
+  if (params.signal?.aborted || result.isCanceled) {
+    throw createAbortError("Aborted");
+  }
+  if (result.failed && !isPlainCommandExitFailure(result)) {
+    throw toErrorObject(result, "SSH command execution failed");
+  }
+  const stdout = Buffer.from(result.stdout);
+  const stderr = Buffer.from(result.stderr);
+  const exitCode = result.exitCode ?? (result.failed ? 1 : 0);
+  if (exitCode !== 0 && !params.allowFailure) {
+    throw Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
+      code: exitCode,
+      stdout,
+      stderr,
+    });
+  }
+  return { stdout, stderr, code: exitCode };
 }
 
 export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
@@ -943,6 +899,35 @@ function resolveSshTmpRoot(): string {
   return path.resolve(resolvePreferredOpenClawTmpDir() ?? os.tmpdir());
 }
 
+async function createSshSandboxSession(
+  command: string,
+  host: string,
+  buildConfigText: (configDir: string) => string | Promise<string>,
+): Promise<SshSandboxSession> {
+  const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
+  const configPath = path.join(configDir, "config");
+  try {
+    await writePrivateFile(configPath, await buildConfigText(configDir));
+    return { command, configPath, host };
+  } catch (error) {
+    // Best-effort rollback must not replace the initialization failure.
+    await fs.rm(configDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+function assertSshConfigLineValue(value: string | undefined, field: string): void {
+  if (value && /[\r\n"]/.test(value)) {
+    throw new Error(`SSH sandbox ${field} must not contain line breaks or double quotes.`);
+  }
+}
+
+// ssh_config tokenizes unquoted arguments on whitespace; default macOS key
+// locations ("Application Support") would otherwise parse as extra arguments.
+function quoteSshConfigPath(value: string): string {
+  return /\s/.test(value) ? `"${value}"` : value;
+}
+
 function resolveOptionalLocalPath(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? resolveUserPath(trimmed) : undefined;
@@ -954,10 +939,12 @@ async function writeSecretMaterial(
   contents: string,
 ): Promise<string> {
   const pathname = path.join(dir, filename);
-  await fs.writeFile(pathname, normalizeInlineSshMaterial(contents, filename), {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await fs.chmod(pathname, 0o600);
+  await writePrivateFile(pathname, normalizeInlineSshMaterial(contents, filename));
   return pathname;
 }
+
+async function writePrivateFile(pathname: string, contents: string): Promise<void> {
+  await fs.writeFile(pathname, contents, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(pathname, 0o600);
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

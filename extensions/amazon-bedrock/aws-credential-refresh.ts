@@ -2,10 +2,6 @@
  * AWS shared config cache refresh helpers for Bedrock. They nudge the AWS SDK
  * to re-read profile/SSO config when no static credentials are present.
  */
-type SharedIniFileLoader = {
-  loadSharedConfigFiles(init?: { ignoreCache?: boolean }): Promise<unknown>;
-};
-
 function hasStaticAwsCredentialEnv(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY);
 }
@@ -18,10 +14,6 @@ function shouldRefreshAwsSharedConfigCacheForBedrock(env: NodeJS.ProcessEnv): bo
   return !hasStaticAwsCredentialEnv(env);
 }
 
-async function loadSharedIniFileLoader(): Promise<SharedIniFileLoader> {
-  return (await import("@smithy/shared-ini-file-loader")) as SharedIniFileLoader;
-}
-
 /** Refresh Smithy shared config files when Bedrock needs default-chain credentials. */
 export async function refreshAwsSharedConfigCacheForBedrock(
   env: NodeJS.ProcessEnv = process.env,
@@ -29,6 +21,6 @@ export async function refreshAwsSharedConfigCacheForBedrock(
   if (!shouldRefreshAwsSharedConfigCacheForBedrock(env)) {
     return;
   }
-  const loader = await loadSharedIniFileLoader();
-  await loader.loadSharedConfigFiles({ ignoreCache: true });
+  const { loadSharedConfigFiles } = await import("@smithy/shared-ini-file-loader");
+  await loadSharedConfigFiles({ ignoreCache: true });
 }

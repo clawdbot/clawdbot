@@ -115,7 +115,7 @@ vi.mock("../process/supervisor/index.js", () => ({
   }),
 }));
 
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 
 function createExecApprovals(): ExecApprovalsResolved {
   return {
@@ -175,7 +175,7 @@ describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ createExecTool } = await import("./bash-tools.exec-run.js"));
   });
 
   afterAll(() => {

@@ -3,7 +3,7 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 
-export type VisibleTranscriptEventEntry<T> = {
+type VisibleTranscriptEventEntry<T> = {
   event: T;
   /** Parent id after active-branch normalization; null when no visible parent exists. */
   parentId: string | null;

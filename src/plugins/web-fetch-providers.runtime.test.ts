@@ -15,7 +15,6 @@ let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
 let resolvePluginWebFetchProviders: WebFetchProvidersRuntimeModule["resolvePluginWebFetchProviders"];
-let clearLoadPluginMetadataSnapshotMemo: typeof import("./plugin-metadata-snapshot.js").clearLoadPluginMetadataSnapshotMemo;
 
 const DEFAULT_WORKSPACE = "/tmp/workspace";
 
@@ -105,9 +104,10 @@ function createRuntimeWebFetchProvider() {
 
 describe("resolvePluginWebFetchProviders", () => {
   beforeAll(async () => {
-    vi.doMock("./plugin-registry.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
+    vi.doMock("./plugin-registry-snapshot.js", async () => {
+      const actual = await vi.importActual<typeof import("./plugin-registry-snapshot.js")>(
+        "./plugin-registry-snapshot.js",
+      );
       return {
         ...actual,
         loadPluginRegistrySnapshotWithMetadata: () => ({
@@ -121,14 +121,12 @@ describe("resolvePluginWebFetchProviders", () => {
     manifestRegistryModule = await import("./manifest-registry.js");
     webFetchProvidersSharedModule = await import("./web-fetch-providers.shared.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
-    ({ clearLoadPluginMetadataSnapshotMemo } = await import("./plugin-metadata-snapshot.js"));
     ({ resolvePluginWebFetchProviders } = await import("./web-fetch-providers.runtime.js"));
   });
 
   beforeEach(() => {
-    clearLoadPluginMetadataSnapshotMemo();
-    vi.spyOn(manifestRegistryModule, "loadPluginManifestRegistry").mockReturnValue(
-      createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
+    vi.spyOn(manifestRegistryModule, "loadPluginManifestRegistryCore").mockReturnValue(
+      createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistryCore"] extends (
         ...args: unknown[]
       ) => infer R
         ? R
@@ -146,7 +144,6 @@ describe("resolvePluginWebFetchProviders", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
-    clearLoadPluginMetadataSnapshotMemo();
     vi.restoreAllMocks();
   });
 
@@ -160,10 +157,10 @@ describe("resolvePluginWebFetchProviders", () => {
   });
 
   it("falls back to the plugin loader for non-bundled provider owners", () => {
-    vi.mocked(manifestRegistryModule.loadPluginManifestRegistry).mockReturnValue(
+    vi.mocked(manifestRegistryModule.loadPluginManifestRegistryCore).mockReturnValue(
       createManifestRegistryFixture(
         "global",
-      ) as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
+      ) as ManifestRegistryModule["loadPluginManifestRegistryCore"] extends (
         ...args: unknown[]
       ) => infer R
         ? R
@@ -251,76 +248,6 @@ describe("resolvePluginWebFetchProviders", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("reuses a compatible active registry for snapshot resolution when config is provided", () => {
-    const env = createWebFetchEnv();
-    const rawConfig = createFirecrawlAllowConfig();
-    const { config, activationSourceConfig, autoEnabledReasons } =
-      webFetchProvidersSharedModule.resolveBundledWebFetchResolutionConfig({
-        config: rawConfig,
-        env,
-      });
-    const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
-      config,
-      activationSourceConfig,
-      autoEnabledReasons,
-      workspaceDir: DEFAULT_WORKSPACE,
-      env,
-      onlyPluginIds: ["firecrawl"],
-      cache: true,
-      activate: false,
-    });
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push({ id: "firecrawl", status: "loaded" } as never);
-    registry.webFetchProviders.push(createRuntimeWebFetchProvider());
-    setActivePluginRegistry(registry, cacheKey);
-
-    const providers = resolvePluginWebFetchProviders({
-      config: rawConfig,
-      workspaceDir: DEFAULT_WORKSPACE,
-      env,
-    });
-
-    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
-      "firecrawl:firecrawl",
-    ]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
-
-  it("inherits workspaceDir from the active registry for compatible web-fetch snapshot reuse", () => {
-    const env = createWebFetchEnv();
-    const rawConfig = createFirecrawlAllowConfig();
-    const { config, activationSourceConfig, autoEnabledReasons } =
-      webFetchProvidersSharedModule.resolveBundledWebFetchResolutionConfig({
-        config: rawConfig,
-        workspaceDir: DEFAULT_WORKSPACE,
-        env,
-      });
-    const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
-      config,
-      activationSourceConfig,
-      autoEnabledReasons,
-      workspaceDir: DEFAULT_WORKSPACE,
-      env,
-      onlyPluginIds: ["firecrawl"],
-      cache: true,
-      activate: false,
-    });
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push({ id: "firecrawl", status: "loaded" } as never);
-    registry.webFetchProviders.push(createRuntimeWebFetchProvider());
-    setActivePluginRegistry(registry, cacheKey, "default", DEFAULT_WORKSPACE);
-
-    const providers = resolvePluginWebFetchProviders({
-      config: rawConfig,
-      env,
-    });
-
-    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
-      "firecrawl:firecrawl",
-    ]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
-
   it("uses the active registry workspace for candidate discovery when workspaceDir is omitted", () => {
     const env = createWebFetchEnv();
     const rawConfig = createFirecrawlAllowConfig();
@@ -331,10 +258,10 @@ describe("resolvePluginWebFetchProviders", () => {
       "default",
       "/tmp/runtime-workspace",
     );
-    vi.mocked(manifestRegistryModule.loadPluginManifestRegistry).mockReturnValue(
+    vi.mocked(manifestRegistryModule.loadPluginManifestRegistryCore).mockReturnValue(
       createManifestRegistryFixture(
         "global",
-      ) as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
+      ) as ManifestRegistryModule["loadPluginManifestRegistryCore"] extends (
         ...args: unknown[]
       ) => infer R
         ? R
@@ -346,10 +273,11 @@ describe("resolvePluginWebFetchProviders", () => {
       env,
     });
 
-    expect(manifestRegistryModule.loadPluginManifestRegistry).toHaveBeenCalledWith({
+    expect(manifestRegistryModule.loadPluginManifestRegistryCore).toHaveBeenCalledWith({
       config: rawConfig,
       workspaceDir: "/tmp/runtime-workspace",
       env,
+      candidates: [],
       diagnostics: [],
       installRecords: {},
     });
@@ -370,10 +298,10 @@ describe("resolvePluginWebFetchProviders", () => {
   it("resolves web-fetch providers for each active registry workspace", () => {
     const env = createWebFetchEnv();
     const config = createFirecrawlAllowConfig();
-    vi.mocked(manifestRegistryModule.loadPluginManifestRegistry).mockReturnValue(
+    vi.mocked(manifestRegistryModule.loadPluginManifestRegistryCore).mockReturnValue(
       createManifestRegistryFixture(
         "global",
-      ) as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
+      ) as ManifestRegistryModule["loadPluginManifestRegistryCore"] extends (
         ...args: unknown[]
       ) => infer R
         ? R

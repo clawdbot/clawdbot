@@ -13,7 +13,7 @@ import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { runStatusJsonCommand } from "./status-json-command.ts";
+import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
   loadStatusProviderUsageModule,
@@ -37,28 +37,8 @@ const statusCommandTextRuntimeLoader = createLazyImportLoader(
 );
 const statusNodeModeModuleLoader = createLazyImportLoader(() => import("./status.node-mode.js"));
 
-function loadStatusScanModule() {
-  return statusScanModuleLoader.load();
-}
-
-function loadStatusScanFastJsonModule() {
-  return statusScanFastJsonModuleLoader.load();
-}
-
-function loadStatusAllModule() {
-  return statusAllModuleLoader.load();
-}
-
-function loadStatusCommandTextRuntime() {
-  return statusCommandTextRuntimeLoader.load();
-}
-
-function loadStatusNodeModeModule() {
-  return statusNodeModeModuleLoader.load();
-}
-
 /** Extracts device-pairing recovery context from structured gateway errors or legacy message text. */
-export function resolvePairingRecoveryContext(params: {
+function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
   details?: unknown;
@@ -92,6 +72,12 @@ export function resolvePairingRecoveryContext(params: {
   };
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.statusCommandTestApi")] = {
+    resolvePairingRecoveryContext,
+  };
+}
+
 function normalizeStatusWrapperPath(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -117,17 +103,19 @@ export async function statusCommand(
     json?: boolean;
     deep?: boolean;
     usage?: boolean;
+    agent?: string;
     timeoutMs?: number;
     verbose?: boolean;
     all?: boolean;
   },
   runtime: RuntimeEnv,
 ) {
+  assertStatusUsageAgentScope(opts);
   if (opts.all && !opts.json) {
     // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
-    await loadStatusAllModule().then(({ statusAllCommand }) =>
-      statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }),
-    );
+    await statusAllModuleLoader
+      .load()
+      .then(({ statusAllCommand }) => statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }));
     return;
   }
 
@@ -135,20 +123,25 @@ export async function statusCommand(
     await runStatusJsonCommand({
       opts,
       runtime,
-      includeSecurityAudit: opts.all === true,
-      includePluginCompatibility: true,
+      includeSecurityAudit: opts.all === true || opts.deep === true,
+      includePluginCompatibility: opts.all === true,
       suppressHealthErrors: true,
       scanStatusJsonFast: async (scanOpts, runtimeForScan) =>
-        await loadStatusScanFastJsonModule().then(({ scanStatusJsonFast }) =>
-          scanStatusJsonFast(scanOpts, runtimeForScan),
-        ),
+        await statusScanFastJsonModuleLoader
+          .load()
+          .then(({ scanStatusJsonFast }) => scanStatusJsonFast(scanOpts, runtimeForScan)),
     });
     return;
   }
 
-  const scan = await loadStatusScanModule().then(({ scanStatus }) =>
-    scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep }, runtime),
-  );
+  const scan = await statusScanModuleLoader
+    .load()
+    .then(({ scanStatus }) =>
+      scanStatus(
+        { json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep },
+        runtime,
+      ),
+    );
 
   const {
     cfg,
@@ -174,6 +167,7 @@ export async function statusCommand(
     memory,
     memoryPlugin,
     pluginCompatibility,
+    env,
   } = scan;
 
   const {
@@ -187,6 +181,7 @@ export async function statusCommand(
     config: scan.cfg,
     sourceConfig: scan.sourceConfig,
     timeoutMs: opts.timeoutMs,
+    ...(opts.agent ? { agentId: opts.agent } : {}),
     usage: opts.usage,
     deep: opts.deep,
     gatewayReachable,
@@ -220,6 +215,11 @@ export async function statusCommand(
       ),
   });
 
+  // Structured probe failures belong to nonthrowing JSON; text status keeps failures loud.
+  if (health && "error" in health) {
+    throw new Error(health.error);
+  }
+
   const rich = true;
   const {
     buildStatusUpdateSurface,
@@ -239,7 +239,7 @@ export async function statusCommand(
     resolveMemoryVectorState,
     shortenText,
     theme,
-  } = await loadStatusCommandTextRuntime();
+  } = await statusCommandTextRuntimeLoader.load();
   const muted = (value: string) => (rich ? theme.muted(value) : value);
   const ok = (value: string) => (rich ? theme.success(value) : value);
   const warn = (value: string) => (rich ? theme.warn(value) : value);
@@ -278,12 +278,14 @@ export async function statusCommand(
     runtime.log("");
   }
 
-  const nodeOnlyGateway = await loadStatusNodeModeModule().then(({ resolveNodeOnlyGatewayInfo }) =>
-    resolveNodeOnlyGatewayInfo({
-      daemon,
-      node: nodeDaemon,
-    }),
-  );
+  const nodeOnlyGateway = await statusNodeModeModuleLoader
+    .load()
+    .then(({ resolveNodeOnlyGatewayInfo }) =>
+      resolveNodeOnlyGatewayInfo({
+        daemon,
+        node: nodeDaemon,
+      }),
+    );
   const pairingRecovery = resolvePairingRecoveryContext({
     error: gatewayProbe?.error ?? null,
     closeReason: gatewayProbe?.close?.reason ?? null,
@@ -327,6 +329,7 @@ export async function statusCommand(
   );
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
+      env: env ?? {},
       opts,
       surface: overviewSurface,
       osSummary,

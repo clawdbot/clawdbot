@@ -1,3 +1,7 @@
+import {
+  compileAllowlist,
+  resolveAllowlistMatchByCandidates,
+} from "openclaw/plugin-sdk/allow-from";
 import { ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
@@ -36,6 +40,10 @@ function normalizeChatId(raw?: string | null): string {
     return "";
   }
   return normalizeFeishuTarget(raw) ?? raw.trim();
+}
+
+function normalizeFeishuAllowlist(entries: Array<string | number> | undefined): string[] {
+  return (entries ?? []).map((entry) => normalizeFeishuAllowEntry(String(entry))).filter(Boolean);
 }
 
 function readContextFields(ctx: FeishuReadContext): {
@@ -115,10 +123,10 @@ export function isFeishuGroupReadAllowed(
   const normalizedChatId = normalizeFeishuAllowEntry(chatId);
   return (
     explicitlyConfigured ||
-    (account.config.groupAllowFrom ?? []).some((entry) => {
-      const normalized = normalizeFeishuAllowEntry(String(entry));
-      return normalized === "*" || normalized === normalizedChatId;
-    })
+    resolveAllowlistMatchByCandidates({
+      allowList: normalizeFeishuAllowlist(account.config.groupAllowFrom),
+      candidates: [{ value: normalizedChatId, source: "id" }],
+    }).allowed
   );
 }
 
@@ -137,9 +145,7 @@ function isDmUniversallyAllowed(account: ResolvedFeishuAccount): boolean {
   // Feishu's canonical schema has no disabled DM mode; channel/account enabled owns shutdown.
   // Account overrides merge field-by-field, so only an allowFrom wildcard proves
   // universal non-current access under every supported ingress policy.
-  return (account.config.allowFrom ?? []).some(
-    (entry) => normalizeFeishuAllowEntry(String(entry)) === "*",
-  );
+  return compileAllowlist(normalizeFeishuAllowlist(account.config.allowFrom)).wildcard;
 }
 
 export function assertFeishuChatReadAllowed(params: {
@@ -156,7 +162,7 @@ export function assertFeishuChatReadAllowed(params: {
   return authorization.chatId;
 }
 
-export type FeishuChatReadPreliminaryDecision = "allow" | "deny" | "needs-metadata";
+type FeishuChatReadPreliminaryDecision = "allow" | "deny" | "needs-metadata";
 
 export function resolveFeishuChatReadPreliminaryAuthorization(params: {
   cfg: OpenClawConfig;
@@ -261,9 +267,7 @@ export function canEnumerateAllFeishuGroups(
   return (
     policy === "open" ||
     (policy === "allowlist" &&
-      (account.config.groupAllowFrom ?? []).some(
-        (entry) => normalizeFeishuAllowEntry(String(entry)) === "*",
-      ))
+      compileAllowlist(normalizeFeishuAllowlist(account.config.groupAllowFrom)).wildcard)
   );
 }
 

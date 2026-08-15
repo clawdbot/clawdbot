@@ -36,7 +36,7 @@ export function hasChromeProxyControlArg(args: readonly string[]): boolean {
 }
 
 /** Return true when Chrome args route traffic through an explicit proxy. */
-export function hasExplicitChromeProxyRoutingArg(args: readonly string[]): boolean {
+function hasExplicitChromeProxyRoutingArg(args: readonly string[]): boolean {
   return args.some((arg) => PROXY_ROUTING_CHROME_ARGS.has(chromeArgName(arg)));
 }
 

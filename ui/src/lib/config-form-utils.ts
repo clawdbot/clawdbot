@@ -1,5 +1,5 @@
 // Control UI controller manages form utils gateway state.
-import JSON5 from "json5";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export function cloneConfigObject<T>(value: T): T {
   return structuredClone(value);
@@ -9,21 +9,19 @@ export function serializeConfigForm(form: Record<string, unknown>): string {
   return `${JSON.stringify(form, null, 2).trimEnd()}\n`;
 }
 
-const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+
+/** True when a form subtree still carries server-redacted secret placeholders. */
+export function containsRedactedSentinel(value: unknown): boolean {
+  const children = Array.isArray(value) ? value : isRecord(value) ? Object.values(value) : [];
+  return value === REDACTED_SENTINEL || children.some(containsRedactedSentinel);
+}
 type SanitizeResult = { omitted: true } | { omitted: false; value: unknown };
 
 const OMIT_VALUE: SanitizeResult = { omitted: true };
 
 function keepValue(value: unknown): SanitizeResult {
   return { omitted: false, value };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasOwnRecordValue(record: Record<string, unknown> | null, key: string): boolean {
-  return record != null && Object.hasOwn(record, key);
 }
 
 function sanitizeRedactedValue(params: {
@@ -74,7 +72,8 @@ function sanitizeRedactedValue(params: {
       originalFormRecord != null && Object.hasOwn(originalFormRecord, key)
         ? originalFormRecord[key]
         : undefined;
-    const originalRawPathExists = hasOwnRecordValue(originalRawRecord, key);
+    const originalRawPathExists =
+      originalRawRecord != null && Object.hasOwn(originalRawRecord, key);
     const sanitized = sanitizeRedactedValue({
       value: item,
       originalFormValue,
@@ -96,19 +95,11 @@ function sanitizeRedactedValue(params: {
 export function sanitizeRedactedFormForSubmit(
   form: Record<string, unknown>,
   originalForm: Record<string, unknown> | null | undefined,
-  originalRaw: string,
+  parsedOriginalRaw: Record<string, unknown> | null,
 ): Record<string, unknown> {
-  if (!originalForm || !originalRaw) {
-    return form;
-  }
-
-  let parsedOriginalRaw: unknown;
-  try {
-    parsedOriginalRaw = JSON5.parse(originalRaw);
-  } catch {
-    return form;
-  }
-  if (!isRecord(parsedOriginalRaw)) {
+  // Callers parse the original raw once at snapshot ingestion so this submit
+  // path stays synchronous and never races the lazy JSON5 parser.
+  if (!originalForm || !parsedOriginalRaw) {
     return form;
   }
 

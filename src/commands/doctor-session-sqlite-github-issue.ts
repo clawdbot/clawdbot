@@ -2,7 +2,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import type { SessionSqliteMigrationFailureIssue } from "./doctor-session-sqlite-types.js";
 
-export type SessionSqliteGithubIssueCreateResult =
+type SessionSqliteGithubIssueCreateResult =
   | { ok: true; url: string }
   | { fallbackUrl: string; message: string; ok: false };
 
@@ -10,6 +10,8 @@ type SpawnGh = (
   args: readonly string[],
   options: { input: string },
 ) => Pick<SpawnSyncReturns<Buffer>, "error" | "status" | "stderr" | "stdout">;
+
+const GITHUB_ISSUE_CREATE_TIMEOUT_MS = 30_000;
 
 /** Creates an openclaw/openclaw issue through the GitHub CLI using sanitized stdin. */
 export function createSessionSqliteGithubIssue(
@@ -45,6 +47,8 @@ function defaultSpawnGh(
   return spawnSync("gh", [...args], {
     encoding: "buffer",
     input: options.input,
+    killSignal: "SIGKILL",
     maxBuffer: 1024 * 1024,
+    timeout: GITHUB_ISSUE_CREATE_TIMEOUT_MS,
   });
 }

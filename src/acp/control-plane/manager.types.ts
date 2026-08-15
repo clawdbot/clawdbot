@@ -7,6 +7,7 @@ import type {
   AcpRuntimePromptMode,
   AcpRuntimeSessionMode,
   AcpRuntimeStatus,
+  AcpRuntimeTurnAttachment,
 } from "@openclaw/acp-core/runtime/types";
 import type {
   SessionAcpIdentity,
@@ -49,17 +50,17 @@ export type AcpInitializeSessionInput = {
   mode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
   runtimeOptions?: Partial<AcpSessionRuntimeOptions>;
+  modelExplicit?: boolean;
   cwd?: string;
   backendId?: string;
 };
 
-export type AcpTurnAttachment = {
-  mediaType: string;
-  data: string;
-};
+export type AcpTurnAttachment = AcpRuntimeTurnAttachment;
 
 /** Input for one ACP prompt turn routed through the manager. */
 export type AcpRunTurnInput = {
+  /** Private admitted execution context supplied by the owning host ingress. */
+  admittedRunContext: import("../../agents/admitted-run-context.js").AdmittedRunContext;
   cfg: OpenClawConfig;
   sessionKey: string;
   provenance: "human" | "agent" | "system";
@@ -150,7 +151,7 @@ export type TurnLatencyStats = {
 
 export type AcpSessionManagerDeps = {
   listAcpSessions: typeof listAcpSessionEntries;
-  readSessionEntry: typeof readAcpSessionEntry;
+  loadSessionEntry: typeof readAcpSessionEntry;
   upsertSessionMeta: typeof upsertAcpSessionMeta;
   getRuntimeBackend: typeof getAcpRuntimeBackend;
   requireRuntimeBackend: typeof requireAcpRuntimeBackend;
@@ -205,7 +206,7 @@ export type WithManagerSessionActor = <T>(sessionKey: string, op: () => Promise<
 
 export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   listAcpSessions: listAcpSessionEntries,
-  readSessionEntry: readAcpSessionEntry,
+  loadSessionEntry: readAcpSessionEntry,
   upsertSessionMeta: upsertAcpSessionMeta,
   getRuntimeBackend: getAcpRuntimeBackend,
   requireRuntimeBackend: requireAcpRuntimeBackend,
