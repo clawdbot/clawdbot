@@ -1,5 +1,5 @@
 // Control UI tests cover markdown link rendering: autolinking, file links, and link marks.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { shortestFileLabels } from "./file-kind.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
@@ -448,6 +448,38 @@ describe("toSanitizedMarkdownHtml links", () => {
       for (const path of collidingPaths) {
         expect(collidingLabels.get(path)).toBe(path);
       }
+    });
+
+    it("keeps per-path lookup cost linear as path count grows (performance contract)", () => {
+      // Wall-clock timing flakes under CI load, so this asserts the actual
+      // performance contract structurally: count every Map#get call made while
+      // shortestFileLabels runs. The trie makes a fixed number of child
+      // lookups per path segment (one per segment on insert, one per resolved
+      // suffix depth on lookup), so total lookups scale with path count, not
+      // its square. The pre-fix full-list rescan (#124230) re-read every other
+      // path's segments inside `unique.some(...)` at every depth, which cost
+      // O(n^2) lookups for this same all-unique-basename shape -- 8x the paths
+      // there costs ~64x the lookups, far outside the linear band asserted
+      // below, so a regression back to that scan fails this test every run.
+      const countMapLookups = (pathCount: number): number => {
+        const paths = Array.from(
+          { length: pathCount },
+          (_, i) => `src/pkg${i % 50}/mod${i}/file${i}.ts`,
+        );
+        const getSpy = vi.spyOn(Map.prototype, "get");
+        try {
+          shortestFileLabels(paths);
+          return getSpy.mock.calls.length;
+        } finally {
+          getSpy.mockRestore();
+        }
+      };
+
+      const small = countMapLookups(500);
+      const large = countMapLookups(4000); // 8x the paths
+
+      expect(large).toBeGreaterThan(small * 4);
+      expect(large).toBeLessThan(small * 16);
     });
 
     it.each([
