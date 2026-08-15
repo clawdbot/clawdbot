@@ -178,6 +178,7 @@ export class MemoryDB {
     vector: number[],
     limit = 5,
     minScore = 0.5,
+    executionOptions?: Pick<LanceDB.QueryExecutionOptions, "timeoutMs">,
   ): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
 
@@ -186,7 +187,7 @@ export class MemoryDB {
     const results = await this.table!.vectorSearch(vector)
       .where(memoryAgentPredicate(agentId))
       .limit(limit)
-      .toArray();
+      .toArray(executionOptions);
 
     const mapped = results.map((row) => {
       const distance = row["_distance"] ?? 0;

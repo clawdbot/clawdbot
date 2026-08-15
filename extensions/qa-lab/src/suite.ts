@@ -28,40 +28,12 @@ import type { QaReportCheck } from "./report.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
-import {
-  type QaSuiteGatewayHeapSnapshot,
-  type QaSuiteGatewayRssSample,
-  writeQaSuiteArtifacts,
-} from "./suite-artifacts.js";
-import {
-  scenarioRequiresControlUi,
-  shouldUseIsolatedQaSuiteScenarioWorkers,
-  splitModelRef,
-} from "./suite-planning.js";
+import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
+import { shouldUseIsolatedQaSuiteScenarioWorkers, splitModelRef } from "./suite-planning.js";
 import type { QaSuiteRoundTripProbe } from "./suite-round-trip.js";
-import {
-  createQaSuiteScenarioStepRunner,
-  runQaSuiteScenarioDefinition,
-  runQaSuiteScenarioSteps,
-} from "./suite-runtime-flow.js";
+import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
-import {
-  appendNodeOption,
-  buildQaGatewayHeapCheckpointRuntimeEnvPatch,
-  buildQaIsolatedScenarioWorkerParams,
-  mergeQaRuntimeEnvPatches,
-  remapModelRefForForcedRuntime,
-} from "./suite-support.js";
-
-function resolveQaSuiteControlUiEnabled(params: {
-  explicit?: boolean;
-  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
-}) {
-  return (
-    params.explicit ?? params.scenarios.some((scenario) => scenarioRequiresControlUi(scenario))
-  );
-}
 
 export type QaSuiteScenarioResult = {
   name: string;
@@ -594,26 +566,3 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   const { runQaFlowSuiteFromRuntime } = await import("./suite-run.runtime.js");
   return await runQaFlowSuiteFromRuntime(params);
 }
-
-export const qaSuiteProgressTesting = {
-  appendNodeOption,
-  buildQaGatewayHeapCheckpointRuntimeEnvPatch,
-  buildQaIsolatedScenarioWorkerParams,
-  buildQaSuiteRuntimeMetrics,
-  createQaSuiteTransportAdapter,
-  createScenarioStepRunner: createQaSuiteScenarioStepRunner,
-  formatQaSuiteRunStartProgress,
-  mergeQaRuntimeEnvPatches,
-  remapModelRefForForcedRuntime,
-  runQaFlowSuiteCleanupPlan,
-  runQaSuiteCleanupSteps,
-  throwQaSuiteCleanupErrors,
-  resolveQaSuiteControlUiEnabled,
-  scenarioRequiresControlUi,
-  resolveQaSuiteTransportReadyTimeoutMs,
-  sanitizeQaSuiteProgressValue,
-  shouldRunQaSuiteWithIsolatedScenarioWorkers,
-  shouldLogQaSuiteProgress,
-  waitForQaLabReadyOrStopOwned,
-  writeQaSuiteArtifacts,
-};

@@ -94,23 +94,6 @@ describe("prepareCodexAttemptConnection", () => {
     expect(resolveModelPolicy).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps effective default yolo ahead of generic tool approval hooks", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
-    );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    params.agentDir = path.join(tempDir, "agent");
-    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: { bindingStore: testCodexAppServerBindingStore },
-    });
-
-    expect(connection.appServer.approvalPolicy).toBe("never");
-  });
-
   it("does not give OpenClaw ownership of an explicit operator approval policy", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),

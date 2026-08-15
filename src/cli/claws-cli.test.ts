@@ -945,6 +945,15 @@ describe("claws cli", () => {
 
   it("applies a supported update only after explicit consent", async () => {
     const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+    const applyUpdate = mocks.applyClawUpdatePlan.getMockImplementation();
+    if (!applyUpdate) {
+      throw new Error("missing update fixture implementation");
+    }
+    mocks.applyClawUpdatePlan.mockImplementationOnce(async (...args) => {
+      const options = args[2] as { runtime?: typeof mocks.runtime };
+      (options.runtime ?? mocks.runtime).log("Installed plugin: demo");
+      return await applyUpdate(...args);
+    });
 
     await runCli([
       "claws",
@@ -977,6 +986,7 @@ describe("claws cli", () => {
         }),
       }),
     );
+    expect(mocks.logs).toHaveLength(1);
     expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
       schemaVersion: "openclaw.clawUpdateResult.v1",
       status: "complete",
