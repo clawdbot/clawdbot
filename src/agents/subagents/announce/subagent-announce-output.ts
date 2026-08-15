@@ -415,6 +415,8 @@ function formatChildResultData(resultText?: string | null): string {
       label: "Child result",
       text: boundedText,
       maxChars: MAX_CHILD_COMPLETION_RESULT_CHARS,
+      maxEscapedChars: MAX_CHILD_COMPLETION_RESULT_CHARS,
+      truncationMarker: CHILD_RESULT_TRUNCATION_NOTICE,
     }) || "Child result: (no output)"
   );
 }
