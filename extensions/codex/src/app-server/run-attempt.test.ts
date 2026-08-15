@@ -94,6 +94,7 @@ import {
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -152,24 +153,7 @@ const testing = {
   buildDeveloperInstructions,
   buildDynamicTools,
   filterCodexDynamicTools,
-  resolveCodexDynamicToolDirectNames(
-    params: EmbeddedRunAttemptParams,
-    hostSystemAgentActive = false,
-  ): string[] {
-    const names: string[] = [];
-    if (
-      hostSystemAgentActive &&
-      params.toolsAllow?.length === 1 &&
-      params.toolsAllow[0] === "openclaw"
-    ) {
-      names.push("openclaw");
-    }
-    names.push("message");
-    if (params.pluginHarnessToolPolicyRestricted === true) {
-      names.push("update_plan");
-    }
-    return names;
-  },
+  resolveCodexDynamicToolDirectNames,
   setOpenClawCodingToolsFactoryForTests(
     factory: NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>,
   ): void {
@@ -1684,7 +1668,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(automaticNames).toContain("message");
 
     params.disableMessageTool = true;
-    expect(testing.resolveCodexDynamicToolDirectNames(params)).toContain("message");
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).not.toContain("message");
   });
 
   it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
@@ -2190,10 +2174,18 @@ describe("runCodexAppServerAttempt", () => {
       normalRegisteredTools,
     );
     expect(bridge.availableSpecs.map((tool) => tool.name)).not.toContain("message");
-    expect(bridge.specs.map((tool) => tool.name)).toContain("message");
-    expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
-      codexDynamicToolsFingerprint(normalBridge.specs),
+    const disabledMessageSpec = flattenSpecsWithNamespace(bridge.specs).find(
+      (tool) => tool.name === "message",
     );
+    expect(disabledMessageSpec).toMatchObject({
+      namespace: "openclaw",
+      deferLoading: true,
+    });
+    const enabledMessageSpec = flattenSpecsWithNamespace(normalBridge.specs).find(
+      (tool) => tool.name === "message",
+    );
+    expect(enabledMessageSpec).not.toHaveProperty("namespace");
+    expect(enabledMessageSpec).not.toHaveProperty("deferLoading");
     await expect(
       bridge.handleToolCall({
         threadId: "thread-1",

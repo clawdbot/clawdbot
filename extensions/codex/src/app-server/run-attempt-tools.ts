@@ -85,9 +85,12 @@ export function resolveCodexDynamicToolDirectNames(
   if (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     names.push("openclaw");
   }
-  // Keep the registered schema byte-stable when source delivery mode changes.
-  // An unavailable message tool is still execution-denied by the dynamic bridge.
-  names.push("message");
+  // Keep directness stable across source delivery modes while the tool is
+  // enabled. Disabled tools can remain registered for schema stability, but
+  // must not be advertised as immediately callable.
+  if (params.disableMessageTool !== true) {
+    names.push("message");
+  }
   // Restricted plugin runs replace Codex's native tool surface with an exact
   // OpenClaw policy-filtered catalog. Keep the replacement planner visible in
   // the initial context so Codex can maintain the same user-facing plan stream.
