@@ -2835,7 +2835,7 @@ td.data-table-key-col {
 }
 
 .chat-queue__item--steered {
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  background: var(--info-subtle);
 }
 
 /* The edited row keeps its slot so the operator can see where the corrected
@@ -2920,6 +2920,10 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+.chat-queue__item--steered .chat-queue__icon {
+  color: var(--info);
+}
+
 /* Reconnect rows mirror the connection pill's amber status dot so the queue
    reads as quiet auto-retry status, not a failure needing action. */
 .chat-queue__dot {
@@ -2951,8 +2955,8 @@ td.data-table-key-col {
 }
 
 .chat-queue__badge--steered {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--info) 16%, transparent);
+  color: var(--info);
 }
 
 .chat-queue__item--failed .chat-queue__badge {
