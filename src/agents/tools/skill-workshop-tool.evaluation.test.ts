@@ -64,33 +64,41 @@ describe("skill_workshop evaluation", () => {
     const { tool, proposal } = await createEvaluationFixture("Evaluated Skill");
 
     evaluatorMocks.enabled = true;
-    evaluatorMocks.evaluate.mockResolvedValue([
-      { evaluatorId: "offline", pluginId: "quality", status: "error", error: "private error" },
-      {
-        evaluatorId: "pass-rules",
-        pluginId: "quality",
-        pluginVersion: "1.2.3",
-        status: "completed",
-        result: {
-          decision: "pass",
-          decisionReason: "private pass reason",
-          summary: "private pass summary",
-          evaluatorVersion: "rules-7",
-          mode: "static",
-          metrics: { score: 0.8 },
-          findings: [
-            {
-              ruleId: "critical-rule",
-              severity: "critical",
-              message: "critical finding",
-              file: "SKILL.md",
-              line: 12,
-            },
-          ],
-        },
+    const completedOutcome = {
+      evaluatorId: "pass-rules",
+      pluginId: "quality",
+      pluginVersion: "1.2.3",
+      status: "completed",
+      result: {
+        decision: "pass",
+        decisionReason: "private pass reason",
+        summary: "private pass summary",
+        evaluatorVersion: "rules-7",
+        mode: "static",
+        metrics: { score: 0.8, coverage: 0.75 },
+        findings: [
+          {
+            ruleId: "critical-rule",
+            severity: "critical",
+            message: "critical finding",
+            file: "SKILL.md",
+            line: 12,
+          },
+        ],
       },
-      { evaluatorId: "optional", pluginId: "quality", status: "skipped" },
-    ]);
+    } as const;
+    const errorOutcome = {
+      evaluatorId: "offline",
+      pluginId: "quality",
+      status: "error",
+      error: "private error",
+    } as const;
+    const skippedOutcome = {
+      evaluatorId: "optional",
+      pluginId: "quality",
+      status: "skipped",
+    } as const;
+    evaluatorMocks.evaluate.mockResolvedValue([errorOutcome, completedOutcome, skippedOutcome]);
 
     const evaluated = await tool.execute("evaluate", {
       action: "evaluate",
@@ -107,10 +115,11 @@ describe("skill_workshop evaluation", () => {
     expect(visible).toContain('"decision":"pass"');
     expect(visible).toContain("private pass reason");
     expect(visible).toContain("private pass summary");
-    expect(visible).toContain(
-      '"severity":"critical","message":"critical finding","file":"SKILL.md","line":12',
-    );
-    expect(visible).toContain('"metrics":{"score":0.8}');
+    expect(visible).toContain('"file":"SKILL.md"');
+    expect(visible).toContain('"line":12');
+    expect(visible).toContain('"message":"critical finding"');
+    expect(visible).toContain('"severity":"critical"');
+    expect(visible).toContain('"metrics":{"coverage":0.75,"score":0.8}');
     expect(visible).toContain('"evaluatorVersion":"rules-7"');
     expect(visible).toContain('"mode":"static"');
     expect(visible).toContain('"error":"private error"');
@@ -136,6 +145,21 @@ describe("skill_workshop evaluation", () => {
     });
     const inspectVisible = toolText(inspected);
     expect(inspectVisible).toContain(visible.slice(visible.indexOf("Decisions:")));
+
+    evaluatorMocks.evaluate.mockResolvedValue([
+      errorOutcome,
+      {
+        ...completedOutcome,
+        result: { ...completedOutcome.result, metrics: { coverage: 0.75, score: 0.8 } },
+      },
+      skippedOutcome,
+    ]);
+    const reevaluated = await tool.execute("evaluate", {
+      action: "evaluate",
+      proposal_id: proposal.id,
+      expected_revision_hash: proposal.revisionHash,
+    });
+    expect(toolText(reevaluated)).toBe(visible);
   });
 
   it("bounds adversarial evaluator details with an explicit truncation marker", async () => {

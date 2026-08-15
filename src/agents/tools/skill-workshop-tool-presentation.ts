@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   SkillProposalEvaluation,
@@ -85,7 +86,7 @@ export function formatProposalEvaluation(
   for (const outcome of evaluation.outcomes) {
     counts[outcome.status === "completed" ? (outcome.result.decision ?? "none") : outcome.status]++;
   }
-  const outcomes = JSON.stringify(evaluation.outcomes);
+  const outcomes = stableStringify(evaluation.outcomes);
   const text = `${heading}\nDecisions: pass=${counts.pass}, revise=${counts.revise}, block=${counts.block}, none=${counts.none}; errors=${counts.error}; skipped=${counts.skipped}.\nOutcomes: ${outcomes}`;
   return text.length > SKILL_PROPOSAL_EVALUATION_MAX_CHARS
     ? `${truncateUtf16Safe(text, SKILL_PROPOSAL_EVALUATION_MAX_CHARS - EVALUATION_TRUNCATION_MARKER.length)}${EVALUATION_TRUNCATION_MARKER}`
