@@ -3,6 +3,7 @@ const REMOTE_QUIESCENCE_PS_JS = String.raw`function processes() {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
     timeout: 2000,
+    killSignal: "SIGKILL",
   });
   const rows = new Map();
   for (const line of output.split("\n")) {
@@ -28,12 +29,14 @@ function ancestors(rows) {
 }
 function processIdentity(pid) {
   try {
-    // Identity lookups gate every thaw; an unbounded ps would strand frozen
-    // processes, so this matches the bound processes()/processStatus() use.
+    // Identity gates every thaw, and execFileSync's timeout only signals before waiting for
+    // the child: under the default SIGTERM a ps that ignores it still blocks forever, so every
+    // probe here must be killable to stay bounded.
     const start = require("node:child_process").execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
       maxBuffer: 4096,
       timeout: 2000,
+      killSignal: "SIGKILL",
     }).trim();
     return start || null;
   } catch (error) {
@@ -43,7 +46,7 @@ function processIdentity(pid) {
 }
 function processStatus(pid) {
   try {
-    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000 }).trim();
+    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000, killSignal: "SIGKILL" }).trim();
     const match = /^(\S+)\s+(.+)$/u.exec(output);
     return match ? { state: match[1], start: match[2] } : null;
   } catch (error) {

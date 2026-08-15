@@ -114,6 +114,11 @@ async function waitForProcessState(pid: number, pattern: RegExp) {
   return state;
 }
 
+// A ps that ignores SIGTERM: execFileSync's timeout signals and then waits for the child, so
+// only a killable probe stays bounded against this shape.
+const STALLED_PS =
+  '#!/bin/sh\ntrap \'\' TERM\ncase "$*" in\n  *"lstart= -p"*) while true; do sleep 1; done ;;\n  *) exit 1 ;;\nesac\n';
+
 function spawnIdleWorker() {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   expect(child.pid).toBeDefined();
@@ -308,12 +313,10 @@ describe("remote workspace quiescence scripts", () => {
     const input = await fixture();
     const nonce = await quiesce(input);
 
-    // Every SIGCONT is gated on processIdentity, so an unbounded lookup leaves
-    // the whole lease frozen with no remaining resumer.
-    await fs.writeFile(
-      path.join(input.bin, "ps"),
-      '#!/bin/sh\ncase "$*" in\n  *"lstart= -p"*) sleep 30 ;;\n  *) exit 1 ;;\nesac\n',
-    );
+    // Every SIGCONT is gated on processIdentity, so an unbounded lookup leaves the whole
+    // lease frozen with no remaining resumer. The stub ignores SIGTERM because that is the
+    // shape execFileSync's timeout alone cannot escape.
+    await fs.writeFile(path.join(input.bin, "ps"), STALLED_PS);
     await fs.chmod(path.join(input.bin, "ps"), 0o755);
 
     const result = await runCommandWithTimeout(
@@ -362,7 +365,7 @@ describe("remote workspace quiescence scripts", () => {
       // sweep aborts exactly where the old order had already retired the last resumer.
       await fs.writeFile(
         path.join(input.bin, "ps"),
-        `#!/bin/sh\ncase "$*" in\n  *"lstart= -p ${watchdogPid}") exec /bin/ps "$@" ;;\n  *"lstart= -p"*) sleep 30 ;;\n  *) exit 1 ;;\nesac\n`,
+        `#!/bin/sh\ntrap '' TERM\ncase "$*" in\n  *"lstart= -p ${watchdogPid}") exec /bin/ps "$@" ;;\n  *"lstart= -p"*) while true; do sleep 1; done ;;\n  *) exit 1 ;;\nesac\n`,
       );
       await fs.chmod(path.join(input.bin, "ps"), 0o755);
 
@@ -400,10 +403,7 @@ describe("remote workspace quiescence scripts", () => {
 
       // ps stays stalled across the failed resume and past lease expiry, so only a
       // watchdog that keeps re-probing identity can still thaw this worker.
-      await fs.writeFile(
-        path.join(input.bin, "ps"),
-        '#!/bin/sh\ncase "$*" in\n  *"lstart= -p"*) sleep 30 ;;\n  *) exit 1 ;;\nesac\n',
-      );
+      await fs.writeFile(path.join(input.bin, "ps"), STALLED_PS);
       await fs.chmod(path.join(input.bin, "ps"), 0o755);
 
       const failed = await runCommandWithTimeout(
