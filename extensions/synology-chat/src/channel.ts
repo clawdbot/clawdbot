@@ -342,7 +342,10 @@ async function sendSynologyChatMedia(
     ctx.to,
     account.allowInsecureSsl,
     ...(dispatch ? [dispatch] : []),
-  );
+  ).catch(async (error: unknown) => {
+    await Promise.allSettled([prepared.cleanup()]);
+    throw error;
+  });
   if (sendResult.status === "not-dispatched") {
     await prepared.cleanup();
     throw new Error(

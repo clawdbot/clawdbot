@@ -5,14 +5,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { synologyChatPlugin } from "./channel.js";
 import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
 
-const { hostedCapabilityUrl } = vi.hoisted(() => ({
+const { hostedCapabilityUrl, hostedCapabilityCleanup } = vi.hoisted(() => ({
   hostedCapabilityUrl:
     "https://gateway.example.com/webhook/synology?__openclaw_synology_media_token_aaaaaaaaaaaaaaaaaaaaaaaa=secret",
+  hostedCapabilityCleanup: vi.fn(async () => undefined),
 }));
 vi.mock("./outbound-media.js", () => ({
   prepareSynologyHostedMedia: vi.fn(async () => ({
     url: hostedCapabilityUrl,
-    cleanup: vi.fn(async () => undefined),
+    cleanup: hostedCapabilityCleanup,
   })),
   resolveSynologyHostedMediaRoute: vi.fn(),
 }));
@@ -199,6 +200,7 @@ describe("Synology Chat client loopback", () => {
     const rejectedMediaDispatch = vi.fn(async () => {
       throw custodyFailure;
     });
+    hostedCapabilityCleanup.mockClear();
     await expect(
       synologyChatPlugin.message.send?.media?.({
         cfg,
@@ -209,6 +211,7 @@ describe("Synology Chat client loopback", () => {
       }),
     ).rejects.toThrow(custodyFailure.message);
     expect(rejectedMediaDispatch).toHaveBeenCalledOnce();
+    expect(hostedCapabilityCleanup).toHaveBeenCalledOnce();
     expect(receivedPayloads).toHaveLength(1);
   });
 
