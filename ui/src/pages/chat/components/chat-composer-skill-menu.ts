@@ -3,6 +3,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   getSkillCommandCompletions,
+  getSkillReferenceName,
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
@@ -175,7 +176,7 @@ export function getActiveSkillMenuOptionLabel(state: ChatComposerState): string 
     return "";
   }
   const command = state.skillMenuItems[state.skillMenuIndex];
-  return command ? `$${command.name} ${getSlashCommandDescription(command)}` : "";
+  return command ? `$${getSkillReferenceName(command)} ${getSlashCommandDescription(command)}` : "";
 }
 
 export function scrollActiveSkillMenuOptionIntoView(
@@ -221,7 +222,7 @@ export function selectSkillMention(
     return;
   }
   const suffix = target.end === current.length ? " " : "";
-  const replacement = `$${command.name}${suffix}`;
+  const replacement = `$${getSkillReferenceName(command)}${suffix}`;
   const next = `${current.slice(0, target.start)}${replacement}${current.slice(target.end)}`;
   const retainedBeforeCaret = Math.max(0, currentCaret - target.end);
   const nextCaret = target.start + replacement.length + retainedBeforeCaret;
@@ -279,7 +280,7 @@ export function renderSkillMenu(
                   >
                     <span class="slash-menu-leading">
                       <span class="slash-menu-icon">${icons.zap}</span>
-                      <span class="slash-menu-name">$${command.name}</span>
+                      <span class="slash-menu-name">$${getSkillReferenceName(command)}</span>
                     </span>
                     <span class="slash-menu-trailing">
                       <span class="slash-menu-desc">${getSlashCommandDescription(command)}</span>

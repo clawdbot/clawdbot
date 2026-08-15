@@ -332,6 +332,7 @@ describe("parseSlashCommand", () => {
     applyRemoteEntries([
       {
         name: "release_notes",
+        skillName: "release-notes",
         textAliases: ["/release_notes"],
         description: "Draft release notes.",
         source: "skill",
@@ -341,8 +342,11 @@ describe("parseSlashCommand", () => {
       },
     ]);
 
-    expect(getSkillCommandCompletions("release-n").map((command) => command.name)).toEqual([
-      "release_notes",
+    expect(getSkillCommandCompletions("release-n")).toMatchObject([
+      { name: "release_notes", skillName: "release-notes" },
+    ]);
+    expect(getSkillCommandCompletions("release_n")).toMatchObject([
+      { name: "release_notes", skillName: "release-notes" },
     ]);
   });
 

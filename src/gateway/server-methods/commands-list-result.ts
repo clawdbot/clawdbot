@@ -238,7 +238,12 @@ export function buildCommandsListResult(params: {
     const skill = skillsByKey.get(cmd.key);
     commands.push({
       ...mapCommand(cmd, skill ? "skill" : "native", includeArgs, nameSurface, provider),
-      ...(skill ? { skillModelVisible: skill.modelVisible !== false } : {}),
+      ...(skill
+        ? {
+            skillName: clampString(skill.skillName, COMMAND_NAME_MAX_LENGTH),
+            skillModelVisible: skill.modelVisible !== false,
+          }
+        : {}),
     });
   }
 

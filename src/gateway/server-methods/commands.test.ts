@@ -368,6 +368,7 @@ describe("commands.list handler", () => {
     const commands = listCommands();
     const skill = commands.find((c) => c.name === "code_review");
     expect(skill?.source).toBe("skill");
+    expect(skill?.skillName).toBe("code-review");
     expect(skill?.skillModelVisible).toBe(true);
     expect(skill?.category).toBe("tools");
   });

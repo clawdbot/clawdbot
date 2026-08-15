@@ -24,6 +24,7 @@ suite.define(() => {
             acceptsArgs: true,
             description: "Pre-commit and ship code review.",
             name: "autoreview",
+            skillName: "auto-review",
             scope: "both",
             source: "skill",
             skillModelVisible: true,
@@ -33,6 +34,7 @@ suite.define(() => {
             acceptsArgs: true,
             description: "Build and review technical documentation.",
             name: "technical_documentation",
+            skillName: "technical-documentation",
             scope: "both",
             source: "skill",
             skillModelVisible: true,
@@ -76,16 +78,22 @@ suite.define(() => {
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await expect
           .poll(() => picker.getByRole("option").first().textContent())
-          .toContain("$autoreview");
+          .toContain("$auto-review");
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "skill-reference-picker.png"),
+            fullPage: true,
+          });
+        }
         await composer.press("Enter");
-        await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
+        await expect.poll(() => composer.inputValue()).toBe("Review this with $auto-review ");
 
         await composer.fill(`${await composer.inputValue()}and $technical`);
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await composer.press("Tab");
         await expect
           .poll(() => composer.inputValue())
-          .toBe("Review this with $autoreview and $technical_documentation ");
+          .toBe("Review this with $auto-review and $technical-documentation ");
 
         if (artifactDir) {
           await page.screenshot({
@@ -97,7 +105,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Send message" }).click();
         const request = await gateway.waitForRequest("chat.send");
         expect((request.params as { message?: unknown }).message).toBe(
-          "Review this with $autoreview and $technical_documentation",
+          "Review this with $auto-review and $technical-documentation",
         );
 
         await composer.fill("Print $HOME");

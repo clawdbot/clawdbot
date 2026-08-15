@@ -3600,13 +3600,14 @@ describe("chat composer sizing", () => {
 
 describe("chat slash menu accessibility", () => {
   function replaceSkillCommands(
-    ...skills: Array<{ key: string; name?: string; description: string }>
+    ...skills: Array<{ key: string; name?: string; skillName?: string; description: string }>
   ) {
     replaceSlashCommands([
       ...buildFallbackSlashCommands(),
-      ...skills.map(({ key, name = key, description }) => ({
+      ...skills.map(({ key, name = key, skillName, description }) => ({
         key,
         name,
+        skillName,
         description,
         source: "skill" as const,
         skillModelVisible: true,
@@ -3749,7 +3750,11 @@ describe("chat slash menu accessibility", () => {
   });
 
   it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
-    replaceSkillCommands({ key: "prose", description: "Draft polished prose." });
+    replaceSkillCommands({
+      key: "prose_writer",
+      skillName: "prose-writer",
+      description: "Draft polished prose.",
+    });
     const onSlashIntent = vi.fn(async () => undefined);
     const { container } = createReactiveDraftHarness({ onSlashIntent });
 
@@ -3760,7 +3765,7 @@ describe("chat slash menu accessibility", () => {
     const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
     const renderedTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
     expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
-    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("$prose");
+    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("$prose-writer");
     expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
     expect(renderedTextarea?.getAttribute("aria-expanded")).toBe("true");
     expect(onSlashIntent).toHaveBeenCalledOnce();
