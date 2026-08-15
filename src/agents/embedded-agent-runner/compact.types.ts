@@ -15,6 +15,7 @@ import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
+import type { CommandInventoryPromptInput } from "../command-inventory-prompt.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
@@ -131,6 +132,8 @@ export type CompactEmbeddedAgentSessionParams = {
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
+  /** Trusted run-scoped command inventory; node-mode callers provide one selected node. */
+  commandInventory?: CommandInventoryPromptInput;
   abortSignal?: AbortSignal;
   onCompactionHookMessages?: (payload: {
     phase: "before" | "after";

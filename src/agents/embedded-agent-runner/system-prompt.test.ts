@@ -91,6 +91,51 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).not.toContain("Beta compaction fact");
   });
 
+  it("forwards node-operator command inventory into the embedded prompt", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+      },
+      tools: [{ name: "nodes" } as never],
+      userTimezone: "UTC",
+      userDate: "2026-01-05",
+      commandInventory: {
+        scope: "node-operator",
+        nodeCommands: [
+          {
+            id: "node:desk:filesystem.read",
+            command: "filesystem.read",
+            title: "filesystem.read",
+            nodeId: "desk",
+            description: "Live command advertised by paired node Desk.",
+            argumentHints: ["path"],
+            invocationHint: "openclaw nodes invoke --node desk --command filesystem.read",
+            availability: "available",
+            approvalKind: "gateway-allowlist",
+            risk: "high",
+            confirmationRequired: true,
+            effectMode: "mixed",
+            effects: [],
+            trustBoundary: "paired-node",
+            sourceKind: "node-runtime",
+            sourceId: "desk:filesystem.read",
+            discoveryMode: "runtime-node-query",
+            visibility: ["prompt", "audit", "operator"],
+          },
+        ],
+      },
+    });
+
+    expect(prompt).toContain("node:desk:filesystem.read->filesystem.read");
+    expect(prompt).not.toContain("gateway-status->openclaw gateway status");
+  });
+
   it("uses config-backed sub-agent delegation mode", () => {
     const prompt = buildEmbeddedSystemPrompt({
       config: {

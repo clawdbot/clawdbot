@@ -542,13 +542,17 @@ own trust.
 
 ### CLI registration metadata
 
-`api.registerCli(registrar, opts?)` accepts two kinds of command metadata:
+`api.registerCli(registrar, opts?)` accepts command ownership data:
 
 - `commands`: explicit command names owned by the registrar
 - `descriptors`: parse-time command descriptors used for CLI help,
   routing, and lazy plugin CLI registration
 - `parentPath`: optional parent command path for nested command groups, such as
   `["nodes"]`
+
+Nested plugin CLI registrations are only for extension points that core
+documents as plugin-extensible. The `tools` root is reserved for OpenClaw's
+read-only inventory commands and does not load plugin-owned child commands.
 
 For paired-node features, prefer
 `api.registerNodeCliFeature(registrar, opts?)`. It is a small wrapper around
@@ -558,6 +562,9 @@ For paired-node features, prefer
 If you want a plugin command to stay lazy-loaded in the normal root CLI path,
 provide `descriptors` that cover every top-level command root exposed by that
 registrar.
+
+Descriptors describe parse-time command shape only. They do not declare effect
+risk, grant permission, enforce policy, or hide commands from inventory.
 
 ```typescript
 api.registerCli(
