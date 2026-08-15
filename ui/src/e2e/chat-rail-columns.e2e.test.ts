@@ -424,6 +424,44 @@ suite.define(() => {
             "Side chat",
             "Desktop",
           ]);
+          await expect
+            .poll(() =>
+              sidePanel(page)
+                .locator(":scope > .side-panel__header .tabstrip-tab__icon")
+                .evaluateAll((icons) => {
+                  const geometry = icons.map((icon) => {
+                    const iconRect = icon.getBoundingClientRect();
+                    const glyphRect = icon.querySelector("svg")?.getBoundingClientRect();
+                    const tab = icon.closest("wa-tab");
+                    const baseRect = tab?.shadowRoot
+                      ?.querySelector<HTMLElement>('[part~="base"]')
+                      ?.getBoundingClientRect();
+                    return {
+                      baseDelta: Math.abs(
+                        iconRect.y +
+                          iconRect.height / 2 -
+                          ((baseRect?.y ?? 0) + (baseRect?.height ?? 0) / 2),
+                      ),
+                      box: [iconRect.width, iconRect.height],
+                      center: iconRect.y + iconRect.height / 2,
+                      glyph: [glyphRect?.width, glyphRect?.height],
+                    };
+                  });
+                  const centers = geometry.map(({ center }) => center);
+                  return {
+                    baseDeltas: geometry.map(({ baseDelta }) => baseDelta),
+                    boxes: geometry.map(({ box }) => box),
+                    centerSpread: Math.max(...centers) - Math.min(...centers),
+                    glyphs: geometry.map(({ glyph }) => glyph),
+                  };
+                }),
+            )
+            .toEqual({
+              baseDeltas: [0, 0, 0, 0, 0, 0, 0],
+              boxes: Array.from({ length: 7 }, () => [16, 16]),
+              centerSpread: 0,
+              glyphs: Array.from({ length: 7 }, () => [15, 15]),
+            });
           const filesTab = sidePanel(page).locator("wa-tab").filter({ hasText: "Files" });
           const filesClose = sidePanel(page).getByRole("button", {
             name: "Close Files",
