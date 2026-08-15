@@ -5646,14 +5646,23 @@ describe("subagent registry seam flow", () => {
     });
     mockPendingAgentWait();
 
-    expect(() =>
+    let thrown: unknown;
+    try {
       mod.registerSubagentRun({
         runId: "run-task-row-rollback-new",
         childSessionKey,
         task: "retain the last durable snapshot",
         taskRowOwnership: "required",
-      }),
-    ).toThrowError("rollback disk full");
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as AggregateError).errors.map((error) => (error as Error).message)).toEqual([
+      "detached task runtime created no task row for run run-task-row-rollback-new",
+      "rollback disk full",
+    ]);
+    expect((thrown as AggregateError).cause).toBe((thrown as AggregateError).errors[0]);
 
     expect(findRequesterRun("run-task-row-rollback-new")).toMatchObject({
       runId: "run-task-row-rollback-new",

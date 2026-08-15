@@ -133,6 +133,7 @@ describe("subagent registration rollback", () => {
           requesterDisplayKey: "main",
           task: "task registration failure",
           cleanup: "keep",
+          taskRowOwnership: "required",
         }),
       ).toThrow(taskError);
       expect(
@@ -230,15 +231,20 @@ describe("subagent registration rollback", () => {
           requesterDisplayKey: "main",
           task: "rollback persistence failure",
           cleanup: "keep",
+          taskRowOwnership: "required",
         });
       } catch (error) {
         thrown = error;
       }
       expect(thrown).toBeInstanceOf(AggregateError);
       expect((thrown as AggregateError).errors).toEqual([taskError, rollbackError]);
+      expect((thrown as AggregateError).cause).toBe(taskError);
       expect(
         getSubagentRunByChildSessionKey("agent:main:subagent:rollback-persist-fails"),
-      ).toBeNull();
+      ).toMatchObject({
+        runId: "run-rollback-persist-fails",
+        task: "rollback persistence failure",
+      });
     } finally {
       createTaskSpy.mockRestore();
     }

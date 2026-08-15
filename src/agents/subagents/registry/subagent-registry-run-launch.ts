@@ -266,26 +266,28 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           log.warn("Failed to persist background task for subagent run", { runId });
         }
       } catch (error) {
-        // Default and required ownership both fail closed. gateway_best_effort is
-        // excluded by the outer guard. Dual persist failure surfaces both errors.
-        rollbackRegistration();
-        try {
-          this.options.persistOrThrow(...registeredRunIds);
-        } catch (rollbackError) {
-          if (registerParams.taskRowOwnership === "required") {
+        if (registerParams.taskRowOwnership !== "required") {
+          // ACP/default: keep the durable registry row. Secondary task-runtime
+          // faults must not unwind an already-persisted registration.
+          log.warn("Failed to create background task for subagent run", { runId, error });
+        } else {
+          rollbackRegistration();
+          try {
+            this.options.persistOrThrow(...registeredRunIds);
+          } catch (rollbackError) {
             restoreDurableRegistration();
             // Durable state still owns this registration. Keep reconciliation active so
             // caller cleanup can terminalize it instead of leaving a phantom run.
             activateRegistrationLifecycle();
+            const aggregateError = new AggregateError(
+              [error, rollbackError],
+              `Subagent task registration and rollback persistence both failed: ${runId}`,
+            );
+            aggregateError.cause = error;
+            throw aggregateError;
           }
-          const aggregateError = new AggregateError(
-            [error, rollbackError],
-            `Subagent task registration and rollback persistence both failed: ${runId}`,
-          );
-          aggregateError.cause = error;
-          throw aggregateError;
+          throw error;
         }
-        throw error;
       }
     }
     // Wait through Gateway RPC; the in-process lifecycle listener is the embedded fallback.
