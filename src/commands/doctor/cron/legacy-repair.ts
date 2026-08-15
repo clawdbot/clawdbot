@@ -168,7 +168,7 @@ export async function loadLegacyCronRepairState(params: {
   const currentJobs =
     currentEntries.length > 0
       ? currentEntries.map((entry) => entry.job)
-      : loaded.store.jobs.map((job) => Object.assign({}, job));
+      : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
   const sqliteProjectionBackfillCount = currentEntries.filter((entry) =>
     needsSqliteProjectionBackfill({
       configJob: entry.job,
@@ -191,7 +191,7 @@ export async function loadLegacyCronRepairState(params: {
       invalidConfigRows.push(...loadedLegacy.invalidConfigRows);
       const merged = mergeLegacyCronJobs({
         currentJobs: rawJobs,
-        legacyJobs: loadedLegacy.store.jobs.map((job) => Object.assign({}, job)),
+        legacyJobs: loadedLegacy.store.jobs as unknown as Array<Record<string, unknown>>,
       });
       rawJobs = merged.jobs;
       legacyImportCount = merged.importedCount;
