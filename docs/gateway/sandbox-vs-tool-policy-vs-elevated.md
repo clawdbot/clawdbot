@@ -149,6 +149,7 @@ In `"non-main"` mode, group/channel keys are _not_ main. Use the main session ke
 
 ## Related
 
+- [Session permission modes](/gateway/permission-modes) -- session roots and escalation reviewers
 - [Sandboxing](/gateway/sandboxing) -- full sandbox reference (modes, scopes, backends, images)
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [Elevated Mode](/tools/elevated)
