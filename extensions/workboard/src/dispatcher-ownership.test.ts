@@ -412,9 +412,12 @@ describe("Workboard dispatcher ownership", () => {
       try {
         vi.setSystemTime(wallClock);
         const store = new WorkboardStore(createMemoryStore());
+        // Use a non-terminal status (todo) so the claim still consumes the
+        // owner slot — review/blocked are terminal for dispatch and no longer
+        // hold the slot (#122911).
         await store.create({
-          title: "Review claim with a deterministic expiry",
-          status: "review",
+          title: "Todo claim with a deterministic expiry",
+          status: "todo",
           agentId: "shared-worker",
           metadata: {
             claim: {

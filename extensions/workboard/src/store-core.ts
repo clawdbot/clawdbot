@@ -780,12 +780,30 @@ export class WorkboardCoreStore {
       effectivePatch.sessionKey === undefined
         ? existing.sessionKey
         : normalizeOptionalString(effectivePatch.sessionKey);
-    const execution =
+    let execution =
       effectivePatch.execution === undefined
         ? effectivePatch.sessionKey === undefined
           ? existing.execution
           : syncExecutionSessionKey(existing.execution, sessionKey)
         : normalizeExecution(effectivePatch.execution);
+    // Terminal status transitions (done/review/blocked) must close a
+    // still-running execution so the card's lifecycle and its worker execution
+    // record stay consistent. complete/block/reclaim pass an explicit execution
+    // patch and bypass this; releaseClaim, generic update, move, and reassign
+    // rely on updateCard to finalize the execution they leave untouched when
+    // the card reaches a terminal status. Non-terminal statuses (todo, backlog,
+    // triage, scheduled, ready) preserve execution occupancy so a worker moved
+    // aside can still complete successfully (#122911 ClawSweeper P1).
+    // done/review are successful worker outcomes (attempt succeeds, failureCount
+    // resets); blocked is an explicit failure or abandonment path.
+    if (
+      effectivePatch.execution === undefined &&
+      existing.status === "running" &&
+      (status === "done" || status === "review" || status === "blocked") &&
+      execution?.status === "running"
+    ) {
+      execution = { ...execution, status, updatedAt: now };
+    }
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowAutomationLaunch: options.allowAutomationLaunch,
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,

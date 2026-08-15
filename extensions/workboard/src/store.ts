@@ -407,6 +407,21 @@ export class WorkboardStore extends WorkboardNotificationStore {
           } else if (associationIsCurrent && card.metadata?.stale) {
             metadata = { ...metadata, stale: null };
           }
+          // Lifecycle success/failure transitions (card -> review/blocked) are
+          // terminal for dispatch: the worker has finished, so the dispatch
+          // claim must be released to free the owner's slot for the next card.
+          // Without this, the claim persists via normalizeMetadata's fallback
+          // and workboardCardConsumesOwnerSlot still counts it against capacity
+          // (#122911).
+          if (
+            associationIsCurrent &&
+            patch.status !== undefined &&
+            patch.status !== "running" &&
+            patch.status !== "done" &&
+            card.metadata?.claim
+          ) {
+            metadata = { ...metadata, claim: undefined };
+          }
           if (metadata) {
             patch.metadata = metadata;
           }

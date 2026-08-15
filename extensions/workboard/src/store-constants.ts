@@ -35,13 +35,16 @@ export function isWorkboardClaimReclaimable(
 
 export function workboardCardConsumesOwnerSlot(card: WorkboardCard, now: number): boolean {
   const claim = card.metadata?.claim;
-  const activeClaim = claim && isFutureDateTimestampMs(claim.expiresAt, { nowMs: now });
+  const activeClaim = Boolean(claim && isFutureDateTimestampMs(claim.expiresAt, { nowMs: now }));
+  // review/blocked are terminal for dispatch: the worker has finished (review)
+  // or failed (blocked), so a lingering claim must not hold the owner's slot.
+  // This also covers legacy rows where syncLifecycle did not clear the claim
+  // before this fix shipped (#122911).
+  const isTerminalForDispatch = card.status === "review" || card.status === "blocked";
   return (
     !card.metadata?.archivedAt &&
     !isWorkboardClaimReclaimable(claim, now) &&
-    (card.status === "running" ||
-      (card.status !== "done" && activeClaim) ||
-      card.execution?.status === "running")
+    (card.status === "running" || (card.status !== "done" && activeClaim && !isTerminalForDispatch))
   );
 }
 
