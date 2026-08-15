@@ -1,6 +1,7 @@
 // PID liveness helpers check whether process ids still refer to active processes.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
+import { readWindowsProcessStartTimeSync } from "../infra/windows-port-pids.js";
 
 const DARWIN_PS_TIMEOUT_MS = 1000;
 
@@ -108,6 +109,12 @@ export function getProcessStartTime(pid: number): number | null {
 export function getFileLockProcessStartTime(pid: number): number | null {
   if (!isValidPid(pid)) {
     return null;
+  }
+  if (process.platform === "win32") {
+    // Windows has no procfs; read the process creation time via PowerShell
+    // (wmic fallback) so the cron durable fence can establish a PID-reuse-safe
+    // identity instead of failing every tick.
+    return readWindowsProcessStartTimeSync(pid);
   }
   return process.platform === "darwin" ? getDarwinProcessStartTime(pid) : getProcessStartTime(pid);
 }

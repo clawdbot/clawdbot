@@ -2,6 +2,7 @@
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readWindowsProcessStartTimeSync } from "../infra/windows-port-pids.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   getFileLockProcessStartTime,
@@ -10,8 +11,17 @@ import {
   isPidDefinitelyDead,
 } from "./pid-alive.js";
 
+vi.mock("../infra/windows-port-pids.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../infra/windows-port-pids.js")>();
+  return {
+    ...mod,
+    readWindowsProcessStartTimeSync: vi.fn(mod.readWindowsProcessStartTimeSync),
+  };
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.mocked(readWindowsProcessStartTimeSync).mockReset();
 });
 
 function mockProcReads(entries: Record<string, string>) {
@@ -226,7 +236,15 @@ describe("process start times", () => {
   it("returns null on unsupported platforms", () => {
     return withMockedPlatform("win32", async () => {
       expect(getProcessStartTime(process.pid)).toBeNull();
-      expect(getFileLockProcessStartTime(process.pid)).toBeNull();
+    });
+  });
+
+  it("reads Windows creation time for file-lock identities on win32", () => {
+    vi.mocked(readWindowsProcessStartTimeSync).mockReturnValue(1_752_000_000_000);
+
+    return withMockedPlatform("win32", async () => {
+      expect(getFileLockProcessStartTime(process.pid)).toBe(1_752_000_000_000);
+      expect(readWindowsProcessStartTimeSync).toHaveBeenCalledWith(process.pid);
     });
   });
 
