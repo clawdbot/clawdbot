@@ -1,6 +1,7 @@
 // Command registration policy tests cover CLI registration boundaries and duplicate guards.
 import { describe, expect, it } from "vitest";
 import {
+  isPluginYieldingBuiltinCommandRoot,
   shouldEagerRegisterSubcommands,
   shouldRegisterPrimaryCommandOnly,
   shouldRegisterPrimarySubcommandOnly,
@@ -57,7 +58,7 @@ describe("command-registration-policy", () => {
         primary: "auth",
         hasBuiltinPrimary: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldSkipPluginCommandRegistration({
         argv: ["node", "openclaw", "tool", "image_generate"],
@@ -79,6 +80,12 @@ describe("command-registration-policy", () => {
         hasBuiltinPrimary: false,
       }),
     ).toBe(false);
+  });
+
+  it("marks collision-sensitive built-in aliases as plugin-yielding", () => {
+    expect(isPluginYieldingBuiltinCommandRoot("auth")).toBe(true);
+    expect(isPluginYieldingBuiltinCommandRoot("models")).toBe(false);
+    expect(isPluginYieldingBuiltinCommandRoot(null)).toBe(false);
   });
 
   it("matches lazy subcommand registration policy", () => {

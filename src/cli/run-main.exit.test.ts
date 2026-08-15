@@ -3082,7 +3082,6 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
-    ["auth", ["node", "openclaw", "auth", "--help"]],
     ["tool", ["node", "openclaw", "tool", "image_generate"]],
     ["tools", ["node", "openclaw", "tools", "effective"]],
   ])("keeps reserved %s command roots out of plugin command discovery", async (_name, argv) => {
@@ -3099,6 +3098,60 @@ describe("runCli exit behavior", () => {
     expect(registerSubCliByNameMock.mock.calls).toEqual([[program, argv[2], argv]]);
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
     expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
+
+  it("uses the core auth shortcut when no plugin owns the auth root", async () => {
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = {
+      commands: [],
+      parseAsync,
+    };
+    buildProgramMock.mockReturnValueOnce(program);
+
+    await runCli(["node", "openclaw", "auth", "list"]);
+
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+      program,
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "auth", skipPluginValidation: false },
+    );
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(program, "auth", [
+      "node",
+      "openclaw",
+      "auth",
+      "list",
+    ]);
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "auth", "list"]);
+  });
+
+  it("lets an installed plugin-owned auth root win over the core auth shortcut", async () => {
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = {
+      commands: [] as Array<{ name: () => string; aliases: () => string[] }>,
+      parseAsync,
+    };
+    buildProgramMock.mockReturnValueOnce(program);
+    registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
+      program.commands.push({ name: () => "auth", aliases: () => [] });
+      return {};
+    });
+
+    await runCli(["node", "openclaw", "auth", "login"]);
+
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+      program,
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "auth", skipPluginValidation: false },
+    );
+    expect(registerSubCliByNameMock).not.toHaveBeenCalledWith(program, "auth", [
+      "node",
+      "openclaw",
+      "auth",
+      "login",
+    ]);
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "auth", "login"]);
   });
 
   it("routes incidental logs to stderr throughout --json startup and dispatch", async () => {
@@ -3182,32 +3235,38 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("routes plugin registration logs for descriptor-declared machine output", async () => {
-    tryRouteCliMock.mockResolvedValueOnce(false);
-    resolvePluginCliRootOwnerIdsMock.mockImplementation(
-      ({ primaryCommand }: { primaryCommand?: string }) =>
-        primaryCommand === "path" ? ["oc-path"] : [],
-    );
-    loadPluginCliDescriptorsMock.mockResolvedValueOnce([
-      {
-        name: "path",
-        description: "OC path",
-        hasSubcommands: true,
-        machineOutput: ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY,
-      },
-    ]);
-    let stderrDuringPluginRegistration = false;
-    registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
-      stderrDuringPluginRegistration = loggingState.forceConsoleToStderr;
-      return {};
-    });
-    buildProgramMock.mockReturnValueOnce({ commands: [], parseAsync: vi.fn() });
+  it.each([
+    ["plugin-only root", "path", "oc-path"],
+    ["plugin-yielding built-in root", "auth", "proof-auth-owner"],
+  ])(
+    "routes plugin registration logs for descriptor-declared machine output on a %s",
+    async (_name, commandRoot, ownerId) => {
+      tryRouteCliMock.mockResolvedValueOnce(false);
+      resolvePluginCliRootOwnerIdsMock.mockImplementation(
+        ({ primaryCommand }: { primaryCommand?: string }) =>
+          primaryCommand === commandRoot ? [ownerId] : [],
+      );
+      loadPluginCliDescriptorsMock.mockResolvedValueOnce([
+        {
+          name: commandRoot,
+          description: `${commandRoot} commands`,
+          hasSubcommands: true,
+          machineOutput: ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY,
+        },
+      ]);
+      let stderrDuringPluginRegistration = false;
+      registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
+        stderrDuringPluginRegistration = loggingState.forceConsoleToStderr;
+        return {};
+      });
+      buildProgramMock.mockReturnValueOnce({ commands: [], parseAsync: vi.fn() });
 
-    await runCli(["node", "openclaw", "path", "validate", "oc://AGENTS.md"]);
+      await runCli(["node", "openclaw", commandRoot, "validate", "oc://AGENTS.md"]);
 
-    expect(stderrDuringPluginRegistration).toBe(true);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
-  });
+      expect(stderrDuringPluginRegistration).toBe(true);
+      expect(loggingState.forceConsoleToStderr).toBe(false);
+    },
+  );
 
   it("does not route lazy plugin registration logs for pass-through --json after terminator", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);

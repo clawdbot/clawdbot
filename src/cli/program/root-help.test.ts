@@ -85,6 +85,22 @@ describe("root help", () => {
     expect(text).toContain("Matrix channel utilities");
   });
 
+  it("lets plugin descriptors replace plugin-yielding built-in aliases", async () => {
+    getPluginCliCommandDescriptorsMock.mockResolvedValueOnce([
+      {
+        name: "auth",
+        description: "Plugin auth utilities",
+        hasSubcommands: true,
+      },
+    ]);
+
+    const text = await renderRootHelpText({ includePluginDescriptors: true });
+
+    expect(text).toContain("auth");
+    expect(text).toContain("Plugin auth utilities");
+    expect(text).not.toContain("Model auth profile shortcuts");
+  });
+
   it("does not load plugin CLI descriptors by default", async () => {
     await renderRootHelpText();
 

@@ -2,10 +2,15 @@
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 
-const RESERVED_NON_PLUGIN_COMMAND_ROOTS = new Set(["auth", "tool", "tools"]);
+const RESERVED_NON_PLUGIN_COMMAND_ROOTS = new Set(["tool", "tools"]);
+const PLUGIN_YIELDING_BUILTIN_COMMAND_ROOTS = new Set(["auth"]);
 
 export function isReservedNonPluginCommandRoot(primary: string | null | undefined): boolean {
   return typeof primary === "string" && RESERVED_NON_PLUGIN_COMMAND_ROOTS.has(primary);
+}
+
+export function isPluginYieldingBuiltinCommandRoot(primary: string | null | undefined): boolean {
+  return typeof primary === "string" && PLUGIN_YIELDING_BUILTIN_COMMAND_ROOTS.has(primary);
 }
 
 export function shouldRegisterPrimaryCommandOnly(argv: string[]): boolean {
