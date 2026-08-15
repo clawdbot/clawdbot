@@ -72,7 +72,8 @@ export function renderAgentScopeControl(params: AgentScopeControlParams) {
         .options=${options}
         .value=${selected}
         .accessibleLabel=${t("agentScope.label")}
-        .onSelect=${(value: string) => params.selection.setScope(value || null)}
+        .onSelect=${(value: string) =>
+          allowAll ? params.selection.setScope(value || null) : params.selection.set(value || null)}
       ></openclaw-agent-select>
     </div>
   `;

@@ -19,16 +19,16 @@ import type { OutboundDeliveryResult } from "./deliver-types.js";
 import { markDurableDeliveryQueued } from "./delivery-completion.js";
 import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
 import {
+  claimReusableDeliveryPlatformSendAttempt,
+  renewDeliveryPlatformSendLease,
+} from "./delivery-queue-platform-lease.js";
+import {
   StableDeliveryPreparationLostError,
   withStableDeliveryPreparation,
   type StableDeliveryPreparationOwner,
 } from "./delivery-queue-preparation.js";
+import { withActiveDeliveryClaim } from "./delivery-queue-recovery.js";
 import { findDeliveryIntentOwner, loadPendingDelivery } from "./delivery-queue-storage.js";
-import {
-  claimReusableDeliveryPlatformSendAttempt,
-  renewDeliveryPlatformSendLease,
-  withActiveDeliveryClaim,
-} from "./delivery-queue.js";
 import { createMessageSentEmitter } from "./message-sent-hook.js";
 import { emitOutboundAuditTerminals, uniformOutboundAuditTerminals } from "./outbound-audit.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";

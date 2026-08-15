@@ -617,7 +617,7 @@ actor VoiceWakeRuntime {
         }
 
         // Keep the "ears" boosted for the capture window so the status icon animates while recording.
-        await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
+        await MainActor.run { AppStateStore.shared.startVoiceEars() }
 
         self.captureTask?.cancel()
         self.captureTask = Task { [weak self] in

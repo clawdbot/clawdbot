@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SpawnResult } from "../process/exec.js";
+import type { NodeWorkerWorkspaceTransferInput } from "./node-workspace-transfer-protocol.js";
 
 const IDENTIFIER_MAX_CHARS = 256;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -9,7 +10,9 @@ const INPUT_MAX_BYTES = 128 * 1024;
 const OUTPUT_MAX_BYTES = 64 * 1024;
 const STDERR_MAX_BYTES = 16 * 1024;
 const ARGV_MAX_ITEMS = 128;
-const ARG_MAX_BYTES = 8 * 1024;
+// Workspace scripts are shipped through this private command and remain bounded by
+// REQUEST_MAX_BYTES; the canonical manifest script is larger than an ordinary argv item.
+const ARG_MAX_BYTES = 128 * 1024;
 const TIMEOUT_MAX_MS = 10 * 60 * 1000;
 
 export type NodeWorkerWorkspaceExecInput = {
@@ -21,6 +24,7 @@ export type NodeWorkerWorkspaceExecInput = {
   input?: string;
   timeoutMs?: number;
   resetWorkspace?: boolean;
+  transfer?: NodeWorkerWorkspaceTransferInput;
 };
 
 export type NodeWorkerWorkspaceExecResult = SpawnResult & { workspaceDir: string };
@@ -66,7 +70,7 @@ export function parseNodeWorkerWorkspaceExecInput(
     !hasExactKeys(
       value,
       ["gatewayNamespace", "environmentId", "sessionId", "generation", "argv"],
-      ["input", "timeoutMs", "resetWorkspace"],
+      ["input", "timeoutMs", "resetWorkspace", "transfer"],
     )
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker workspace request");
@@ -114,6 +118,37 @@ export function parseNodeWorkerWorkspaceExecInput(
   if (value.resetWorkspace !== undefined && typeof value.resetWorkspace !== "boolean") {
     throw new Error("INVALID_REQUEST: resetWorkspace must be a boolean");
   }
+  let transfer: NodeWorkerWorkspaceTransferInput | undefined;
+  if (value.transfer !== undefined) {
+    if (!isRecord(value.transfer)) {
+      throw new Error("INVALID_REQUEST: workspace transfer is invalid");
+    }
+    const direction = value.transfer.direction;
+    const token = value.transfer.token;
+    const manifestRef = value.transfer.manifestRef;
+    const baseManifestRef = value.transfer.baseManifestRef;
+    const validRef = (candidate: unknown): candidate is string =>
+      typeof candidate === "string" && /^sha256:[a-f0-9]{64}$/u.test(candidate);
+    if (
+      typeof token !== "string" ||
+      token.length === 0 ||
+      token.length > 1_024 ||
+      token.includes("\0") ||
+      (direction === "download"
+        ? !hasExactKeys(value.transfer, ["direction", "token", "manifestRef"]) ||
+          !validRef(manifestRef)
+        : direction === "upload"
+          ? !hasExactKeys(value.transfer, ["direction", "token", "baseManifestRef"]) ||
+            !validRef(baseManifestRef)
+          : true)
+    ) {
+      throw new Error("INVALID_REQUEST: workspace transfer is invalid");
+    }
+    transfer =
+      direction === "download"
+        ? { direction, token, manifestRef: manifestRef as string }
+        : { direction: "upload", token, baseManifestRef: baseManifestRef as string };
+  }
   return {
     gatewayNamespace,
     environmentId: requireIdentifier(value.environmentId, "environmentId"),
@@ -123,6 +158,7 @@ export function parseNodeWorkerWorkspaceExecInput(
     ...(value.input === undefined ? {} : { input: value.input }),
     ...(value.timeoutMs === undefined ? {} : { timeoutMs: value.timeoutMs }),
     ...(value.resetWorkspace === undefined ? {} : { resetWorkspace: value.resetWorkspace }),
+    ...(transfer ? { transfer } : {}),
   };
 }
 

@@ -112,6 +112,9 @@ export function createConfigWriteCoordinator({
   const clearAutoSaveDraftConnection = () => {
     autoSaveDraftConnection = null;
     autoSaveRequiresExplicitSubmit = false;
+    if (state.configAutoSaveStatus === "paused") {
+      state.configAutoSaveStatus = "idle";
+    }
   };
   const captureAutoSaveDraftConnection = () => {
     if (
@@ -138,6 +141,9 @@ export function createConfigWriteCoordinator({
       epoch: currentConfigConnectionEpoch(state),
     };
     autoSaveRequiresExplicitSubmit = false;
+    if (state.configAutoSaveStatus === "paused") {
+      state.configAutoSaveStatus = "idle";
+    }
   };
   const canAutoSaveDraftOnCurrentConnection = () =>
     !autoSaveRequiresExplicitSubmit &&
@@ -396,8 +402,14 @@ export function createConfigWriteCoordinator({
       if (draftBelongsToPreviousConnection) {
         // A retained draft belongs to the Gateway connection where the edit
         // began. Preserve it across replacement, but require an explicit
-        // Save/Apply or reload before the new Gateway may receive it.
+        // Save/Apply or reload before the new Gateway may receive it. The
+        // latch must be visible: without a rendered state the form looks
+        // normal while every subsequent edit silently never saves.
         autoSaveRequiresExplicitSubmit = true;
+        // Conflict outranks the latch: that snapshot is stale regardless.
+        if (state.configAutoSaveStatus !== "conflict") {
+          state.configAutoSaveStatus = "paused";
+        }
       }
       if (autoSaveInFlight !== null || manualSubmitInFlight !== null) {
         // The epoch guard already blocks these flights from mutating state;

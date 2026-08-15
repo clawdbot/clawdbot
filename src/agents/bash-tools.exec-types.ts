@@ -17,6 +17,7 @@ import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
@@ -56,6 +57,8 @@ export type ExecToolDefaults = {
   sessionKey?: string;
   /** Stable agent run that owns any approval created by this tool. */
   runId?: string;
+  /** Exact admitted execution instance that owns secret-egress proxy access. */
+  operationalRunInstance?: OperationalRunInstanceRef;
   /** Durable session that receives detached exec completion events and approval followups. */
   notifySessionKey?: string;
   /** Ephemeral session UUID active when this exec tool was built. Regenerated

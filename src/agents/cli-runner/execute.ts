@@ -154,12 +154,15 @@ export async function executePreparedCliRun(
   const basePrompt = cliSessionIdToUse
     ? params.prompt
     : (context.openClawHistoryPrompt ?? params.prompt);
-  let prompt = applyPluginTextReplacements(
-    appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
-      preserveExactPrompt: context.heartbeatPrompt,
-    }),
-    context.backendResolved.textTransforms?.input,
-  );
+  let prompt =
+    params.controlOperation !== undefined
+      ? basePrompt
+      : applyPluginTextReplacements(
+          appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
+            preserveExactPrompt: context.heartbeatPrompt,
+          }),
+          context.backendResolved.textTransforms?.input,
+        );
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||
@@ -181,7 +184,11 @@ export async function executePreparedCliRun(
         media: params.media,
       });
   prompt = imagePayload.prompt;
-  const { argsPrompt, stdin } = resolvePromptInput({ backend, prompt });
+  const promptInputBackend =
+    params.controlOperation === "compact" && context.backendResolved.manualCompaction
+      ? { ...backend, input: context.backendResolved.manualCompaction.input }
+      : backend;
+  const { argsPrompt, stdin } = resolvePromptInput({ backend: promptInputBackend, prompt });
   const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
@@ -329,12 +336,13 @@ export async function executePreparedCliRun(
       throw createCliAbortError();
     }
     const cliTurnStartedAt = Date.now();
-    const restoreSkillEnv = params.skillsSnapshot
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
-          config: params.config,
-        })
-      : undefined;
+    const restoreSkillEnv =
+      params.skillsSnapshot && !params.controlOperation
+        ? applySkillEnvOverridesFromSnapshot({
+            snapshot: params.skillsSnapshot,
+            config: params.config,
+          })
+        : undefined;
     let cleanupMcpCaptureAttempt: (() => Promise<void>) | undefined;
     let runOutput: CliOutput | undefined;
     let runError: unknown;
@@ -510,6 +518,7 @@ export async function executePreparedCliRun(
       const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
         backend,
         timeoutMs: params.timeoutMs,
+        expectedQuiet: params.controlOperation === "compact",
         runTimeoutOverrideMs,
         useResume,
         trigger: params.trigger,

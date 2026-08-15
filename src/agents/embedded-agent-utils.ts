@@ -1,3 +1,4 @@
+import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 /**
  * Embedded-agent message text utilities.
  * Extracts visible assistant text, reasoning summaries, thinking-tag blocks,
@@ -350,6 +351,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
     return;
   }
   message.content = next;
+  stripCompactionReplayCheckpointInPlace(message);
 }
 
 /** Extract closed thinking-tag content from a complete text payload. */

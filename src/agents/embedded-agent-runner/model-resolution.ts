@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import {
   prepareModelRuntimeSnapshot,
@@ -67,7 +66,6 @@ export async function resolveTieredModel(params: {
     (await prepareModelRuntimeSnapshot({
       config,
       agentDir: params.agentDir,
-      inheritedAuthDir: resolveDefaultAgentDir(config),
       workspaceDir: params.workspaceDir,
     }));
   return (

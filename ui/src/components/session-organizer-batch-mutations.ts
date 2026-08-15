@@ -19,7 +19,7 @@ import type { SessionOrganizerControllerHost } from "./session-organizer-control
 export type SessionActionRow = Pick<
   SidebarRecentSession,
   "key" | "sessionId" | "label" | "pinned" | "archived" | "active"
->;
+> & { gatewayHasActiveRun?: boolean; hasActiveRun?: boolean };
 
 export type SessionActionHost = Pick<
   SessionOrganizerControllerHost,

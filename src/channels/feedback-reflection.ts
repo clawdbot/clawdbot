@@ -6,7 +6,7 @@ import {
   resolveSessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildChannelInboundEventContext } from "./inbound-event/context.js";
+import { buildHostChannelInboundEventContext } from "./inbound-event/context.js";
 import { createChannelInboundEnvelopeBuilder } from "./inbound-event/envelope.js";
 import { dispatchRoutedChannelTurn } from "./turn/lifecycle.js";
 
@@ -133,7 +133,8 @@ export async function runChannelFeedbackReflection(params: {
     timestamp,
   });
   const target = `conversation:${params.conversationId}`;
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = buildHostChannelInboundEventContext({
+    channelIngress: "unsupported",
     channel: params.channel,
     accountId: params.accountId,
     messageId: `feedback-reflection:${timestamp}`,

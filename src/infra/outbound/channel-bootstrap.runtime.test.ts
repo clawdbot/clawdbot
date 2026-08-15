@@ -2,6 +2,7 @@
 // send-capable active registry short-circuiting.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -115,6 +116,48 @@ describe("bootstrapOutboundChannelPlugin", () => {
 
     expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceDir: "/tmp/openclaw-ops" }),
+    );
+  });
+
+  it("bootstraps outbound sends with the retained legacy owner after config load", async () => {
+    installDiscordSetupShell();
+    const migrated = migratePersistedImplicitMainRoster({
+      agents: {
+        defaults: { workspace: "/tmp/openclaw-legacy" },
+        entries: {
+          ops: { default: true },
+          research: {},
+        },
+      },
+      channels: { discord: {} },
+    }).config as OpenClawConfig;
+    const handle = createEmptyPluginRegistry();
+    handle.channels = [
+      {
+        pluginId: "discord",
+        plugin: {
+          id: "discord",
+          meta: {},
+          outbound: {
+            extractMarkdownImages: true,
+            sendText: async () => ({ messageId: "1" }),
+          },
+        },
+        source: "runtime",
+      },
+    ] as never;
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
+
+    await expect(
+      resolveChannelOutboundDirectiveOptions({
+        channel: "discord",
+        cfg: migrated,
+      }),
+    ).resolves.toEqual({ extractMarkdownImages: true });
+
+    expect(migrated.agents?.entries?.ops?.default).toBeUndefined();
+    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-legacy" }),
     );
   });
 

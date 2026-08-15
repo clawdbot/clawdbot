@@ -10,6 +10,7 @@ const RECORD_BASE = {
   sessionId: "session-1",
   agentId: "main",
   sessionKey: "agent:main:session-1",
+  executionMode: "worker-turn" as const,
   generation: 4,
   workspaceBaseManifestRef: null,
   remoteWorkspaceDir: null,

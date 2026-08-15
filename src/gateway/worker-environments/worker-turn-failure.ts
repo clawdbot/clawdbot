@@ -17,14 +17,14 @@ export type WorkerTurnEnvironmentService = Pick<
   | "get"
   | "startTunnel"
   | "stopTunnel"
->;
+> &
+  Partial<Pick<WorkerEnvironmentService, "resolveSshIdentity">>;
 
 export type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 
 export class WorkerTurnExecutionError extends Error {}
-export class WorkerWorkspaceReconciliationError extends Error {}
 
-export function workerTurnRecoveryError(error: unknown): string {
+function workerTurnRecoveryError(error: unknown): string {
   const message = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })
     .replace(/\s+/gu, " ")
     .trim();

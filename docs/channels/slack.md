@@ -1922,6 +1922,8 @@ Slack does not send presence changes through the Events API or Socket Mode. Open
 
 OpenClaw polls at most 45 unique workspace-user pairs per minute per Slack account, seeds the first result without waking the agent, and only wakes on an observed `away` to `active` transition. A durable 8-hour cooldown applies per Slack account, workspace, and user, even if that person participates in several threads. The event routes only to that person's most recently active eligible conversation and tells the agent to consult memory/wiki and known timezone context before deciding whether to send one short greeting. The agent may stay silent.
 
+The event includes `observed_away_at_ms`, `observed_active_at_ms`, and `observed_away_duration_ms`. The duration is the elapsed time between the first sampled `away` state in the current monitor run and the later sampled `active` state. It is not exact time away because presence can change between polls, and the observation starts fresh after the monitor restarts or the target expires. The event records what Slack reported, not whether the person was at their keyboard; Slack can mark someone away automatically or manually, and `users.getPresence` does not distinguish those cases for another user.
+
 The bot token needs `users:read`, which is already included in the recommended manifest. Enterprise Grid org-wide installs create a workspace-scoped polling client only after an authorized event identifies that workspace; presence state, cooldowns, and delivery targets remain partitioned by workspace.
 
 ## Configuration reference

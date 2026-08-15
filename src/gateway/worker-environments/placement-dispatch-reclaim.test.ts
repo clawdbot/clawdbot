@@ -104,6 +104,34 @@ describe("worker placement dispatch reclaim", () => {
     ]);
   });
 
+  it("reclaims an environment-free failed placement back to clean local state", async () => {
+    const harness = createHarness(placementStore);
+    const requested = placementStore.startDispatch(REQUEST);
+    const failed = placementStore.fail({
+      sessionId: REQUEST.sessionId,
+      expectedGeneration: requested.generation,
+      recoveryError: "device worker is offline",
+    });
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).resolves.toMatchObject({
+      state: "local",
+      generation: failed.generation + 1,
+      environmentId: null,
+      recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
+    });
+
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
   it("retains and reports cloud versions that conflict during an idle reclaim", async () => {
     const harness = createHarness(placementStore, {
       reconcileConflictPaths: ["src/local.ts"],

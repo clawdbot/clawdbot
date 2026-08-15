@@ -1634,6 +1634,55 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("does not inject skill env overrides into control operations", async () => {
+    const previousEnvValue = process.env.CLI_SKILL_API_KEY;
+    delete process.env.CLI_SKILL_API_KEY;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { env?: Record<string, string> };
+      expect(input.env?.CLI_SKILL_API_KEY).toBeUndefined();
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: CLAUDE_OK_JSONL,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      const context = buildPreparedCliRunContext({
+        config: {
+          skills: {
+            entries: {
+              envskill: { apiKey: "skill-secret" }, // pragma: allowlist secret
+            },
+          },
+        },
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "envskill", primaryEnv: "CLI_SKILL_API_KEY" }],
+        },
+      });
+      context.params.controlOperation = "compact";
+      context.backendResolved.manualCompaction = {
+        input: "arg",
+        buildPrompt: () => "/compact",
+        validateOutput: () => ({ ok: true }),
+      };
+      await executePreparedCliRun(context);
+      expect(process.env.CLI_SKILL_API_KEY).toBeUndefined();
+    } finally {
+      if (previousEnvValue === undefined) {
+        delete process.env.CLI_SKILL_API_KEY;
+      } else {
+        process.env.CLI_SKILL_API_KEY = previousEnvValue;
+      }
+    }
+  });
+
   it("runs CLI through supervisor and returns payload", async () => {
     const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
     supervisorSpawnMock.mockResolvedValueOnce(

@@ -51,6 +51,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
+import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs, type PluginsHubTab } from "./plugins-hub.ts";
 import type { ConnectorSuggestion } from "./presentation.ts";
 import { pluginArtPath } from "./presentation.ts";
@@ -736,6 +737,7 @@ class PluginsPage extends OpenClawLightDomElement {
         text: formatUiError(error),
       });
     },
+    options: { preserveMessageWhilePending?: boolean } = {},
   ): Promise<void> {
     const scope = this.gateway.capture();
     if (!scope || !this.canMutate() || this.busy[rowKey]) {
@@ -746,7 +748,9 @@ class PluginsPage extends OpenClawLightDomElement {
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.mutationTokens.get(rowKey) === mutationToken;
     this.setBusy(rowKey, true);
-    this.setMessage(rowKey, null);
+    if (!options.preserveMessageWhilePending) {
+      this.setMessage(rowKey, null);
+    }
     try {
       const mutation = await runPluginConfigMutation(
         this.context.runtimeConfig,
@@ -769,23 +773,36 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
-  private async install(rowKey: string, request: PluginInstallRequest): Promise<void> {
+  private async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
     await this.runPluginMutation(
-      rowKey,
+      installIdentity,
       (client) => installPlugin(client, request),
       async (result, refreshError, client) => {
+        const installedPluginKey = pluginRowKey(result.plugin.id);
         this.applyMutationResult(result);
+        if (installedPluginKey !== installIdentity) {
+          this.setMessage(installIdentity, null);
+        }
         this.setMessage(
-          rowKey,
+          installedPluginKey,
           committedMutationMessage(mutationSuccessMessage("installed", result), refreshError),
         );
         await this.refreshCatalogAfterMutation(client);
       },
       (error) => {
+        const policyWarning = readPluginInstallPolicyWarning(error);
+        if (policyWarning) {
+          this.setMessage(installIdentity, {
+            kind: "warning",
+            text: policyWarning.reason,
+            installPolicyWarning: { details: policyWarning, request },
+          });
+          return;
+        }
         const trust = readPluginInstallTrustError(error);
         const packageName = request.source === "clawhub" ? request.packageName : null;
         if (packageName && pluginInstallNeedsRiskAcknowledgement(error)) {
-          this.setMessage(rowKey, {
+          this.setMessage(installIdentity, {
             kind: "error",
             text: trust?.warning ?? t("pluginsPage.defaultRiskWarning"),
             acknowledge: {
@@ -795,10 +812,13 @@ class PluginsPage extends OpenClawLightDomElement {
           });
           return;
         }
-        this.setMessage(rowKey, {
+        this.setMessage(installIdentity, {
           kind: "error",
           text: formatUiError(error),
         });
+      },
+      {
+        preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
       },
     );
   }
@@ -1029,7 +1049,8 @@ class PluginsPage extends OpenClawLightDomElement {
           },
           onSetEnabled: (pluginId, enabled, rowKey) =>
             void this.updateEnabled(pluginId, enabled, rowKey),
-          onInstall: (rowKey, request) => void this.install(rowKey, request),
+          onInstall: (request, installIdentity) => void this.install(request, installIdentity),
+          onDismissMessage: (rowKey) => this.setMessage(rowKey, null),
           onRequestUninstall: (rowKey) => this.setPendingRemoval(rowKey, true),
           onCancelUninstall: (rowKey) => this.setPendingRemoval(rowKey, false),
           onUninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),
