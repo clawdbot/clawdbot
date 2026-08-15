@@ -227,6 +227,71 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("answer_candidate");
   });
 
+  it("keeps an earlier final answer when a later coda arrives with no tool work between them", async () => {
+    const projector = await createProjector(await createParams());
+    const summary = "Read-only; inspected actual diffs, no mutations: - #122457 — Copies";
+    const coda = "The summary above already incorporates the final review results.";
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta(summary, "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: summary,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta(coda, "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: coda,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: summary,
+        },
+        {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: coda,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const snapshot = JSON.stringify(result.messagesSnapshot);
+
+    expect(result.assistantTexts).toEqual([summary, coda]);
+    expect(result.lastAssistant?.content).toEqual([
+      { type: "text", text: `${summary}\n\n${coda}` },
+    ]);
+    expect(snapshot).toContain(summary);
+    expect(snapshot).toContain(coda);
+  });
+
   it("does not reselect a final answer superseded by late tool work", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({

@@ -304,9 +304,39 @@ export class CodexAssistantProjection {
     }
   }
 
-  collectAssistantTexts(): string[] {
-    const finalText = this.resolveFinalAssistantTextItem()?.text;
-    return finalText ? [finalText] : [];
+  collectAssistantTexts(turnItems?: readonly CodexThreadItem[]): string[] {
+    const lastNativeWorkIndex = lastNativeWorkItemIndex(turnItems);
+    const texts: string[] = [];
+    let seenLaterPersistable = false;
+    // Phase-less agentMessages are replaceable coordination text; a later
+    // persistable item supersedes them. Explicit final_answer items stay unless
+    // they sit before later native tool work.
+    for (let index = this.assistantItemOrder.length - 1; index >= 0; index -= 1) {
+      const itemId = this.assistantItemOrder[index];
+      if (!itemId || this.assistantPhaseByItem.get(itemId) === "commentary") {
+        continue;
+      }
+      if (turnItems && lastNativeWorkIndex >= 0) {
+        const itemIndex = turnItems.findIndex(
+          (item) => item?.type === "agentMessage" && item.id === itemId,
+        );
+        if (itemIndex >= 0 && itemIndex < lastNativeWorkIndex) {
+          continue;
+        }
+      }
+      const text = this.assistantTextByItem.get(itemId)?.trim();
+      if (!text || this.isToolProgressEchoText(itemId, text)) {
+        continue;
+      }
+      const isTerminalFinal = this.assistantPhaseByItem.get(itemId) === "final_answer";
+      if (!isTerminalFinal && seenLaterPersistable) {
+        continue;
+      }
+      texts.push(text);
+      seenLaterPersistable = true;
+    }
+    texts.reverse();
+    return texts;
   }
 
   collectCommentaryMessages(): Array<{ itemId: string; message: AssistantMessage }> {
@@ -557,4 +587,17 @@ export class CodexAssistantProjection {
   private isToolProgressEchoText(itemId: string, text: string): boolean {
     return this.rawPromotedAssistantItemIds.has(itemId) && this.matchesToolProgressEcho(text);
   }
+}
+
+function lastNativeWorkItemIndex(turnItems: readonly CodexThreadItem[] | undefined): number {
+  if (!turnItems) {
+    return -1;
+  }
+  for (let index = turnItems.length - 1; index >= 0; index -= 1) {
+    const item = turnItems[index];
+    if (item && shouldClearTerminalPresentationForNativeItem(item)) {
+      return index;
+    }
+  }
+  return -1;
 }
