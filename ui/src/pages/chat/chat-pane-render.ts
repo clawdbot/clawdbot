@@ -28,18 +28,21 @@ import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
-  companionPanelActions,
   companionRailTemplate,
-  discussionPanelActions,
   discussionPanelTemplate,
   embeddedSurfaceTemplates,
+  sidePanelHeaderActions,
 } from "./chat-pane-embedded-panels.ts";
 import {
   createChatPaneSessionActionCallbacks,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
-import { renderSidebarRegion, resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
+import {
+  renderSidebarRegion,
+  resolveSidebarLayoutForBoard,
+  sidebarRegionCallbacks,
+} from "./chat-pane-sidebar-layout.ts";
 import {
   dismissChatError,
   resolveAssistantAttachmentAuthToken,
@@ -65,21 +68,14 @@ import {
   renderSessionWorkspaceRail,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
-import type {
-  SidebarPanelTemplates,
-  SidebarRegionCallbacks,
-} from "./components/chat-sidebar-region-types.ts";
+import type { SidebarPanelTemplates } from "./components/chat-sidebar-region-types.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
-  activatePanel,
   closeSlot,
   openSlot,
-  reorderPanel,
-  setSidebarDock,
-  setSidebarExpanded,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
 import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool-stream.ts";
@@ -661,54 +657,32 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         : {}),
       ...discussionPanelTemplate(discussion, this.connectionGeneration),
     };
-    const sidebarCallbacks: SidebarRegionCallbacks = {
-      activatePanel: (panelId: string) => {
-        state.updateSidebarLayout(activatePanel(state.sidebarLayout, panelId));
-        state.updateSidebarActivePanel(panelId);
-      },
-      closeSlot: (slot: SidebarSlotId) => {
-        if (slot === "chat") {
-          this.handleBoardDockChange("hidden");
-          return;
-        }
-        if (slot === "discussion") {
-          this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim());
-        }
-        closePanelSlot(slot);
-      },
-      openSlot: openPanelSlot,
-      reorderPanel: (panelId, targetPanelId, position) =>
-        state.updateSidebarLayout(
-          reorderPanel(state.sidebarLayout, panelId, targetPanelId, position),
-        ),
-      resizePanel: (columnId: string, size: number) => {
-        this.commitSidebarPanelResize(sidebarLayout, columnId, size);
-      },
-      setDock: (dock) => state.updateSidebarLayout(setSidebarDock(state.sidebarLayout, dock)),
-      setExpanded: (expanded: boolean) =>
-        state.updateSidebarLayout(setSidebarExpanded(state.sidebarLayout, expanded)),
-      setOpen: (open: boolean) => this.setChatSidePanelOpen(open),
-    };
     const availableSlots = availableSidebarSlots({
       state,
       desktopAvailable,
       hasDiscussion: discussion !== null,
       hasBoard: board.hasBoard,
     });
-    const panelActions: SidebarPanelTemplates = {
-      ...companionPanelActions({
-        connected: state.connected,
-        pendingQuestion: companionThread.pendingQuestion,
-        onClear: () => void this.clearSessionCompanion(),
-      }),
-      ...discussionPanelActions(discussion?.openUrl ?? null),
-    };
     const content = renderSidebarRegion({
       availableWidth: this.paneWidth,
       availableSlots,
-      callbacks: sidebarCallbacks,
+      callbacks: sidebarRegionCallbacks({
+        state,
+        closePanelSlot,
+        openPanelSlot,
+        hideBoard: () => this.handleBoardDockChange("hidden"),
+        forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
+        resizePanel: (columnId, size) =>
+          this.commitSidebarPanelResize(sidebarLayout, columnId, size),
+        setPanelOpen: (open) => this.setChatSidePanelOpen(open),
+      }),
       layout: sidebarLayout,
-      panelActions,
+      panelActions: sidePanelHeaderActions({
+        connected: state.connected,
+        pendingQuestion: companionThread.pendingQuestion,
+        discussionOpenUrl: discussion?.openUrl ?? null,
+        onClearCompanion: () => void this.clearSessionCompanion(),
+      }),
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelTemplates,
       primary,

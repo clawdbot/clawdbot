@@ -94,22 +94,37 @@ export function companionRailTemplate(params: {
 }
 
 /**
- * Side-chat header actions. The clear is destructive, so it stays behind an
- * overflow menu; it lives in the panel header because the embedded rail has no
- * header of its own and the gateway reset has no other entry point.
+ * Header actions contributed by the panels that own content actions. Panels
+ * have no header of their own in the tabbed model, so anything acting on the
+ * active panel — the destructive side-chat clear, the discussion's external
+ * link — is only reachable through the shared side-panel header.
  */
-export function companionPanelActions(params: {
+export function sidePanelHeaderActions(params: {
   connected: boolean;
   pendingQuestion: string | null;
-  onClear: () => void;
-}): Partial<SidebarPanelTemplates> {
+  discussionOpenUrl: string | null;
+  onClearCompanion: () => void;
+}): SidebarPanelTemplates {
   return {
+    ...(params.discussionOpenUrl
+      ? {
+          discussion: html`<a
+            class="rail-header__action"
+            href=${params.discussionOpenUrl}
+            target="_blank"
+            rel="noopener"
+            aria-label=${t("chat.sessionDiscussion.openExternal")}
+            title=${t("chat.sessionDiscussion.openExternal")}
+            >${icons.externalLink}</a
+          >`,
+        }
+      : {}),
     companion: html`<wa-dropdown
       class="chat-session-rail__menu"
       placement="bottom-end"
       @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
         if (event.detail.item.value === "clear") {
-          params.onClear();
+          params.onClearCompanion();
         }
       }}
     >
@@ -130,24 +145,6 @@ export function companionPanelActions(params: {
         ${t("chat.rail.clear")}
       </wa-dropdown-item>
     </wa-dropdown>`,
-  };
-}
-
-/** Discussion header action; the panel body is a cross-origin frame. */
-export function discussionPanelActions(openUrl: string | null): Partial<SidebarPanelTemplates> {
-  if (!openUrl) {
-    return {};
-  }
-  return {
-    discussion: html`<a
-      class="rail-header__action"
-      href=${openUrl}
-      target="_blank"
-      rel="noopener"
-      aria-label=${t("chat.sessionDiscussion.openExternal")}
-      title=${t("chat.sessionDiscussion.openExternal")}
-      >${icons.externalLink}</a
-    >`,
   };
 }
 

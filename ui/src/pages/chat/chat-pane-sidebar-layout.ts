@@ -1,16 +1,21 @@
 import { html, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import type {
   SidebarPanelTemplates,
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region-types.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import {
+  activatePanel,
   closeSlot,
   fitSidebarLayout,
   isSidebarRegionCollapsed,
   openSlot,
+  reorderPanel,
+  setSidebarDock,
+  setSidebarExpanded,
   sidebarDock,
   type SidebarLayout,
   type SidebarSlotId,
@@ -39,6 +44,49 @@ function ensurePanelRuntime(slot: SidebarSlotId) {
   if (load) {
     panelRuntimeLoads.set(slot, load);
   }
+}
+
+/**
+ * Region callbacks: the pure layout moves resolve here, while the pane injects
+ * what only it owns — the board dock, the cached discussion url, the persisted
+ * resize, and the panel's open state.
+ */
+export function sidebarRegionCallbacks(params: {
+  state: ChatPageHost;
+  closePanelSlot: (slot: SidebarSlotId) => void;
+  openPanelSlot: (slot: SidebarSlotId) => void;
+  hideBoard: () => void;
+  forgetDiscussionUrl: () => void;
+  resizePanel: (columnId: string, size: number) => void;
+  setPanelOpen: (open: boolean) => void;
+}): SidebarRegionCallbacks {
+  const { state } = params;
+  return {
+    activatePanel: (panelId) => {
+      state.updateSidebarLayout(activatePanel(state.sidebarLayout, panelId));
+      state.updateSidebarActivePanel(panelId);
+    },
+    closeSlot: (slot) => {
+      if (slot === "chat") {
+        params.hideBoard();
+        return;
+      }
+      if (slot === "discussion") {
+        params.forgetDiscussionUrl();
+      }
+      params.closePanelSlot(slot);
+    },
+    openSlot: params.openPanelSlot,
+    reorderPanel: (panelId, targetPanelId, placement) =>
+      state.updateSidebarLayout(
+        reorderPanel(state.sidebarLayout, panelId, targetPanelId, placement),
+      ),
+    resizePanel: params.resizePanel,
+    setDock: (dock) => state.updateSidebarLayout(setSidebarDock(state.sidebarLayout, dock)),
+    setExpanded: (expanded) =>
+      state.updateSidebarLayout(setSidebarExpanded(state.sidebarLayout, expanded)),
+    setOpen: params.setPanelOpen,
+  };
 }
 
 export function renderSidebarRegion(params: {

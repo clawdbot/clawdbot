@@ -3,7 +3,7 @@
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../components/resizable-divider.ts";
-import { companionPanelActions } from "../chat-pane-embedded-panels.ts";
+import { sidePanelHeaderActions } from "../chat-pane-embedded-panels.ts";
 import {
   openSlot,
   setSidebarDock,
@@ -85,10 +85,11 @@ describe("chat sidebar region", () => {
   it("keeps the destructive companion clear reachable, behind the active panel's overflow menu", async () => {
     const onClear = vi.fn();
     const region = await createRegion(openSlot(openSlot({ columns: [] }, "detail"), "companion"));
-    region.panelActions = companionPanelActions({
+    region.panelActions = sidePanelHeaderActions({
       connected: true,
       pendingQuestion: null,
-      onClear,
+      discussionOpenUrl: null,
+      onClearCompanion: onClear,
     });
     await region.updateComplete;
 
