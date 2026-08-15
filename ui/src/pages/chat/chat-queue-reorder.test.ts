@@ -101,4 +101,42 @@ describe("queued message reorder", () => {
     expect(host.lastError).toBeNull();
     unsubscribe();
   });
+
+  it("commits a multi-row reorder as one durable write instead of a partial permutation", () => {
+    const { host, unsubscribe } = queueHost([{}, {}, {}]);
+    const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
+    let writes = 0;
+    // Permits exactly one write to land, then fails every write after it. A
+    // per-row write loop would apply the first changed row and get stuck mid
+    // permutation; a single batch write either lands the whole reorder or none of it.
+    vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
+      writes += 1;
+      if (writes > 1) {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      originalSetItem(key, value);
+    });
+
+    moveQueuedChatMessage(host as never, "queued-3", 0);
+
+    expect(writes).toBe(1);
+    expect(storedOrder(host)).toEqual(["queued-3", "queued-1", "queued-2"]);
+    expect(host.chatQueue.map((item) => item.id)).toEqual(storedOrder(host));
+    expect(host.lastError).toBeNull();
+    unsubscribe();
+  });
+
+  it("leaves the durable and visible order unchanged when the batch write fails", () => {
+    const { host, unsubscribe } = queueHost([{}, {}, {}]);
+    vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    });
+
+    moveQueuedChatMessage(host as never, "queued-3", 0);
+
+    expect(storedOrder(host)).toEqual(["queued-1", "queued-2", "queued-3"]);
+    expect(host.chatQueue.map((item) => item.id)).toEqual(storedOrder(host));
+    expect(host.lastError).not.toBeNull();
+    unsubscribe();
+  });
 });
