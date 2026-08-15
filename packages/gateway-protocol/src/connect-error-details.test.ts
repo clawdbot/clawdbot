@@ -11,7 +11,7 @@ import {
   formatConnectPairingRequiredMessage,
   normalizePairingConnectRequestId,
   readConnectErrorDetailCode,
-  readControlUiBuildMismatchDetails,
+  readControlUiBuildMismatchId,
   readConnectErrorRecoveryAdvice,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
@@ -44,19 +44,15 @@ describe("readConnectErrorDetailCode", () => {
   });
 });
 
-describe("readControlUiBuildMismatchDetails", () => {
+describe("readControlUiBuildMismatchId", () => {
   it("returns a bounded reload target", () => {
     expect(
-      readControlUiBuildMismatchDetails({
+      readControlUiBuildMismatchId({
         code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
         gatewayBuildId: "gateway-build",
         reloadRequired: true,
       }),
-    ).toEqual({
-      code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-      gatewayBuildId: "gateway-build",
-      reloadRequired: true,
-    });
+    ).toBe("gateway-build");
   });
 
   it.each([
@@ -73,7 +69,7 @@ describe("readControlUiBuildMismatchDetails", () => {
       reloadRequired: false,
     },
   ])("rejects malformed details", (details) => {
-    expect(readControlUiBuildMismatchDetails(details)).toBeNull();
+    expect(readControlUiBuildMismatchId(details)).toBeNull();
   });
 });
 

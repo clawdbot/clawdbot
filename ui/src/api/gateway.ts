@@ -27,6 +27,7 @@ import {
   PROTOCOL_VERSION,
   resolveGatewayStartupRetryAfterMs,
   resolveSafeTimeoutDelayMs,
+  shouldPauseGatewayReconnect,
 } from "@openclaw/gateway-client/browser";
 export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
 import type {
@@ -54,8 +55,6 @@ import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
 import {
   enrichProtocolMismatchDetails,
-  isLegacyGatewayBuildIdSchemaError,
-  isNonRecoverableConnectError,
   resolveGatewayErrorDetailCode,
 } from "./gateway-connect-errors.ts";
 
@@ -288,7 +287,6 @@ export class GatewayBrowserClient {
   // Older shipped Gateways used a closed client schema. Downgrade once per
   // browser client; a document reload creates a fresh exact-identity attempt.
   private clientBuildIdCompatibilityDisabled = false;
-  private clientBuildIdRetryBudgetUsed = false;
   // Close/stop advances this generation before another socket can make stale hello work look active.
   private recovery = { value: "", resolved: false, generation: 0 };
   private scopeUpgradeBinding: ScopeUpgradeBinding | null = null;
@@ -380,7 +378,6 @@ export class GatewayBrowserClient {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.clientBuildIdCompatibilityDisabled = false;
-    this.clientBuildIdRetryBudgetUsed = false;
   }
 
   get connected() {
@@ -587,11 +584,11 @@ export class GatewayBrowserClient {
     const connectErrorCode =
       err instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(err) : null;
     if (
-      !this.clientBuildIdRetryBudgetUsed &&
-      isLegacyGatewayBuildIdSchemaError(err, plan.params.client.buildId)
+      !this.clientBuildIdCompatibilityDisabled &&
+      plan.params.client.buildId &&
+      /invalid connect params.*unexpected property.*buildid/iu.test(err.message)
     ) {
       this.clientBuildIdCompatibilityDisabled = true;
-      this.clientBuildIdRetryBudgetUsed = true;
       this.client.resetReconnectBackoff(250);
       return { closeCode: CONNECT_FAILED_CLOSE_CODE, closeReason: "connect retry" };
     }
@@ -725,7 +722,10 @@ export class GatewayBrowserClient {
     const retry =
       connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
         ? this.pendingDeviceTokenRetry
-        : !isNonRecoverableConnectError(connectError);
+        : !shouldPauseGatewayReconnect({
+            details: connectError?.details,
+            protocolMismatchIsTerminal: true,
+          });
     return { retry, notify: true, pendingError: error };
   }
 

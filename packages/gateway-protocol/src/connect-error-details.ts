@@ -55,12 +55,6 @@ export const ConnectErrorDetailCodes = {
 type ConnectErrorDetailCode =
   (typeof ConnectErrorDetailCodes)[keyof typeof ConnectErrorDetailCodes];
 
-export type ControlUiBuildMismatchDetails = {
-  code: typeof ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH;
-  gatewayBuildId: string;
-  reloadRequired: true;
-};
-
 /** Pairing-specific reasons clients can display and use for reconnect policy. */
 const ConnectPairingRequiredReasons = {
   NOT_PAIRED: "not-paired",
@@ -237,15 +231,8 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
 }
 
 /** Read the exact target artifact from an untrusted reload-required rejection. */
-export function readControlUiBuildMismatchDetails(
-  details: unknown,
-): ControlUiBuildMismatchDetails | null {
-  if (
-    readConnectErrorDetailCode(details) !== ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH ||
-    !details ||
-    typeof details !== "object" ||
-    Array.isArray(details)
-  ) {
+export function readControlUiBuildMismatchId(details: unknown): string | null {
+  if (readConnectErrorDetailCode(details) !== ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
     return null;
   }
   const raw = details as { gatewayBuildId?: unknown; reloadRequired?: unknown };
@@ -253,11 +240,7 @@ export function readControlUiBuildMismatchDetails(
   if (!gatewayBuildId || gatewayBuildId.length > 96 || raw.reloadRequired !== true) {
     return null;
   }
-  return {
-    code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-    gatewayBuildId,
-    reloadRequired: true,
-  };
+  return gatewayBuildId;
 }
 
 /** Extracts normalized retry advice from untrusted connect-error details. */
