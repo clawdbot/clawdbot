@@ -90,31 +90,39 @@ jobs:
       - name: Build Android APK
         run: |
           set -euo pipefail
-      
+
           mkdir -p dist
-      
+
           cd apps/android
           ./gradlew :app:assembleThirdPartyRelease
           cd "$GITHUB_WORKSPACE"
-      
-          apk_path=$(
+
+          mapfile -t apk_files < <(
             find apps/android/app/build/outputs/apk \
               -type f \
-              -path "*/thirdParty/release/*.apk"
+              -path "*/thirdParty/release/*.apk" \
+              -print
           )
-      
-          test -n "$apk_path"
+
+          if [[ "${#apk_files[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one third-party release APK, found ${#apk_files[@]}"
+            printf '%s\n' "${apk_files[@]}"
+            exit 1
+          fi
+
+          apk_path="${apk_files[0]}"
           test -s "$apk_path"
-      
+
           echo "APK found: $apk_path"
-      
           cp "$apk_path" dist/OpenClaw-Android.apk
-      
-          apksigner verify --print-certs dist/OpenClaw-Android.apk
-      
+
+          apksigner verify --verbose --print-certs \
+            dist/OpenClaw-Android.apk
+
           (
             cd dist
-            sha256sum OpenClaw-Android.apk > OpenClaw-Android-SHA256SUMS.txt
+            sha256sum OpenClaw-Android.apk \
+              > OpenClaw-Android-SHA256SUMS.txt
           )
 
       - name: Upload Signed Android APK
