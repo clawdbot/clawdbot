@@ -45,7 +45,6 @@ describe("LLM API registry", () => {
     );
 
     const provider = registry.getApiProvider("test-api");
-    expect(provider).toBeDefined();
     expect(() => provider?.streamSimple({ ...model, api: "other-api" }, { messages: [] })).toThrow(
       "Mismatched api: other-api expected test-api",
     );

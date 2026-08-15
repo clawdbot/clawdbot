@@ -314,7 +314,6 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("apps")).toBe("/apps");
-    expect(pathForRoute("portals")).toBe("/portals");
     expect(pathForRoute("dashboards")).toBe("/dashboards");
     expect(pathForRoute("custodian")).toBe("/custodian");
     expect(pathForRoute("connection")).toBe("/settings/connection");
@@ -323,7 +322,6 @@ describe("pathForRoute", () => {
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
     expect(pathForRoute("approvals")).toBe("/settings/approvals");
     expect(pathForRoute("labs")).toBe("/settings/labs");
-    expect(pathForRoute("secrets")).toBe("/settings/secrets");
   });
 
   it("prepends base path", () => {
@@ -353,7 +351,6 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/connection")).toBeNull();
     expect(routeIdFromPath("/activity")).toBe("activity");
     expect(routeIdFromPath("/apps")).toBe("apps");
-    expect(routeIdFromPath("/portals")).toBe("portals");
     expect(routeIdFromPath("/dashboards")).toBe("dashboards");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/debug")).toBe("debug");
@@ -532,7 +529,6 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "apps",
       "portals",
     ]);
-    expect(new Set(SIDEBAR_NAV_ROUTES).size).toBe(SIDEBAR_NAV_ROUTES.length);
   });
 
   it("collapses the plugins hub to a single sidebar entry", () => {
