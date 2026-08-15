@@ -74,6 +74,7 @@ export async function runEmbeddedAttempt(
     resolvedWorkspace,
     sandbox,
     sandboxSessionKey,
+    sessionPermissionPolicy,
     sessionAgentId,
   } = await measureEmbeddedAgentPreparation(
     "attempt.setup",
@@ -210,6 +211,7 @@ export async function runEmbeddedAttempt(
           runTrace,
           sandbox,
           sandboxSessionKey,
+          sessionPermissionPolicy,
           sessionAgentId,
           skillUsagePaths,
           skillsSnapshot: skillsSnapshotForRun,

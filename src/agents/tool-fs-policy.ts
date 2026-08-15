@@ -4,18 +4,38 @@
  * Combines global and agent fs/tool policy into workspace-only and root-expansion decisions.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecMode } from "../infra/exec-approvals.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
-import type { ToolFsPolicy } from "./tool-fs-policy.types.js";
+import type { PreparedSessionPermissionPolicy, ToolFsPolicy } from "./tool-fs-policy.types.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
-export type { ToolFsPolicy } from "./tool-fs-policy.types.js";
+export type { PreparedSessionPermissionPolicy, ToolFsPolicy } from "./tool-fs-policy.types.js";
 
-export function createToolFsPolicy(params: { workspaceOnly?: boolean }): ToolFsPolicy {
+export function createToolFsPolicy(params: {
+  workspaceOnly?: boolean;
+  root?: string;
+}): ToolFsPolicy {
   return {
     workspaceOnly: params.workspaceOnly === true,
+    ...(params.root ? { root: params.root } : {}),
   };
+}
+
+export function resolveSessionPermissionExecMode(
+  policy: PreparedSessionPermissionPolicy,
+): ExecMode {
+  switch (policy.mode) {
+    case "read-only":
+      return "deny";
+    case "guarded":
+      return "ask";
+    case "workspace":
+      return "auto";
+    case "full":
+      return "full";
+  }
 }
 
 export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: string }): {

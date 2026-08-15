@@ -96,9 +96,11 @@ type AttemptWorkspaceParams = Pick<
   | "config"
   | "cwd"
   | "execOverrides"
+  | "permissionMode"
   | "sandboxSessionKey"
   | "sessionId"
   | "sessionKey"
+  | "sessionRoot"
   | "skillWorkshopCollectionReconcile"
   | "skillsSnapshot"
   | "workspaceDir"
@@ -124,6 +126,13 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  if (params.permissionMode && !params.sessionRoot) {
+    throw new Error("session permission mode requires a recorded session root");
+  }
+  const sessionPermissionPolicy =
+    params.permissionMode && params.sessionRoot
+      ? { root: params.sessionRoot, mode: params.permissionMode }
+      : undefined;
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
     throw new Error(
       "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
@@ -144,6 +153,7 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     }),
     effectiveWorkspace,
     resolvedWorkspace,
+    sessionPermissionPolicy,
     sandbox,
     sandboxSessionKey,
     sessionAgentId,

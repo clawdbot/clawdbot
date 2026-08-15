@@ -8,7 +8,6 @@ import {
   createSandboxedReadTool,
   createSandboxedWriteTool,
   wrapReadToolWithSkillContent,
-  wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -70,9 +69,11 @@ function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undef
 
 type CoreCodingToolsOptions = {
   codingRoot: string;
+  containmentRoot: string;
   includeBaseCodingTools: boolean;
   includeShellTools: boolean;
   workspaceOnly: boolean;
+  readOnly: boolean;
   sandbox?: SandboxContext;
   skillsSnapshot?: SkillSnapshot;
   modelContextWindowTokens?: number;
@@ -138,7 +139,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       const guarded = options.workspaceOnly
         ? wrapToolWorkspaceRootGuardWithOptions(
             wrapped,
-            sandboxRoot ?? options.codingRoot,
+            sandboxRoot ?? options.containmentRoot,
             sandboxRoot
               ? {
                   additionalContainerMounts: readOnlySandboxReadMounts(
@@ -147,7 +148,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                   ),
                   containerWorkdir: sandbox.containerWorkdir,
                 }
-              : { additionalRoots: skillReadRoots },
+              : { additionalRoots: skillReadRoots, resolutionCwd: options.codingRoot },
           )
         : wrapped;
       base.push(
@@ -157,29 +158,39 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         }),
       );
     }
-    if (!sandboxRoot && baseToolNames.has("edit")) {
+    if (!options.readOnly && !sandboxRoot && baseToolNames.has("edit")) {
       const edit = createHostWorkspaceEditTool(options.codingRoot, {
+        containmentRoot: options.containmentRoot,
         workspaceOnly: options.workspaceOnly,
         memoryWriteProvenance: options.memoryWriteProvenance,
         createTool: options.baseToolFactories?.createEditTool,
       });
       base.push(
-        options.workspaceOnly ? wrapToolWorkspaceRootGuard(edit, options.codingRoot) : edit,
+        options.workspaceOnly
+          ? wrapToolWorkspaceRootGuardWithOptions(edit, options.containmentRoot, {
+              resolutionCwd: options.codingRoot,
+            })
+          : edit,
       );
     }
-    if (!sandboxRoot && baseToolNames.has("write")) {
+    if (!options.readOnly && !sandboxRoot && baseToolNames.has("write")) {
       const write = createHostWorkspaceWriteTool(options.codingRoot, {
+        containmentRoot: options.containmentRoot,
         workspaceOnly: options.workspaceOnly,
         memoryWriteProvenance: options.memoryWriteProvenance,
         createTool: options.baseToolFactories?.createWriteTool,
       });
       base.push(
-        options.workspaceOnly ? wrapToolWorkspaceRootGuard(write, options.codingRoot) : write,
+        options.workspaceOnly
+          ? wrapToolWorkspaceRootGuardWithOptions(write, options.containmentRoot, {
+              resolutionCwd: options.codingRoot,
+            })
+          : write,
       );
     }
   }
 
-  if (options.includeBaseCodingTools && sandboxRoot && allowWorkspaceWrites) {
+  if (options.includeBaseCodingTools && !options.readOnly && sandboxRoot && allowWorkspaceWrites) {
     const toolOptions = {
       root: sandboxRoot,
       bridge: sandboxFsBridge!,
@@ -214,6 +225,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       shell.push(
         createApplyPatchTool({
           cwd: options.codingRoot,
+          root: options.containmentRoot,
           sandbox:
             sandboxRoot && allowWorkspaceWrites
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
