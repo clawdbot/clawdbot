@@ -420,8 +420,7 @@ node does not advertise this command yet, so its rows remain view-only.
 
 ### Host OpenClaw sessions
 
-A headless node host can separately opt into full OpenClaw session hosting from
-its local installation:
+A headless node host can separately opt into full OpenClaw session hosting:
 
 ```json5
 {
@@ -431,13 +430,20 @@ its local installation:
 }
 ```
 
-Restart the node host after enabling this setting. At startup it freezes the
-exact OpenClaw version, worker-bundle hash, and worker protocol features of its
-own installation in the connection handshake, then repeats that build in its
-live runner inventory. The Gateway reports prepared session-host eligibility
-only while those declarations match, and provisioning requires the node and
-Gateway versions to match exactly. If they differ, update the node before
-retrying.
+Restart the node host after enabling this setting. On the first session dispatch
+for a Gateway build, the node downloads one sealed worker artifact from that
+paired Gateway, verifies its exact content hash, and publishes it atomically
+under the Gateway-namespaced node-host bundle root. The artifact already
+contains its complete JavaScript dependency closure; the node does not install
+packages or execute lifecycle scripts. Later turns reuse the immutable artifact
+while its receipt still matches the Gateway's current build.
+
+Node hosts must support the current private worker-supervisor dialect before
+they can host sessions. An older connected host remains visible but disabled in
+the session picker. Update OpenClaw on that device and reconnect it; for a
+headless node, run `openclaw update` followed by `openclaw node restart`. The
+Gateway does not fall back to the node's local OpenClaw package or an older
+supervisor dialect.
 
 This setting enables supervised session turns on the paired device, including
 Gateway-owned workspace transfer and result reconciliation. Each node runs at

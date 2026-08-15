@@ -120,7 +120,7 @@ OpenClaw derives one canonical `cbx_...` lease ID from the durable provision ope
 
 ### Install channels
 
-- **`bundle`** ships one dedicated worker executable whose complete JavaScript dependency closure is bundled and content-hashed by the Gateway. The box verifies and publishes those exact bytes without installing dependencies. This is how you run a dev build on a worker.
+- **`bundle`** ships one dedicated worker executable whose complete JavaScript dependency closure is bundled and content-hashed by the Gateway. It does not ship the normal OpenClaw package manifest or a dependency-install recipe. The box verifies and publishes those exact bytes without installing packages or running lifecycle scripts. This is how you run a dev build on a worker.
 - **`npm`** proves the release exists on the public registry, pins its SHA-512 integrity, and extracts the same dedicated worker executable from `openclaw@<version>` without materializing the package's dependency tree.
 
 ### Verify the profile
