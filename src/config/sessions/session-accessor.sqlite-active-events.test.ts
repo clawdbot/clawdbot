@@ -154,6 +154,162 @@ describe("SQLite active transcript event projection", () => {
     });
   });
 
+  it("stops counting discarded transcript bytes after a reset", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "discarded-old",
+          parentId: null,
+          message: { role: "user", content: `discarded ${"x".repeat(20_000)}` },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "discarded-old",
+      timestamp: "2026-08-15T00:00:00.000Z",
+      reason: "new",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-reset",
+          parentId: "reset-boundary",
+          message: { role: "user", content: "fresh turn" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    expect(readSessionTranscriptActiveStats(scope)).toMatchObject({ eventCount: 1 });
+    expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeLessThan(1_000);
+  });
+
+  it("counts paired reset tool results without counting discarded orphan results", async () => {
+    const assistantMessage = {
+      role: "assistant" as const,
+      api: "openai-responses" as const,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      content: [{ type: "toolCall" as const, id: "call-1", name: "read", arguments: {} }],
+      stopReason: "toolUse" as const,
+      timestamp: Date.parse("2026-08-15T00:00:00.000Z"),
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "discarded-old",
+          parentId: null,
+          message: { role: "user", content: `discarded ${"x".repeat(12_000)}` },
+        },
+        {
+          eventId: "kept-user",
+          parentId: "discarded-old",
+          message: { role: "user", content: "kept question" },
+        },
+        { eventId: "kept-assistant", parentId: "kept-user", message: assistantMessage },
+        {
+          eventId: "kept-result",
+          parentId: "kept-assistant",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: `paired ${"p".repeat(3_000)}` }],
+            isError: false,
+            timestamp: Date.parse("2026-08-15T00:00:01.000Z"),
+          },
+        },
+        {
+          eventId: "discarded-orphan",
+          parentId: "kept-result",
+          message: {
+            role: "toolResult",
+            toolCallId: "orphan-call",
+            toolName: "read",
+            content: [{ type: "text", text: `orphan ${"o".repeat(20_000)}` }],
+            isError: false,
+            timestamp: Date.parse("2026-08-15T00:00:02.000Z"),
+          },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "discarded-orphan",
+      timestamp: "2026-08-15T00:00:03.000Z",
+      reason: "new",
+      firstKeptEntryId: "kept-user",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-reset",
+          parentId: "reset-boundary",
+          message: { role: "user", content: "fresh turn" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    const stats = readSessionTranscriptActiveStats(scope);
+    expect(stats.eventCount).toBe(4);
+    expect(stats.sizeBytes).toBeGreaterThan(3_000);
+    expect(stats.sizeBytes).toBeLessThan(8_000);
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "second-post-reset",
+          parentId: "post-reset",
+          message: { role: "assistant", content: "fresh answer" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(5);
+      expect(parseSpy).not.toHaveBeenCalled();
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
+  it("keeps counting genuinely oversized post-reset events", async () => {
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: null,
+      timestamp: "2026-08-15T00:00:00.000Z",
+      reason: "new",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-reset",
+          parentId: "reset-boundary",
+          message: { role: "user", content: "x".repeat(20_000) },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeGreaterThan(20_000);
+  });
+
   it("defers mixed legacy and canonical rebuilds off request stacks", async () => {
     await persistSessionTranscriptTurn(scope, {
       messages: [

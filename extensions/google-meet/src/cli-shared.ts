@@ -11,11 +11,7 @@ import {
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import prettyMilliseconds from "pretty-ms";
 import type { GoogleMeetCalendarLookupResult } from "./calendar.js";
-import {
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  type GoogleMeetModeInput,
-  type GoogleMeetTransport,
-} from "./config.js";
+import type { GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export type JoinOptions = {
@@ -34,13 +30,6 @@ export type OAuthLoginOptions = {
   manual?: boolean;
   json?: boolean;
   timeoutSec?: string;
-};
-
-export const testing = {
-  parsePositiveNumber,
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  resolveGoogleMeetGatewayTimeoutMs,
-  resolveGoogleMeetOAuthCallbackTimeoutMs,
 };
 
 export type ResolveSpaceOptions = {

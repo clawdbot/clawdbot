@@ -282,6 +282,47 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
   });
 
+  it("classifies exact arguments before the policy handler and transport", async () => {
+    const policy = createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => {
+      expect(ctx.risk).toEqual({ level: "high", family: "fixture_mutation" });
+      return ctx.invokeNode();
+    });
+    policy.policy.classifyRisk = ({ command, params }) => {
+      expect({ command, params }).toEqual({ command: DEMO_COMMAND, params: DEMO_PARAMS });
+      return { level: "high", family: "fixture_mutation" };
+    };
+    setDangerousDemoCommandRegistry([policy]);
+    const { context, invoke } = createContext();
+
+    await expect(invokeDemoPolicy(context)).resolves.toMatchObject({ ok: true });
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when argument risk classification throws or returns invalid metadata", async () => {
+    for (const classifyRisk of [
+      () => {
+        throw new Error("hostile argument text");
+      },
+      () => ({ level: "high" as const, family: "contains spaces" }),
+    ]) {
+      const policy = createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) =>
+        ctx.invokeNode(),
+      );
+      policy.policy.classifyRisk = classifyRisk;
+      setDangerousDemoCommandRegistry([policy]);
+      const { context, invoke } = createContext();
+
+      await expect(invokeDemoPolicy(context)).resolves.toEqual({
+        ok: false,
+        code: "PLUGIN_POLICY_RISK_CLASSIFICATION_FAILED",
+        message: `node.invoke ${DEMO_COMMAND} arguments could not be classified by plugin ${DEMO_PLUGIN_ID}`,
+        details: { nodeCommandDispatched: false },
+      });
+      expect(invoke).not.toHaveBeenCalled();
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
   it.each([5_000, 0])(
     "bounds plugin timeout override %i by the remaining invocation deadline",
     async (overrideTimeoutMs) => {

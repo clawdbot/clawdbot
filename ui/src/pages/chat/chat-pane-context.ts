@@ -224,6 +224,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
+      this.retireHeaderSessionMutations();
       invalidateChatAvatarCache(state);
       invalidateAssistantIdentityCache(state.client);
       state.assistantIdentityRequestVersion += 1;
@@ -357,11 +358,18 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       const startupGeneration = this.connectionGeneration;
       const startupSessionKey = state.sessionKey;
       const agentsListBeforeStartup = this.context.agents.state.agentsList;
+      const rosterRevisionBeforeStartup = this.context.agents.state.listRevision;
       const clientIsCurrent = () =>
         this.connectionGeneration === startupGeneration &&
         this.connectedClient === startupClient &&
         state.client === startupClient &&
         state.connected;
+      state.onAgentsList = (agentsList, client) => {
+        const ownsRoster =
+          clientIsCurrent() &&
+          this.context.agents.adoptList(agentsList, client, rosterRevisionBeforeStartup);
+        return ownsRoster;
+      };
       const finishStartup = async () => {
         if (!clientIsCurrent()) {
           return;
@@ -402,6 +410,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       });
       this.deferSessionHydrationUntilTranscript(startupSessionKey, historyRefresh);
       void historyRefresh.finally(() => {
+        if (clientIsCurrent()) {
+          state.onAgentsList = undefined;
+        }
         void finishStartup();
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());

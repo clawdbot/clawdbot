@@ -19,6 +19,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
+import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
@@ -303,10 +304,15 @@ function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.systemPromptReport,
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
-  const scheduledToolPolicy = resolveCronScheduledToolPolicy({
+  const validatedScheduledToolPolicy = resolveCronScheduledToolPolicy({
     toolsAllow: params.agentPayload?.toolsAllow,
     scheduledToolPolicy: params.job.scheduledToolPolicy,
     owner: params.job.owner,
+  });
+  const scheduledToolPolicy = resolveScheduledToolPolicyContext({
+    toolsAllow: params.agentPayload?.toolsAllow,
+    scheduledToolPolicy: validatedScheduledToolPolicy,
+    callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
   });
   const { sourceDelivery } = params;
   const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;

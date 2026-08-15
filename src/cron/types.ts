@@ -4,7 +4,10 @@ import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
-import type { CronScheduledToolPolicy } from "./scheduled-tool-policy.js";
+import type {
+  CronScheduledToolCallerOrigin,
+  CronScheduledToolPolicy,
+} from "./scheduled-tool-policy.js";
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
@@ -491,6 +494,8 @@ export type CronJob = CronJobBase<
 export type CronToolsAllowProvenance = {
   version: 1;
   source: "final-executable-surface";
+  /** Store-private creator origin; missing legacy facts normalize to unknown. */
+  callerOrigin?: CronScheduledToolCallerOrigin;
 };
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */

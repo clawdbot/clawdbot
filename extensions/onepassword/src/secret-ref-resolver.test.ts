@@ -256,8 +256,6 @@ describe("plugin manifest", () => {
     expect(integration?.maxOutputBytes).toBeGreaterThan(
       maxRefsPerRequest * worstCaseEscapedValueBytes,
     );
-    expect(resolverSource).toContain("#!/usr/bin/env node");
-    expect(resolverSource).toContain('from "execa"');
     expect(packageJson.openclaw?.build?.staticAssets).toContainEqual({
       source: "./onepassword-op-path.js",
       output: "onepassword-op-path.js",

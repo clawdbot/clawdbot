@@ -58,6 +58,11 @@ function makeParamsWithToolsAllow(toolsAllow: string[]) {
         ownerSessionKey: "agent:main:whatsapp:group:team",
         ownerAccountId: "default",
       },
+      toolsAllowProvenance: {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "external", channel: "whatsapp" },
+      },
       payload: {
         kind: "agentTurn",
         message: "check allowed tools",
@@ -98,6 +103,7 @@ function requireEmbeddedAgentCall(): {
     mode: "account";
     ownerSessionKey: string;
     ownerAccountId: string;
+    ownerOrigin: { kind: "external"; channel: string } | { kind: "local" } | { kind: "unknown" };
   };
 } {
   const call = runEmbeddedAgentMock.mock.calls[0]?.[0] as
@@ -109,6 +115,10 @@ function requireEmbeddedAgentCall(): {
           mode: "account";
           ownerSessionKey: string;
           ownerAccountId: string;
+          ownerOrigin:
+            | { kind: "external"; channel: string }
+            | { kind: "local" }
+            | { kind: "unknown" };
         };
       }
     | undefined;
@@ -190,6 +200,30 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
         mode: "account",
         ownerSessionKey: "agent:main:whatsapp:group:team",
         ownerAccountId: "default",
+        ownerOrigin: { kind: "external", channel: "whatsapp" },
+      });
+    },
+  );
+
+  it(
+    "preserves explicit local scheduled-tool provenance",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithDefaultToolsAllow(["transcripts"]);
+      (params.job as { toolsAllowProvenance?: unknown }).toolsAllowProvenance = {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "local" },
+      };
+
+      await runCronIsolatedAgentTurn(params);
+
+      expect(requireEmbeddedAgentCall().scheduledToolPolicy).toEqual({
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:whatsapp:group:team",
+        ownerAccountId: "default",
+        ownerOrigin: { kind: "local" },
       });
     },
   );

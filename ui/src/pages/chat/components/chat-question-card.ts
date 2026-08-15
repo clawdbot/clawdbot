@@ -38,7 +38,6 @@ type QuestionPanelProps = {
 };
 
 type GatewayQuestionPanelOptions = {
-  nowMs: number;
   onChange?: () => void;
   onSubmit?: (answers: Record<string, string[]>) => void | Promise<void>;
   onSkip?: () => void | Promise<void>;

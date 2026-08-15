@@ -119,6 +119,13 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.activeChanged(value);
   }
   protected activeChanged(_active: boolean): void {}
+  // Call wherever connectionGeneration itself advances (reconnect, capability
+  // replacement, pane teardown) so a header confirm dialog open across that
+  // boundary dismisses itself instead of confirming into a retired scope.
+  protected retireHeaderSessionMutations(): void {
+    this.headerSessionMutationAbortController.abort();
+    this.headerSessionMutationAbortController = new AbortController();
+  }
   @property({ attribute: false }) draft?: string;
   @property({ attribute: false }) focusComposer = false;
   @property({ attribute: false }) routeFace: BoardFace = "chat";
@@ -171,6 +178,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected boardProviderLease: (BoardProviderLease & { sessionKey: string }) | undefined;
   protected boardProviderLifecycleConnected = false;
   protected connectionGeneration = 0;
+  // Owns the abort signal handed to header-scoped destructive confirm dialogs.
+  // Retiring it alongside every connectionGeneration bump lets a dialog open
+  // across a reconnect or pane teardown dismiss itself, matching
+  // SessionDataController's own epoch-scoped controller for the sidebar.
+  protected headerSessionMutationAbortController = new AbortController();
   @litState() protected headerEditing = false;
   @litState() protected headerRenameValue = "";
   @litState() protected headerPlatform: string | null = null;

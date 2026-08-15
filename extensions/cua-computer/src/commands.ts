@@ -84,7 +84,6 @@ type CuaComputerProviderOptions = {
   imageProcessor?: ImageProcessor;
   setInterval?: typeof setInterval;
   clearInterval?: typeof clearInterval;
-  resourceRoot?: string;
 };
 
 function resolveMacOsMcpEndpoint(
@@ -507,7 +506,7 @@ export function createCuaComputerProvider(
         throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
       }
       const executionDriver = options.driver ?? createDriver();
-      const resources = createLazyCuaExecutionResources({ rootDir: options.resourceRoot });
+      const resources = createLazyCuaExecutionResources();
       const executionState = { resources, recording: {} };
       const queue = new PromiseQueue();
       const frameState: CuaFrameState = { generation: executionDriver.generation };

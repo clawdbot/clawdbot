@@ -7,18 +7,15 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CodexAppServerRpcError } from "./app-server/client.js";
-import type {
-  CodexThread,
-  CodexThreadTurnsListParams,
-  CodexThreadTurnsListResponse,
-  CodexTurn,
-  CodexUserInput,
-} from "./app-server/protocol.js";
+import type { CodexTurn, CodexUserInput } from "./app-server/protocol.js";
 import {
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
 } from "./app-server/session-binding.js";
-import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
+import type {
+  CodexSessionCatalogControl,
+  CodexSessionCatalogControlFactory,
+} from "./session-catalog-types.js";
 
 const CODEX_UPSTREAM_TURN_LIMIT = 100;
 // codex-rs app-server thread/read maps a gone rollout to JSON-RPC invalid_request
@@ -36,12 +33,10 @@ function isCodexThreadGoneError(error: unknown): boolean {
   );
 }
 
-type CodexUpstreamControl = {
-  connectionFingerprint?: string;
-  withPinnedConnection<T>(run: (control: CodexUpstreamControl) => Promise<T>): Promise<T>;
-  listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
-};
+type CodexUpstreamControl = Pick<
+  CodexSessionCatalogControl,
+  "connectionFingerprint" | "listTurnPage" | "readThread" | "withPinnedConnection"
+>;
 
 type CodexUpstreamMarker = {
   turnId: string | null;
@@ -204,27 +199,55 @@ async function checkCodexUpstreamActivity(
 export function createChecker(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
-  control: CodexSessionCatalogControl;
+  control: CodexSessionCatalogControlFactory;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
-  return async (probes) =>
-    await checkCodexUpstreamActivity(probes, params.control, async (probe) => {
-      const config = params.getRuntimeConfig();
-      const entry = params.api.runtime.agent.session.getSessionEntry({
-        agentId: probe.agentId,
-        sessionKey: probe.sessionKey,
-        readConsistency: "latest",
-      });
-      const sessionId = entry?.sessionId?.trim();
-      if (!sessionId) {
-        return probe.threadId;
-      }
-      const binding = await params.bindingStore.read(
-        sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
-      );
-      return binding?.connectionScope === "supervision" &&
-        binding.supervisionSourceThreadId === probe.threadId
-        ? binding.threadId
-        : probe.threadId;
+  const resolveThreadId = async (probe: SessionUpstreamProbe) => {
+    const config = params.getRuntimeConfig();
+    const entry = params.api.runtime.agent.session.getSessionEntry({
+      agentId: probe.agentId,
+      sessionKey: probe.sessionKey,
+      readConsistency: "latest",
     });
+    const sessionId = entry?.sessionId?.trim();
+    if (!sessionId) {
+      return probe.threadId;
+    }
+    const binding = await params.bindingStore.read(
+      sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
+    );
+    return binding?.connectionScope === "supervision" &&
+      binding.supervisionSourceThreadId === probe.threadId
+      ? binding.threadId
+      : probe.threadId;
+  };
+  return async (probes) => {
+    const groups = new Map<
+      string,
+      { control: CodexSessionCatalogControl; probes: SessionUpstreamProbe[] }
+    >();
+    for (const probe of probes) {
+      const fingerprint = upstreamConnectionFingerprint(probe);
+      if (!fingerprint) {
+        continue;
+      }
+      const control = params.control.forUpstream(probe.agentId, fingerprint);
+      if (!control) {
+        continue;
+      }
+      const key = `${probe.agentId}\0${fingerprint}`;
+      const group = groups.get(key) ?? {
+        control,
+        probes: [],
+      };
+      group.probes.push(probe);
+      groups.set(key, group);
+    }
+    const batches = await Promise.all(
+      [...groups.values()].map((group) =>
+        checkCodexUpstreamActivity(group.probes, group.control, resolveThreadId),
+      ),
+    );
+    return batches.flat();
+  };
 }

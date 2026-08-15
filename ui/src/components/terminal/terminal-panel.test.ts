@@ -374,7 +374,11 @@ describe("OpenClawTerminalPanel", () => {
     document.body.append(panel);
     const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
 
-    panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:terminal-toggle", {
+        detail: { agentId: "research", catalog },
+      }),
+    );
 
     await panel.updateComplete;
     expect(panel.renderRoot.querySelector(".tp")?.classList.contains("tp--main")).toBe(true);
@@ -665,13 +669,17 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => expect(createGhosttyTerminalMock).toHaveBeenCalledOnce());
     const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
 
-    panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:terminal-toggle", {
+        detail: { agentId: "research", catalog },
+      }),
+    );
     firstBoot.resolve(createTerminalController());
 
     await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.open",
-        params: { agentId: undefined, cols: 100, rows: 30, catalog },
+        params: { agentId: "research", cols: 100, rows: 30, catalog },
       });
     });
     expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(2);

@@ -34,7 +34,7 @@ import type {
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
-let providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
+const providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
 const defaultProviderRuntimePluginCache = new PluginLruCache<ProviderPlugin | null>(128);
 
 type ProviderRuntimePluginLookupParams = {
@@ -81,11 +81,6 @@ export function getModelProviderRuntimePluginHandle(
   return model
     ? (model as ModelWithProviderRuntimePluginHandle)[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]
     : undefined;
-}
-
-export function clearProviderRuntimePluginCacheForTest(): void {
-  providerRuntimePluginCache = new WeakMap();
-  defaultProviderRuntimePluginCache.clear();
 }
 
 function resolveProviderRuntimePluginCacheKey(

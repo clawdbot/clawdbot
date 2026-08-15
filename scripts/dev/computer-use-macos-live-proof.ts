@@ -20,7 +20,7 @@ const { values } = parseArgs({
 
 if (values.help) {
   console.log(
-    "Usage: computer-use-macos-live-proof.ts --provider <peekaboo|cua> --window-title <title> --text <text> --artifacts <dir> [--element-label <label>]",
+    "Usage: computer-use-macos-live-proof.ts --provider <peekaboo|cua> --window-title <title> --text <text> --artifacts <dir> [--element-label <label>]\nRuns on macOS or an X11 Linux session; native Wayland is intentionally refused.",
   );
   process.exit(0);
 }
@@ -64,10 +64,7 @@ if (advertisedProvider.id !== expectedProviderId) {
     `expected provider ${expectedProviderId}, but node advertised ${advertisedProvider.id}`,
   );
 }
-const tool = createComputerTool({
-  modelHasVision: true,
-  capabilityDescriptor: selectedNode.computerUse,
-});
+const tool = createComputerTool({ modelHasVision: true });
 let callSequence = 0;
 
 async function call(action: string, fields: JsonRecord = {}): Promise<ToolResult> {
@@ -187,11 +184,29 @@ async function saveImage(name: string, result: ToolResult): Promise<string> {
   return output;
 }
 
-async function frontmostApp(): Promise<string> {
-  const script =
-    'tell application "System Events" to get name of first application process whose frontmost is true';
-  const { stdout } = await execFileAsync("/usr/bin/osascript", ["-e", script]);
-  return stdout.trim();
+type FrontmostState = { kind: "application" | "window"; name: string };
+
+async function frontmostState(): Promise<FrontmostState> {
+  if (process.platform === "darwin") {
+    const script =
+      'tell application "System Events" to get name of first application process whose frontmost is true';
+    const { stdout } = await execFileAsync("/usr/bin/osascript", ["-e", script]);
+    return { kind: "application", name: stdout.trim() };
+  }
+  if (process.platform === "linux") {
+    if (process.env.XDG_SESSION_TYPE === "wayland" || process.env.WAYLAND_DISPLAY) {
+      throw new Error("Linux live proof requires X11; native Wayland is out of scope");
+    }
+    const { stdout: windowId } = await execFileAsync("xdotool", ["getactivewindow"]);
+    const { stdout: title } = await execFileAsync("xdotool", ["getwindowname", windowId.trim()]);
+    return { kind: "window", name: title.trim() };
+  }
+  throw new Error(`frontmost-window proof is unsupported on ${process.platform}`);
+}
+
+function isTargetFrontmost(frontmost: FrontmostState, target: JsonRecord): boolean {
+  const targetIdentity = frontmost.kind === "application" ? target.appName : target.title;
+  return typeof targetIdentity === "string" && frontmost.name === targetIdentity;
 }
 
 function cursor(result: ToolResult): { x: unknown; y: unknown } {
@@ -257,10 +272,10 @@ const targetFields = {
   observationId,
   deliveryMode: "background",
 };
-const frontmostBefore = await frontmostApp();
-if (frontmostBefore === target.appName) {
+const frontmostBefore = await frontmostState();
+if (isTargetFrontmost(frontmostBefore, target)) {
   throw new Error(
-    `target app ${stringValue(target.appName) || "<unknown>"} is frontmost; foreground another app and retry`,
+    `target ${frontmostBefore.kind} ${frontmostBefore.name || "<unknown>"} is frontmost; foreground another window and retry`,
   );
 }
 const cursorBeforeResult = await call("get_cursor_position");
@@ -282,7 +297,7 @@ if (typed.kind === "error" || wireResult(typed.result).effect !== "confirmed") {
 }
 
 const cursorAfterResult = await call("get_cursor_position");
-const frontmostAfter = await frontmostApp();
+const frontmostAfter = await frontmostState();
 const after = await call("get_window_state", { windowRef: target.windowRef });
 const afterImage = await saveImage("window-after", after);
 const afterElement = selectElement(after);
@@ -291,7 +306,8 @@ const cursorAfter = cursor(cursorAfterResult);
 const finalOutcome = confirmation ?? typed;
 
 const evidence = {
-  route: "agent computer tool -> Gateway node.invoke -> paired Mac node -> selected provider",
+  route: "agent computer tool -> Gateway node.invoke -> paired node -> selected provider",
+  platform: process.platform,
   provider: { expected: expectedProviderId, advertised: advertisedProvider },
   screenshot: resultText(screenshot),
   target: {
@@ -317,8 +333,9 @@ const evidence = {
   },
   artifacts: { beforeImage, afterImage },
   assertions: {
-    targetWasNotFrontmost: frontmostBefore !== target.appName,
-    frontmostUnchanged: frontmostBefore === frontmostAfter,
+    targetWasNotFrontmost: !isTargetFrontmost(frontmostBefore, target),
+    frontmostUnchanged:
+      frontmostBefore.kind === frontmostAfter.kind && frontmostBefore.name === frontmostAfter.name,
     cursorUnchanged: cursorBefore.x === cursorAfter.x && cursorBefore.y === cursorAfter.y,
     targetContentChanged: beforeElement.value !== afterElement.value,
     confirmedEffectOrStructuredRefusal: structuredOutcome(finalOutcome),

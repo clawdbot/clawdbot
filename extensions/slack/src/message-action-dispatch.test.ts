@@ -738,6 +738,32 @@ describe("handleSlackMessageAction", () => {
         initialComment: "path alias",
       },
     },
+    {
+      name: "maps an upload-file caption to the upload's initial comment",
+      params: {
+        channelId: "C1",
+        media: "/tmp/chart.png",
+        caption: "chart attached",
+      },
+      expected: {
+        filePath: "/tmp/chart.png",
+        initialComment: "chart attached",
+      },
+    },
+    {
+      name: "prefers an explicit upload-file initial comment over message and caption",
+      params: {
+        channelId: "C1",
+        media: "/tmp/chart.png",
+        initialComment: "",
+        message: "message text",
+        caption: "caption text",
+      },
+      expected: {
+        filePath: "/tmp/chart.png",
+        initialComment: "",
+      },
+    },
   ])("$name", async ({ params, expected }) => {
     const invoke = createInvokeSpy();
     const cfg = slackConfig();

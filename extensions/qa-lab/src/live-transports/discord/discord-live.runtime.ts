@@ -19,6 +19,7 @@ import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
+import type { DiscordTranscriptsVoiceAuthorizationRun } from "./discord-transcripts-authorization.types.js";
 
 type DiscordQaRuntimeEnv = {
   guildId: string;
@@ -44,6 +45,7 @@ export type DiscordQaScenarioRun =
   | {
       kind: "voice-autojoin";
     }
+  | DiscordTranscriptsVoiceAuthorizationRun
   | {
       kind: "status-reactions-tool-only";
       expectedSequence: string[];
@@ -368,6 +370,10 @@ function buildDiscordQaConfig(
   },
   options: {
     statusReactionsToolOnly?: boolean;
+    voiceChannelAccess?: {
+      channelId: string;
+      users: string[];
+    };
     voiceAutoJoin?: {
       channelId: string;
       guildId: string;
@@ -400,16 +406,41 @@ function buildDiscordQaConfig(
           visibleReplies: "automatic" as const,
         },
       };
-  const voiceConfig = options.voiceAutoJoin
-    ? {
-        ...baseCfg.channels?.discord?.voice,
-        enabled: true,
-        mode: "stt-tts" as const,
-        autoJoin: [options.voiceAutoJoin],
-      }
-    : undefined;
+  const voiceConfig =
+    options.voiceAutoJoin || options.voiceChannelAccess
+      ? {
+          ...baseCfg.channels?.discord?.voice,
+          enabled: true,
+          mode: "stt-tts" as const,
+          ...(options.voiceAutoJoin ? { autoJoin: [options.voiceAutoJoin] } : { autoJoin: [] }),
+        }
+      : undefined;
   return {
     ...baseCfg,
+    ...(options.voiceChannelAccess
+      ? {
+          agents: {
+            ...baseCfg.agents,
+            entries: {
+              ...baseCfg.agents?.entries,
+              qa: {
+                ...baseCfg.agents?.entries?.qa,
+                tools: {
+                  ...baseCfg.agents?.entries?.qa?.tools,
+                  alsoAllow: uniqueStrings([
+                    ...(baseCfg.agents?.entries?.qa?.tools?.alsoAllow ?? []),
+                    "transcripts",
+                  ]),
+                },
+              },
+            },
+          },
+          tools: {
+            ...baseCfg.tools,
+            alsoAllow: uniqueStrings([...(baseCfg.tools?.alsoAllow ?? []), "transcripts"]),
+          },
+        }
+      : {}),
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
@@ -438,6 +469,14 @@ function buildDiscordQaConfig(
                     requireMention: !options.statusReactionsToolOnly,
                     users: [params.driverBotId],
                   },
+                  ...(options.voiceChannelAccess
+                    ? {
+                        [options.voiceChannelAccess.channelId]: {
+                          enabled: true,
+                          users: options.voiceChannelAccess.users,
+                        },
+                      }
+                    : {}),
                 },
               },
             },

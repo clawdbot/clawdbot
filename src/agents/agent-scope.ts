@@ -309,7 +309,7 @@ export { resolveAgentIdFromSessionKey };
 export function resolveSessionAgentIds(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
-  agentId?: string;
+  agentId?: string | undefined;
   fallbackAgentId?: string;
 }): {
   defaultAgentId: string;

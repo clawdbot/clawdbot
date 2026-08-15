@@ -37,6 +37,7 @@ import {
 } from "../auto-reply/thinking.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
@@ -665,7 +666,9 @@ export async function projectSessionPatchResult(params: {
   });
   return {
     ok: true,
-    path: params.storePath,
+    path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
+      agentId: params.targetAgentId,
+    }).path,
     key: params.canonicalKey,
     entry: params.entry,
     resolved: {

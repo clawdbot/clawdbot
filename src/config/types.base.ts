@@ -251,6 +251,8 @@ export type SessionMaintenanceConfig = {
   pruneAfter?: string | number;
   /** Maximum total session entries to keep when protection permits. Default: 500. */
   maxEntries?: number;
+  /** Protect interactive sessions active within this duration. Default and false: disabled. */
+  preserveRecent?: string | number | false;
   /**
    * Age-based retention for archived transcripts (`*.reset.<timestamp>` and
    * `*.deleted.<timestamp>`). Default and `false`: keep archives until the

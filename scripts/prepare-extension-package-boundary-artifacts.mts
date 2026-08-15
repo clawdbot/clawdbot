@@ -164,6 +164,8 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   // provider-auth re-exports these signatures into generated SDK declarations.
   "src/agents/cli-credentials.ts",
   "src/plugins/provider-runtime-model.types.ts",
+  // session-catalog re-exports provider params into generated SDK declarations.
+  "src/plugins/session-catalog.ts",
   "src/plugins/types.ts",
   "src/auto-reply",
   // doctor-repair-runtime re-exports the state migration contract into the SDK.

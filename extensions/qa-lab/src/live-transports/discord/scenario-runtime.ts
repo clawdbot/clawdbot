@@ -3,6 +3,7 @@ import {
   discordQaScenarioSupport,
   type DiscordQaScenarioImplementation,
 } from "./discord-live.runtime.js";
+import { runDiscordTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
 export {
@@ -13,13 +14,15 @@ export {
   discordQaThreadReplyFilepathAttachmentScenario,
   discordQaVoiceAutojoinScenario,
 } from "./discord-live.runtime.js";
+export { discordQaTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
 
 export async function runDiscordScenario(
   environment: DiscordQaScenarioEnvironment,
   implementation: DiscordQaScenarioImplementation,
 ) {
   const scenario = environment.scenario;
-  const { cfg, run, voiceChannel } = await environment.configureScenario(implementation);
+  const { cfg, configureTranscriptVoiceAccess, run, voiceChannel } =
+    await environment.configureScenario(implementation);
   if (run.kind === "application-command-registration") {
     const registered =
       await discordQaScenarioSupport.testing.assertDiscordApplicationCommandsRegistered({
@@ -42,6 +45,14 @@ export async function runDiscordScenario(
       timeoutMs: scenario.timeoutMs,
     });
     return { details: "SUT bot joined voice channel" };
+  }
+  if (run.kind === "transcripts-voice-authorization") {
+    return await runDiscordTranscriptsVoiceAuthorizationScenario(environment, {
+      cfg,
+      run,
+      voiceChannel,
+      configureTranscriptVoiceAccess,
+    });
   }
   if (run.kind === "thread-reply-filepath-attachment") {
     const result =

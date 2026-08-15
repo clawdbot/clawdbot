@@ -580,7 +580,6 @@ openclaw-chat-pane {
   max-width: min(260px, calc(100vw - 24px));
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .chat-pane__sharing-menu--capped::part(menu) {
@@ -627,17 +626,6 @@ openclaw-chat-pane {
   height: 20px;
   align-items: center;
   justify-content: center;
-}
-
-.chat-pane__sharing-channel-icon {
-  border-radius: var(--radius-full);
-  background: var(--bg-muted);
-  color: var(--muted);
-}
-
-.chat-pane__sharing-channel-icon svg {
-  width: 13px;
-  height: 13px;
 }
 
 .chat-pane__sharing-member-label {

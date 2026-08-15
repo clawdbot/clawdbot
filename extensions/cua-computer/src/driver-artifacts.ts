@@ -1,13 +1,12 @@
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import pluginManifest from "../package.json" with { type: "json" };
 import {
   inspectCuaDriverArtifacts,
   readPackageIdentity,
   type CuaDriverArtifactVerification,
 } from "./driver-artifact-verification.js";
 
-const PLUGIN_MANIFEST_PATH = fileURLToPath(new URL("../package.json", import.meta.url));
 const requireFromPlugin = createRequire(import.meta.url);
 
 function resolvePackageJson(packageName: string): string | undefined {
@@ -50,7 +49,7 @@ export function verifyInstalledCuaDriverArtifacts(): CuaDriverArtifactVerificati
     platform: process.platform,
     arch: process.arch,
     ...(process.platform === "linux" ? { linuxLibc: detectLinuxLibc() } : {}),
-    pluginManifestPath: PLUGIN_MANIFEST_PATH,
+    pluginManifest,
     resolvePackageJson,
   });
   return installedVerification;

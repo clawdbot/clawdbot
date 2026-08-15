@@ -24,7 +24,6 @@ afterEach(async () => {
 
 describe("cua-computer recording actions", () => {
   it("maps each recording tool while projecting only opaque resource handles", async () => {
-    const resourceRoot = await tempRoot("openclaw-cua-recording-");
     const active = driver();
     let nativeRecordingRoot = "";
     active.callTool.mockImplementation(async (name, args) => {
@@ -51,7 +50,7 @@ describe("cua-computer recording actions", () => {
           return cuaToolResult({});
       }
     });
-    const computer = await execution(active.session, { resourceRoot });
+    const computer = await execution(active.session);
 
     const startedJson = await computer.act(
       JSON.stringify({ action: "start_recording", recordVideo: false }),
@@ -89,10 +88,12 @@ describe("cua-computer recording actions", () => {
         undefined,
       ],
     ]);
+
+    await computer.close("cancel");
+    await expect(fs.access(nativeRecordingRoot)).rejects.toThrow();
   });
 
   it("rejects malformed, absolute, traversal, and symlink-escaped replay resources", async () => {
-    const resourceRoot = await tempRoot("openclaw-cua-resource-security-");
     const outside = await tempRoot("openclaw-cua-resource-outside-");
     const active = driver();
     let nativeRecordingRoot = "";
@@ -106,7 +107,7 @@ describe("cua-computer recording actions", () => {
       }
       return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.replay);
     });
-    const computer = await execution(active.session, { resourceRoot });
+    const computer = await execution(active.session);
 
     for (const resourceHandle of [
       "../outside",
@@ -123,6 +124,20 @@ describe("cua-computer recording actions", () => {
       await computer.act(JSON.stringify({ action: "start_recording" })),
     ) as { details: { resourceHandle: string } };
     await computer.act(JSON.stringify({ action: "stop_recording" }));
+    const escapedChild = path.join(nativeRecordingRoot, "escaped-child");
+    await fs.symlink(outside, escapedChild, "dir");
+    const callsBeforeChildEscape = active.callTool.mock.calls.length;
+    await expect(
+      computer.act(
+        JSON.stringify({
+          action: "replay_trajectory",
+          resourceHandle: started.details.resourceHandle,
+        }),
+      ),
+    ).rejects.toThrow("COMPUTER_INVALID_RESOURCE");
+    expect(active.callTool).toHaveBeenCalledTimes(callsBeforeChildEscape);
+    await fs.rm(escapedChild);
+
     await fs.rm(nativeRecordingRoot, { recursive: true });
     await fs.symlink(outside, nativeRecordingRoot, "dir");
     const callsBeforeReplay = active.callTool.mock.calls.length;
@@ -135,23 +150,28 @@ describe("cua-computer recording actions", () => {
       ),
     ).rejects.toThrow("COMPUTER_INVALID_RESOURCE");
     expect(active.callTool).toHaveBeenCalledTimes(callsBeforeReplay);
+
+    await fs.rm(nativeRecordingRoot);
+    await computer.close("cancel");
+    expect((await fs.stat(outside)).isDirectory()).toBe(true);
   });
 
   it("finalizes an in-flight recording once on every execution close", async () => {
-    const resourceRoot = await tempRoot("openclaw-cua-recording-close-");
     const active = driver();
+    let nativeRecordingRoot = "";
     let releaseStart: (() => void) | undefined;
     const startGate = new Promise<void>((resolve) => {
       releaseStart = resolve;
     });
-    active.callTool.mockImplementation(async (name) => {
+    active.callTool.mockImplementation(async (name, args) => {
       if (name === "start_recording") {
+        nativeRecordingRoot = String(args.output_dir);
         await startGate;
         return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.recordingActive);
       }
       return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.recordingStopped);
     });
-    const computer = await execution(active.session, { resourceRoot });
+    const computer = await execution(active.session);
 
     const start = computer.act(JSON.stringify({ action: "start_recording" }));
     await vi.waitFor(() =>
@@ -168,6 +188,6 @@ describe("cua-computer recording actions", () => {
       "stop_recording",
     ]);
     expect(active.dispose).toHaveBeenCalledOnce();
-    expect(await fs.readdir(resourceRoot)).toEqual([]);
+    await expect(fs.access(nativeRecordingRoot)).rejects.toThrow();
   });
 });

@@ -342,9 +342,7 @@ async function mirror(params: {
     const sourceFingerprint = fingerprintCodexMirrorSourceMessage(message);
     const sourceUserIdempotencyKey =
       message.role === "user"
-        ? normalizeOptionalString(
-            (message as unknown as { idempotencyKey?: unknown }).idempotencyKey,
-          )
+        ? normalizeOptionalString("idempotencyKey" in message ? message.idempotencyKey : undefined)
         : undefined;
     // Gateway-owned user keys keep optimistic client rows stable. Other rows use
     // the provider mirror identity so retries find the exact logical message.
@@ -375,10 +373,7 @@ async function mirror(params: {
       });
       for (const { dedupeIdentity, idempotencyKey, message, sourceFingerprint } of candidates) {
         const transcriptMessage = {
-          ...(attachCodexMirrorAttestation(message, sourceFingerprint) as unknown as Record<
-            string,
-            unknown
-          >),
+          ...attachCodexMirrorAttestation(message, sourceFingerprint),
           ...(idempotencyKey ? { idempotencyKey } : {}),
         } as AgentMessage;
         if (idempotencyKey && mirrorFacts.existingIdempotencyKeys.has(idempotencyKey)) {
@@ -423,10 +418,7 @@ async function mirror(params: {
         let messageToAppend = (
           idempotencyKey
             ? {
-                ...(attachCodexMirrorAttestation(
-                  nextMessage,
-                  sourceFingerprint,
-                ) as unknown as Record<string, unknown>),
+                ...attachCodexMirrorAttestation(nextMessage, sourceFingerprint),
                 idempotencyKey,
               }
             : attachCodexMirrorAttestation(nextMessage, sourceFingerprint)

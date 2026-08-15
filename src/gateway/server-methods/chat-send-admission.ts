@@ -460,11 +460,19 @@ export async function admitChatSend(params: {
     };
   };
   let releaseGatewayRootContinuation: (() => void) | undefined;
+  // Prepared inbound media has no transcript reference until the user turn
+  // persists; every abandonment exit funnels through cleanupAdmittedRun, so
+  // the armed discard here is the single custody owner for that window. The
+  // handler disarms it once the media becomes referenced (durable admission
+  // or ACK handing ownership to dispatch, which persists on all paths).
+  let discardAbandonedPreparedMedia: (() => void) | undefined;
   const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
     activeRunAbort.cleanup(options);
     releaseInitialGatewayWorkAdmission();
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
+    discardAbandonedPreparedMedia?.();
+    discardAbandonedPreparedMedia = undefined;
   };
   const rejectActiveLeafChanged = async () => {
     if (
@@ -525,6 +533,9 @@ export async function admitChatSend(params: {
       rejectSessionRoutingChanged,
       retainGatewayWorkAdmission,
       restartSafeAdmission,
+      setDiscardAbandonedPreparedMedia: (discard: (() => void) | undefined) => {
+        discardAbandonedPreparedMedia = discard;
+      },
       setReleaseGatewayRootContinuation: (release: (() => void) | undefined) => {
         releaseGatewayRootContinuation = release;
       },

@@ -1247,6 +1247,7 @@ describe("createOpenClawCodingTools", () => {
           mode: "account",
           ownerSessionKey: "agent:main:discord:group:ops",
           ownerAccountId: "creator",
+          ownerOrigin: { kind: "external", channel: "discord" },
         },
         messageThreadId: "42",
         includeCoreTools: false,
@@ -1331,12 +1332,40 @@ describe("createOpenClawCodingTools", () => {
         mode: "account",
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "creator",
+        ownerOrigin: { kind: "external", channel: "discord" },
       },
     });
 
     expect(latestCreateOpenClawToolsOptions()).toMatchObject({
       agentAccountId: "delivery",
       gatewayCallerAccountId: "creator",
+      gatewayCallerChannel: "discord",
+      gatewayCallerScheduled: true,
+    });
+  });
+
+  it("keeps explicit local scheduled authority distinct from live delivery routing", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      agentAccountId: "delivery",
+      messageChannel: "discord",
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:main",
+        ownerAccountId: "creator",
+        ownerOrigin: { kind: "local" },
+      },
+    });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerLocal: true,
+      gatewayCallerScheduled: true,
     });
   });
 

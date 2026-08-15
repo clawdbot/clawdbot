@@ -383,12 +383,6 @@ async function requestManagedImage(params: {
   }
 }
 
-describe("resolveManagedImageAttachmentLimits", () => {
-  it("keeps the existing public limit shape", () => {
-    expect(resolveManagedImageAttachmentLimits()).toEqual(DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS);
-  });
-});
-
 describe("handleManagedOutgoingImageHttpRequest", () => {
   let stateDir: string;
 

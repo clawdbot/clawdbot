@@ -1,4 +1,5 @@
 import type { Api, AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ResponseFunctionCallOutputItemList,
   ResponseInput,
@@ -369,9 +370,7 @@ function convertResponsesMessagesWithStyle(
             const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
               reasoningItem,
               replayContext,
-              readOpenAIResponsesReasoningReplayBlockMetadata(
-                block as unknown as Record<string, unknown>,
-              ),
+              readOpenAIResponsesReasoningReplayBlockMetadata(isRecord(block) ? block : {}),
               providerStyle ? { preserveUnattributedEncryptedContent: true } : undefined,
             );
             if (!shouldReplayResponsesItemIds) {

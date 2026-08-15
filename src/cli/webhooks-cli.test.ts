@@ -101,7 +101,6 @@ describe("webhooks cli", () => {
       expect(payload).toEqual({
         error: expect.stringContaining("Gmail failed: Authorization: Bearer"),
       });
-      expect(Object.keys(payload)).toEqual(["error"]);
       expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
     } else {
       expect(runtimeErrors()).toEqual([

@@ -259,32 +259,6 @@ export function getActiveSlashMenuOptionLabel(state: ChatComposerState): string 
   return `${command} ${getSlashCommandDescription(cmd)}`;
 }
 
-export function scrollActiveSlashMenuOptionIntoView(
-  state: ChatComposerState,
-  paneId: string,
-): void {
-  const activeId = getActiveSlashMenuOptionId(state, paneId);
-  if (!activeId) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    const activeOption = document.getElementById(activeId);
-    const scrollRegion = activeOption?.closest<HTMLElement>(".slash-menu__scroll");
-    if (!activeOption || !scrollRegion) {
-      return;
-    }
-    const menuBounds = scrollRegion.getBoundingClientRect();
-    const optionBounds = activeOption.getBoundingClientRect();
-    // scrollIntoView also moves the short-landscape composer and page. Keep
-    // keyboard navigation owned by the menu so textarea focus stays stable.
-    if (optionBounds.top < menuBounds.top) {
-      scrollRegion.scrollTop -= menuBounds.top - optionBounds.top;
-    } else if (optionBounds.bottom > menuBounds.bottom) {
-      scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
-    }
-  });
-}
-
 function renderSlashIcon(name: string) {
   return icons[name as IconName] ?? icons.terminal;
 }
