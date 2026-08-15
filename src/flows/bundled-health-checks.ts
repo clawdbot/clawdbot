@@ -1,7 +1,7 @@
 // Bundled health checks define built-in doctor checks for runtime readiness.
 import { asOptionalObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import { registerHealthCheck } from "./health-check-registry.js";
@@ -75,11 +75,21 @@ export function registerBundledHealthChecks(params: { cfg: OpenClawConfig; cwd?:
 
 function isMemoryCoreActive(cfg: OpenClawConfig): boolean {
   const plugins = normalizePluginsConfig(cfg.plugins);
+  const selectedMemoryPluginId =
+    typeof plugins.slots.memory === "string"
+      ? normalizePluginId(plugins.slots.memory)
+      : plugins.slots.memory;
+  const configuredMemorySlot = cfg.plugins?.slots?.memory;
+  const explicitlySelected =
+    typeof configuredMemorySlot === "string" &&
+    normalizePluginId(configuredMemorySlot) === "memory-core";
   return (
-    plugins.enabled &&
-    plugins.slots.memory === "memory-core" &&
-    !plugins.deny.includes("memory-core") &&
-    plugins.entries["memory-core"]?.enabled !== false
+    selectedMemoryPluginId === "memory-core" &&
+    passesManifestOwnerBasePolicy({
+      plugin: { id: "memory-core" },
+      normalizedConfig: plugins,
+      allowRestrictiveAllowlistBypass: explicitlySelected,
+    })
   );
 }
 

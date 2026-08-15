@@ -62,6 +62,7 @@ describe("registerBundledHealthChecks", () => {
     { slots: { memory: "memory-lancedb" } },
     { slots: { memory: "none" } },
     { enabled: false },
+    { allow: ["browser"] },
     { deny: ["memory-core"] },
     { entries: { "memory-core": { enabled: false } } },
   ])("keeps the check addressable but inactive when memory-core does not own memory", (plugins) => {
@@ -71,6 +72,24 @@ describe("registerBundledHealthChecks", () => {
       registerHealthCheck: expect.any(Function),
       inspectManagedLocalEmbeddingSetup: mocks.inspectLlamaCppManagedSetup,
       memoryCoreActive: false,
+    });
+  });
+
+  it("honors an explicitly selected memory-core slot behind a restrictive allowlist", () => {
+    registerBundledHealthChecks({
+      cfg: {
+        plugins: {
+          allow: ["browser"],
+          slots: { memory: "Memory-Core" },
+        },
+      },
+      cwd: workspaceDir,
+    });
+
+    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledWith({
+      registerHealthCheck: expect.any(Function),
+      inspectManagedLocalEmbeddingSetup: mocks.inspectLlamaCppManagedSetup,
+      memoryCoreActive: true,
     });
   });
 
