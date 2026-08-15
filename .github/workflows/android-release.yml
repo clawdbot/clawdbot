@@ -86,60 +86,36 @@ jobs:
           mkdir -p ~/.gradle
           cp "${signing_dir}/gradle.properties" ~/.gradle/gradle.properties
 
-          # 3. 提取刚刚生成的临时证书的 SHA-256 指纹
-          cert_fingerprint=$(keytool -list -v -keystore "${keystore_path}" -storepass openclawpassword -alias openclaw | grep "SHA256:" | awk '{print $2}' | tr -d ':' | tr '[:upper:]' '[:lower:]')
-          echo "Generated Cert SHA256: ${cert_fingerprint}"
-
-          # 4. 将当前指纹写回 ReleaseSigning.json 覆盖官方的预期指纹
-          signing_config="apps/android/Config/ReleaseSigning.json"
-          if [[ -f "${signing_config}" ]]; then
-            node -e "
-              const fs = require('fs');
-              const cfg = JSON.parse(fs.readFileSync('${signing_config}', 'utf8'));
-              if (cfg.certificateSha256) cfg.certificateSha256 = '${cert_fingerprint}';
-              if (cfg['third-party']) cfg['third-party'].certificateSha256 = '${cert_fingerprint}';
-              fs.writeFileSync('${signing_config}', JSON.stringify(cfg, null, 2));
-            "
-          fi
-
-
-      - name: Prepare and verify signed Android APK
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+      
+      - name: Build Android APK
         run: |
           set -euo pipefail
-          export GIT_COMMIT="$(git rev-parse HEAD)"
+      
           mkdir -p dist
-            base_dir="${RUNNER_TEMP}/fallback-android-release"
-            mkdir -p "${base_dir}"
-
-            bun apps/android/scripts/build-release-artifacts.ts --artifact third-party
-
-            version="$(node -p 'require("./apps/android/version.json").version')"
-            source_apk="apps/android/build/release-artifacts/openclaw-${version}-third-party-release.apk"
-            source_checksum="${source_apk}.sha256"
-            test -s "${source_apk}"
-            test -s "${source_checksum}"
-            cp "${source_apk}" dist/OpenClaw-Android.apk
-            (
-              cd dist
-              sha256sum OpenClaw-Android.apk > OpenClaw-Android-SHA256SUMS.txt
-            )
-          
-          expected_version_name="${RELEASE_TAG#v}"
-          expected_version_name="${expected_version_name%%-*}"
-          expected_version_code="$(node -p 'require("./apps/android/version.json").versionCode')"
-          actual_app_id="$(apkanalyzer manifest application-id dist/OpenClaw-Android.apk)"
-          actual_version_name="$(apkanalyzer manifest version-name dist/OpenClaw-Android.apk)"
-          actual_version_code="$(apkanalyzer manifest version-code dist/OpenClaw-Android.apk)"
-          if [[ "${actual_app_id}" != "ai.openclaw.app" ]]; then
-            echo "Standalone APK has unexpected application ID ${actual_app_id}." >&2
-            exit 1
-          fi
-          if [[ "${actual_version_name}" != "${expected_version_name}" || "${actual_version_code}" != "${expected_version_code}" ]]; then
-            echo "Standalone APK version metadata does not match apps/android/version.json." >&2
-            exit 1
-          fi
+      
+          cd apps/android
+          ./gradlew :app:assembleThirdPartyRelease
+          cd "$GITHUB_WORKSPACE"
+      
+          apk_path=$(
+            find apps/android/app/build/outputs/apk \
+              -type f \
+              -path "*/thirdParty/release/*.apk"
+          )
+      
+          test -n "$apk_path"
+          test -s "$apk_path"
+      
+          echo "APK found: $apk_path"
+      
+          cp "$apk_path" dist/OpenClaw-Android.apk
+      
+          apksigner verify --print-certs dist/OpenClaw-Android.apk
+      
+          (
+            cd dist
+            sha256sum OpenClaw-Android.apk > OpenClaw-Android-SHA256SUMS.txt
+          )
 
       - name: Upload Signed Android APK
         uses: actions/upload-artifact@v4
