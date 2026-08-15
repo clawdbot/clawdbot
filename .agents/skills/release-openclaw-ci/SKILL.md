@@ -166,6 +166,12 @@ node scripts/full-release-validation-at-sha.mjs \
   --target-ref release/YYYY.M.PATCH
 ```
 
+Never raw-dispatch the workflow without `target_context_ref` (the helper's
+`--target-ref` records it). Trusted-workflow release-branch CI passes
+`target_ref` + `release_candidate_ref`; never `release_gate` there — it
+requires workflow head == target. (The PR-head ci.yml fallback below is a
+different dispatch and does use `release_gate=true`.)
+
 For immutable workflow proof on a moving `main`, use
 `pnpm ci:full-release --sha <code-sha> --target-ref
 release/YYYY.M.PATCH`. Its canonical `release-ci/*` ref keeps evidence reuse
@@ -229,6 +235,8 @@ For a one-shot snapshot:
 node scripts/release-ci-summary.mjs <full-release-run-id>
 ```
 
+`release-ci-summary` accepts Full Release Validation parent runs only.
+Diverged release-branch logs: `--first-parent` plus a bounded count.
 Stop watchers before ending the turn or switching strategy.
 
 ## Failure Triage
