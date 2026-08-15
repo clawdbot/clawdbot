@@ -7,7 +7,6 @@ import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
 import { formatByteSize } from "@openclaw/normalization-core";
-import type { Static, TSchema } from "typebox";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { isMissingPathError, toErrorObject } from "../infra/errors.js";
 import {
@@ -39,7 +38,7 @@ import {
   withMemoryWriteProvenance,
 } from "./memory-write-provenance.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
-import type { AgentTool, AgentToolResult } from "./runtime/index.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import {
@@ -84,16 +83,6 @@ type ReadTruncationDetails = {
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
-
-function eraseFileToolParameters<TParameters extends TSchema, TDetails>(
-  tool: AgentTool<TParameters, TDetails>,
-): AnyAgentTool {
-  const execute = tool.execute;
-  return Object.assign(tool, {
-    execute: (...args: Parameters<AnyAgentTool["execute"]>) =>
-      execute(args[0], args[1] as Static<TParameters>, args[2], args[3]),
-  });
-}
 
 function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number {
   const contextWindowTokens = options?.modelContextWindowTokens;
@@ -896,11 +885,9 @@ type SandboxToolParams = {
 export function createSandboxedReadTool(
   params: SandboxToolParams & { createTool?: typeof createReadTool },
 ) {
-  const base = eraseFileToolParameters(
-    (params.createTool ?? createReadTool)(params.root, {
-      operations: createSandboxReadOperations(params),
-    }),
-  );
+  const base = (params.createTool ?? createReadTool)(params.root, {
+    operations: createSandboxReadOperations(params),
+  }) as unknown as AnyAgentTool;
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
@@ -911,11 +898,9 @@ export function createSandboxedReadTool(
 export function createSandboxedWriteTool(
   params: SandboxToolParams & { createTool?: typeof createWriteTool },
 ) {
-  const base = eraseFileToolParameters(
-    (params.createTool ?? createWriteTool)(params.root, {
-      operations: createSandboxWriteOperations(params),
-    }),
-  );
+  const base = (params.createTool ?? createWriteTool)(params.root, {
+    operations: createSandboxWriteOperations(params),
+  }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
@@ -923,11 +908,9 @@ export function createSandboxedWriteTool(
 export function createSandboxedEditTool(
   params: SandboxToolParams & { createTool?: typeof createEditTool },
 ) {
-  const base = eraseFileToolParameters(
-    (params.createTool ?? createEditTool)(params.root, {
-      operations: createSandboxEditOperations(params),
-    }),
-  );
+  const base = (params.createTool ?? createEditTool)(params.root, {
+    operations: createSandboxEditOperations(params),
+  }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
 }
 
@@ -940,11 +923,9 @@ export function createHostWorkspaceWriteTool(
     createTool?: typeof createWriteTool;
   },
 ) {
-  const base = eraseFileToolParameters(
-    (options?.createTool ?? createWriteTool)(root, {
-      operations: createHostWriteOperations(root, options),
-    }),
-  );
+  const base = (options?.createTool ?? createWriteTool)(root, {
+    operations: createHostWriteOperations(root, options),
+  }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
@@ -957,11 +938,9 @@ export function createHostWorkspaceEditTool(
     createTool?: typeof createEditTool;
   },
 ) {
-  const base = eraseFileToolParameters(
-    (options?.createTool ?? createEditTool)(root, {
-      operations: createHostEditOperations(root, options),
-    }),
-  );
+  const base = (options?.createTool ?? createEditTool)(root, {
+    operations: createHostEditOperations(root, options),
+  }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
 }
 
@@ -1024,15 +1003,13 @@ export function wrapReadToolWithSkillContent(
     }
     return content;
   };
-  const virtualBase = eraseFileToolParameters(
-    createReadTool("/", {
-      operations: {
-        resolvePath: (filePath) => filePath,
-        access: async (filePath) => void readContent(filePath),
-        readFile: async (filePath) => Buffer.from(readContent(filePath), "utf8"),
-      },
-    }),
-  );
+  const virtualBase = createReadTool("/", {
+    operations: {
+      resolvePath: (filePath) => filePath,
+      access: async (filePath) => void readContent(filePath),
+      readFile: async (filePath) => Buffer.from(readContent(filePath), "utf8"),
+    },
+  }) as unknown as AnyAgentTool;
   const virtualRead = createOpenClawReadTool(virtualBase, options);
   return {
     ...tool,
