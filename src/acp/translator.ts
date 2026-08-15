@@ -60,9 +60,7 @@ export class AcpGatewayAgent implements Agent {
   private readonly sessionUpdates: AcpTranslatorSessionUpdates;
   private readonly promptStream: AcpTranslatorPromptStream;
   private readonly sessionLifecycle: AcpTranslatorSessionLifecycle;
-  private readonly ownedSessionStore:
-    | ReturnType<typeof createInMemorySessionStore>
-    | undefined;
+  private readonly ownedSessionStore: ReturnType<typeof createInMemorySessionStore> | undefined;
   private readonly approvalRelays = new Map<string, AcpPendingApprovalRelay>();
   private readonly log: (msg: string) => void;
 
@@ -72,9 +70,15 @@ export class AcpGatewayAgent implements Agent {
     opts: AcpGatewayAgentOptions = {},
   ) {
     this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
-    const sessionStore = opts.sessionStore ?? createInMemorySessionStore();
     // Injected stores remain caller-owned; only the agent-created registry follows shutdown.
-    this.ownedSessionStore = opts.sessionStore === undefined ? sessionStore : undefined;
+    let sessionStore: AcpSessionStore;
+    if (opts.sessionStore === undefined) {
+      this.ownedSessionStore = createInMemorySessionStore();
+      sessionStore = this.ownedSessionStore;
+    } else {
+      this.ownedSessionStore = undefined;
+      sessionStore = opts.sessionStore;
+    }
     this.sessionUpdates = new AcpTranslatorSessionUpdates({
       connection,
       eventLedger: opts.eventLedger ?? createInMemoryAcpEventLedger(),
