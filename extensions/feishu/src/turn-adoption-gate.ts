@@ -7,6 +7,7 @@
 // messages reach the gateway while the first turn continues in the background
 // — the same pattern telegram already uses. The full turn keeps running under
 // core's reply-run registry; this helper only picks the lane-release moment.
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 
 type FeishuTurnAdoptionGate = {
@@ -130,7 +131,9 @@ export function enqueueAdoptionGatedTurn(params: {
     // pending while the turn runs.
     const adoptionFailure = await Promise.race([gate, turn.catch(() => undefined)]);
     if (adoptionFailure) {
-      throw adoptionFailure;
+      // The gate carries a durable-adoption rejection, which may be a
+      // non-Error value; normalize so the flush's catch observes an Error.
+      throw toErrorObject(adoptionFailure, "Feishu turn adoption failed");
     }
   };
   const lane = enqueue(sequentialKey, task);
