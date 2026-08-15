@@ -454,11 +454,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
   provider?: string | null,
 ): StreamFn {
   return (model, context, options) => {
-    const ctx = context as unknown as { messages?: unknown };
-    const messages = ctx?.messages;
-    if (!Array.isArray(messages)) {
-      return baseFn(model, context, options);
-    }
+    const messages = context.messages;
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi: (model as { api?: unknown })?.api as string | null | undefined,
       provider,
@@ -509,10 +505,10 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
         nextMessages = validateAnthropicTurns(nextMessages);
       }
     }
-    const nextContext = {
-      ...(context as unknown as Record<string, unknown>),
-      messages: nextMessages,
-    } as unknown;
-    return baseFn(model, nextContext as typeof context, options);
+    const nextContext: typeof context = {
+      ...context,
+      messages: nextMessages as typeof context.messages,
+    };
+    return baseFn(model, nextContext, options);
   };
 }
