@@ -444,4 +444,85 @@ describe("authenticated WebSocket request trace dispatch", () => {
       resetTestPluginRegistry();
     }
   });
+
+  it("returns a typed error when a handler response cannot be serialized", async () => {
+    let returnInvalidPayload = true;
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["test.serialize"] = ({ respond }) => {
+      respond(true, returnInvalidPayload ? { value: 1n } : { value: 1 });
+    };
+    setTestPluginRegistry(registry);
+
+    const token = "gateway-response-serialization-test-token";
+    const port = await getGatewayTestPort();
+    const server = await startTestGatewayServer(port, {
+      auth: { mode: "token", token },
+      bind: "loopback",
+      controlUiEnabled: false,
+    });
+    let ws: WebSocket | undefined;
+    try {
+      ws = await openAuthenticatedTraceSocket({
+        port,
+        token,
+        connectTraceparent: TRACEPARENTS.first,
+      });
+      const response = onceMessage<{ type: "res"; id: string; ok: boolean; error?: unknown }>(
+        ws,
+        (value) => value.type === "res" && value.id === "invalid-payload",
+      );
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "invalid-payload",
+          method: "test.serialize",
+          params: {},
+        }),
+      );
+
+      await expect(response).resolves.toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "gateway response serialization failed" },
+      });
+
+      returnInvalidPayload = false;
+      const healthyResponse = onceMessage<{ type: "res"; id: string; ok: boolean }>(
+        ws,
+        (value) => value.type === "res" && value.id === "healthy-after-error",
+      );
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "healthy-after-error",
+          method: "test.serialize",
+          params: {},
+        }),
+      );
+      await expect(healthyResponse).resolves.toMatchObject({ ok: true });
+
+      ws.terminate();
+      ws = await openAuthenticatedTraceSocket({
+        port,
+        token,
+        connectTraceparent: TRACEPARENTS.second,
+      });
+      const reconnectResponse = onceMessage<{ type: "res"; id: string; ok: boolean }>(
+        ws,
+        (value) => value.type === "res" && value.id === "healthy-after-reconnect",
+      );
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "healthy-after-reconnect",
+          method: "test.serialize",
+          params: {},
+        }),
+      );
+      await expect(reconnectResponse).resolves.toMatchObject({ ok: true });
+    } finally {
+      ws?.terminate();
+      await server.close();
+      resetTestPluginRegistry();
+    }
+  });
 });

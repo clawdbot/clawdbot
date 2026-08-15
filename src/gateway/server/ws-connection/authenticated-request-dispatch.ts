@@ -113,8 +113,23 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       error?: ErrorShape,
       meta?: Record<string, unknown>,
     ) => {
-      send({ type: "res", id: req.id, ok, payload, error });
-      const unauthorizedRoleError = isUnauthorizedRoleError(error);
+      let response = { ok, payload, error };
+      let frame = { type: "res", id: req.id, ...response };
+      try {
+        JSON.stringify(frame);
+      } catch (serializationError) {
+        logGateway.error(
+          `response serialization failed method=${req.method}: ${formatForLog(serializationError)}`,
+        );
+        response = {
+          ok: false,
+          payload: undefined,
+          error: errorShape(ErrorCodes.UNAVAILABLE, "gateway response serialization failed"),
+        };
+        frame = { type: "res", id: req.id, ...response };
+      }
+      send(frame);
+      const unauthorizedRoleError = isUnauthorizedRoleError(response.error);
       let logMeta = meta;
       if (unauthorizedRoleError) {
         const unauthorizedDecision = unauthorizedFloodGuard.registerUnauthorized();
@@ -144,10 +159,10 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       logWs("out", "res", {
         connId,
         id: req.id,
-        ok,
+        ok: response.ok,
         method: req.method,
-        errorCode: error?.code,
-        errorMessage: error?.message,
+        errorCode: response.error?.code,
+        errorMessage: response.error?.message,
         ...logMeta,
       });
     };
