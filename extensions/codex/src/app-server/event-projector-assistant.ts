@@ -41,10 +41,11 @@ export class CodexAssistantProjection {
   private responseModel: string | undefined;
   private streamedPartialAssistantItemId: string | undefined;
   private streamedPartialAssistantItemReplaceable = false;
-  // turn/completed.items is a Summary of last_agent_message only. Native-tool
-  // invalidation has to be recorded from item notifications, or a later coda
-  // would revive every pre-tool final.
+  // turn/completed.items is a Summary of last_agent_message only. Tool
+  // invalidation has to be recorded from the first item notification for each
+  // native or dynamic handoff, or a later coda would revive every pre-tool final.
   private persistableAssistantBarrier = 0;
+  private readonly persistableAssistantBarrierItemIds = new Set<string>();
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -312,38 +313,16 @@ export class CodexAssistantProjection {
   }
 
   collectAssistantTexts(): string[] {
-    const texts: string[] = [];
-    let seenLaterPersistable = false;
-    let seenLaterUnphased = false;
-    // Phase-less agentMessages are replaceable coordination text. Explicit
-    // final_answer items stay unless later native work or a later unphased
-    // message supersedes them.
-    for (let index = this.assistantItemOrder.length - 1; index >= 0; index -= 1) {
-      const itemId = this.assistantItemOrder[index];
-      if (
-        !itemId ||
-        index < this.persistableAssistantBarrier ||
-        this.assistantPhaseByItem.get(itemId) === "commentary"
-      ) {
-        continue;
-      }
-      const text = this.assistantTextByItem.get(itemId)?.trim();
-      if (!text || this.isToolProgressEchoText(itemId, text)) {
-        continue;
-      }
-      const isTerminalFinal = this.assistantPhaseByItem.get(itemId) === "final_answer";
-      if (seenLaterUnphased || (!isTerminalFinal && seenLaterPersistable)) {
-        continue;
-      }
-      texts.push(text);
-      seenLaterPersistable = true;
-      if (!isTerminalFinal) {
-        seenLaterUnphased = true;
-      }
+    const afterHandoff = this.collectPersistableAssistantTexts(this.persistableAssistantBarrier);
+    if (afterHandoff.length > 0) {
+      return afterHandoff;
     }
-    texts.reverse();
-    const audible = texts.filter((text) => !isSilentReplyText(text));
-    return audible.length > 0 ? audible : texts;
+    const recoveredAudible = this.collectPersistableAssistantTexts(0);
+    if (recoveredAudible.length > 0) {
+      return recoveredAudible.slice(-1);
+    }
+    const recovered = this.resolveFinalAssistantTextItem()?.text;
+    return recovered ? [recovered] : [];
   }
 
   collectCommentaryMessages(): Array<{ itemId: string; message: AssistantMessage }> {
@@ -583,9 +562,45 @@ export class CodexAssistantProjection {
     return undefined;
   }
 
+  private collectPersistableAssistantTexts(minIndex: number): string[] {
+    const texts: string[] = [];
+    let seenLaterPersistable = false;
+    let seenLaterUnphased = false;
+    // Phase-less agentMessages are replaceable coordination text. Explicit
+    // final_answer items stay unless later native work or a later unphased
+    // message supersedes them.
+    for (let index = this.assistantItemOrder.length - 1; index >= minIndex; index -= 1) {
+      const itemId = this.assistantItemOrder[index];
+      if (!itemId || this.assistantPhaseByItem.get(itemId) === "commentary") {
+        continue;
+      }
+      const text = this.assistantTextByItem.get(itemId)?.trim();
+      if (!text || this.isToolProgressEchoText(itemId, text)) {
+        continue;
+      }
+      const isTerminalFinal = this.assistantPhaseByItem.get(itemId) === "final_answer";
+      if (seenLaterUnphased || (!isTerminalFinal && seenLaterPersistable)) {
+        continue;
+      }
+      texts.push(text);
+      seenLaterPersistable = true;
+      if (!isTerminalFinal) {
+        seenLaterUnphased = true;
+      }
+    }
+    texts.reverse();
+    return texts.filter((text) => !isSilentReplyText(text));
+  }
+
   private noteNativeWorkBarrier(item: CodexThreadItem | undefined): void {
-    if (!item || !shouldClearTerminalPresentationForNativeItem(item)) {
+    if (!item || !shouldAdvancePersistableAssistantBarrier(item)) {
       return;
+    }
+    if (item.id && this.persistableAssistantBarrierItemIds.has(item.id)) {
+      return;
+    }
+    if (item.id) {
+      this.persistableAssistantBarrierItemIds.add(item.id);
     }
     this.persistableAssistantBarrier = this.assistantItemOrder.length;
   }
@@ -601,4 +616,8 @@ export class CodexAssistantProjection {
   private isToolProgressEchoText(itemId: string, text: string): boolean {
     return this.rawPromotedAssistantItemIds.has(itemId) && this.matchesToolProgressEcho(text);
   }
+}
+
+function shouldAdvancePersistableAssistantBarrier(item: CodexThreadItem): boolean {
+  return shouldClearTerminalPresentationForNativeItem(item) || item.type === "dynamicToolCall";
 }
