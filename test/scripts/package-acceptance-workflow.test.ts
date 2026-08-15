@@ -98,6 +98,10 @@ const RELEASE_MAINTAINER_SKILL = resolve(
   ".agents/skills/release-openclaw-maintainer/SKILL.md",
 );
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
+const QA_LIVE_RUNTIME_PROOF_IF =
+  "github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_live_runtime_proof == true)";
+const gitFetch = (refspec: string, tags = "--no-tags") => ["fetch", tags, "origin", refspec];
+const QA_MAIN_FETCH = gitFetch("+refs/heads/main:refs/remotes/origin/main");
 const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
 const CI_CHECK_TESTBOX_WORKFLOW = ".github/workflows/ci-check-testbox.yml";
 const CI_CHECK_ARM_TESTBOX_WORKFLOW = ".github/workflows/ci-check-arm-testbox.yml";
@@ -173,6 +177,7 @@ type Workflow = {
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
   on?: {
+    schedule?: Array<{ cron?: string }>;
     workflow_call?: {
       inputs?: Record<string, unknown>;
     };
@@ -398,6 +403,148 @@ function runFullReleaseTargetSummary(rerunGroup: string, skipTelegram: string) {
   });
   const summary = result.status === 0 ? readFileSync(summaryPath, "utf8") : "";
   return { result, summary };
+}
+
+function runQaSelectedRefGuard(params: {
+  eventName: string;
+  expectedSha?: string;
+  headSha: string;
+  inputRef: string;
+  mainAncestor?: boolean;
+  pull?: { repo: string; sha: string; state: string };
+  releaseObjectNames?: string[];
+  runLiveRuntimeProof: boolean;
+  tags?: string[];
+}) {
+  const validateScript =
+    workflowStep(
+      workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "validate_selected_ref"),
+      "Validate selected ref",
+    ).run ?? "";
+  const workdir = tempDirs.make("qa-selected-ref-");
+  const binDir = resolve(workdir, "bin");
+  const gitCallsPath = resolve(workdir, "git-calls.jsonl");
+  const ghCallsPath = resolve(workdir, "gh-calls.jsonl");
+  const outputPath = resolve(workdir, "github-output");
+  mkdirSync(binDir);
+  for (const path of [gitCallsPath, ghCallsPath, outputPath]) {
+    writeFileSync(path, "");
+  }
+  const mockPath = resolve(binDir, "mock-cli.cjs");
+  writeFileSync(
+    mockPath,
+    `
+const fs = require("node:fs");
+const [cli, ...args] = process.argv.slice(2);
+const env = process.env;
+const is = (...expected) => JSON.stringify(args) === JSON.stringify(expected);
+const fail = () => { console.error("Unexpected mock " + cli + " invocation: " + JSON.stringify(args)); process.exit(2); };
+fs.appendFileSync(env["MOCK_" + cli.toUpperCase() + "_CALLS"], JSON.stringify(args) + "\\n");
+if (cli === "git") {
+  const fetches = [
+    ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+    ["fetch", "--no-tags", "origin", "+refs/heads/*:refs/remotes/origin/*"], ["fetch", "--tags", "origin", "+refs/tags/*:refs/tags/*"],
+    ["fetch", "--no-tags", "origin", "+refs/heads/release/*:refs/remotes/origin/release/*"],
+  ];
+  if (is("rev-parse", "HEAD")) console.log(env.MOCK_HEAD_SHA);
+  else if (fetches.some((expected) => is(...expected))) {}
+  else if (is("merge-base", "--is-ancestor", env.MOCK_HEAD_SHA, "refs/remotes/origin/main")) process.exit(env.MOCK_MAIN_ANCESTOR === "true" ? 0 : 1);
+  else if (is("tag", "--points-at", env.MOCK_HEAD_SHA)) JSON.parse(env.MOCK_TAGS).forEach((value) => console.log(value));
+  else if (is("for-each-ref", "--format=%(objectname)", "refs/remotes/origin/release")) JSON.parse(env.MOCK_RELEASE_OBJECT_NAMES).forEach((value) => console.log(value));
+  else fail();
+} else if (cli === "gh") {
+  const endpoint = "repos/" + env.GITHUB_REPOSITORY + "/commits/" + env.MOCK_HEAD_SHA + "/pulls";
+  const query = '[.[] | select(.state == "open" and .head.repo.full_name == "' +
+    env.GITHUB_REPOSITORY + '" and .head.sha == "' + env.MOCK_HEAD_SHA + '")] | length';
+  if (!is("api", "-H", "Accept: application/vnd.github+json", endpoint, "--jq", query)) fail();
+  const pull = JSON.parse(env.MOCK_PULL);
+  console.log(pull && pull.state === "open" && pull.repo === env.GITHUB_REPOSITORY && pull.sha === env.MOCK_HEAD_SHA ? 1 : 0);
+} else {
+  fail();
+}
+`,
+  );
+  for (const cli of ["git", "gh"]) {
+    const path = resolve(binDir, cli);
+    writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${mockPath}" ${cli} "$@"\n`);
+    chmodSync(path, 0o755);
+  }
+  const result = spawnSync("bash", ["-c", validateScript], {
+    encoding: "utf8",
+    env: {
+      EVENT_NAME: params.eventName,
+      EXPECTED_SHA: params.expectedSha ?? "",
+      GITHUB_OUTPUT: outputPath,
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_STEP_SUMMARY: outputPath,
+      INPUT_REF: params.inputRef,
+      MOCK_GH_CALLS: ghCallsPath,
+      MOCK_GIT_CALLS: gitCallsPath,
+      MOCK_HEAD_SHA: params.headSha,
+      MOCK_MAIN_ANCESTOR: String(params.mainAncestor ?? false),
+      MOCK_PULL: JSON.stringify(params.pull ?? null),
+      MOCK_RELEASE_OBJECT_NAMES: JSON.stringify(params.releaseObjectNames ?? []),
+      MOCK_TAGS: JSON.stringify(params.tags ?? []),
+      PATH: `${binDir}:/usr/bin:/bin`,
+      RUN_LIVE_RUNTIME_PROOF: String(params.runLiveRuntimeProof),
+    },
+  });
+  const calls = (path: string) =>
+    readFileSync(path, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as string[]);
+  return {
+    ghCalls: calls(ghCallsPath),
+    gitCalls: calls(gitCallsPath),
+    result,
+    trustedReason: readFileSync(outputPath, "utf8").match(/^trusted_reason=(.*)$/mu)?.[1],
+  };
+}
+
+function simulateWorkflowSteps(
+  job: WorkflowJob,
+  injectedStep?: { name: string; outcome: "cancelled" | "failure" },
+) {
+  type Outcome = "cancelled" | "failure" | "skipped" | "success";
+  const outcomes = new Map<string, Outcome>();
+  const stepOutcomes = new Map<string, Outcome>();
+  const outputs = new Set<string>();
+  const eligibleSteps = new Set<string>();
+  let jobCancelled = false;
+  let jobFailed = false;
+  const conditionAllows = (condition?: string) => {
+    if (!condition) return !jobFailed && !jobCancelled;
+    return condition
+      .replace(/^\$\{\{\s*|\s*\}\}$/gu, "")
+      .split(/\s*&&\s*/u)
+      .every((term) => {
+        if (term === "always()") return true;
+        if (term === "!cancelled()") return !jobCancelled;
+        const outcome = term.match(/^steps\.([^.]+)\.outcome == '([^']+)'$/u);
+        if (outcome) return stepOutcomes.get(outcome[1] ?? "") === outcome[2];
+        const output = term.match(/^steps\.([^.]+)\.outputs\.([^. ]+) != ''$/u);
+        if (output) return outputs.has(`${output[1]}.${output[2]}`);
+        throw new Error(`Unsupported workflow condition term: ${term}`);
+      });
+  };
+  for (const step of job.steps ?? []) {
+    const name = step.name ?? step.id ?? step.uses ?? "unnamed";
+    if (!conditionAllows(step.if)) {
+      outcomes.set(name, "skipped");
+      continue;
+    }
+    eligibleSteps.add(name);
+
+    const outcome: Outcome = name === injectedStep?.name ? injectedStep.outcome : "success";
+    outcomes.set(name, outcome);
+    if (step.id) stepOutcomes.set(step.id, outcome);
+    if (step.id === "run_lane") outputs.add("run_lane.output_dir");
+    if (outcome === "failure" && step["continue-on-error"] !== true) jobFailed = true;
+    if (outcome === "cancelled") jobCancelled = true;
+  }
+
+  return { eligibleSteps, jobCancelled, jobFailed, outcomes };
 }
 
 function shellFunctionSource(source: string, functionName: string): string {
@@ -3980,6 +4127,151 @@ describe("package artifact reuse", () => {
     }
   });
 
+  it("pins manually selected live runtime proof to the checked-out full SHA", () => {
+    const exactSha = "a".repeat(40);
+    const revParse = ["rev-parse", "HEAD"];
+    const mainTrustCalls = [
+      revParse,
+      QA_MAIN_FETCH,
+      ["merge-base", "--is-ancestor", exactSha, "refs/remotes/origin/main"],
+    ];
+    const manualCases = [
+      ["unselected branch name", "main", false, 0, "main-ancestor", mainTrustCalls],
+      ["selected non-full ref", "main", true, 1, undefined, [revParse]],
+      ["lowercase short SHA", exactSha.slice(0, 12), true, 1, undefined, [revParse]],
+      ["uppercase 40-character SHA", exactSha.toUpperCase(), true, 1, undefined, [revParse]],
+      ["different full SHA", "0".repeat(40), true, 1, undefined, [revParse]],
+      ["checked-out full SHA", exactSha, true, 0, "main-ancestor", mainTrustCalls],
+    ] as const;
+    for (const [name, inputRef, selected, status, reason, gitCalls] of manualCases) {
+      const execution = runQaSelectedRefGuard({
+        eventName: "workflow_dispatch",
+        headSha: exactSha,
+        inputRef,
+        mainAncestor: true,
+        runLiveRuntimeProof: selected,
+      });
+      expect(execution.result.status, `${name}: ${execution.result.stderr}`).toBe(status);
+      expect(execution.trustedReason, name).toBe(reason);
+      expect(execution.gitCalls, name).toEqual(gitCalls);
+      expect(execution.ghCalls, name).toEqual([]);
+    }
+
+    const reusableMismatch = runQaSelectedRefGuard({
+      eventName: "workflow_call",
+      expectedSha: "0".repeat(40),
+      headSha: exactSha,
+      inputRef: "release/2026.8.1",
+      runLiveRuntimeProof: false,
+    });
+    expect(reusableMismatch.result.status).toBe(1);
+    expect(reusableMismatch.result.stderr).toContain(`expected ${"0".repeat(40)}`);
+    expect(reusableMismatch.gitCalls).toEqual([revParse]);
+    const reusableMatch = runQaSelectedRefGuard({
+      eventName: "workflow_call",
+      expectedSha: exactSha,
+      headSha: exactSha,
+      inputRef: "release/2026.8.1",
+      runLiveRuntimeProof: false,
+      tags: ["v2026.8.1"],
+    });
+    expect(reusableMatch.result.status, reusableMatch.result.stderr).toBe(0);
+    expect(reusableMatch.trustedReason).toBe("release-tag");
+    expect(reusableMatch.gitCalls).toEqual([
+      revParse,
+      QA_MAIN_FETCH,
+      gitFetch("+refs/heads/*:refs/remotes/origin/*"),
+      gitFetch("+refs/tags/*:refs/tags/*", "--tags"),
+      ["tag", "--points-at", exactSha],
+    ]);
+    expect(reusableMatch.ghCalls).toEqual([]);
+  });
+
+  it("executes selected-ref trust policy against release and pull request fixtures", () => {
+    const selectedSha = "b".repeat(40);
+    const releaseHeadSha = "c".repeat(40);
+    const releaseFetch = gitFetch("+refs/heads/release/*:refs/remotes/origin/release/*");
+    const expectedGitCalls = [
+      ["rev-parse", "HEAD"],
+      QA_MAIN_FETCH,
+      ["merge-base", "--is-ancestor", selectedSha, "refs/remotes/origin/main"],
+      ["tag", "--points-at", selectedSha],
+      releaseFetch,
+      ["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/release"],
+    ];
+    const expectedGhCall = [
+      "api",
+      "-H",
+      "Accept: application/vnd.github+json",
+      `repos/openclaw/openclaw/commits/${selectedSha}/pulls`,
+      "--jq",
+      `[.[] | select(.state == "open" and .head.repo.full_name == "openclaw/openclaw" and .head.sha == "${selectedSha}")] | length`,
+    ];
+    const sameRepoPull = { repo: "openclaw/openclaw", sha: selectedSha, state: "open" };
+    const staleReleaseHeads = [releaseHeadSha];
+    const cases = [
+      ["exact release head", [selectedSha], undefined, 0, "release-branch-head"],
+      ["stale release commit", staleReleaseHeads, undefined, 1, undefined],
+      ["open same-repo PR", staleReleaseHeads, sameRepoPull, 0, "open-pr-head"],
+      ["closed PR", staleReleaseHeads, { ...sameRepoPull, state: "closed" }, 1, undefined],
+      ["fork PR", staleReleaseHeads, { ...sameRepoPull, repo: "fork/openclaw" }, 1, undefined],
+    ] as const;
+
+    for (const [name, releaseObjectNames, pull, status, reason] of cases) {
+      const execution = runQaSelectedRefGuard({
+        eventName: "workflow_dispatch",
+        headSha: selectedSha,
+        inputRef: selectedSha,
+        pull,
+        releaseObjectNames: [...releaseObjectNames],
+        runLiveRuntimeProof: true,
+      });
+
+      expect(execution.result.status, `${name}: ${execution.result.stderr}`).toBe(status);
+      expect(execution.trustedReason, name).toBe(reason);
+      expect(execution.gitCalls, name).toEqual(expectedGitCalls);
+      if (reason === "release-branch-head") {
+        expect(execution.ghCalls).toEqual([]);
+      } else {
+        expect(execution.ghCalls).toEqual([expectedGhCall]);
+      }
+    }
+  });
+
+  it("gates live runtime proof to schedules or opted-in direct dispatches", () => {
+    const workflow = readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW);
+    const callInputs = workflow.on?.workflow_call?.inputs ?? {};
+    const dispatchInputs = workflow.on?.workflow_dispatch?.inputs ?? {};
+    const validateStep = workflowStep(
+      workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "validate_selected_ref"),
+      "Validate selected ref",
+    );
+    expect(workflow.on?.schedule).toEqual([{ cron: "41 4 * * *" }]);
+    expect(dispatchInputs.run_live_runtime_proof).toEqual({
+      description: "Run the blocking live runtime release proof",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    expect(callInputs.run_live_runtime_proof).toBeUndefined();
+    expect(dispatchInputs.expected_sha).toBeUndefined();
+    for (const jobName of [
+      "run_live_runtime_token_efficiency",
+      "run_live_gateway_restart_runtime_pair",
+      "run_live_inbound_voice_talkback",
+    ]) {
+      const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName);
+      expect(job.needs, jobName).toEqual(["authorize_actor", "validate_selected_ref"]);
+      expect(job.if, jobName).toBe(QA_LIVE_RUNTIME_PROOF_IF);
+    }
+    expect(validateStep.env).toMatchObject({
+      EVENT_NAME: "${{ github.event_name }}",
+      EXPECTED_SHA: "${{ inputs.expected_sha }}",
+      INPUT_REF: "${{ github.event_name != 'schedule' && inputs.ref || github.sha }}",
+      RUN_LIVE_RUNTIME_PROOF: "${{ inputs.run_live_runtime_proof }}",
+    });
+  });
+
   it("routes release Matrix through the QA Lab selector", () => {
     const releaseWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const releaseTelegramWorkflow = readFileSync(RELEASE_TELEGRAM_QA_WORKFLOW, "utf8");
@@ -4173,6 +4465,16 @@ describe("package artifact reuse", () => {
         "Upload live runtime token-efficiency artifacts",
         "always() && steps.run_lane.outputs.output_dir != ''",
       ],
+      [
+        "run_live_gateway_restart_runtime_pair",
+        "Upload live gateway restart runtime-pair artifacts",
+        "always() && steps.run_lane.outputs.output_dir != ''",
+      ],
+      [
+        "run_live_inbound_voice_talkback",
+        "Upload live inbound voice talkback artifacts",
+        "always() && steps.run_lane.outputs.output_dir != ''",
+      ],
       ["run_live_matrix", "Upload Matrix QA artifacts", "always()"],
       ["run_live_buzz", "Upload Buzz QA artifacts", "always()"],
       ["run_live_telegram", "Upload Telegram QA artifacts", "always()"],
@@ -4189,38 +4491,231 @@ describe("package artifact reuse", () => {
     }
   });
 
-  it("preserves the primary runtime token-efficiency failure", () => {
-    const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_runtime_token_efficiency");
-    const runStep = workflowStep(job, "Run live core runtime-pair lane");
-    const reportStep = workflowStep(job, "Generate live runtime token-efficiency report");
+  it("runs blocking live runtime proofs as independent jobs", () => {
+    const sharedEnv = {
+      QA_PARITY_CONCURRENCY: "1",
+      OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1",
+      OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000",
+    };
+    const cases = [
+      {
+        artifactName:
+          "qa-live-runtime-token-efficiency-${{ github.run_id }}-${{ github.run_attempt }}",
+        forbiddenFlags: [] as string[],
+        jobName: "run_live_runtime_token_efficiency",
+        marker:
+          "printf 'Runtime token-efficiency lane started.\\n' > \"${output_dir}/runtime-lane-started.txt\"",
+        outputDir:
+          'output_dir=".artifacts/qa-e2e/runtime-token-efficiency-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+        runStepName: "Run live core runtime-pair lane",
+        command: [
+          "pnpm openclaw qa suite",
+          "--repo-root .",
+          "--provider-mode live-frontier",
+          "--runtime-pair-lane core",
+          '--concurrency "${QA_PARITY_CONCURRENCY}"',
+          '--model "${OPENCLAW_CI_OPENAI_MODEL}"',
+          '--alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}"',
+          "--runtime-pair openclaw,codex",
+          "--fast",
+          "--allow-failures",
+          '--output-dir "${output_dir}/runtime-suite"',
+        ],
+        uploadStepName: "Upload live runtime token-efficiency artifacts",
+      },
+      {
+        artifactName:
+          "qa-live-gateway-restart-runtime-pair-${{ github.run_id }}-${{ github.run_attempt }}",
+        forbiddenFlags: ["--allow-failures"],
+        jobName: "run_live_gateway_restart_runtime_pair",
+        marker:
+          "printf 'Gateway restart runtime-pair lane started.\\n' > \"${output_dir}/gateway-restart-runtime-pair-lane-started.txt\"",
+        outputDir:
+          'output_dir=".artifacts/qa-e2e/gateway-restart-runtime-pair-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+        runStepName: "Run pinned GPT-5.4 gateway restart runtime pair",
+        command: [
+          "pnpm openclaw qa suite",
+          "--repo-root .",
+          "--provider-mode live-frontier",
+          "--scenario gateway-restart-multi-live",
+          "--concurrency 1",
+          "--model openai/gpt-5.4",
+          "--alt-model openai/gpt-5.4",
+          "--runtime-pair openclaw,codex",
+          "--fast",
+          '--output-dir "${output_dir}/gateway-restart-gpt-5.4-runtime-pair"',
+        ],
+        uploadStepName: "Upload live gateway restart runtime-pair artifacts",
+      },
+      {
+        artifactName:
+          "qa-live-inbound-voice-talkback-${{ github.run_id }}-${{ github.run_attempt }}",
+        forbiddenFlags: ["--runtime-pair", "--runtime-pair-lane", "--allow-failures"],
+        jobName: "run_live_inbound_voice_talkback",
+        marker:
+          "printf 'Inbound voice talkback lane started.\\n' > \"${output_dir}/inbound-voice-talkback-lane-started.txt\"",
+        outputDir:
+          'output_dir=".artifacts/qa-e2e/inbound-voice-talkback-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+        runStepName: "Run pinned GPT-5.4 inbound voice talkback",
+        command: [
+          "pnpm openclaw qa suite",
+          "--repo-root .",
+          "--provider-mode live-frontier",
+          "--scenario inbound-voice-talkback-live",
+          "--concurrency 1",
+          "--model openai/gpt-5.4",
+          "--alt-model openai/gpt-5.4",
+          "--fast",
+          '--output-dir "${output_dir}/inbound-voice-talkback-live-gpt-5.4"',
+        ],
+        uploadStepName: "Upload live inbound voice talkback artifacts",
+      },
+    ] as const;
 
-    expect(runStep.run).toContain('mkdir -p "${output_dir}"');
-    expect(runStep.run).toContain(
-      "printf 'Runtime token-efficiency lane started.\\n' > \"${output_dir}/runtime-lane-started.txt\"",
+    for (const testCase of cases) {
+      const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, testCase.jobName);
+      const checkoutStep = workflowStep(job, "Checkout selected ref");
+      const setupStep = workflowStep(job, "Setup Node environment");
+      const credentialStep = workflowStep(job, "Validate required QA credential env");
+      const buildStep = workflowStep(job, "Build private QA runtime");
+      const runStep = workflowStep(job, testCase.runStepName);
+      const uploadStep = workflowStep(job, testCase.uploadStepName);
+      const command = (runStep.run ?? "")
+        .split("\n")
+        .map((line) => line.trim().replace(/ \\$/u, ""))
+        .filter((line) => line === "pnpm openclaw qa suite" || line.startsWith("--"));
+
+      expect(job.needs, testCase.jobName).toEqual(["authorize_actor", "validate_selected_ref"]);
+      expect(job.if, testCase.jobName).toBe(QA_LIVE_RUNTIME_PROOF_IF);
+      expect(job["runs-on"], testCase.jobName).toBe("blacksmith-16vcpu-ubuntu-2404");
+      expect(job["timeout-minutes"], testCase.jobName).toBe(45);
+      expect(job.environment, testCase.jobName).toBe("qa-live-shared");
+      expect(job.env, testCase.jobName).toEqual(sharedEnv);
+      expect(job.outputs, testCase.jobName).toBeUndefined();
+      expect(job.concurrency, testCase.jobName).toBeUndefined();
+      expect(checkoutStep.with, testCase.jobName).toMatchObject({
+        "persist-credentials": false,
+        ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+        "fetch-depth": 1,
+      });
+      expect(setupStep.uses, testCase.jobName).toBe("./.github/actions/setup-node-env");
+      expect(setupStep.with, testCase.jobName).toEqual({
+        "node-version": "${{ env.NODE_VERSION }}",
+        "install-bun": "true",
+      });
+      expect(credentialStep.run, testCase.jobName).toContain(
+        'if [[ -z "${OPENAI_API_KEY:-}" ]]',
+      );
+      expect(credentialStep.run, testCase.jobName).toContain("exit 1");
+      expect(buildStep.run, testCase.jobName).toBe("pnpm build");
+      expect(runStep.id, testCase.jobName).toBe("run_lane");
+      expect(runStep.run, testCase.jobName).toContain(testCase.outputDir);
+      expect(runStep.run, testCase.jobName).toContain(
+        'echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"',
+      );
+      expect(runStep.run, testCase.jobName).toContain('mkdir -p "${output_dir}"');
+      expect(runStep.run, testCase.jobName).toContain(testCase.marker);
+      expect(runStep.run, testCase.jobName).not.toMatch(
+        /^\s*(?:for|while|until)\b[^\n]*\b(?:attempt|retry)\w*\b/imu,
+      );
+      expect(command, testCase.jobName).toEqual(testCase.command);
+      for (const forbiddenFlag of testCase.forbiddenFlags) {
+        expect(runStep.run, `${testCase.jobName}: ${forbiddenFlag}`).not.toContain(forbiddenFlag);
+      }
+      expect(uploadStep.if, testCase.jobName).toBe(
+        "always() && steps.run_lane.outputs.output_dir != ''",
+      );
+      expect(uploadStep.with?.name, testCase.jobName).toBe(testCase.artifactName);
+      expect(uploadStep.with?.path, testCase.jobName).toBe(
+        "${{ steps.run_lane.outputs.output_dir }}",
+      );
+      expect(job.steps?.filter((step) => step.uses === UPLOAD_ARTIFACT_V7)).toHaveLength(1);
+      for (const blockingSurface of [job, ...(job.steps ?? [])]) {
+        expect(blockingSurface["continue-on-error"], testCase.jobName).toBeUndefined();
+      }
+      expect(job.needs, testCase.jobName).not.toContain("run_live_runtime_token_efficiency");
+      expect(job.needs, testCase.jobName).not.toContain("run_live_gateway_restart_runtime_pair");
+      expect(job.needs, testCase.jobName).not.toContain("run_live_inbound_voice_talkback");
+    }
+
+    const broadJob = workflowJob(
+      QA_LIVE_TRANSPORTS_WORKFLOW,
+      "run_live_runtime_token_efficiency",
     );
-    expect(reportStep.if).toBe("steps.run_lane.outcome == 'success'");
+    const reportStep = workflowStep(broadJob, "Generate live runtime token-efficiency report");
+    expectTextToIncludeAll(reportStep.run, [
+      '--summary "${{ steps.run_lane.outputs.output_dir }}/runtime-suite/qa-suite-summary.json"',
+      '--output-dir "${{ steps.run_lane.outputs.output_dir }}/runtime-report"',
+    ]);
+    expect(reportStep.if).toBe(
+      "${{ !cancelled() && steps.run_lane.outcome == 'success' }}",
+    );
+    expect(reportStep["continue-on-error"]).toBeUndefined();
+    for (const jobName of [
+      "run_live_gateway_restart_runtime_pair",
+      "run_live_inbound_voice_talkback",
+    ]) {
+      expect(
+        workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName).steps?.some((step) =>
+          step.name?.includes("token-efficiency report"),
+        ),
+      ).toBe(false);
+    }
   });
 
-  it("runs the core gateway restart pair on its pinned live model", () => {
-    const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_runtime_token_efficiency");
-    const credentialStep = workflowStep(job, "Validate required QA credential env");
-    const runStep = workflowStep(job, "Run pinned GPT-5.4 gateway restart runtime pair");
-    const stepNames = job.steps?.map((step) => step.name) ?? [];
+  it("keeps published-output artifact conditions eligible after failure or cancellation", () => {
+    for (const [jobName, runStepName, uploadStepName] of [
+      [
+        "run_live_runtime_token_efficiency",
+        "Run live core runtime-pair lane",
+        "Upload live runtime token-efficiency artifacts",
+      ],
+      [
+        "run_live_gateway_restart_runtime_pair",
+        "Run pinned GPT-5.4 gateway restart runtime pair",
+        "Upload live gateway restart runtime-pair artifacts",
+      ],
+      [
+        "run_live_inbound_voice_talkback",
+        "Run pinned GPT-5.4 inbound voice talkback",
+        "Upload live inbound voice talkback artifacts",
+      ],
+    ] as const) {
+      const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName);
+      const failure = simulateWorkflowSteps(job, {
+        name: runStepName,
+        outcome: "failure",
+      });
+      const cancellation = simulateWorkflowSteps(job, {
+        name: runStepName,
+        outcome: "cancelled",
+      });
 
-    expect(credentialStep.run).toContain('if [[ -z "${OPENAI_API_KEY:-}" ]]');
-    expect(credentialStep.run).toContain("exit 1");
-    expect(runStep.run).toContain("--provider-mode live-frontier");
-    expect(runStep.run).toContain("--scenario gateway-restart-multi-live");
-    expect(runStep.run).toContain("--model openai/gpt-5.4");
-    expect(runStep.run).toContain("--alt-model openai/gpt-5.4");
-    expect(runStep.run).toContain("--runtime-pair openclaw,codex");
-    expect(runStep.run).toContain(
-      "steps.run_lane.outputs.output_dir }}/gateway-restart-gpt-5.4-runtime-pair",
+      expect(failure.jobFailed, jobName).toBe(true);
+      expect(failure.jobCancelled, jobName).toBe(false);
+      expect(failure.eligibleSteps.has(uploadStepName), jobName).toBe(true);
+      expect(cancellation.jobFailed, jobName).toBe(false);
+      expect(cancellation.jobCancelled, jobName).toBe(true);
+      expect(cancellation.eligibleSteps.has(uploadStepName), jobName).toBe(true);
+    }
+
+    const broadJob = workflowJob(
+      QA_LIVE_TRANSPORTS_WORKFLOW,
+      "run_live_runtime_token_efficiency",
     );
-    expect(runStep.run).not.toContain("--allow-failures");
-    expect(stepNames.indexOf("Run pinned GPT-5.4 gateway restart runtime pair")).toBeLessThan(
-      stepNames.indexOf("Generate live runtime token-efficiency report"),
-    );
+    for (const outcome of ["failure", "cancelled"] as const) {
+      const simulation = simulateWorkflowSteps(broadJob, {
+        name: "Validate required QA credential env",
+        outcome,
+      });
+
+      expect(simulation.outcomes.get("Build private QA runtime"), outcome).toBe("skipped");
+      expect(simulation.outcomes.get("Run live core runtime-pair lane"), outcome).toBe("skipped");
+      expect(
+        simulation.eligibleSteps.has("Upload live runtime token-efficiency artifacts"),
+        outcome,
+      ).toBe(false);
+    }
   });
 
   it("requires release-check QA evidence artifacts when lanes run", () => {
