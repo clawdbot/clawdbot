@@ -1,4 +1,5 @@
 import { browserElement, browserTarget, requireWindowTarget } from "./action-targets.js";
+import type { CuaComputerActParams } from "./action-targets.js";
 import type { CuaDriverSession } from "./driver-client.js";
 import {
   browserBinding,
@@ -16,7 +17,6 @@ import {
   verifyGeneration,
   type CuaFrameState,
 } from "./frame.js";
-import type { CuaComputerActParams } from "./v2-actions.js";
 
 export async function handleBrowserAct(
   driver: CuaDriverSession,

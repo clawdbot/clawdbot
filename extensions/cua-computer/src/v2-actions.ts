@@ -2,7 +2,12 @@ import {
   COMPUTER_USE_V2_ACTION_NAMES,
   type ComputerActParams,
 } from "openclaw/plugin-sdk/computer-use";
-import { elementArgs, requireWindowTarget, windowPointArgs } from "./action-targets.js";
+import {
+  elementArgs,
+  requireWindowTarget,
+  windowPointArgs,
+  type CuaComputerActParams,
+} from "./action-targets.js";
 import { normalizeModifiers, parseKeyChord } from "./actions.js";
 import { handleBrowserAct } from "./browser-actions.js";
 import { EscalationReason, type CuaDriverSession } from "./driver-client.js";
@@ -39,65 +44,6 @@ const CUA_TARGETED_ACTION_NAMES = new Set([
   "type",
   "key",
 ] as const);
-
-export type CuaComputerActParams = {
-  action: ComputerActParams["action"];
-  displayFrameId?: string;
-  x?: number;
-  y?: number;
-  fromX?: number;
-  fromY?: number;
-  text?: string;
-  keys?: string;
-  modifiers?: string;
-  scrollDirection?: "up" | "down" | "left" | "right";
-  scrollAmount?: number;
-  durationMs?: number;
-  screenIndex?: number;
-  refWidth?: number;
-  windowRef?: string;
-  elementRef?: string;
-  observationId?: string;
-  deliveryMode?: "background" | "foreground";
-  query?: string;
-  depth?: number;
-  maxElements?: number;
-  app?: string;
-  value?: string;
-  path?: string[];
-  browserRef?: string;
-  pageRef?: string;
-  snapshotFormat?: "dom_refs_v1" | "semantic_v2";
-  continuation?: string;
-  includeScreenshot?: boolean;
-  profile?: "isolated_new" | "isolated_named";
-  profileName?: string;
-  url?: string;
-  inputRoute?: "trusted" | "dom_event";
-  mode?: "insert_text" | "keystrokes";
-  replace?: boolean;
-  dialogAction?: "inspect" | "accept" | "dismiss";
-  dialogRef?: string;
-  promptText?: string;
-  files?: string[];
-  destinationRoot?: string;
-  pointerAction?: "hover" | "right_click" | "double_click" | "scroll" | "drag";
-  destinationElementRef?: string;
-  toX?: number;
-  toY?: number;
-  deltaX?: number;
-  deltaY?: number;
-  x1?: number;
-  y1?: number;
-  x2?: number;
-  y2?: number;
-  reason?:
-    | "ax_tree_pixel_mismatch"
-    | "background_delivery_failed"
-    | "foreground_ineffective"
-    | "no_window_target"
-    | "other";
-};
 
 async function handleTargetedAct(
   platform: NodeJS.Platform,
@@ -263,6 +209,8 @@ async function handleTargetedAct(
   const result = await callWindowTool(driver, state, tool, args, signal);
   return JSON.stringify(actionEnvelope(result));
 }
+
+export type { CuaComputerActParams } from "./action-targets.js";
 
 export async function handleV2Act(
   platform: NodeJS.Platform,

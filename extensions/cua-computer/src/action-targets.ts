@@ -10,7 +10,65 @@ import {
   verifyGeneration,
   type CuaFrameState,
 } from "./frame.js";
-import type { CuaComputerActParams } from "./v2-actions.js";
+
+export type CuaComputerActParams = {
+  action: ComputerActParams["action"];
+  displayFrameId?: string;
+  x?: number;
+  y?: number;
+  fromX?: number;
+  fromY?: number;
+  text?: string;
+  keys?: string;
+  modifiers?: string;
+  scrollDirection?: "up" | "down" | "left" | "right";
+  scrollAmount?: number;
+  durationMs?: number;
+  screenIndex?: number;
+  refWidth?: number;
+  windowRef?: string;
+  elementRef?: string;
+  observationId?: string;
+  deliveryMode?: "background" | "foreground";
+  query?: string;
+  depth?: number;
+  maxElements?: number;
+  app?: string;
+  value?: string;
+  path?: string[];
+  browserRef?: string;
+  pageRef?: string;
+  snapshotFormat?: "dom_refs_v1" | "semantic_v2";
+  continuation?: string;
+  includeScreenshot?: boolean;
+  profile?: "isolated_new" | "isolated_named";
+  profileName?: string;
+  url?: string;
+  inputRoute?: "trusted" | "dom_event";
+  mode?: "insert_text" | "keystrokes";
+  replace?: boolean;
+  dialogAction?: "inspect" | "accept" | "dismiss";
+  dialogRef?: string;
+  promptText?: string;
+  files?: string[];
+  destinationRoot?: string;
+  pointerAction?: "hover" | "right_click" | "double_click" | "scroll" | "drag";
+  destinationElementRef?: string;
+  toX?: number;
+  toY?: number;
+  deltaX?: number;
+  deltaY?: number;
+  x1?: number;
+  y1?: number;
+  x2?: number;
+  y2?: number;
+  reason?:
+    | "ax_tree_pixel_mismatch"
+    | "background_delivery_failed"
+    | "foreground_ineffective"
+    | "no_window_target"
+    | "other";
+};
 
 export function requireWindowTarget(
   driver: CuaDriverSession,
