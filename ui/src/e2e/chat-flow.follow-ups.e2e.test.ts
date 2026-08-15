@@ -4,6 +4,7 @@ import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
   installMockGateway,
+  pauseVirtualClock,
   requireRecord,
   requireString,
   waitForRequests,
@@ -12,6 +13,112 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("recovers a queued follow-up when terminal events are missed", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await page.clock.install();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agent.wait": { status: "ok", endedAt: Date.now() },
+      },
+      sessionInfo: { hasActiveRun: false, key: "main", status: "done" },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+      await page.goto(`${suite.server.baseUrl}chat?session=main`);
+      await expect.poll(() => new URL(page.url()).pathname).toMatch(/\/chat\/main$/);
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill("finish silently");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const initialSend = await gateway.waitForRequest("chat.send");
+      const activeRunId = requireString(
+        requireRecord(initialSend.params).idempotencyKey,
+        "active chat run id",
+      );
+      await gateway.setMethodResponse("chat.history", {
+        messages: [
+          {
+            __openclaw: { idempotencyKey: `${activeRunId}:user` },
+            content: [{ text: "finish silently", type: "text" }],
+            role: "user",
+            timestamp: Date.now(),
+          },
+        ],
+        sessionId: "control-ui-e2e-session",
+        sessionInfo: { hasActiveRun: false, key: "global", status: "done" },
+        thinkingLevel: null,
+      });
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [activeRunId],
+        clientRunId: activeRunId,
+        hasActiveRun: true,
+        message: {
+          __openclaw: {
+            id: "persisted-silent-user",
+            idempotencyKey: `${activeRunId}:user`,
+            seq: 1,
+          },
+          content: [{ text: "finish silently", type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        messageId: "persisted-silent-user",
+        messageSeq: 1,
+        session: {
+          activeRunIds: [activeRunId],
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+      await gateway.setMethodResponse("chat.send", { runId: "recovered-run", status: "ok" });
+
+      await pauseVirtualClock(page);
+      const followUp = "send after the missed terminal";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(followUp);
+      await page.getByRole("button", { name: "Queue message" }).click();
+      const queue = page.locator(".chat-queue");
+      await queue.getByText(followUp).waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/missed-terminal-queued.png`,
+          fullPage: true,
+        });
+      }
+
+      await page.clock.fastForward(15_000);
+
+      await gateway.waitForRequest("agent.wait");
+      await page.clock.runFor(1_000);
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      expect(requireRecord(sends[1]?.params)).toMatchObject({
+        message: followUp,
+        sessionKey: "main",
+      });
+      await queue.waitFor({ state: "detached", timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/missed-terminal-recovered.png`,
+          fullPage: true,
+        });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("opens a git-backed agent draft from the sidebar new-session action", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

@@ -1780,12 +1780,25 @@ jobs:
           --configLoader runner
           ui/src/e2e/mcp-app-conformance.e2e.test.ts
 
-      - name: Test Control UI auth transports with a real Gateway
+      - name: Test Control UI browser flows with a real Gateway
+        env:
+          OPENCLAW_CAPTURE_UI_PROOF: "1"
+          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/chat-flow-real-gateway
         run: >-
           node scripts/run-vitest.mjs run
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
+          ui/src/e2e/chat-flow.real-gateway.e2e.test.ts
           ui/src/e2e/control-ui-auth-transports.e2e.test.ts
+
+      - name: Upload Control UI real-Gateway behavior proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: control-ui-real-gateway-proof-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e/chat-flow-real-gateway
+          if-no-files-found: warn
+          retention-days: 7
 
   control-ui-i18n:
     permissions:

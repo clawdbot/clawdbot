@@ -12,6 +12,7 @@ import {
   flushStoredChatOutbox,
   retryableGatewayDelayMs,
   scheduleStoredChatOutboxDrain as scheduleOutboxDrain,
+  scheduleStoredChatOutboxRunWatch,
   scheduleStoredChatOutboxRetry,
   UNCONFIRMED_CHAT_SEND_ERROR,
   type ChatOutboxDrainDependencies,
@@ -638,6 +639,9 @@ export async function deliverChatQueueItem(
       );
       if (typeof parked === "string") {
         drainResult = parked;
+        if (parked === "pending") {
+          scheduleStoredChatOutboxRunWatch(host, outbox, chatOutboxDrainDependencies);
+        }
         if (parked === "pending" && outbox.queue[0]?.id !== item.id) {
           // Reconcile older restored rows without delaying this turn's active-run policy.
           void scheduleOutboxDrain(host, outbox, chatOutboxDrainDependencies);

@@ -16,6 +16,7 @@ import {
   type ChatCommandResetOptions,
 } from "./chat-commands.ts";
 import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
+import { scheduleChatOutboxRunWatch } from "./chat-outbox-run-watch.ts";
 import {
   excludeComposerAttachments,
   readQueuedMessageById,
@@ -31,7 +32,7 @@ import {
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
-import { isChatBusy } from "./run-lifecycle.ts";
+import { isChatBusy, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import {
   chatMessagesContainQueuedSend,
   OFFLINE_QUEUE_STORAGE_ERROR,
@@ -108,6 +109,49 @@ function getStoredChatOutboxClientState(client: GatewayBrowserClient): StoredCha
   return created;
 }
 
+export function scheduleStoredChatOutboxRunWatch(
+  host: ChatHost,
+  scope: StoredChatOutboxScope,
+  dependencies: ChatOutboxDrainDependencies,
+) {
+  const client = host.client;
+  const runId = host.chatRunId;
+  if (!host.connected || !client || !runId) {
+    return;
+  }
+  const connectionEpoch = host.connectionEpoch;
+  scheduleChatOutboxRunWatch({
+    client,
+    connectionEpoch,
+    runId,
+    isCurrent: () =>
+      host.connected &&
+      host.client === client &&
+      host.connectionEpoch === connectionEpoch &&
+      host.chatRunId === runId &&
+      visibleSessionMatches(host, scope.sessionKey, scope.agentId) &&
+      Boolean(readStoredChatOutbox(host, scope)),
+    onTerminal: async (projection) => {
+      reconcileChatRunLifecycle(host, {
+        ...projection,
+        runId,
+        sessionKey: host.sessionKey,
+        sessionKeys: [scope.sessionKey],
+        clearLocalRun: true,
+        clearChatStream: true,
+        clearToolStream: projection.yielded !== true,
+        publishRunStatus: false,
+        armLocalTerminalReconcile: projection.yielded !== true,
+      });
+      try {
+        await loadChatHistory(host as unknown as ChatState);
+      } finally {
+        await scheduleStoredChatOutboxDrain(host, scope, dependencies);
+      }
+    },
+  });
+}
+
 export function retryableGatewayDelayMs(err: unknown): number | null {
   if (!(err instanceof GatewayRequestError) || !err.retryable) {
     return null;
@@ -169,11 +213,21 @@ async function readCurrentStoredChatHistory(
   connectionEpoch: number | undefined,
   dependencies: ChatOutboxDrainDependencies,
 ): Promise<ChatHistoryResult | "blocked" | "continue"> {
+  const historySessionKey =
+    isUiGlobalSessionKey(outbox.sessionKey) &&
+    !isUiGlobalSessionKey(host.sessionKey) &&
+    visibleSessionMatches(host, outbox.sessionKey, outbox.agentId)
+      ? host.sessionKey
+      : outbox.sessionKey;
   let history: ChatHistoryResult;
   try {
     history = await client.request<ChatHistoryResult>("chat.history", {
-      sessionKey: outbox.sessionKey,
-      ...(isUiGlobalSessionKey(outbox.sessionKey) && outbox.agentId
+      // Global is the durable browser scope for main-session aliases, but a
+      // per-sender Gateway can keep the visible transcript at agent:<id>:main.
+      // Reconcile that visible canonical route so an already-delivered head
+      // cannot become unconfirmed and block later FIFO rows.
+      sessionKey: historySessionKey,
+      ...(isUiGlobalSessionKey(historySessionKey) && outbox.agentId
         ? { agentId: outbox.agentId }
         : {}),
       limit: 1000,
@@ -602,10 +656,15 @@ export async function resumeStoredChatOutboxes(
   if (!host.connected || !host.client) {
     return;
   }
+  const outboxes = listStoredChatOutboxes(host);
+  const visibleOutbox = outboxes.find((outbox) =>
+    visibleSessionMatches(host, outbox.sessionKey, outbox.agentId),
+  );
+  if (visibleOutbox) {
+    scheduleStoredChatOutboxRunWatch(host, visibleOutbox, dependencies);
+  }
   await Promise.allSettled(
-    listStoredChatOutboxes(host).map((outbox) =>
-      scheduleStoredChatOutboxDrain(host, outbox, dependencies),
-    ),
+    outboxes.map((outbox) => scheduleStoredChatOutboxDrain(host, outbox, dependencies)),
   );
 }
 

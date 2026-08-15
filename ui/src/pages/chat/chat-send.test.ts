@@ -7469,6 +7469,297 @@ describe("handleSendChat", () => {
     ).toMatchObject({ expectedLeafEntryId: "leaf-after-terminal" });
   });
 
+  it.each([
+    {
+      name: "completion",
+      waitResult: { status: "ok", endedAt: 1 },
+      sessionStatus: "done" as const,
+      expectedSends: 1,
+    },
+    {
+      name: "hard timeout",
+      waitResult: { status: "timeout", endedAt: 1, stopReason: "timeout" },
+      sessionStatus: "timeout" as const,
+      expectedSends: 1,
+    },
+    {
+      name: "direct cancellation",
+      waitResult: { status: "error", endedAt: 1, stopReason: "aborted" },
+      sessionStatus: "killed" as const,
+      expectedSends: 1,
+    },
+    ...["restart", "superseded", "rpc", "stop"].map((stopReason) => ({
+      name: `${stopReason} cancellation`,
+      waitResult: { status: "error", endedAt: 1, stopReason },
+      sessionStatus: "killed" as const,
+      expectedSends: 1,
+    })),
+    {
+      name: "yielded continuation",
+      waitResult: { status: "ok", endedAt: 1, stopReason: "end_turn", yielded: true },
+      sessionStatus: "running" as const,
+      expectedSends: 1,
+    },
+  ])("reconciles $name before recovering a queued follow-up", async (testCase) => {
+    vi.useFakeTimers();
+    try {
+      const host = makeChatHost({
+        requestHandlers: {
+          "agent.wait": () => ({ runId: "stale-run", ...testCase.waitResult }),
+          "chat.history": () => ({
+            messages: [],
+            sessionInfo: row("agent:main", {
+              hasActiveRun: false,
+              status: testCase.sessionStatus,
+            }),
+          }),
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "recovered follow-up payload");
+            return { runId: payload.idempotencyKey, status: "ok" };
+          },
+        },
+        chatFollowUpMode: "queue",
+        chatMessage: "send after the missed terminal",
+        chatRunId: "stale-run",
+      });
+      const reconcileRunTerminal = vi.spyOn(host.sessions, "reconcileRunTerminal");
+
+      await handleSendChat(host);
+
+      expect(host.chatRunId).toBe("stale-run");
+      expect(listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue)).toEqual([
+        expect.objectContaining({
+          text: "send after the missed terminal",
+          sendState: "waiting-idle",
+        }),
+      ]);
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(host.request).toHaveBeenCalledWith("agent.wait", {
+        runId: "stale-run",
+        timeoutMs: 50,
+      });
+      expect(host.chatRunId).toBeNull();
+      expect(reconcileRunTerminal).toHaveBeenCalledWith({
+        runId: "stale-run",
+        status: testCase.sessionStatus,
+        sessionKeys: expect.arrayContaining(["agent:main"]),
+        endedAt: expect.any(Number),
+      });
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(
+        testCase.expectedSends,
+      );
+      expect(listStoredChatOutboxes(host)).toHaveLength(testCase.expectedSends === 1 ? 0 : 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconciles a visible global outbox through its canonical Gateway session", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstRunId = "real-first-run";
+      const canonicalSessionKey = "agent:main:main";
+      const historySessionKeys: string[] = [];
+      let terminal = false;
+      const host = makeChatHost({
+        requestHandlers: {
+          "agent.wait": () => {
+            terminal = true;
+            return { runId: firstRunId, status: "ok", endedAt: Date.now() };
+          },
+          "chat.history": (params: unknown) => {
+            const payload = requireRecord(params, "canonical history payload");
+            const requestedSessionKey = String(payload.sessionKey);
+            historySessionKeys.push(requestedSessionKey);
+            return requestedSessionKey === canonicalSessionKey && terminal
+              ? {
+                  messages: [
+                    {
+                      role: "user",
+                      __openclaw: { idempotencyKey: `${firstRunId}:user` },
+                    },
+                  ],
+                  sessionInfo: row(canonicalSessionKey, {
+                    hasActiveRun: false,
+                    status: "done",
+                  }),
+                }
+              : {
+                  messages: [],
+                  sessionInfo: row(requestedSessionKey, {
+                    hasActiveRun: !terminal,
+                    status: terminal ? "done" : "running",
+                  }),
+                };
+          },
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "canonical follow-up payload");
+            return { runId: payload.idempotencyKey, status: "ok" };
+          },
+        },
+        agentsList: { defaultId: "main", mainKey: "main" },
+        chatFollowUpMode: "queue",
+        chatMessage: "follow-up behind delivered head",
+        chatRunId: firstRunId,
+        sessionKey: canonicalSessionKey,
+      });
+      expect(
+        admitStoredChatComposerQueueItem(host, canonicalSessionKey, {
+          id: "delivered-head",
+          text: "already delivered first turn",
+          createdAt: 1,
+          sendAttempts: 1,
+          sendRequestStartedAtMs: 1,
+          sendRunId: firstRunId,
+          sendState: "waiting-reconnect",
+        }),
+      ).toBe(true);
+
+      await handleSendChat(host);
+      expect(listStoredChatOutboxes(host)).toEqual([
+        expect.objectContaining({
+          agentId: "main",
+          sessionKey: "global",
+          queue: [
+            expect.objectContaining({ id: "delivered-head" }),
+            expect.objectContaining({ text: "follow-up behind delivered head" }),
+          ],
+        }),
+      ]);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(host.request).toHaveBeenCalledWith("agent.wait", {
+        runId: firstRunId,
+        timeoutMs: 50,
+      });
+      expect(historySessionKeys).not.toContain("global");
+      expect(historySessionKeys).toContain(canonicalSessionKey);
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({ message: "follow-up behind delivered head" }),
+      );
+      expect(listStoredChatOutboxes(host)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-arms missed-terminal recovery for the current connection epoch", async () => {
+    vi.useFakeTimers();
+    try {
+      let terminal = false;
+      const host = makeChatHost({
+        requestHandlers: {
+          "agent.wait": () => {
+            terminal = true;
+            return { runId: "reconnected-run", status: "ok", endedAt: Date.now() };
+          },
+          "chat.history": () => ({
+            messages: [],
+            sessionInfo: row("agent:main", {
+              activeRunIds: terminal ? [] : ["reconnected-run"],
+              hasActiveRun: !terminal,
+              status: terminal ? "done" : "running",
+            }),
+          }),
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "reconnected follow-up payload");
+            return { runId: payload.idempotencyKey, status: "ok" };
+          },
+        },
+        chatFollowUpMode: "queue",
+        chatMessage: "send after reconnect recovery",
+        chatRunId: "reconnected-run",
+        connectionEpoch: 1,
+      });
+      expect(
+        admitStoredChatComposerQueueItem(host, "agent:other:main", {
+          id: "older-other-session-row",
+          text: "unrelated older session",
+          createdAt: 1,
+          sendState: "waiting-idle",
+          sessionKey: "agent:other:main",
+          agentId: "other",
+        }),
+      ).toBe(true);
+
+      await handleSendChat(host);
+      host.connectionEpoch = 2;
+      await retryReconnectableQueuedChatSends(host);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(host.request).toHaveBeenCalledWith("agent.wait", {
+        runId: "reconnected-run",
+        timeoutMs: 50,
+      });
+      expect(host.chatRunId).toBeNull();
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+      expect(listStoredChatOutboxes(host)).toEqual([
+        expect.objectContaining({
+          agentId: "other",
+          sessionKey: "global",
+          queue: [expect.objectContaining({ id: "older-other-session-row" })],
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { name: "the run is still active", firstWait: { status: "timeout" } },
+    { name: "the recovery probe fails", firstWait: new Error("gateway closed") },
+  ])("keeps the follow-up queued when $name", async ({ firstWait }) => {
+    vi.useFakeTimers();
+    try {
+      let waitCalls = 0;
+      const host = makeChatHost({
+        requestHandlers: {
+          "agent.wait": () => {
+            waitCalls += 1;
+            if (waitCalls === 1) {
+              if (firstWait instanceof Error) {
+                throw firstWait;
+              }
+              return firstWait;
+            }
+            return { runId: "active-run", status: "ok", endedAt: Date.now() };
+          },
+          "chat.history": () => ({
+            messages: [],
+            sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+          }),
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "retried recovery payload");
+            return { runId: payload.idempotencyKey, status: "ok" };
+          },
+        },
+        chatFollowUpMode: "queue",
+        chatMessage: "wait for the active run",
+        chatRunId: "active-run",
+      });
+
+      await handleSendChat(host);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(host.chatRunId).toBe("active-run");
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+      expect(listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue)).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(waitCalls).toBe(2);
+      expect(host.chatRunId).toBeNull();
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("omits the active leaf when draining a restored outbox", async () => {
     const host = makeChatHost({
       client: null,
