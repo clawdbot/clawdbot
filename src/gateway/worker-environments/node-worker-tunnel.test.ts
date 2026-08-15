@@ -242,7 +242,6 @@ describe("node worker tunnel manager", () => {
         manifestRef,
         remoteWorkspaceDir: "/node/workspace",
       }));
-
       const first = manager.start(startRequest());
       await vi.waitFor(() => expect(prepareSync).toHaveBeenCalledOnce());
       expect(manager.status("environment-1")).toBe("connecting");
