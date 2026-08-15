@@ -208,7 +208,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     });
     const active = column.panels.find((panel) => panel.id === column.activePanelId) ?? tabs[0];
     const activePanel = column.panels.find((panel) => panel.id === active?.id);
-    const openUrl = activePanel ? this.panelOpenUrls[activePanel.slot] : null;
+    const openUrl = (activePanel ? this.panelOpenUrls[activePanel.slot] : null) ?? null;
     return html`
       <header class="rail-header side-panel__header">
         <div class="side-panel__header-tabs">

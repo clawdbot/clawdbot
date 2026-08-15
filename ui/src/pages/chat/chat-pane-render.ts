@@ -57,7 +57,10 @@ import {
   renderSessionWorkspaceRail,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
-import type { SidebarPanelTemplates } from "./components/chat-sidebar-region-types.ts";
+import type {
+  SidebarPanelTemplates,
+  SidebarRegionCallbacks,
+} from "./components/chat-sidebar-region-types.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -695,7 +698,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
           }
         : {}),
     };
-    const sidebarCallbacks = {
+    const sidebarCallbacks: SidebarRegionCallbacks = {
       activatePanel: (panelId: string) => {
         state.updateSidebarLayout(activatePanel(state.sidebarLayout, panelId));
         state.updateSidebarActivePanel(panelId);
