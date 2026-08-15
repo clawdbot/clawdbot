@@ -191,6 +191,9 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
+    // Frozen before context prep so early failures still delete the provisional
+    // child. Preparation may rewrite sessionId (fork); reassign afterward so
+    // later guarded cleanup still matches the spawn-owned lifecycle row.
     let provisionalSessionIdentity = {
       expectedSessionId: initialSession.entry?.sessionId,
       expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
@@ -343,11 +346,27 @@ export async function spawnSubagentDirect(
         swarmSchedulerGroupKey,
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
-    if (childEntry) {
+    // Prefer the post-context persisted child entry so fork paths record and
+    // return the same durable UUID (fork.transcript.sessionId), not the
+    // provisional pre-fork entry identity.
+    const acceptedChildEntry =
+      preparedSpawnContext.mode === "fork"
+        ? {
+            ...(childEntry ?? {
+              sessionId: preparedSpawnContext.forked.sessionId,
+              updatedAt: Date.now(),
+            }),
+            sessionId: preparedSpawnContext.forked.sessionId,
+            ...(preparedSpawnContext.forked.sessionFile
+              ? { sessionFile: preparedSpawnContext.forked.sessionFile }
+              : {}),
+          }
+        : childEntry;
+    if (acceptedChildEntry) {
       recordSessionCreated({
         sessionKey: childSessionKey,
         agentId: targetAgentId,
-        entry: childEntry,
+        entry: acceptedChildEntry,
       });
     }
     recordSubagentSpawned({
@@ -356,6 +375,10 @@ export async function spawnSubagentDirect(
       requesterSessionKey: requesterInternalKey,
       agentId: targetAgentId,
     });
+    const resolveAcceptedChildSessionId = (): string | undefined =>
+      typeof acceptedChildEntry?.sessionId === "string" && acceptedChildEntry.sessionId.trim()
+        ? acceptedChildEntry.sessionId.trim()
+        : undefined;
     const launchChildRun = async (assertDispatchCurrent?: () => void) =>
       await callNativeSubagentGateway(
         withSubagentGatewayExecutionIdentity(
@@ -672,6 +695,9 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
+      sessionId: resolveAcceptedChildSessionId(),
+      // sessionKey remains collector-launch only; ordinary spawns expose durable
+      // identity via sessionId + childSessionKey without redefining sessionKey.
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,

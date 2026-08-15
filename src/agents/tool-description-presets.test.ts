@@ -6,6 +6,7 @@ import {
   describeSessionsListTool,
   describeSessionsSearchTool,
   describeSessionsSendTool,
+  describeSessionsSpawnTool,
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
 
@@ -82,5 +83,19 @@ describe("sessions_send tool description", () => {
     expect(describeSessionsSendTool()).toContain("reply may still announce");
     expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
     expect(describeSessionsSendTool()).toContain("neither proves target completion");
+  });
+});
+
+describe("sessions_spawn tool description", () => {
+  it("scopes durable sessionId to hidden native accepts", () => {
+    const description = describeSessionsSpawnTool();
+    expect(description).toContain("Hidden native accepts include durable `sessionId`");
+    expect(description).toContain("prefer over parsing `childSessionKey`");
+    expect(description).toContain("ACP and `visible=true` accepts omit it");
+
+    const hiddenAcp = describeSessionsSpawnTool({ acpAvailable: false });
+    expect(hiddenAcp).toContain("Hidden native accepts include durable `sessionId`");
+    expect(hiddenAcp).toContain("`visible=true` accepts omit it");
+    expect(hiddenAcp).not.toContain("ACP");
   });
 });
