@@ -9,6 +9,13 @@ on:
         type: string
         default: 'v20260815'
 
+  # 新增：当推送代码时自动触发
+  push:
+    branches:
+      - main # 如果你的默认分支叫 master，请改成 master
+    paths:
+      - '.github/workflows/android-release.yml' # 监听到当前 workflow 文件被修改就触发
+      - 'apps/android/**'                     # 监听到 Android 源码被修改也触发
 
 permissions:
   contents: read
@@ -35,7 +42,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "true"
-          install-deps: "false"
+          install-deps: "true"
           use-actions-cache: "false"
 
       - name: Setup Android toolchain
