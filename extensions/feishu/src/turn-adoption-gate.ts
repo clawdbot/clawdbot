@@ -9,7 +9,7 @@
 // core's reply-run registry; this helper only picks the lane-release moment.
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 
-export type FeishuTurnAdoptionGate = {
+type FeishuTurnAdoptionGate = {
   /** Wrapped lifecycle to hand to the turn runner, or undefined passthrough. */
   lifecycle: FeishuIngressLifecycle | undefined;
   /**
