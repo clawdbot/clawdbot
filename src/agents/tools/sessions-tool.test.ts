@@ -162,6 +162,10 @@ describe("sessions tool", () => {
         },
         deleteTranscript: { type: "boolean" },
         label: { type: "string", description: expect.stringContaining("Empty string clears") },
+        icon: {
+          type: "string",
+          description: expect.stringContaining("Distinct from attention"),
+        },
         statusNote: { type: "string", maxLength: 120 },
         attention: {
           type: "string",
@@ -946,7 +950,7 @@ describe("sessions tool", () => {
     });
   });
 
-  it("patches and clears title, status, attention, and archive state", async () => {
+  it("patches and clears title, icon, status, attention, and archive state", async () => {
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
@@ -958,12 +962,13 @@ describe("sessions tool", () => {
     await tool.execute("declare", {
       action: "patch",
       label: "Waiting on staging",
+      icon: "🦞",
       statusNote: "Blocked: need the staging password",
       attention: "key",
       ttlMinutes: 45,
       archived: true,
     });
-    await tool.execute("clear", { action: "patch", label: "", attention: "clear" });
+    await tool.execute("clear", { action: "patch", label: "", icon: "", attention: "clear" });
 
     expect(callGateway.mock.calls).toEqual([
       [
@@ -972,6 +977,7 @@ describe("sessions tool", () => {
           params: {
             key: "agent:main:main",
             label: "Waiting on staging",
+            icon: "🦞",
             statusNote: "Blocked: need the staging password",
             attention: "key",
             ttlMinutes: 45,
@@ -983,7 +989,7 @@ describe("sessions tool", () => {
       [
         {
           method: "sessions.patch",
-          params: { key: "agent:main:main", label: null, attention: null },
+          params: { key: "agent:main:main", label: null, icon: null, attention: null },
         },
       ],
     ]);

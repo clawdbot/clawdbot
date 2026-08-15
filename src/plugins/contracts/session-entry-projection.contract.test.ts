@@ -316,7 +316,7 @@ describe("plugin session extension SessionEntry projection", () => {
         });
         api.registerSessionExtension({
           namespace: "custom-icon",
-          description: "retired custom icon",
+          description: "reserved custom icon",
           sessionEntrySlotKey: "icon",
         });
         api.registerSessionExtension({

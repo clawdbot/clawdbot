@@ -11,6 +11,19 @@ const SESSION_AGENT_STATUS_DEFAULT_TTL_MINUTES = 30;
 export const SESSION_AGENT_STATUS_MAX_TTL_MINUTES = 120;
 
 const ATTENTION_ICON_IDS = new Set<string>(SESSION_AGENT_ATTENTION_ICON_IDS);
+const SESSION_ICON_MAX_UTF16_UNITS = 16;
+const ASCII_VISIBLE_CHARACTER_RE = /^[!-~]$/u;
+
+export function normalizeSessionIconValue(value: string): string | null {
+  const normalized = value.trim();
+  if (!normalized || normalized.length > SESSION_ICON_MAX_UTF16_UNITS) {
+    return null;
+  }
+  const graphemes = [
+    ...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(normalized),
+  ];
+  return graphemes.length === 1 && !ASCII_VISIBLE_CHARACTER_RE.test(normalized) ? normalized : null;
+}
 
 export function isSessionAgentAttentionIconId(
   value: unknown,

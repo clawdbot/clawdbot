@@ -36,6 +36,7 @@ export const SessionRowSchema = Type.Object(
       Type.Literal("unknown"),
     ]),
     label: Type.Optional(Type.String()),
+    icon: Type.Optional(Type.String()),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),

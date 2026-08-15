@@ -59,27 +59,40 @@ async function loadTranscriptRows(params: {
   });
 }
 
-test("sessions.patch accepts and discards the retired beta icon field", async () => {
+test("sessions.patch sets, clears, and validates the persistent emoji icon", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
-    entries: {
-      main: {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-      },
-    },
+    entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
   });
 
   const patched = await directSessionHandlerReq<{
     entry: Record<string, unknown>;
   }>("sessions.patch", {
     key: "agent:main:main",
-    icon: "🧪",
+    icon: "🦞",
   });
 
   expect(patched.ok).toBe(true);
-  expect(patched.payload?.entry).not.toHaveProperty("icon");
+  expect(patched.payload?.entry.icon).toBe("🦞");
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.icon).toBe("🦞");
+
+  const cleared = await directSessionHandlerReq<{ entry: Record<string, unknown> }>(
+    "sessions.patch",
+    { key: "agent:main:main", icon: "" },
+  );
+  expect(cleared.ok).toBe(true);
+  expect(cleared.payload?.entry).not.toHaveProperty("icon");
   expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty("icon");
+
+  const invalid = await directSessionHandlerReq("sessions.patch", {
+    key: "agent:main:main",
+    icon: "hand",
+  });
+  expect(invalid.ok).toBe(false);
+  expect(invalid.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: "icon must be a single emoji",
+  });
 });
 
 test("lists and patches session store via sessions.* RPC", async () => {
