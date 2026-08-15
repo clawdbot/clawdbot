@@ -223,6 +223,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
 
   private isHeaderSessionActionScopeCurrent(scope: SidebarSessionMutationScope): boolean {
     return (
+      this.presented &&
       this.isConnected &&
       this.connectionGeneration === scope.epoch &&
       this.context === scope.context &&
@@ -284,8 +285,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.publishHeaderError(access.reason);
       return;
     }
+    const generation = this.connectionGeneration;
     void patchChatSessionLabel(state, this.context.sessions, key, label).catch((error: unknown) =>
-      this.publishHeaderError(error),
+      this.publishHeaderError(error, generation),
     );
   }
 
@@ -387,11 +389,12 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const copiedValue =
       action === "copy-path" ? workspaceRoot : action === "copy-branch" ? branch : null;
     if (copiedValue) {
+      const generation = this.connectionGeneration;
       void copy(copiedValue).then((copied) => {
         if (copied) {
           this.showHeaderCopied(action);
         } else {
-          this.publishHeaderError(t("common.copyFailed"));
+          this.publishHeaderError(t("common.copyFailed"), generation);
         }
       });
       return;
@@ -401,8 +404,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     }
   }
 
-  protected publishHeaderError(error: unknown): void {
-    if (!this.state) {
+  protected publishHeaderError(error: unknown, generation = this.connectionGeneration): void {
+    if (!this.state || !this.presented || generation !== this.connectionGeneration) {
       return;
     }
     this.state.lastError = error instanceof Error ? error.message : String(error);
@@ -415,6 +418,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!client) {
       return;
     }
+    const generation = this.connectionGeneration;
     const agentId = parseAgentSessionKey(row.key)?.agentId;
     try {
       const result = await client.request<SessionsFilesRevealResult>("sessions.files.reveal", {
@@ -422,10 +426,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         ...(agentId ? { agentId } : {}),
       });
       if (!result.ok) {
-        this.publishHeaderError(result.error ?? "Failed to reveal session workspace.");
+        this.publishHeaderError(result.error ?? "Failed to reveal session workspace.", generation);
       }
     } catch (error) {
-      this.publishHeaderError(error);
+      this.publishHeaderError(error, generation);
     }
   }
 }
