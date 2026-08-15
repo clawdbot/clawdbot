@@ -146,14 +146,24 @@ function paginateSessionMessages(
     }
   }
   let start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
-  const boundarySeq = resolveMessageSeq(messages[start]);
-  // Projection can expand one transcript record into several display rows.
-  // Keep equal-seq runs atomic because the public cursor cannot address a row within the run.
-  while (start > 0) {
-    if (boundarySeq === undefined || resolveMessageSeq(messages[start - 1]) !== boundarySeq) {
-      break;
+  // Projection can interleave several rows from the same transcript records.
+  // Close the page over their seq groups because the public cursor cannot split one.
+  const pageSeqs = new Set(
+    messages.slice(start, endExclusive).map(resolveMessageSeq).filter(Boolean),
+  );
+  const gapSeqs = new Set<number>();
+  for (let index = start - 1; index >= 0; index--) {
+    const seq = resolveMessageSeq(messages[index]);
+    if (seq === undefined) {
+      continue;
     }
-    start -= 1;
+    gapSeqs.add(seq);
+    if (!pageSeqs.has(seq)) {
+      continue;
+    }
+    start = index;
+    gapSeqs.forEach((gapSeq) => pageSeqs.add(gapSeq));
+    gapSeqs.clear();
   }
   const paginatedMessages = messages.slice(start, endExclusive);
   const firstSeq = resolveMessageSeq(paginatedMessages[0]);

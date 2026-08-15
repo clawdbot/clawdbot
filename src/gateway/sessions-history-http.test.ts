@@ -1108,21 +1108,37 @@ describe("session history HTTP endpoints", () => {
           content: [
             {
               type: "toolCall",
-              id: "call-message-cursor",
+              id: "call-message-first",
               name: "message",
-              arguments: { action: "send", message: "Cursor-visible reply." },
+              arguments: { action: "send", message: "First visible reply." },
+            },
+            {
+              type: "toolCall",
+              id: "call-message-second",
+              name: "message",
+              arguments: { action: "send", message: "Second visible reply." },
             },
           ],
           timestamp: sharedTimestamp,
         },
       },
       {
-        id: "history-tool-result",
+        id: "history-tool-result-first",
         message: {
           role: "toolResult",
           toolName: "message",
-          toolCallId: "call-message-cursor",
-          content: { ok: true, messageId: "same-sequence-result" },
+          toolCallId: "call-message-first",
+          content: { ok: true, messageId: "same-sequence-first" },
+          timestamp: sharedTimestamp,
+        },
+      },
+      {
+        id: "history-tool-result-second",
+        message: {
+          role: "toolResult",
+          toolName: "message",
+          toolCallId: "call-message-second",
+          content: { ok: true, messageId: "same-sequence-second" },
           timestamp: sharedTimestamp,
         },
       },
@@ -1140,8 +1156,10 @@ describe("session history HTTP endpoints", () => {
         query: "?limit=1",
       });
       expect(firstPage.messages?.map(sessionHistoryRowIdentity)).toEqual([
-        "3:toolResult:call-message-cursor",
-        "3:mirror:Cursor-visible reply.",
+        "3:toolResult:call-message-first",
+        "4:toolResult:call-message-second",
+        "3:mirror:First visible reply.",
+        "4:mirror:Second visible reply.",
       ]);
       expect(firstPage.hasMore).toBe(true);
       expect(firstPage.nextCursor).toBe("3");
@@ -1177,13 +1195,15 @@ describe("session history HTTP endpoints", () => {
       const chronologicalRows = pages.toReversed().flatMap((page) => page.messages ?? []);
       expect(chronologicalRows.map(sessionHistoryRowIdentity)).toEqual([
         "1:user:reply here",
-        "2:assistant:call-message-cursor",
-        "3:toolResult:call-message-cursor",
-        "3:mirror:Cursor-visible reply.",
+        "2:assistant:call-message-first",
+        "3:toolResult:call-message-first",
+        "4:toolResult:call-message-second",
+        "3:mirror:First visible reply.",
+        "4:mirror:Second visible reply.",
       ]);
       expect(
         chronologicalRows.map((message) => requireRecord(message, "history timestamp").timestamp),
-      ).toEqual(Array.from({ length: 4 }, () => sharedTimestamp));
+      ).toEqual(Array.from({ length: 6 }, () => sharedTimestamp));
       expect(
         pages
           .flatMap((page) => page.messages ?? [])
