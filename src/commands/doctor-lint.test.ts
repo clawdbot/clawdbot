@@ -350,10 +350,11 @@ describe("runDoctorLintCli", () => {
       "PRAGMA journal_mode = WAL; CREATE TABLE fixture (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO fixture (value) VALUES ('stable');",
     );
     database.close();
+    const sourcePluginInstallRoots = resolveActivePluginInstallRoots(process.env);
     const sourceContents = fs.readFileSync(databasePath);
     const sourceEntries = fs.readdirSync(path.dirname(databasePath)).toSorted();
     let configIoEnv: NodeJS.ProcessEnv | undefined;
-    let observedPluginStateDir: string | undefined;
+    let observedPluginInstallRoots: ReturnType<typeof resolveActivePluginInstallRoots> | undefined;
     mocks.createConfigIO.mockImplementationOnce((options: { env?: NodeJS.ProcessEnv }) => {
       configIoEnv = options.env;
       return {
@@ -361,13 +362,16 @@ describe("runDoctorLintCli", () => {
       };
     });
     mocks.readConfigFileSnapshot.mockImplementation(async () => {
-      observedPluginStateDir = resolveActivePluginInstallRoots(process.env).stateDir;
-      expect(observedPluginStateDir).not.toBe(stateDir);
+      observedPluginInstallRoots = resolveActivePluginInstallRoots(process.env);
+      expect(observedPluginInstallRoots.stateDir).not.toBe(stateDir);
+      expect(observedPluginInstallRoots.extensionsDir).toBe(sourcePluginInstallRoots.extensionsDir);
+      expect(observedPluginInstallRoots.gitDir).toBe(sourcePluginInstallRoots.gitDir);
+      expect(observedPluginInstallRoots.npmDir).toBe(sourcePluginInstallRoots.npmDir);
       expect(
         fs.existsSync(
           resolveOpenClawStateSqlitePath({
             ...process.env,
-            OPENCLAW_STATE_DIR: observedPluginStateDir,
+            OPENCLAW_STATE_DIR: observedPluginInstallRoots.stateDir,
           }),
         ),
       ).toBe(true);
@@ -396,10 +400,10 @@ describe("runDoctorLintCli", () => {
           onlyIds: ["plugin/example/read-only-state"],
         }),
       ).resolves.toBe(0);
-      expect(observedPluginStateDir).toBeDefined();
-      expect(configIoEnv?.OPENCLAW_STATE_DIR).toBe(observedPluginStateDir);
+      expect(observedPluginInstallRoots).toBeDefined();
+      expect(configIoEnv?.OPENCLAW_STATE_DIR).toBe(observedPluginInstallRoots?.stateDir);
       expect(configIoEnv?.OPENCLAW_CONFIG_PATH).toBe(path.join(stateDir, "openclaw.json"));
-      expect(resolveActivePluginInstallRoots(process.env).stateDir).toBe(stateDir);
+      expect(resolveActivePluginInstallRoots(process.env)).toEqual(sourcePluginInstallRoots);
       expect(fs.readFileSync(databasePath)).toEqual(sourceContents);
       expect(fs.readdirSync(path.dirname(databasePath)).toSorted()).toEqual(sourceEntries);
     } finally {
