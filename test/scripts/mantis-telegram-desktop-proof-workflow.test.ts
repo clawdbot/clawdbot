@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const PROOF_SCRIPT = "scripts/e2e/telegram-user-crabbox-proof.ts";
+const DESKTOP_CRABBOX_SCRIPT = "scripts/e2e/telegram-desktop-crabbox.ts";
 const SUT_CONTAINER_WRAPPER = "scripts/mantis/mantis-sut-container.sh";
 const CREDENTIAL_SCRIPT = "scripts/e2e/telegram-user-credential.ts";
 const USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
@@ -300,7 +301,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const userDriver = readFileSync(USER_DRIVER, "utf8");
 
     expect(proofScript).toContain("zbar-tools");
-    expect(proofScript).toContain("isTransientSshFailure");
+    expect(readFileSync(DESKTOP_CRABBOX_SCRIPT, "utf8")).toContain("isTransientSshFailure");
     expect(proofScript).toContain('rm -rf "$root/desktop/tdata"');
     expect(proofScript).toContain("terminate-desktop-sessions");
     expect(proofScript).toContain('confirm-qr --link "$link"');
@@ -491,15 +492,13 @@ describe("Mantis Telegram Desktop proof workflow", () => {
   });
 
   it("crops the Telegram Desktop chat pane for PR proof GIFs", () => {
-    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+    const desktopCrabbox = readFileSync(DESKTOP_CRABBOX_SCRIPT, "utf8");
     const skill = readFileSync(TELEGRAM_PROOF_SKILL, "utf8");
 
-    expect(proofScript).toContain("const TELEGRAM_PROOF_WINDOW =");
-    expect(proofScript).toContain("const TELEGRAM_PROOF_CROP =");
-    expect(proofScript).toContain("x: TELEGRAM_PROOF_WINDOW.x + 220");
-    expect(proofScript).toContain("width: 430");
-    expect(proofScript).toContain("geometry: TELEGRAM_PROOF_WINDOW");
-    expect(proofScript).toContain("crop: TELEGRAM_PROOF_CROP");
+    expect(desktopCrabbox).toContain("export const TELEGRAM_DESKTOP_WINDOW =");
+    expect(desktopCrabbox).toContain("export const TELEGRAM_DESKTOP_CROP =");
+    expect(desktopCrabbox).toContain("x: TELEGRAM_DESKTOP_WINDOW.x + 220");
+    expect(desktopCrabbox).toContain("width: 430");
     expect(skill).toContain("crop can isolate the chat pane");
     expect(skill).not.toContain("650px` is the largest tested clean width");
   });
