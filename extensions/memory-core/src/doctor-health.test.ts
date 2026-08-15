@@ -113,6 +113,37 @@ describe("managed local embedding setup health check", () => {
     expect(inspect.mock.calls.map(([params]) => params.provider)).toEqual(["local", "openai"]);
   });
 
+  it("does not let a retained remote SecretRef suppress selected local setup", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-secret-ref-"));
+    roots.add(stateDir);
+    await createSemanticIndex(stateDir);
+    const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async (params) => ({
+      provider: params.provider,
+      reason: "Local embeddings need the managed llama.cpp server config.",
+      requirement: "managed-llama-cpp-setup",
+    }));
+    const check = captureCheck(inspect);
+    const checkContext = context(stateDir, "local");
+    checkContext.cfg.memory = {
+      search: {
+        provider: "local",
+        fallback: "none",
+        remote: {
+          apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      },
+    };
+
+    await expect(check.detect(checkContext)).resolves.toEqual([
+      expect.objectContaining({
+        checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
+        target: "main/local",
+        requirement: "managed-llama-cpp-setup",
+      }),
+    ]);
+    expect(inspect).toHaveBeenCalledOnce();
+  });
+
   it.each(["missing", "fts-only"] as const)(
     "does not inspect a provider for a %s vector index",
     async (indexMode) => {

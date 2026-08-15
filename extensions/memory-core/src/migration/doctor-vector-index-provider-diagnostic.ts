@@ -82,6 +82,7 @@ export async function collectVectorProviderFindings(
     stateDir: string;
   },
   inspectProvider: InspectConfiguredProvider,
+  options?: { inspectConfiguredMemorySecretRefs?: boolean },
 ): Promise<VectorProviderFinding[]> {
   const findings: VectorProviderFinding[] = [];
   for (const agentId of listConfiguredAgentIds(params.config)) {
@@ -100,7 +101,10 @@ export async function collectVectorProviderFindings(
     }
     // Status owns SecretRef resolution diagnostics. Doctor must not treat an
     // unresolved ref object as an API key and report a false provider failure.
-    if (hasConfiguredMemorySecretRef(params.config, agentId)) {
+    if (
+      options?.inspectConfiguredMemorySecretRefs !== true &&
+      hasConfiguredMemorySecretRef(params.config, agentId)
+    ) {
       continue;
     }
     const failure = await inspectProvider({

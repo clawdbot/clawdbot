@@ -66,6 +66,7 @@ function createManagedLocalEmbeddingSetupCheck(
             provider,
           });
         },
+        { inspectConfiguredMemorySecretRefs: true },
       );
       return findings.map((finding) => ({
         checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
