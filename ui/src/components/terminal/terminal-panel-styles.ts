@@ -77,15 +77,26 @@ export const terminalPanelStyles = css`
     align-items: center;
     gap: 2px;
   }
-  .tp-session-picker {
+  /* The menu is positioned against the header, not the trigger: the trigger sits
+     mid-toolbar, so a trigger-anchored menu wider than the icons spills past the
+     panel's left edge. Header anchoring makes 100% mean "panel width". */
+  .tp-header {
     position: relative;
+  }
+  .tp-session-picker {
+    position: static;
   }
   .tp-session-menu {
     position: absolute;
     z-index: 4;
-    top: 31px;
-    right: 0;
-    width: min(360px, calc(100vw - 24px));
+    top: calc(100% + 3px);
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: 360px;
+    /* Both edges are pinned, so the menu can never reach past the panel; the
+       auto margin keeps it right-aligned under its trigger while it fits. */
+    margin-left: auto;
     max-height: min(420px, var(--tp-session-menu-max-height));
     overflow-y: auto;
     padding: var(--menu-padding);
@@ -103,13 +114,18 @@ export const terminalPanelStyles = css`
     font-size: 12px;
     font-weight: 600;
   }
+  /* Refreshing the list is not destructive, so it reads as a plain action. */
   .tp-session-refresh {
     border: 0;
     background: transparent;
-    color: var(--accent, #ff5c5c);
+    color: var(--muted, #8a919e);
     font: inherit;
     font-weight: 500;
     padding: 2px 4px;
+  }
+  .tp-session-refresh:hover,
+  .tp-session-refresh:focus-visible {
+    color: var(--text, #d7dae0);
   }
   .tp-session {
     display: grid;
