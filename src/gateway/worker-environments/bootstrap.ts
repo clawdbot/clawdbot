@@ -591,10 +591,8 @@ function normalizeHandshake(artifact: WorkerInstallationArtifact): WorkerAdmissi
     if (!NPM_INTEGRITY_PATTERN.test(artifact.packageIntegrity)) {
       throw new Error("Worker npm install requires a pinned SHA-512 package integrity");
     }
-  } else {
-    if (!BUNDLE_HASH_PATTERN.test(artifact.tarballSha256)) {
-      throw new Error("Worker bundle archive digest must be a lowercase SHA-256 digest");
-    }
+  } else if (!BUNDLE_HASH_PATTERN.test(artifact.tarballSha256)) {
+    throw new Error("Worker bundle archive digest must be a lowercase SHA-256 digest");
   }
   return { bundleHash, openclawVersion, protocolFeatures };
 }
