@@ -124,6 +124,7 @@ export function renderPanelTabStrip(params: {
   return html`
     <wa-tab-group
       class="tabstrip"
+      style=${`--tabstrip-tab-count: ${params.tabs.length}`}
       .active=${params.activeId ?? ""}
       activation="auto"
       without-scroll-controls

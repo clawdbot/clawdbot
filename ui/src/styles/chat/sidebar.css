@@ -270,6 +270,7 @@ openclaw-chat-sidebar-region,
   min-width: 0;
   flex: 1 1 auto;
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .side-panel__header .tabstrip::part(nav) {
@@ -294,9 +295,13 @@ openclaw-chat-sidebar-region,
 
 .side-panel__header .tabstrip-tab {
   position: relative;
+  width: max(
+    28px,
+    calc((100cqi - 28px - 16px * var(--tabstrip-tab-count)) / var(--tabstrip-tab-count))
+  );
   min-width: 28px;
-  max-width: 160px;
-  flex: 1 1 0;
+  max-width: none;
+  flex: 0 1 auto;
 }
 
 .side-panel__header .tabstrip-tab:not(:first-of-type)::before {
