@@ -169,6 +169,7 @@ export function renderPanelTabStrip(params: {
               slot="nav"
               class="rail-header__action tabstrip-tab__close"
               type="button"
+              .tabIndex=${selected ? 0 : -1}
               title=${tab.closeLabel}
               aria-label=${tab.closeLabel}
               @keydown=${(event: KeyboardEvent) => {

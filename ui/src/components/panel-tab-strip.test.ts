@@ -76,6 +76,16 @@ describe("renderPanelTabStrip", () => {
     expect(onClose).toHaveBeenCalledWith(TAB.id);
   });
 
+  it("keeps only the active tab close action in the keyboard order", () => {
+    const container = renderStrip({
+      tabs: [TAB, { ...TAB, id: "tab-2", domId: "test-tab-2", label: "Second tab" }],
+      activeId: "tab-2",
+    });
+    const closeButtons = [...container.querySelectorAll<HTMLButtonElement>(".tabstrip-tab__close")];
+
+    expect(closeButtons.map((button) => button.tabIndex)).toEqual([-1, 0]);
+  });
+
   it("closes a tab on middle click", () => {
     const onClose = vi.fn();
     const container = renderStrip({ tabs: [TAB], onClose });

@@ -115,21 +115,30 @@ describe("chat sidebar region", () => {
 
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("terminal");
     expect(
-      Array.from(root(region).querySelectorAll(".side-panel-type-menu__shortcut"), (node) =>
+      Array.from(root(region).querySelectorAll(".side-panel-type-option__shortcut"), (node) =>
         node.textContent?.trim(),
       ),
     ).toEqual(["Ctrl+`", "⇧⌘B"]);
-    const reviewLabel = Array.from(
-      root(region).querySelectorAll(".side-panel-type-menu__label"),
-    ).find((item) => item.textContent?.trim() === "Review");
-    expect(reviewLabel?.closest("wa-dropdown-item")?.hasAttribute("disabled")).toBe(true);
+    const reviewItem = Array.from(
+      root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
+    ).find((item) => Reflect.get(item, "value") === "detail");
+    expect(reviewItem?.hasAttribute("disabled")).toBe(true);
   });
 
   it("opens into a type selector instead of restoring a previous tab", async () => {
     const region = await createRegion({ columns: [], open: true, expanded: false });
+    const selector = root(region).querySelector(".side-panel-empty--selector");
 
-    expect(root(region).querySelector(".side-panel-empty--selector")).not.toBeNull();
-    expect(root(region).querySelectorAll(".side-panel-empty__type")).toHaveLength(4);
+    expect(selector?.querySelector(".side-panel-empty__title")?.textContent).toBe("Open a surface");
+    expect(selector?.querySelector(".side-panel-empty__description")?.textContent).toBe(
+      "Choose what to show in the right panel.",
+    );
+    expect(selector?.querySelector(":scope > .side-panel-empty__icon")).toBeNull();
+    expect(
+      Array.from(selector?.querySelectorAll(".side-panel-empty__type") ?? [], (item) =>
+        item.textContent?.replace(/\s+/gu, " ").trim(),
+      ),
+    ).toEqual(["Review", "Terminal Ctrl+`", "Files ⇧⌘B", "Side chat"]);
     root(region).querySelector<HTMLButtonElement>(".side-panel-empty__type")?.click();
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("detail");
   });
@@ -157,20 +166,36 @@ describe("chat sidebar region", () => {
     await region.updateComplete;
 
     expect(
-      Array.from(root(region).querySelectorAll(".side-panel-type-menu__label"), (item) =>
-        item.textContent?.trim(),
+      Array.from(root(region).querySelectorAll(".side-panel-type-menu__item"), (item) =>
+        item.textContent?.replace(/\s+/gu, " ").trim(),
       ),
     ).toEqual([
       "Review",
-      "Terminal",
+      "Terminal Ctrl+`",
       "Browser",
-      "Files",
+      "Files ⇧⌘B",
       "Side chat",
       "Tasks",
       "Desktop",
       "Discussion",
       "Board chat",
     ]);
+
+    const browserMenuItem = Array.from(
+      root(region).querySelectorAll<HTMLElement>(".side-panel-type-menu__item"),
+    ).find((item) => Reflect.get(item, "value") === "browser");
+    expect(browserMenuItem?.querySelector('path[d="M2 12h20"]')).not.toBeNull();
+
+    region.layout = openSlot({ columns: [] }, "browser");
+    await region.updateComplete;
+    expect(root(region).querySelector('.tabstrip-tab__icon path[d="M2 12h20"]')).not.toBeNull();
+
+    region.layout = { columns: [], open: true };
+    await region.updateComplete;
+    const browserEmptyItem = Array.from(
+      root(region).querySelectorAll<HTMLElement>(".side-panel-empty__type"),
+    ).find((item) => item.textContent?.trim() === "Browser");
+    expect(browserEmptyItem?.querySelector('path[d="M2 12h20"]')).not.toBeNull();
   });
 
   it("expands, restores, and minimizes without closing tabs", async () => {

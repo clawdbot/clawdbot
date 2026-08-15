@@ -33,7 +33,7 @@ function panelType(slot: SidebarSlotId): PanelType {
         slot,
         label: t("chat.sidePanel.browser"),
         description: t("chat.sidePanel.browserEmpty"),
-        icon: icons.chrome,
+        icon: icons.globe,
       };
     case "chat":
       return {
@@ -96,6 +96,20 @@ function panelType(slot: SidebarSlotId): PanelType {
   }
 }
 
+function renderPanelTypeOption(type: PanelType, slotted = false) {
+  return html`
+    <span slot=${slotted ? "icon" : nothing} class="side-panel-type-option__icon" aria-hidden="true"
+      >${type.icon}</span
+    >
+    <span class="side-panel-type-option__label">${type.label}</span>
+    ${type.shortcut
+      ? html`<kbd slot=${slotted ? "details" : nothing} class="side-panel-type-option__shortcut"
+          >${type.shortcut}</kbd
+        >`
+      : nothing}
+  `;
+}
+
 function panelsOf(layout: SidebarLayout): SidebarPanel[] {
   return layout.columns[0]?.panels ?? [];
 }
@@ -152,22 +166,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         ${this.panelTypes().map(
           (type) => html`
             <wa-dropdown-item
-              class="side-panel-type-menu__item"
+              class="side-panel-type-menu__item session-menu__item"
               .value=${type.slot}
               ?disabled=${openSlots.has(type.slot)}
             >
-              <span slot="icon" class="side-panel-type-menu__icon" aria-hidden="true"
-                >${type.icon}</span
-              >
-              <span class="side-panel-type-menu__copy">
-                <span class="side-panel-type-menu__label">${type.label}</span>
-                <span class="side-panel-type-menu__description">${type.description}</span>
-              </span>
-              ${type.shortcut
-                ? html`<kbd slot="details" class="side-panel-type-menu__shortcut"
-                    >${type.shortcut}</kbd
-                  >`
-                : nothing}
+              ${renderPanelTypeOption(type, true)}
             </wa-dropdown-item>
           `,
         )}
@@ -258,7 +261,6 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       </div>`;
     }
     return html`<div class="side-panel-empty side-panel-empty--selector">
-      <span class="side-panel-empty__icon" aria-hidden="true">${icons.panelRightOpen}</span>
       <strong class="side-panel-empty__title">${t("chat.sidePanel.emptyTitle")}</strong>
       <p class="side-panel-empty__description">${t("chat.sidePanel.emptyDescription")}</p>
       <div class="side-panel-empty__types" role="list">
@@ -269,12 +271,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
             role="listitem"
             @click=${() => this.callbacks?.openSlot(type.slot)}
           >
-            <span class="side-panel-empty__type-icon" aria-hidden="true">${type.icon}</span>
-            <span class="side-panel-empty__type-copy">
-              <strong>${type.label}</strong>
-              <span>${type.description}</span>
-            </span>
-            ${type.shortcut ? html`<kbd>${type.shortcut}</kbd>` : nothing}
+            ${renderPanelTypeOption(type)}
           </button>`,
         )}
       </div>
