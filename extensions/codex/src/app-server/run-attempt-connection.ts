@@ -1,6 +1,4 @@
 import {
-  embeddedAgentLog,
-  getBeforeToolCallPolicyDiagnosticState,
   isActiveHarnessContextEngine,
   resolveSandboxContext,
   resolveSessionAgentIds,
@@ -14,10 +12,7 @@ import {
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import {
-  resolveCodexAppServerForModelProvider,
-  resolveCodexAppServerForOpenClawToolPolicy,
-} from "./app-server-policy.js";
+import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
@@ -26,7 +21,6 @@ import {
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import {
   isCodexRemoteExecPlacementSandbox,
-  isCodexAppServerApprovalPolicyAllowedByRequirements,
   readCodexPluginConfig,
   resolveCodexAppServerHomeScope,
   resolveCodexComputerUseConfig,
@@ -100,7 +94,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     config: params.config,
     agentId: params.agentId,
   });
-  const beforeToolCallPolicy = getBeforeToolCallPolicyDiagnosticState();
   preDynamicStartupStages.mark("config");
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await ensureCodexWorkspaceDirOnce(resolvedWorkspace);
@@ -290,41 +283,14 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
   }
   preDynamicStartupStages.mark("effective-workspace");
-  const shouldPromoteApprovalPolicy =
-    beforeToolCallPolicy.hasBeforeToolCallHook ||
-    beforeToolCallPolicy.trustedToolPolicies.length > 0;
-  const resolvePolicyAppServer = () =>
-    resolveCodexAppServerForOpenClawToolPolicy({
-      appServer: configuredAppServer,
-      pluginConfig,
-      env: process.env,
-      shouldPromote: shouldPromoteApprovalPolicy,
-      execPolicy,
-      canUseUntrustedApprovalPolicy:
-        shouldPromoteApprovalPolicy &&
-        configuredAppServer.approvalPolicy === "never" &&
-        (configuredAppServer.start.transport !== "stdio" ||
-          isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted")),
-    });
-  let policyAppServer = resolvePolicyAppServer();
   let appServer = resolveCodexAppServerForModelProvider({
-    appServer: policyAppServer,
+    appServer: configuredAppServer,
     provider: reviewerPolicyContext.modelProvider,
     model: reviewerPolicyContext.model,
     config: params.config,
     env: process.env,
     agentDir,
   });
-  let approvalPolicyPromotedForOpenClawToolPolicy =
-    configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted";
-  if (approvalPolicyPromotedForOpenClawToolPolicy) {
-    embeddedAgentLog.info("codex app-server approval policy promoted for OpenClaw tool policy", {
-      from: "never",
-      to: "untrusted",
-      beforeToolCallHook: beforeToolCallPolicy.hasBeforeToolCallHook,
-      trustedToolPolicies: beforeToolCallPolicy.trustedToolPolicies,
-    });
-  }
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
@@ -386,17 +352,14 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       modelProvider: reviewerPolicyContext.modelProvider,
       model: reviewerPolicyContext.model,
     });
-    policyAppServer = resolvePolicyAppServer();
     appServer = resolveCodexAppServerForModelProvider({
-      appServer: policyAppServer,
+      appServer: configuredAppServer,
       provider: reviewerPolicyContext.modelProvider,
       model: reviewerPolicyContext.model,
       config: params.config,
       env: process.env,
       agentDir,
     });
-    approvalPolicyPromotedForOpenClawToolPolicy =
-      configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted";
   }
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
@@ -458,7 +421,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     effectiveWorkspace,
     effectiveCwd,
     appServer,
-    approvalPolicyPromotedForOpenClawToolPolicy,
     nativeHookRelayEvents,
     runAbortController,
     terminalState,

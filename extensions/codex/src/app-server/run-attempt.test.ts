@@ -4159,11 +4159,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
   });
 
-  it("promotes implicit Codex yolo approval policy when OpenClaw tool policy exists", async () => {
+  it("keeps effective default Codex yolo when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
-    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
     const { sessionFile, workspaceDir } = createRunPaths();
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -4172,17 +4171,12 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("untrusted");
+    const turnRequest = harness.requests.find((request) => request.method === "turn/start");
+    const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(startParams?.approvalPolicy).toBe("never");
     expect(startParams?.sandbox).toBe("danger-full-access");
-    expect(info).toHaveBeenCalledWith(
-      "codex app-server approval policy promoted for OpenClaw tool policy",
-      {
-        from: "never",
-        to: "untrusted",
-        beforeToolCallHook: true,
-        trustedToolPolicies: [],
-      },
-    );
+    expect(turnParams?.approvalPolicy).toBe("never");
+    expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
   });
   it("keeps explicit Codex yolo mode unpromoted when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
@@ -4242,7 +4236,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.sandbox).toBe("danger-full-access");
   });
 
-  it("ignores invalid Codex app-server env overrides when promoting tool policy approval", async () => {
+  it("ignores invalid Codex app-server env overrides without weakening default yolo", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
@@ -4256,7 +4250,7 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("untrusted");
+    expect(startParams?.approvalPolicy).toBe("never");
   });
   it("preserves a healthy binding when invalid image cleanup hits a transient thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
