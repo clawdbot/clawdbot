@@ -666,9 +666,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           abortController: new AbortController(),
           launchTasks: new Set<Promise<unknown>>(),
         };
-        const entry = { ...base, handle: undefined as unknown as WorkerTunnelHandle };
-        const created = createHandle(entry, restoredWorkspace);
-        entry.handle = created.handle;
+        const created = createHandle(base, restoredWorkspace);
+        const entry = Object.assign(base, { handle: created.handle });
         entries.set(entry.environmentId, entry);
         try {
           await created.validateRestoredWorkspace();

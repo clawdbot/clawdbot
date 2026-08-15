@@ -265,14 +265,20 @@ export function serializeSessionCleanupResult(params: {
   dryRun: boolean;
   summaries: SessionCleanupSummary[];
 }): SessionsCleanupResult {
-  if (params.summaries.length === 1) {
-    return params.summaries[0] ?? ({} as SessionCleanupSummary);
+  const summaries = params.summaries.map((summary) => ({
+    ...summary,
+    storePath: resolveSqliteTargetFromSessionStorePath(summary.storePath, {
+      agentId: summary.agentId,
+    }).path,
+  }));
+  if (summaries.length === 1) {
+    return summaries[0] ?? ({} as SessionCleanupSummary);
   }
   return {
     allAgents: true,
     mode: params.mode,
     dryRun: params.dryRun,
-    stores: params.summaries,
+    stores: summaries,
   };
 }
 

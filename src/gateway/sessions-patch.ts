@@ -239,7 +239,7 @@ export async function projectSessionsPatchEntry(params: {
   };
 
   const existing = params.existingEntry
-    ? projectCanonicalSessionEntryShape(params.existingEntry as unknown as Record<string, unknown>)
+    ? projectCanonicalSessionEntryShape({ ...params.existingEntry })
     : undefined;
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId

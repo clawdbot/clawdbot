@@ -434,20 +434,20 @@ function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>)
   );
 }
 
-function ensureJobStateObject(job: CronStoreFile["jobs"][number]): void {
+function ensureJobStateObject(job: Record<string, unknown>): void {
   if (!isRecord(job.state)) {
-    job.state = {} as never;
+    job.state = {};
   }
 }
 
-function backfillMissingRuntimeFields(job: CronStoreFile["jobs"][number]): void {
+function backfillMissingRuntimeFields(job: Record<string, unknown>): void {
   ensureJobStateObject(job);
   if (typeof job.updatedAtMs !== "number") {
     job.updatedAtMs = typeof job.createdAtMs === "number" ? job.createdAtMs : Date.now();
   }
 }
 
-function resolveUpdatedAtMs(job: CronStoreFile["jobs"][number], updatedAtMs: unknown): number {
+function resolveUpdatedAtMs(job: Record<string, unknown>, updatedAtMs: unknown): number {
   if (typeof updatedAtMs === "number" && Number.isFinite(updatedAtMs)) {
     return updatedAtMs;
   }
@@ -459,20 +459,21 @@ function resolveUpdatedAtMs(job: CronStoreFile["jobs"][number], updatedAtMs: unk
     : Date.now();
 }
 
-function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: unknown): void {
+function mergeStateFileEntry(job: Record<string, unknown>, entry: unknown): void {
   if (!isRecord(entry)) {
     backfillMissingRuntimeFields(job);
     return;
   }
   job.updatedAtMs = resolveUpdatedAtMs(job, entry.updatedAtMs);
-  job.state = isRecord(entry.state) ? (entry.state as never) : ({} as never);
+  job.state = isRecord(entry.state) ? entry.state : {};
   if (
     typeof entry.scheduleIdentity === "string" &&
-    entry.scheduleIdentity !==
-      tryLegacyCronScheduleIdentity(job as unknown as Record<string, unknown>)
+    entry.scheduleIdentity !== tryLegacyCronScheduleIdentity(job)
   ) {
     ensureJobStateObject(job);
-    job.state.nextRunAtMs = undefined;
+    if (isRecord(job.state)) {
+      job.state.nextRunAtMs = undefined;
+    }
   }
 }
 
@@ -595,7 +596,7 @@ export async function loadLegacyCronStoreForMigration(
       version: 1,
       jobs: configRows as never as CronStoreFile["jobs"],
     };
-    const jobs = store.jobs as unknown as Array<Record<string, unknown>>;
+    const jobs = configRows;
     const configJobs = cloneConfigJobs(configRows);
 
     const statePath = resolveLegacyCronStatePath(resolvedStorePath);
@@ -604,8 +605,8 @@ export async function loadLegacyCronStoreForMigration(
     const hasLegacyInlineState = !stateFile && hasInlineState(jobs);
 
     if (stateFile) {
-      for (const job of store.jobs) {
-        const stateId = resolveCronStateId(job as unknown as Record<string, unknown>);
+      for (const job of jobs) {
+        const stateId = resolveCronStateId(job);
         const entry = stateId ? stateFile.jobs[stateId] : undefined;
         configJobRuntimeEntries.push(isRecord(entry) ? structuredClone(entry) : {});
         if (entry) {
@@ -615,12 +616,12 @@ export async function loadLegacyCronStoreForMigration(
         }
       }
     } else if (!hasLegacyInlineState) {
-      for (const job of store.jobs) {
+      for (const job of jobs) {
         backfillMissingRuntimeFields(job);
       }
     }
 
-    for (const job of store.jobs) {
+    for (const job of jobs) {
       ensureJobStateObject(job);
     }
 

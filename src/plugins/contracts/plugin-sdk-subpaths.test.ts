@@ -1113,7 +1113,9 @@ describe("plugin-sdk subpath exports", () => {
       "shouldAckReaction",
       "DEFAULT_EMOJIS",
     ]);
-    expectSourceOmits("channel-feedback", [
+    // The load-only WhatsApp bridge lives in the barrel for published
+    // pre-#121257 artifacts; the owner file stays free of channel policy.
+    expectSourceMentions("channel-feedback", [
       "shouldAckReactionForWhatsApp",
       "WhatsAppAckReactionMode",
     ]);

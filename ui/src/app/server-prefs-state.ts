@@ -118,6 +118,21 @@ export function prefValuesEqual(left: unknown, right: unknown): boolean {
   return left === right;
 }
 
+function applyChangedSettingsPatch(
+  target: Partial<UiSettings>,
+  settings: UiSettings,
+  source: Partial<UiSettings>,
+): void {
+  const applyKey = <K extends keyof UiSettings>(key: K, value: UiSettings[K] | undefined) => {
+    if (!prefValuesEqual(settings[key], value)) {
+      target[key] = value;
+    }
+  };
+  for (const key of Object.keys(source) as Array<keyof UiSettings>) {
+    applyKey(key, source[key]);
+  }
+}
+
 export function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
   const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
   if (!prefs) {
@@ -232,13 +247,7 @@ export function serverPrefsLocalPatch(
     if (serverValue === null) {
       const resetPatch = specification.clearable ? specification.reset?.(settings) : undefined;
       if (resetPatch) {
-        for (const [resetKey, resetValue] of Object.entries(resetPatch)) {
-          if (
-            !prefValuesEqual((settings as unknown as Record<string, unknown>)[resetKey], resetValue)
-          ) {
-            (patch as Record<string, unknown>)[resetKey] = resetValue;
-          }
-        }
+        applyChangedSettingsPatch(patch, settings, resetPatch);
       }
       continue;
     }

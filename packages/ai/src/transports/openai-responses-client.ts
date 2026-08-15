@@ -76,6 +76,7 @@ import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitiz
 import {
   mergeTransportMetadata,
   transportAbortError,
+  type WritableTransportStream,
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
 import { redactIdentifier } from "./transport-utils.js";
@@ -240,7 +241,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
     const compactRequest = claimResponsesCompactRequest(responsesOptions);
     const eventStream = createAssistantMessageEventStream();
-    const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
+    const stream = eventStream as unknown as WritableTransportStream;
     void (async () => {
       const output = createOpenAIResponsesAssistantOutput(model, config.outputApi);
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
@@ -590,7 +591,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         firstEventAbort?.dispose();
       }
     })();
-    return eventStream as unknown as ReturnType<StreamFn>;
+    return eventStream;
   };
 }
 

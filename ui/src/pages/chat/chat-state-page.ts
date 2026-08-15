@@ -170,7 +170,6 @@ export function createPageState(
     chatBranches: [],
     chatBranchesSessionKey: null,
     chatBranchesConnectionEpoch: null,
-    chatBranchesLoading: false,
     chatToolMessages: [],
     chatThinkingLevel: null,
     chatVerboseLevel: null,

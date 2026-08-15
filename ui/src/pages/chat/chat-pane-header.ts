@@ -28,6 +28,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
+import { displayedChatSessionBranches } from "./chat-history.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
@@ -366,10 +367,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       workspaceIcon: this.resolveWorkspaceIcon(workspace.root ? row?.key : undefined),
       parentSession: resolveChatPaneParentSession(row, this.state?.sessionsResult?.sessions ?? []),
       branch,
-      branches:
-        this.state && this.state.chatBranchesSessionKey === this.state.sessionKey
-          ? (this.state.chatBranches ?? [])
-          : [],
+      branches: this.state ? displayedChatSessionBranches(this.state) : [],
       branchSwitchDisabledReason,
       platform: this.headerPlatform,
       canReveal,
