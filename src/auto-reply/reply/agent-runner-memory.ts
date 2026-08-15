@@ -977,7 +977,9 @@ export async function runPreflightCompactionIfNeeded(params: {
       logVerbose(
         `preflightCompaction unresolved: sessionKey=${params.sessionKey} reason=${result.reason ?? "not_compacted"}`,
       );
-      throw new Error(`Preflight compaction required but failed: ${UNRESOLVED_TOKEN_PREFLIGHT_REASON}`);
+      throw new Error(
+        `Preflight compaction required but failed: ${UNRESOLVED_TOKEN_PREFLIGHT_REASON}`,
+      );
     }
 
     if (!result?.ok) {
