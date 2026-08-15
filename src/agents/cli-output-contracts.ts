@@ -3,6 +3,7 @@ import type {
   CliBackendJsonlUsage,
   CliBackendParseJsonlEvent,
 } from "../plugins/cli-backend.types.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -58,6 +59,9 @@ export type CliOutput = {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
+  /** Same-turn continuation evidence beyond messaging delivery — see execute-tool-tracking.ts. */
+  acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  successfulCronAdds?: number;
   yielded?: true;
   yieldAcknowledgment?: string;
 };

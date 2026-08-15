@@ -7,6 +7,10 @@ import {
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
+import {
+  normalizeAcceptedSessionSpawnResult,
+  type AcceptedSessionSpawn,
+} from "../accepted-session-spawn.js";
 import type { CliOutput, CliToolUseStartDelta } from "../cli-output-contracts.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
@@ -26,10 +30,12 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
+import { isCronAddAction } from "../embedded-agent-subscribe.handlers.tools.results.js";
 import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
+import { isAutomationsToolName } from "../tools/automations-tool-name.js";
 import { closeClaudeSession } from "./claude-live-registry.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
@@ -73,6 +79,12 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let yieldAcknowledgment: string | undefined;
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
+  // Continuation evidence for a same-turn sessions_yield (mirrors the embedded runner's
+  // hasYieldContinuationEvidence dimensions that are observable from generic MCP loopback
+  // tool-call results: an accepted subagent spawn or a committed cron add both prove a
+  // future completion will resume this session, so a yield right after either is valid.
+  const acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
+  let successfulCronAdds = 0;
   let inFlightUnclassifiedMcpRequests = 0;
   let inFlightMessagingToolCalls = 0;
   const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
@@ -443,6 +455,15 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
             toolTrustedLocalMedia ||= artifact?.trustedLocalMedia === true;
           }
         }
+        if (call.outcome === "completed") {
+          const acceptedSpawn = normalizeAcceptedSessionSpawnResult(call.result);
+          if (acceptedSpawn) {
+            acceptedSessionSpawns.push(acceptedSpawn);
+          }
+          if (isAutomationsToolName(call.toolName) && isCronAddAction(call.args)) {
+            successfulCronAdds += 1;
+          }
+        }
       },
     });
   };
@@ -614,6 +635,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     toolMediaUrls,
     toolAudioAsVoice,
     toolTrustedLocalMedia,
+    acceptedSessionSpawns,
+    successfulCronAdds,
   });
   return {
     beginGatewayCapture,
@@ -649,6 +672,12 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           : {}),
         ...(current.toolAudioAsVoice ? { toolAudioAsVoice: true } : {}),
         ...(current.toolTrustedLocalMedia ? { toolTrustedLocalMedia: true } : {}),
+        ...(current.acceptedSessionSpawns.length > 0
+          ? { acceptedSessionSpawns: current.acceptedSessionSpawns.slice() }
+          : {}),
+        ...(current.successfulCronAdds > 0
+          ? { successfulCronAdds: current.successfulCronAdds }
+          : {}),
       };
     },
     attachDeliveryEvidence(error: unknown) {

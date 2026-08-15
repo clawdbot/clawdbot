@@ -1,10 +1,12 @@
 /** Tests bounded transcript-flush probing before reusing CLI bindings. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CliOutput } from "../cli-output-contracts.js";
 import {
   isCliBindingFlushed,
   restoreCliRunnerTestDeps,
   setCliRunnerTestDeps,
 } from "../cli-runner.js";
+import { hasCliYieldContinuationEvidence } from "./cli-run-settlement.js";
 
 describe("isCliBindingFlushed", () => {
   const workspaceDir = "/tmp/openclaw-workspace";
@@ -129,5 +131,61 @@ describe("isCliBindingFlushed", () => {
       }),
     ).toBe(true);
     expect(probe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("hasCliYieldContinuationEvidence", () => {
+  const baseOutput: CliOutput = { text: "" };
+
+  it("has no continuation evidence for a bare yielded output", () => {
+    expect(hasCliYieldContinuationEvidence(baseOutput)).toBe(false);
+  });
+
+  it("recognizes committed messaging delivery as continuation evidence", () => {
+    expect(
+      hasCliYieldContinuationEvidence({
+        ...baseOutput,
+        messagingToolSentTexts: ["done"],
+      }),
+    ).toBe(true);
+  });
+
+  it("recognizes an accepted subagent spawn as continuation evidence", () => {
+    // Regression: this is the case ClawSweeper flagged — a yield right after a valid
+    // spawn (no messaging tool involved at all) must not show the no-continuation
+    // diagnostic, since the spawn's completion will resume the session later.
+    expect(
+      hasCliYieldContinuationEvidence({
+        ...baseOutput,
+        acceptedSessionSpawns: [{ runId: "run-1", childSessionKey: "agent:main:sub-1" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not count an empty accepted-spawns array as continuation evidence", () => {
+    expect(
+      hasCliYieldContinuationEvidence({
+        ...baseOutput,
+        acceptedSessionSpawns: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("recognizes a successful cron add as continuation evidence", () => {
+    expect(
+      hasCliYieldContinuationEvidence({
+        ...baseOutput,
+        successfulCronAdds: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not count a zero cron-add count as continuation evidence", () => {
+    expect(
+      hasCliYieldContinuationEvidence({
+        ...baseOutput,
+        successfulCronAdds: 0,
+      }),
+    ).toBe(false);
   });
 });

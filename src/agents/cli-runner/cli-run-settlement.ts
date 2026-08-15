@@ -2,6 +2,7 @@ import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/rep
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import {
   externalCliDiscoveryForProviderAuth,
   loadAuthProfileStoreForRuntime,
@@ -243,6 +244,25 @@ export async function settlePreparedCliRun(params: {
     throw runError instanceof Error ? runError : new Error(formatErrorMessage(runError));
   }
   return result as EmbeddedAgentRunResult;
+}
+
+/**
+ * Whether a yielded CLI turn has a same-turn continuation that will resume the session.
+ * sessions_yield is meant to pause a turn only when a subagent/async/cron/approval
+ * completion will resume it later. CLI backends can observe messaging delivery,
+ * accepted subagent spawns, and successful cron adds via the generic MCP loopback
+ * tool-call result (see execute-tool-tracking.ts); async-tool and approval-prompt
+ * evidence aren't captured yet (those require signals the embedded runner gets from
+ * its own tool-execution wrapper, not from a generic result payload) — a yield right
+ * after one of those two would still show the no-continuation diagnostic even though
+ * it's valid.
+ */
+export function hasCliYieldContinuationEvidence(output: CliOutput): boolean {
+  return (
+    hasCommittedMessagingToolDeliveryEvidence(output) ||
+    hasAcceptedSessionSpawn(output.acceptedSessionSpawns) ||
+    (output.successfulCronAdds ?? 0) > 0
+  );
 }
 
 export function resolveCliSourceReplyMirror(params: {
@@ -526,14 +546,10 @@ export function buildCliRunResult(params: {
   const yielded = output.yielded === true;
   const stopReason = yielded ? "end_turn" : "completed";
   // sessions_yield is meant to pause a turn only when a subagent/async/cron/approval
-  // completion will resume it later. CLI backends don't yet track those signals (see
-  // hasYieldContinuationEvidence for the embedded runner's fuller version), but they do
-  // track messaging-tool delivery — reuse that narrower check so a model that yields with
-  // nothing pending doesn't leave the user staring at a permanently paused turn with no
-  // indication it will never resume on its own. Appends after tool-media payloads so a
-  // yielded turn that already delivered media still gets the diagnostic when warranted.
+  // completion will resume it later. Appends after tool-media payloads so a yielded
+  // turn that already delivered media still gets the diagnostic when warranted.
   const payloadsWithYieldDiagnostic =
-    yielded && !hasCommittedMessagingToolDeliveryEvidence(output)
+    yielded && !hasCliYieldContinuationEvidence(output)
       ? [...(payloadsWithToolMedia ?? []), { text: YIELD_DIAGNOSTIC_TEXT }]
       : payloadsWithToolMedia;
 
