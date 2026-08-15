@@ -143,6 +143,58 @@ describe("memory index", () => {
     expect(queryCalls).toBe(3);
   });
 
+  it("keeps a healthy local provider active when the caller cancels search", async () => {
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    const close = vi.fn(async () => {});
+    let queryCalls = 0;
+    const fields = manager as unknown as {
+      provider: {
+        id: string;
+        model: string;
+        embedQuery: (text: string) => Promise<number[]>;
+        embedBatch: (texts: string[]) => Promise<number[][]>;
+        close: () => Promise<void>;
+      };
+      providerKey: string;
+      providerLifecycle: { mode: "active"; providerId: string };
+      computeProviderKey: () => string;
+    };
+    fields.provider = {
+      id: "local",
+      model: "mock-embed",
+      embedQuery: async () => {
+        queryCalls += 1;
+        return [1, 0, 0, 0];
+      },
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
+      close,
+    };
+    fields.providerLifecycle = { mode: "active", providerId: "local" };
+    fields.providerKey = fields.computeProviderKey();
+    await manager.sync({ reason: "test", force: true });
+
+    const abortReason = new Error("memory search was cancelled");
+    await expect(
+      manager.search("alpha", { signal: AbortSignal.abort(abortReason) }),
+    ).rejects.toMatchObject({ cause: abortReason });
+
+    expect(manager.status()).toMatchObject({
+      provider: "local",
+      custom: {
+        providerState: { mode: "active", providerId: "local" },
+        providerUnavailableReason: undefined,
+      },
+    });
+    await expect(manager.search("alpha")).resolves.not.toStrictEqual([]);
+    expect(queryCalls).toBe(1);
+    expect(close).not.toHaveBeenCalled();
+  });
+
   it("supplements thin strict FTS results for conversational queries", async () => {
     const cases = [
       {
