@@ -11,7 +11,7 @@ Usage:
   scripts/dev/computer-use-macos-live-rig.sh gateway <scratch>
   scripts/dev/computer-use-macos-live-rig.sh app <scratch> [peekaboo|cua]
   scripts/dev/computer-use-macos-live-rig.sh nodes <scratch>
-  scripts/dev/computer-use-macos-live-rig.sh proof <scratch> <window-title> <text> [element-label]
+  scripts/dev/computer-use-macos-live-rig.sh proof <scratch> <peekaboo|cua> <window-title> <text> [element-label]
 
 The rig is maintainer-only and loopback-only. Run gateway and app in separate
 terminals, approve the dedicated CLI device after its first `nodes` request,
@@ -29,6 +29,13 @@ validate_provider() {
     peekaboo | cua) ;;
     *) fail "provider must be peekaboo or cua" ;;
   esac
+}
+
+require_unoccupied_port() {
+  local port="$1"
+  if /usr/sbin/lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1; then
+    fail "port $port already has a listener; choose a fresh proof port"
+  fi
 }
 
 load_rig() {
@@ -60,6 +67,7 @@ prepare() {
   ((port != 18789)) || fail "port 18789 belongs to the operator gateway"
   [[ "$scratch" = /* ]] || fail "scratch path must be absolute"
   validate_provider "$provider"
+  require_unoccupied_port "$port"
 
   local app_path
   app_path="$(cd "$(dirname "$app_input")" && pwd)/$(basename "$app_input")"
@@ -73,10 +81,16 @@ prepare() {
   git -C "$repo_root" diff --cached --quiet -- src packages extensions scripts/run-node.mjs scripts/run-node.mts ||
     fail "runtime sources are staged but uncommitted; commit and rebuild first"
 
+  local app_state="$HOME/.openclaw-$profile"
+  local defaults_domain="ai.openclaw.mac.profile.$profile"
+  [[ ! -e "$app_state" && ! -L "$app_state" ]] ||
+    fail "$app_state already exists; choose a fresh proof profile"
+  if defaults read "$defaults_domain" >/dev/null 2>&1; then
+    fail "$defaults_domain already has saved settings; choose a fresh proof profile"
+  fi
   [[ ! -e "$scratch/rig.env" ]] || fail "$scratch already contains a rig"
   mkdir -p "$scratch" "$scratch/agent-state"
 
-  local app_state="$HOME/.openclaw-$profile"
   local app_config="$app_state/openclaw.json"
   local staged_app_config="$scratch/app.json"
   local gateway_config="$scratch/gateway.json"
@@ -107,13 +121,9 @@ process.stdout.write(`${JSON.stringify({
 NODE
 
   mkdir -p "$app_state"
-  if [[ -e "$app_config" ]] && ! cmp -s "$staged_app_config" "$app_config"; then
-    fail "$app_config already exists with different contents; choose a fresh profile"
-  fi
   cp "$staged_app_config" "$app_config"
   chmod 600 "$app_config" "$gateway_config"
 
-  local defaults_domain="ai.openclaw.mac.profile.$profile"
   defaults write "$defaults_domain" openclaw.macNodeIdentityProfile -string node
   defaults write "$defaults_domain" openclaw.connectionMode -string remote
   defaults write "$defaults_domain" openclaw.pauseEnabled -bool false
@@ -143,11 +153,12 @@ NODE
 run_gateway() {
   [[ $# -eq 1 ]] || { usage; exit 2; }
   load_rig "$1"
+  require_unoccupied_port "$OPENCLAW_CU_RIG_PORT"
   exec env \
     OPENCLAW_CONFIG_PATH="$OPENCLAW_CU_RIG_GATEWAY_CONFIG" \
     OPENCLAW_STATE_DIR="$OPENCLAW_CU_RIG_APP_STATE" \
     node "$repo_root/scripts/run-node.mjs" --profile "$OPENCLAW_CU_RIG_PROFILE" \
-      gateway run --port "$OPENCLAW_CU_RIG_PORT" --auth none --force --verbose
+      gateway run --port "$OPENCLAW_CU_RIG_PORT" --auth none --verbose
 }
 
 run_app() {
@@ -171,16 +182,19 @@ run_nodes() {
 }
 
 run_proof() {
-  [[ $# -ge 3 && $# -le 4 ]] || { usage; exit 2; }
+  [[ $# -ge 4 && $# -le 5 ]] || { usage; exit 2; }
   local scratch="$1"
   load_rig "$scratch"
+  local provider="$2"
+  validate_provider "$provider"
   local args=(
-    --window-title "$2"
-    --text "$3"
+    --provider "$provider"
+    --window-title "$3"
+    --text "$4"
     --artifacts "$scratch"
   )
-  if [[ $# -eq 4 ]]; then
-    args+=(--element-label "$4")
+  if [[ $# -eq 5 ]]; then
+    args+=(--element-label "$5")
   fi
   exec env \
     OPENCLAW_CONFIG_PATH="$OPENCLAW_CU_RIG_GATEWAY_CONFIG" \

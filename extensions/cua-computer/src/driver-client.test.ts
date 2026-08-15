@@ -31,7 +31,12 @@ const sdk = {
   createTrustedSession: mocks.createTrustedSession,
 };
 
-import { ClickButton, createCuaDriver, ScrollDirection } from "./driver-client.js";
+import {
+  ClickButton,
+  createCuaDriver,
+  EscalationReason,
+  ScrollDirection,
+} from "./driver-client.js";
 
 const authorization = {
   allowedModes: ["unrestricted"],
@@ -123,12 +128,14 @@ describe("CUA Driver direct session", () => {
     expect(mocks.endSession).toHaveBeenCalledWith({ session: sessionOptions.publicSession });
   });
 
-  it("keeps window tools available after a desktop action", async () => {
+  it("keeps the window session immutable across desktop actions and escalation", async () => {
     const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
     await driver.getDesktopState();
     await driver.callTool("list_windows", {});
     await driver.callDesktopTool("get_cursor_position", {});
+    await driver.escalateScope(EscalationReason.Other);
+    await driver.callTool("list_windows", {});
     const windowOptions = mocks.createTrustedSession.mock.calls.find(([, options]) =>
       options.publicSession.startsWith("openclaw-window-"),
     )?.[1];
@@ -143,7 +150,9 @@ describe("CUA Driver direct session", () => {
       { session: desktopOptions.publicSession, captureScope: "desktop" },
       undefined,
     );
-    expect(mocks.callTool).toHaveBeenCalledWith(
+    expect(mocks.callTool).toHaveBeenCalledTimes(3);
+    expect(mocks.callTool).toHaveBeenNthCalledWith(
+      1,
       "list_windows",
       JSON.stringify({ session: windowOptions.publicSession }),
       undefined,
@@ -153,7 +162,16 @@ describe("CUA Driver direct session", () => {
       JSON.stringify({ session: desktopOptions.publicSession }),
       undefined,
     );
-    expect(mocks.escalateSession).not.toHaveBeenCalled();
+    expect(mocks.escalateSession).toHaveBeenCalledWith(
+      { session: desktopOptions.publicSession, reason: EscalationReason.Other },
+      undefined,
+    );
+    expect(mocks.callTool).toHaveBeenNthCalledWith(
+      3,
+      "list_windows",
+      JSON.stringify({ session: windowOptions.publicSession }),
+      undefined,
+    );
     await driver.dispose();
   });
 

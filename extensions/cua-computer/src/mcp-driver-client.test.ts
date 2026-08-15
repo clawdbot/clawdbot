@@ -3,7 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ClickButton } from "./driver-client.js";
+import { ClickButton, EscalationReason } from "./driver-client.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
 
 type RpcRequest = {
@@ -192,6 +192,9 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         case "list_windows":
           fake.respond(request, toolResult({ windows: [] }));
           break;
+        case "escalate_session":
+          fake.respond(request, sessionState("desktop"));
+          break;
         case "end_session":
           fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
           break;
@@ -232,6 +235,10 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
         isError: false,
       });
+      await driver.escalateScope(EscalationReason.Other);
+      await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
+        isError: false,
+      });
 
       const startCalls = endpoint.requests.filter(
         (request) => request.method === "tools/call" && request.params?.name === "start_session",
@@ -246,6 +253,25 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         "window",
       ]);
       expect(new Set(startCalls.map((request) => request.params?.arguments?.session)).size).toBe(2);
+      const desktopSession = startCalls.find(
+        (request) => request.params?.arguments?.capture_scope === "desktop",
+      )?.params?.arguments?.session;
+      const windowSession = startCalls.find(
+        (request) => request.params?.arguments?.capture_scope === "window",
+      )?.params?.arguments?.session;
+      expect(
+        endpoint.requests.find(
+          (request) =>
+            request.method === "tools/call" && request.params?.name === "escalate_session",
+        )?.params?.arguments?.session,
+      ).toBe(desktopSession);
+      expect(
+        endpoint.requests
+          .filter(
+            (request) => request.method === "tools/call" && request.params?.name === "list_windows",
+          )
+          .map((request) => request.params?.arguments?.session),
+      ).toEqual([windowSession, windowSession]);
 
       await driver.dispose();
       await vi.waitFor(() => {

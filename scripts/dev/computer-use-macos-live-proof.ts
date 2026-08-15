@@ -3,11 +3,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { createComputerTool } from "../../src/agents/tools/computer-tool.js";
+import { listNodes } from "../../src/agents/tools/nodes-utils.js";
 
 const execFileAsync = promisify(execFile);
 const { values } = parseArgs({
   options: {
     "window-title": { type: "string" },
+    provider: { type: "string" },
     text: { type: "string" },
     artifacts: { type: "string" },
     "element-label": { type: "string" },
@@ -18,17 +20,25 @@ const { values } = parseArgs({
 
 if (values.help) {
   console.log(
-    "Usage: computer-use-macos-live-proof.ts --window-title <title> --text <text> --artifacts <dir> [--element-label <label>]",
+    "Usage: computer-use-macos-live-proof.ts --provider <peekaboo|cua> --window-title <title> --text <text> --artifacts <dir> [--element-label <label>]",
   );
   process.exit(0);
 }
 
 const windowTitle = values["window-title"]?.trim();
+const provider = values.provider?.trim().toLowerCase();
 const text = values.text;
 const artifacts = values.artifacts ? path.resolve(values.artifacts) : undefined;
 const elementLabel = values["element-label"]?.trim().toLowerCase();
-if (!windowTitle || text === undefined || !artifacts) {
-  throw new Error("--window-title, --text, and --artifacts are required");
+if (
+  (provider !== "peekaboo" && provider !== "cua") ||
+  !windowTitle ||
+  text === undefined ||
+  !artifacts
+) {
+  throw new Error(
+    "--provider (peekaboo|cua), --window-title, --text, and --artifacts are required",
+  );
 }
 const artifactDirectory = artifacts;
 
@@ -36,13 +46,35 @@ type ToolResult = Awaited<ReturnType<ReturnType<typeof createComputerTool>["exec
 type JsonRecord = Record<string, unknown>;
 type ActionOutcome = { kind: "result"; result: ToolResult } | { kind: "error"; error: JsonRecord };
 
-const tool = createComputerTool({ modelHasVision: true });
+const expectedProviderId = provider === "cua" ? "cua-computer" : "peekaboo";
+const computerNodes = (await listNodes({ timeoutMs: 30_000 })).filter(
+  (node) =>
+    node.connected === true &&
+    node.commands?.includes("computer.act") === true &&
+    node.commands.includes("screen.snapshot") &&
+    node.computerUse !== undefined,
+);
+if (computerNodes.length !== 1) {
+  throw new Error(`expected exactly one connected computer node, found ${computerNodes.length}`);
+}
+const selectedNode = computerNodes[0]!;
+const advertisedProvider = selectedNode.computerUse!.provider;
+if (advertisedProvider.id !== expectedProviderId) {
+  throw new Error(
+    `expected provider ${expectedProviderId}, but node advertised ${advertisedProvider.id}`,
+  );
+}
+const tool = createComputerTool({
+  modelHasVision: true,
+  capabilityDescriptor: selectedNode.computerUse,
+});
 let callSequence = 0;
 
 async function call(action: string, fields: JsonRecord = {}): Promise<ToolResult> {
   callSequence += 1;
   return await tool.execute(`live-proof-${callSequence}`, {
     action,
+    node: selectedNode.nodeId,
     timeoutMs: 30_000,
     ...fields,
   });
@@ -260,6 +292,7 @@ const finalOutcome = confirmation ?? typed;
 
 const evidence = {
   route: "agent computer tool -> Gateway node.invoke -> paired Mac node -> selected provider",
+  provider: { expected: expectedProviderId, advertised: advertisedProvider },
   screenshot: resultText(screenshot),
   target: {
     windowRef: target.windowRef,
