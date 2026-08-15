@@ -370,6 +370,18 @@ describe("memory embedding policy", () => {
     ).toBe(false);
   });
 
+  it("still classifies a bare periodic word with no usage-limit/spend-limit/reset signal as durable billing", () => {
+    // Regression: a periodic word alone is not proof of a transient window -- this exact
+    // message ("monthly" with no usage-limit, spend-limit, or reset context) is a durable
+    // subscription exhaustion that happens to mention a billing cadence, and must still
+    // enter the cooldown instead of being waved through as transient every sync cycle.
+    expect(
+      isBillingExhaustedMemoryEmbeddingError(
+        "openai embeddings failed: 402 monthly subscription quota exhausted; check your subscription",
+      ),
+    ).toBe(true);
+  });
+
   it("still classifies an explicit subscription/billing 402 with no periodic qualifier", () => {
     // The actual Mistral response body from the live incident carries no periodic
     // wording at all — it must still classify as a durable billing failure.

@@ -537,7 +537,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   ): Promise<number[][]> {
     const provider = generation.provider;
     const batchEmbed = generation.runtime?.batchEmbed;
-    if (!batchEmbed) {
+    // A cooling-down provider must never see the runtime batch API's network call, not just
+    // the standard-embedding fallback: embedChunksInBatches funnels into the same guarded
+    // runProviderBatchWithRetry check and throws the canonical skip error without a request.
+    if (
+      !batchEmbed ||
+      isMemoryEmbeddingCoolingDown(this.embeddingBillingCooldown, provider.id, Date.now())
+    ) {
       return this.embedChunksInBatches(chunks, generation);
     }
     if (chunks.length === 0) {

@@ -102,8 +102,32 @@ const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 const BILLING_EXHAUSTED_MEMORY_EMBEDDING_ERROR_RE =
   /(^| )402(\D|$)|payment required|insufficient_quota|insufficient quota|check your subscription|billing|quota exceeded/i;
 
-const TRANSIENT_402_SIGNAL_RE =
-  /(daily|weekly|monthly|rolling time window|automatic quota refresh|usage limit|organization usage|billing period|spend(?:ing)? limit|resets? (?:in|at)|try again (?:in|later))/i;
+// A periodic/scoped word alone is not enough to call a 402 transient -- e.g. "402 monthly
+// subscription quota exhausted; check your subscription" is a durable billing failure that
+// happens to mention "monthly". Require a periodic/scoped/retry hint together with a
+// usage-limit, spend-limit, or reset signal, mirroring the bounded AND-combinations
+// src/agents/failover/classification-rules.ts's hasRetryable402TransientSignal uses for the
+// same distinction on chat-completion providers (reimplemented locally since extensions
+// cannot import core internals).
+const PERIODIC_402_HINT_RE = /(daily|weekly|monthly)/i;
+const USAGE_OR_SPEND_LIMIT_402_HINT_RE = /(usage limit|organization usage|spend(?:ing)? limit)/i;
+const RESET_402_HINT_RE = /resets? (?:in|at)/i;
+const QUOTA_REFRESH_WINDOW_402_HINT_RE = /(rolling time window|automatic quota refresh)/i;
+const RETRY_402_HINT_RE = /try again (?:in|later)/i;
+const LIMIT_WORD_RE = /limit/i;
+const BILLING_PERIOD_402_HINT_RE = /billing period/i;
+
+function isTransientMemoryEmbedding402Signal(message: string): boolean {
+  const hasPeriodicHint = PERIODIC_402_HINT_RE.test(message);
+  const hasUsageOrSpendLimitHint = USAGE_OR_SPEND_LIMIT_402_HINT_RE.test(message);
+  const hasLimitWord = LIMIT_WORD_RE.test(message);
+  return (
+    QUOTA_REFRESH_WINDOW_402_HINT_RE.test(message) ||
+    (hasPeriodicHint && (hasUsageOrSpendLimitHint || RESET_402_HINT_RE.test(message))) ||
+    (BILLING_PERIOD_402_HINT_RE.test(message) && (hasPeriodicHint || hasLimitWord)) ||
+    (RETRY_402_HINT_RE.test(message) && (hasUsageOrSpendLimitHint || hasLimitWord))
+  );
+}
 
 function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
   return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
@@ -118,7 +142,7 @@ export function isBillingExhaustedMemoryEmbeddingError(message: string): boolean
   if (!BILLING_EXHAUSTED_MEMORY_EMBEDDING_ERROR_RE.test(message)) {
     return false;
   }
-  return !TRANSIENT_402_SIGNAL_RE.test(message);
+  return !isTransientMemoryEmbedding402Signal(message);
 }
 
 export function isRetryableMemoryEmbeddingError(message: string): boolean {
