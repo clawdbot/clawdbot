@@ -3,6 +3,7 @@ import { constants as fsConstants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { collectPackageDistInventory } from "../../infra/package-dist-inventory.js";
+import { compareWorkerBundlePaths } from "../../shared/worker-bundle-hash.js";
 
 // Host node_modules can contain platform-native code and is not portable to a leased box.
 // The bundle ships dist, a pruned package.json, and vendored copies of dist-external
@@ -68,10 +69,6 @@ function sourceIdentityStats(stats: BigIntStats) {
     mtimeNs: stats.mtimeNs,
     ctimeNs: stats.ctimeNs,
   };
-}
-
-export function comparePaths(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function readManifestDependencies(parsed: Record<string, unknown>): Record<string, string> {
@@ -299,7 +296,7 @@ async function collectVendoredPackageFiles(
     }
     throw error;
   }
-  return files.toSorted(comparePaths);
+  return files.toSorted(compareWorkerBundlePaths);
 }
 
 async function stageVendoredWorkspacePackages(params: {
@@ -310,7 +307,7 @@ async function stageVendoredWorkspacePackages(params: {
 }): Promise<{ entries: WorkerBundleManifestEntry[]; vendoredDirsByName: Map<string, string> }> {
   const entries: WorkerBundleManifestEntry[] = [];
   const vendoredDirsByName = new Map<string, string>();
-  for (const packageName of [...params.packageNames].toSorted(comparePaths)) {
+  for (const packageName of [...params.packageNames].toSorted(compareWorkerBundlePaths)) {
     const linkedPath = path.join(params.sourceRoot, "node_modules", ...packageName.split("/"));
     let vendorRealRoot: string;
     try {
@@ -381,7 +378,7 @@ async function collectWorkerBundleManifestInternal(
   }
   const referencedPackages = new Set<string>();
   const entries: WorkerBundleManifestEntry[] = [];
-  for (const relativePath of ["openclaw.mjs", ...distFiles].toSorted(comparePaths)) {
+  for (const relativePath of ["openclaw.mjs", ...distFiles].toSorted(compareWorkerBundlePaths)) {
     const { entry, contents } = await stageManifestEntry(
       sourceRoot,
       sourceRootRealPath,
@@ -412,7 +409,7 @@ async function collectWorkerBundleManifestInternal(
     sourceIdentities,
   );
   entries.push(manifest.entry);
-  return entries.toSorted((left, right) => comparePaths(left.path, right.path));
+  return entries.toSorted((left, right) => compareWorkerBundlePaths(left.path, right.path));
 }
 
 export async function collectWorkerBundleManifest(
@@ -434,7 +431,7 @@ export async function collectWorkerBundleManifestWithSourceIdentity(
   return {
     manifest,
     sourceIdentity: [...identities.values()].toSorted((left, right) =>
-      comparePaths(`${left.kind}\0${left.path}`, `${right.kind}\0${right.path}`),
+      compareWorkerBundlePaths(`${left.kind}\0${left.path}`, `${right.kind}\0${right.path}`),
     ),
   };
 }

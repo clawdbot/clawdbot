@@ -95,7 +95,7 @@ function requireProvisionedEnvironment(
   if (
     environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
     !environment.sshEndpoint &&
-    environment.bootstrapReceipt?.installKind === "local" &&
+    environment.bootstrapReceipt?.installKind === "bundle" &&
     supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
   ) {
     return {

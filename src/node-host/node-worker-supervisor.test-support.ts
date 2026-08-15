@@ -214,7 +214,6 @@ export function testWorkerLaunchInput(
   return {
     launchId,
     gatewayNamespace: "gateway-1",
-    installKind: "bundle",
     expectedBundleHash: TEST_BUNDLE_HASH,
     placementGeneration: 4,
     descriptor: testWorkerDescriptor(workspaceDir, prompt),

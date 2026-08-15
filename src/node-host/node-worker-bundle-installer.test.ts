@@ -152,7 +152,7 @@ describe("node worker bundle installer", () => {
 
     await expect(
       installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).rejects.toThrow("bundle installation did not complete");
+    ).rejects.toThrow("worker bundle download failed integrity validation");
     await expect(
       fs.access(
         path.join(root, fixture.input.gatewayNamespace, "bundles", fixture.input.build.bundleHash),
@@ -171,6 +171,6 @@ describe("node worker bundle installer", () => {
 
     await expect(
       installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).rejects.toThrow("bundle installation did not complete");
+    ).rejects.toThrow("gateway returned an unexpected worker bundle length");
   });
 });

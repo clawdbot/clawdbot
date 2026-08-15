@@ -72,9 +72,9 @@ export type NodeWorkerSupervisorNodeProof = {
   clientId: typeof GATEWAY_CLIENT_IDS.NODE_HOST;
   clientMode: "node";
   protocolFeature: typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE;
-  /** Immutable build ceiling from the authenticated connection handshake. */
+  /** Node-local session-host claim from the connection handshake; never execution authority. */
   workerBuild?: WorkerAdmissionHandshake;
-  /** Transient new-launch eligibility; omitted while the node is at capacity. */
+  /** Transient launch capacity declaration; omitted while the node is full. */
   workerRuns?: WorkerAdmissionHandshake;
   commands: readonly string[];
 };
@@ -253,7 +253,10 @@ function isWorkerSupervisorProofCurrent(
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
     sameOptionalWorkerBuild(current.workerBuild, proof.workerBuild) &&
-    (!requireLaunchEligibility || sameOptionalWorkerBuild(current.workerRuns, proof.workerRuns))
+    (!requireLaunchEligibility ||
+      (current.workerRuns !== undefined &&
+        proof.workerRuns !== undefined &&
+        sameWorkerBuild(current.workerRuns, proof.workerRuns)))
   );
 }
 

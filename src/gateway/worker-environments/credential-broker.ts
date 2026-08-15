@@ -2,11 +2,7 @@ import {
   type WorkerAdmissionHandshake,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import {
-  resolveLocalWorkerBuild,
-  verifyWorkerAdmissionHandshake,
-  type ExpectedWorkerBuild,
-} from "./admission.js";
+import { verifyWorkerAdmissionHandshake, type ExpectedWorkerBuild } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import {
   createWorkerCredentialMaterial,
@@ -124,7 +120,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
 
   const commitReady = (
     record: WorkerEnvironmentRecord,
-    receipt: WorkerAdmissionHandshake & { installKind: "bundle" | "local" },
+    receipt: WorkerAdmissionHandshake & { installKind: "bundle" },
     patch: WorkerEnvironmentTransitionPatch = {},
   ) => {
     const material = credentialMaterial();
@@ -220,9 +216,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       }
       let currentBuild: ExpectedWorkerBuild;
       try {
-        currentBuild =
-          resolveLocalWorkerBuild(current.bootstrapReceipt) ??
-          (await options.prepareInstallation("bundle"));
+        currentBuild = await options.prepareInstallation("bundle");
       } catch {
         throw serviceError("invalid_state", "Current worker build identity is unavailable");
       }

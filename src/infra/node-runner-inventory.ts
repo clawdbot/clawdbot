@@ -5,7 +5,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
-export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v1";
+export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
 
 type NodeWorkerSupervisorProtocolFeatures =
   | readonly []

@@ -42,7 +42,7 @@ describe("device worker placement dispatch", () => {
         bundleHash: "a".repeat(64),
         openclawVersion: "2026.8.12",
         protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
-        installKind: "local",
+        installKind: "bundle",
       },
       sharedHost: true,
       tunnelStatus: "stopped",

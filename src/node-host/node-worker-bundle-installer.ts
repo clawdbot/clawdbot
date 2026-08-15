@@ -1,14 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   validateWorkerAdmissionHandshake,
   type WorkerAdmissionHandshake,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -104,10 +107,7 @@ async function downloadBundle(params: {
       }
       hash.update(chunk);
       if (!output.write(chunk)) {
-        await new Promise<void>((resolve, reject) => {
-          output.once("drain", resolve);
-          output.once("error", reject);
-        });
+        await once(output, "drain");
       }
     }
     await new Promise<void>((resolve, reject) => {
@@ -318,8 +318,12 @@ export class NodeWorkerBundleInstaller {
             { cause: error },
           );
         }
+        const detail = truncateUtf16Safe(
+          redactSensitiveText(error instanceof Error ? error.message : String(error)),
+          512,
+        );
         throw new NodeWorkerBundleInstallError(
-          "worker-bundle-install-failed: bundle installation did not complete",
+          `worker-bundle-install-failed: ${detail || "bundle installation did not complete"}`,
           { cause: error },
         );
       }

@@ -59,7 +59,7 @@ function environment(): WorkerEnvironmentRecord {
     provisionOperationId: "provision-1",
     sharedHost: true,
     desktop: null,
-    bootstrapReceipt: { ...BUILD, installKind: "local" },
+    bootstrapReceipt: { ...BUILD, installKind: "bundle" },
     ownerEpoch: 2,
     teardownTerminalState: null,
     attachedSessionIds: ["session-1"],
