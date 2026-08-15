@@ -120,15 +120,22 @@ describe("sessions.groups.update", () => {
       { name: "Client", cwd: "/workspace/client", worktree: true },
     ]);
     const respond = vi.fn();
+    const assertCurrent = vi.fn();
+    const options = updateOptions(
+      { name: "Client", cwd: "/workspace/link", worktree: true },
+      respond,
+      ["operator.write"],
+    );
+    options.sessionMutationAuthorization = {
+      assertCurrent,
+      assertTargetCurrent: vi.fn(),
+    };
     await expectDefined(
       sessionGroupHandlers["sessions.groups.update"],
       'sessionGroupHandlers["sessions.groups.update"] test invariant',
-    )(
-      updateOptions({ name: "Client", cwd: "/workspace/link", worktree: true }, respond, [
-        "operator.write",
-      ]),
-    );
+    )(options);
 
+    expect(assertCurrent).toHaveBeenCalledOnce();
     expect(groupMocks.update).toHaveBeenCalledWith("Client", {
       cwd: "/workspace/client",
       worktree: true,

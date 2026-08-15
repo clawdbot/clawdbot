@@ -13,6 +13,8 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import { filterMutableSessionGroupRecords } from "../session-group-defaults-access.js";
+import { resolveSessionGroupMutationTargetsByName } from "../session-group-mutation-targets.js";
 import {
   deleteSessionGroup,
   listSessionGroupDefaults,
@@ -42,7 +44,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "sessions.groups.defaults": async ({ params, respond }) => {
+  "sessions.groups.defaults": async ({ params, respond, client, context }) => {
     if (
       !assertValidParams(
         params,
@@ -53,7 +55,12 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    respond(true, { defaults: listSessionGroupDefaults() }, undefined);
+    const defaults = filterMutableSessionGroupRecords({
+      cfg: context.getRuntimeConfig(),
+      client,
+      records: listSessionGroupDefaults(),
+    });
+    respond(true, { defaults }, undefined);
   },
   "sessions.groups.put": async ({ params, respond, context }) => {
     if (
@@ -98,7 +105,13 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
-  "sessions.groups.update": async ({ params, respond, context, client }) => {
+  "sessions.groups.update": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (
       !assertValidParams(
         params,
@@ -131,6 +144,14 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       }
       cwd = containment.path;
     }
+    sessionMutationAuthorization?.assertCurrent();
+    if (sessionMutationAuthorization) {
+      const currentTargets =
+        resolveSessionGroupMutationTargetsByName(context.getRuntimeConfig()).get(params.name) ?? [];
+      for (const target of currentTargets) {
+        sessionMutationAuthorization.assertTargetCurrent(target);
+      }
+    }
     const defaults = updateSessionGroupDefaults(params.name, {
       cwd,
       worktree: params.worktree,
@@ -143,7 +164,18 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    respond(true, { ok: true, defaults }, undefined);
+    respond(
+      true,
+      {
+        ok: true,
+        defaults: filterMutableSessionGroupRecords({
+          cfg: context.getRuntimeConfig(),
+          client,
+          records: defaults,
+        }),
+      },
+      undefined,
+    );
     emitSessionsChanged(context, { reason: "groups" });
   },
   "sessions.groups.delete": async ({ params, respond, context, sessionMutationAuthorization }) => {

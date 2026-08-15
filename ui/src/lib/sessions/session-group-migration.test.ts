@@ -103,6 +103,42 @@ describe("legacy session group migration", () => {
 });
 
 describe("session group catalog loading", () => {
+  it("clears cached cwd when a defaults update omits the removed value", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.list") {
+        return { groups: [{ name: "Client", position: 0 }] };
+      }
+      if (method === "sessions.groups.defaults") {
+        return { defaults: [{ name: "Client", cwd: "/repos/client", worktree: true }] };
+      }
+      if (method === "sessions.groups.update") {
+        return { defaults: [{ name: "Client", worktree: false }] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const gateway = createGateway(request, ["operator.write"]);
+    gateway.snapshot.hello = {
+      ...gateway.snapshot.hello,
+      features: {
+        methods: ["sessions.groups.list", "sessions.groups.defaults", "sessions.groups.update"],
+      },
+    } as GatewayHelloOk;
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.groupsLoad();
+    expect(sessions.state.groupSettings).toEqual([
+      { name: "Client", position: 0, cwd: "/repos/client", worktree: true },
+    ]);
+
+    await expect(sessions.groupsUpdate("Client", { cwd: null, worktree: false })).resolves.toBe(
+      "completed",
+    );
+    expect(sessions.state.groupSettings).toEqual([
+      { name: "Client", position: 0, worktree: false },
+    ]);
+    sessions.dispose();
+  });
+
   it("keeps a loaded path-free catalog when defaults are unavailable", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.groups.list") {
