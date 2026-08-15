@@ -31,6 +31,14 @@ openclaw-session-owner-chip {
   color: white;
   font-weight: 700;
   line-height: 1;
+  transition:
+    filter var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.session-owner-chip--away {
+  filter: grayscale(0.8);
+  opacity: 0.45;
 }
 
 .session-owner-chip--row {

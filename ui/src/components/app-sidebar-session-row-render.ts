@@ -40,6 +40,7 @@ import {
   resolveSidebarSessionSubtitle,
 } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import { projectPresencePayload } from "./viewer-facepile.ts";
 import "./elapsed-time.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
@@ -180,11 +181,20 @@ export function renderRecentSession(params: {
       ? session.archivedBy
       : session.createdActor
     : undefined;
+  const creatorId = ownerAttribution === "created" ? ownerActor?.id?.trim() : undefined;
+  const creatorViewing = creatorId
+    ? projectPresencePayload(
+        host.sessionData.presencePayload,
+        host.sessionDataContext?.gateway.snapshot.selfUser?.id,
+        host.sessionData.presenceInstanceId,
+      ).users.some((user) => user.id === creatorId && user.watchedSessions.includes(session.key))
+    : undefined;
   const { running, leadingIndicator, trailingIndicator } = renderSessionLeadingState(
     session,
     pullRequestState,
     ownerActor,
     ownerAttribution,
+    creatorViewing,
   );
   const trailingDescription = session.isChild
     ? ""
@@ -312,6 +322,7 @@ export function renderRecentSession(params: {
           .selfUserId=${host.sessionDataContext?.gateway.snapshot.selfUser?.id}
           .selfInstanceId=${host.sessionData.presenceInstanceId}
           .sessionKey=${session.key}
+          .excludeUserId=${session.createdActor?.id}
           .maxVisible=${3}
           variant="session"
         ></openclaw-viewer-facepile>

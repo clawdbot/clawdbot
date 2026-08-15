@@ -106,6 +106,7 @@ export function renderSessionLeadingState(
   pullRequestState: SessionPullRequestIndicatorState,
   ownerActor: SessionCreatedActor | null | undefined,
   attribution: "created" | "archived",
+  ownerViewing?: boolean,
 ) {
   const running = session.hasActiveRun;
   const trailingIndicator = session.isChild
@@ -159,7 +160,7 @@ export function renderSessionLeadingState(
     return {
       running,
       leadingIndicator: renderSessionGlyph({
-        content: renderSessionOwnerChip(ownerActor, "row", attribution),
+        content: renderSessionOwnerChip(ownerActor, "row", attribution, ownerViewing),
         running: false,
         circular: true,
       }),

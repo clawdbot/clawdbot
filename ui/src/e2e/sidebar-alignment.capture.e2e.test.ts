@@ -120,7 +120,21 @@ suite.define(() => {
               .locator('[data-session-key="agent:main:owner-present"] .viewer-facepile')
               .getAttribute("data-viewer-count"),
           )
-          .toBe("2");
+          .toBe("1");
+        await expect
+          .poll(() =>
+            sidebar
+              .locator('[data-session-key="agent:main:owner-present"] .session-owner-chip')
+              .getAttribute("class"),
+          )
+          .not.toContain("session-owner-chip--away");
+        await expect
+          .poll(() =>
+            sidebar
+              .locator('[data-session-key="agent:main:owner-away"] .session-owner-chip')
+              .getAttribute("class"),
+          )
+          .toContain("session-owner-chip--away");
 
         const clip = await sidebar.boundingBox();
         if (!clip) {

@@ -837,6 +837,7 @@ export const en: TranslationMap = {
     limit: "Limit",
     createdBy: "Created by {name}",
     archivedBy: "Archived by {name}",
+    viewingNow: "viewing now",
     people: "People",
     allCreators: "All people",
     filterControls: "Session filters",

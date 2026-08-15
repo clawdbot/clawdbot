@@ -121,6 +121,11 @@ describe("AppSidebar session ownership", () => {
     const bobAvatarBefore = sidebar
       .querySelector('[data-session-key="agent:main:bob"] openclaw-viewer-avatar img')
       ?.getAttribute("src");
+    expect(
+      sidebar
+        .querySelector('[data-session-key="agent:main:bob"] .session-owner-chip')
+        ?.classList.contains("session-owner-chip--away"),
+    ).toBe(true);
 
     gateway.publishEvent("presence", {
       presence: [
@@ -131,6 +136,7 @@ describe("AppSidebar session ownership", () => {
             name: "Bob",
             avatarUrl: "/api/users/profile-bob/avatar?v=99",
           },
+          watchedSessions: ["agent:main:bob"],
         },
       ],
     });
@@ -140,6 +146,11 @@ describe("AppSidebar session ownership", () => {
         .querySelector('[data-session-key="agent:main:bob"] openclaw-viewer-avatar img')
         ?.getAttribute("src"),
     ).toBe(bobAvatarBefore);
+    const bobChip = sidebar.querySelector(
+      '[data-session-key="agent:main:bob"] .session-owner-chip',
+    );
+    expect(bobChip?.classList.contains("session-owner-chip--away")).toBe(false);
+    expect(bobChip?.getAttribute("title")).toBe("Created by Bob · viewing now");
 
     const adaChip = sidebar.querySelector(
       '[data-session-key="agent:main:ada"] .session-owner-chip',
