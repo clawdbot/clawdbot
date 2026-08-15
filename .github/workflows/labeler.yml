@@ -496,6 +496,7 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-contents: read
           permission-issues: write
           permission-members: read
           permission-metadata: read
@@ -506,6 +507,7 @@ jobs:
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-contents: read
           permission-issues: write
           permission-members: read
           permission-metadata: read
