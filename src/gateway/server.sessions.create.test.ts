@@ -1234,7 +1234,11 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   try {
     const created = await directSessionReq<{
       key: string;
-      entry: { spawnedCwd?: string };
+      entry: {
+        permissionMode?: string;
+        sessionRoot?: string;
+        spawnedCwd?: string;
+      };
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
@@ -1247,6 +1251,8 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     const worktree = created.payload?.worktree;
     expect(worktree?.branch).toBe("openclaw/release-planning");
     expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
+    expect(created.payload?.entry.permissionMode).toBe("workspace");
+    expect(created.payload?.entry.sessionRoot).toBe(worktree?.path);
     worktreeId = worktree?.id;
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toMatchObject({
       id: worktree?.id,
@@ -1687,7 +1693,12 @@ test("sessions.create maps worktree options and preserves a nested workspace cwd
   );
   try {
     const created = await directSessionReq<{
-      entry: { spawnedCwd?: string; worktree?: { id: string; branch: string; repoRoot: string } };
+      entry: {
+        permissionMode?: string;
+        sessionRoot?: string;
+        spawnedCwd?: string;
+        worktree?: { id: string; branch: string; repoRoot: string };
+      };
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
@@ -1712,6 +1723,8 @@ test("sessions.create maps worktree options and preserves a nested workspace cwd
       }),
     );
     expect(created.payload?.entry).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: worktreePath,
       spawnedCwd: path.join(worktreePath, "packages", "app"),
       worktree: {
         id: "worktree-options",
@@ -1873,6 +1886,28 @@ test("sessions.create reset-in-place clears a prior node binding for Gateway exe
   expect(gatewaySession.payload?.entry.execCwd).toBeUndefined();
 });
 
+test("sessions.reset preserves the recorded permission boundary", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-permission-reset", {
+        permissionMode: "guarded",
+        sessionRoot: "/workspace/project",
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    entry: { permissionMode?: string; sessionRoot?: string };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry).toMatchObject({
+    permissionMode: "guarded",
+    sessionRoot: "/workspace/project",
+  });
+});
+
 test("sessions.create does not apply create-time visibility to an in-place reset", async () => {
   testState.sessionConfig = { dmScope: "main" };
   await createSessionStoreDir();
@@ -1908,17 +1943,26 @@ test("sessions.create rejects a Gateway worktree targeting a node", async () => 
   });
 });
 
-test("sessions.create persists a Gateway cwd without a managed worktree", async () => {
+test("sessions.create persists a canonical Gateway cwd without a managed worktree", async () => {
+  const root = tempDirs.make("openclaw-session-admin-cwd-");
+  const cwd = path.join(root, "real");
+  const alias = path.join(root, "alias");
+  await fs.mkdir(cwd);
+  await fs.symlink(cwd, alias, "dir");
   const created = await directSessionReq(
     "sessions.create",
-    { cwd: "/tmp/repo" },
+    { cwd: alias },
     { client: { connect: { scopes: ["operator.admin"] } } as never },
   );
 
   expect(created.ok).toBe(true);
-  expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(
-    "/tmp/repo",
-  );
+  expect(
+    (
+      created.payload as {
+        entry?: { sessionRoot?: string; spawnedCwd?: string };
+      }
+    )?.entry,
+  ).toMatchObject({ sessionRoot: cwd, spawnedCwd: cwd });
 });
 
 test("sessions.create allows a write-scoped cwd inside the configured workspace", async () => {
@@ -1932,14 +1976,65 @@ test("sessions.create allows a write-scoped cwd inside the configured workspace"
     deviceIdentityPath: path.join(workspace, "write-cwd-device.json"),
   });
   try {
-    const created = await rpcReq<{ entry?: { spawnedCwd?: string } }>(ws, "sessions.create", {
-      cwd,
-    });
+    const created = await rpcReq<{
+      entry?: { sessionRoot?: string; spawnedCwd?: string };
+    }>(ws, "sessions.create", { cwd });
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.entry?.spawnedCwd).toBe(cwd);
+    expect(created.payload?.entry?.sessionRoot).toBe(cwd);
   } finally {
     ws.close();
+    testState.agentConfig = undefined;
+  }
+});
+
+test("sessions.create records the selected agent workspace when cwd is omitted", async () => {
+  const workspace = tempDirs.make("openclaw-session-default-root-");
+  testState.agentConfig = { workspace };
+  try {
+    const created = await directSessionReq<{
+      entry: { permissionMode?: string; sessionRoot?: string; spawnedCwd?: string };
+    }>("sessions.create", { agentId: "main", permissionMode: "guarded" });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.entry).toMatchObject({
+      permissionMode: "guarded",
+      sessionRoot: await fs.realpath(workspace),
+    });
+    expect(created.payload?.entry.spawnedCwd).toBeUndefined();
+  } finally {
+    testState.agentConfig = undefined;
+  }
+});
+
+test("sessions.create requires admin for full permission mode", async () => {
+  const workspace = tempDirs.make("openclaw-session-full-mode-");
+  testState.agentConfig = { workspace };
+  const writer = await openClient({
+    scopes: ["operator.write"],
+    deviceIdentityPath: path.join(workspace, "writer.json"),
+  });
+  const admin = await openClient({
+    scopes: ["operator.admin"],
+    deviceIdentityPath: path.join(workspace, "admin.json"),
+  });
+  try {
+    await expect(
+      rpcReq(writer.ws, "sessions.create", { agentId: "main", permissionMode: "full" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { message: "missing scope: operator.admin" },
+    });
+    await expect(
+      rpcReq(admin.ws, "sessions.create", { agentId: "main", permissionMode: "full" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      payload: { entry: { permissionMode: "full", sessionRoot: workspace } },
+    });
+  } finally {
+    writer.ws.close();
+    admin.ws.close();
     testState.agentConfig = undefined;
   }
 });
@@ -2011,9 +2106,11 @@ test("sessions.create rejects cwd outside a sandboxed agent workspace", async ()
 });
 
 test("sessions.create allows cwd within a sandboxed agent workspace", async () => {
-  testState.agentConfig = { workspace: "/tmp/safe-workspace", sandbox: { mode: "all" } };
+  const workspace = tempDirs.make("openclaw-session-sandbox-workspace-");
+  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
   try {
-    const cwd = "/tmp/safe-workspace/packages/app";
+    const cwd = path.join(workspace, "packages", "app");
+    await fs.mkdir(cwd, { recursive: true });
     const created = await directSessionReq(
       "sessions.create",
       { cwd },

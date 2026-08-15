@@ -30,3 +30,16 @@ it("projects session actors and explicitly clears absent attribution", () => {
     archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
   });
 });
+
+it("projects the prepared permission boundary", () => {
+  expect(
+    buildGatewaySessionEventFields({
+      sessionRow: {
+        key: "agent:main:workspace",
+        kind: "direct",
+        permissionMode: "workspace",
+        sessionRoot: "/workspace/project",
+      },
+    }),
+  ).toMatchObject({ permissionMode: "workspace", sessionRoot: "/workspace/project" });
+});

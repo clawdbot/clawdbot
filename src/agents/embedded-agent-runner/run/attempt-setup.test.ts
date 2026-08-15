@@ -106,6 +106,24 @@ describe("prepareEmbeddedAttemptSetup", () => {
     }
   });
 
+  it("prepares one closed session permission policy", async () => {
+    const root = path.join(os.tmpdir(), "openclaw-attempt-permission-root");
+    const setup = await prepareEmbeddedAttemptSetup({
+      config: {},
+      modelId: "gpt-5.4",
+      permissionMode: "workspace",
+      provider: "openai",
+      runId: "run-prepared-permission",
+      sessionId: "session-prepared-permission",
+      sessionRoot: root,
+      thinkLevel: "high",
+      timeoutMs: 30_000,
+      workspaceDir: root,
+    } as unknown as EmbeddedRunAttemptParams);
+
+    expect(setup.sessionPermissionPolicy).toEqual({ root, mode: "workspace" });
+  });
+
   it("passes the resolved skill snapshot into sandbox synchronization", async () => {
     const skillsSnapshot = {
       prompt: "skills",
