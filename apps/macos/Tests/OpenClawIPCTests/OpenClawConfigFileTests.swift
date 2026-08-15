@@ -116,6 +116,53 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
+    func `save dict removes retired config metadata`() async throws {
+        let configPath = self.makeConfigOverridePath()
+        defer { try? FileManager().removeItem(at: URL(fileURLWithPath: configPath).deletingLastPathComponent()) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": ["mode": "local"],
+                "meta": ["lastTouchedAt": "2026-08-05T22:45:14Z"],
+            ]))
+
+            let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
+            let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let meta = try #require(root["meta"] as? [String: Any])
+            #expect(meta["lastTouchedVersion"] as? String != nil)
+            #expect(meta["lastTouchedAt"] == nil)
+        }
+    }
+
+    @MainActor
+    @Test
+    func `gateway start migration repairs existing retired config metadata`() async throws {
+        let configPath = self.makeConfigOverridePath()
+        let configURL = URL(fileURLWithPath: configPath)
+        defer { try? FileManager().removeItem(at: configURL.deletingLastPathComponent()) }
+
+        try FileManager().createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try Data(
+            #"{"gateway":{"mode":"local"},"meta":{"lastTouchedAt":"2026-08-05T22:45:14Z"}}"#.utf8)
+            .write(to: configURL)
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.migrateRetiredAppMetadataForGatewayStart())
+
+            let data = try Data(contentsOf: configURL)
+            let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let gateway = try #require(root["gateway"] as? [String: Any])
+            let meta = try #require(root["meta"] as? [String: Any])
+            #expect(gateway["mode"] as? String == "local")
+            #expect(meta["lastTouchedVersion"] as? String != nil)
+            #expect(meta["lastTouchedAt"] == nil)
+        }
+    }
+
+    @MainActor
+    @Test
     func `save dict preserves gateway auth unless explicitly allowed`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)

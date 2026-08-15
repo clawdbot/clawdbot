@@ -1,5 +1,6 @@
-// Google Meet tests cover index.create plugin behavior.
 import { Command } from "commander";
+// Google Meet tests cover index.create plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin, { testing as googleMeetPluginTesting } from "./index.js";
 import { registerGoogleMeetCli } from "./src/cli.js";
@@ -137,12 +138,7 @@ async function runCreateMeetBrowserScript(params: { buttonText: string }) {
   return { button, result: scriptResult };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 type BrowserProxyBody = {
   fn?: string;

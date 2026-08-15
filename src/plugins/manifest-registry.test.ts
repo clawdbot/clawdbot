@@ -2,11 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
+import { collectChannelSchemaMetadataCore } from "../config/channel-config-metadata.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
+import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -82,21 +84,25 @@ function createPluginCandidate(params: {
   packageDir?: string;
   bundledManifest?: PluginCandidate["bundledManifest"];
   bundledManifestPath?: string;
+  installOwner?: string;
 }): PluginCandidate {
-  return {
-    idHint: params.idHint,
-    source: path.join(params.rootDir, params.sourceName ?? "index.ts"),
-    rootDir: params.rootDir,
-    origin: params.origin,
-    format: params.format,
-    bundleFormat: params.bundleFormat,
-    packageName: params.packageName,
-    packageVersion: params.packageVersion,
-    packageManifest: params.packageManifest,
-    packageDir: params.packageDir,
-    bundledManifest: params.bundledManifest,
-    bundledManifestPath: params.bundledManifestPath,
-  };
+  return recordPluginCandidateInstallOwner(
+    {
+      idHint: params.idHint,
+      source: path.join(params.rootDir, params.sourceName ?? "index.ts"),
+      rootDir: params.rootDir,
+      origin: params.origin,
+      format: params.format,
+      bundleFormat: params.bundleFormat,
+      packageName: params.packageName,
+      packageVersion: params.packageVersion,
+      packageManifest: params.packageManifest,
+      packageDir: params.packageDir,
+      bundledManifest: params.bundledManifest,
+      bundledManifestPath: params.bundledManifestPath,
+    },
+    params.installOwner,
+  );
 }
 
 function createMsteamsClawHubInstallRecord(
@@ -117,7 +123,7 @@ function createMsteamsClawHubInstallRecord(
 function resolveMsteamsClawHubTrust(overrides: Partial<PluginInstallRecord> = {}) {
   const dir = makeTempDir();
   writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryCore({
     installRecords: {
       msteams: createMsteamsClawHubInstallRecord(dir, overrides),
     },
@@ -127,6 +133,7 @@ function resolveMsteamsClawHubTrust(overrides: Partial<PluginInstallRecord> = {}
         rootDir: dir,
         packageName: "@openclaw/msteams",
         origin: "global",
+        installOwner: "msteams",
       }),
     ],
   });
@@ -136,7 +143,7 @@ function resolveMsteamsClawHubTrust(overrides: Partial<PluginInstallRecord> = {}
 function resolveDiffsNpmTrust(overrides: Partial<PluginInstallRecord> = {}) {
   const dir = makeTempDir();
   writeManifest(dir, { id: "diffs", configSchema: { type: "object" } });
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryCore({
     installRecords: {
       diffs: {
         source: "npm",
@@ -154,6 +161,7 @@ function resolveDiffsNpmTrust(overrides: Partial<PluginInstallRecord> = {}) {
         rootDir: dir,
         packageName: "@openclaw/diffs",
         origin: "global",
+        installOwner: "diffs",
       }),
     ],
   });
@@ -161,7 +169,7 @@ function resolveDiffsNpmTrust(overrides: Partial<PluginInstallRecord> = {}) {
 }
 
 function loadRegistry(candidates: PluginCandidate[]) {
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryCore({
     candidates,
   });
 }
@@ -175,7 +183,9 @@ function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
-function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRegistry>): number {
+function countDuplicateWarnings(
+  registry: ReturnType<typeof loadPluginManifestRegistryCore>,
+): number {
   return registry.diagnostics.filter(
     (diagnostic) =>
       diagnostic.level === "warn" && diagnostic.message?.includes("duplicate plugin id"),
@@ -183,7 +193,7 @@ function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRe
 }
 
 function hasPluginIdMismatchWarning(
-  registry: ReturnType<typeof loadPluginManifestRegistry>,
+  registry: ReturnType<typeof loadPluginManifestRegistryCore>,
 ): boolean {
   return registry.diagnostics.some((diagnostic) =>
     diagnostic.message.includes("plugin id mismatch"),
@@ -191,14 +201,14 @@ function hasPluginIdMismatchWarning(
 }
 
 function expectRegistryDiagnosticContains(
-  registry: ReturnType<typeof loadPluginManifestRegistry>,
+  registry: ReturnType<typeof loadPluginManifestRegistryCore>,
   fragment: string,
 ) {
   expect(registry.diagnostics.map((diag) => diag.message).join("\n")).toContain(fragment);
 }
 
 function expectNoRegistryDiagnosticContains(
-  registry: ReturnType<typeof loadPluginManifestRegistry>,
+  registry: ReturnType<typeof loadPluginManifestRegistryCore>,
   fragment: string,
 ) {
   expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(fragment);
@@ -232,7 +242,7 @@ function expectArrayIncludesAll(value: unknown, expected: readonly unknown[], la
 }
 
 function expectDiagnosticFields(
-  registry: ReturnType<typeof loadPluginManifestRegistry>,
+  registry: ReturnType<typeof loadPluginManifestRegistryCore>,
   expected: { level?: string; pluginId?: string; source?: string; messageIncludes?: string },
 ) {
   const diagnostic = registry.diagnostics.find((entry) => {
@@ -307,7 +317,7 @@ function loadRegistryForMinHostVersionCase(params: {
   minHostVersion: string;
   env?: NodeJS.ProcessEnv;
 }) {
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryCore({
     ...(params.env ? { env: params.env } : {}),
     candidates: [
       createPluginCandidate({
@@ -333,7 +343,7 @@ function loadRegistryForPluginApiCase(params: {
   origin?: "bundled" | "global" | "workspace" | "config";
   idHint?: string;
 }) {
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryCore({
     ...(params.env ? { env: params.env } : {}),
     candidates: [
       createPluginCandidate({
@@ -355,7 +365,7 @@ function loadRegistryForPluginApiCase(params: {
   });
 }
 
-function hasUnsafeManifestDiagnostic(registry: ReturnType<typeof loadPluginManifestRegistry>) {
+function hasUnsafeManifestDiagnostic(registry: ReturnType<typeof loadPluginManifestRegistryCore>) {
   return registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path"));
 }
 
@@ -386,7 +396,7 @@ function createDuplicateCandidateRegistry(params: {
   writeManifest(bundledDir, manifest);
   writeManifest(duplicateDir, manifest);
 
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryCore({
     candidates: [
       createPluginCandidate({
         idHint: params.pluginId,
@@ -441,7 +451,7 @@ function loadBundleRegistry(params: {
 }
 
 function expectPluginRoot(
-  registry: ReturnType<typeof loadPluginManifestRegistry>,
+  registry: ReturnType<typeof loadPluginManifestRegistryCore>,
   pluginId: string,
 ) {
   const plugin = registry.plugins.find((entry) => entry.id === pluginId);
@@ -452,8 +462,8 @@ function expectPluginRoot(
 }
 
 function expectCachedPluginRoot(params: {
-  first: ReturnType<typeof loadPluginManifestRegistry>;
-  second: ReturnType<typeof loadPluginManifestRegistry>;
+  first: ReturnType<typeof loadPluginManifestRegistryCore>;
+  second: ReturnType<typeof loadPluginManifestRegistryCore>;
   pluginId: string;
   firstRoot: string;
   secondRoot: string;
@@ -495,7 +505,7 @@ describe("loadPluginManifestRegistry", () => {
       OPENCLAW_STATE_DIR: stateDir,
     });
 
-    const first = loadPluginManifestRegistry({ env });
+    const first = loadPluginManifestRegistryCore({ env });
 
     writeManifest(pluginDir, {
       id: "cached-manifest",
@@ -505,7 +515,7 @@ describe("loadPluginManifestRegistry", () => {
     const updatedAt = new Date(Date.now() + 5000);
     fs.utimesSync(manifestPath, updatedAt, updatedAt);
 
-    const second = loadPluginManifestRegistry({ env });
+    const second = loadPluginManifestRegistryCore({ env });
     manifestChangeCase = {
       firstName: first.plugins.find((plugin) => plugin.id === "cached-manifest")?.name,
       secondName: second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name,
@@ -522,7 +532,7 @@ describe("loadPluginManifestRegistry", () => {
     const source = path.join(dir, "maintenance-access.ts");
     writeTextFile(dir, "maintenance-access.ts", "export default { register() {} };");
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       config: { plugins: { load: { paths: [source] } } },
       candidates: [
         createPluginCandidate({
@@ -550,7 +560,7 @@ describe("loadPluginManifestRegistry", () => {
     const source = path.join(dir, "node-mcp.ts");
     writeTextFile(dir, "node-mcp.ts", "export default { register() {} };");
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       config: { plugins: { load: { paths: [source] } } },
       candidates: [
         createPluginCandidate({
@@ -570,7 +580,7 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeTextFile(dir, "index.ts", "export default { register() {} };");
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       config: { plugins: { load: { paths: [dir] } } },
       env: hermeticEnv(),
     });
@@ -789,13 +799,13 @@ describe("loadPluginManifestRegistry", () => {
       origin: "global",
     });
 
-    const disabledRegistry = loadPluginManifestRegistry({
+    const disabledRegistry = loadPluginManifestRegistryCore({
       config: { plugins: { entries: { "external-chat": { enabled: false } } } },
       candidates: [candidate],
     });
     expectNoRegistryDiagnosticContains(disabledRegistry, "without channelConfigs metadata");
 
-    const allowlistRegistry = loadPluginManifestRegistry({
+    const allowlistRegistry = loadPluginManifestRegistryCore({
       config: { plugins: { allow: ["other-plugin"] } },
       candidates: [candidate],
     });
@@ -809,7 +819,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(bundledDir, manifest);
     writeManifest(globalDir, manifest);
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       installRecords: {
         zalouser: {
           source: "npm",
@@ -826,6 +836,7 @@ describe("loadPluginManifestRegistry", () => {
           idHint: "zalouser",
           rootDir: globalDir,
           origin: "global",
+          installOwner: "zalouser",
         }),
       ],
     });
@@ -844,7 +855,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(bundledDir, manifest);
     writeManifest(globalDir, manifest);
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
       installRecords: {
         codex: {
@@ -877,7 +888,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(bundledDir, manifest);
     writeManifest(globalDir, manifest);
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       installRecords: {
         zalouser: {
           source: "npm",
@@ -889,6 +900,7 @@ describe("loadPluginManifestRegistry", () => {
           idHint: "zalouser",
           rootDir: globalDir,
           origin: "global",
+          installOwner: "zalouser",
         }),
         createPluginCandidate({
           idHint: "zalouser",
@@ -905,6 +917,55 @@ describe("loadPluginManifestRegistry", () => {
 
   it("marks official registry npm installs as trusted", () => {
     expect(resolveDiffsNpmTrust()).toBe(true);
+  });
+
+  it("associates official trust with every child owned by the installed package", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "diffs", configSchema: { type: "object" } });
+    const registry = loadPluginManifestRegistryCore({
+      installRecords: {
+        diffs: {
+          source: "npm",
+          spec: "@openclaw/diffs",
+          installPath: dir,
+          resolvedName: "@openclaw/diffs",
+          resolvedSpec: "@openclaw/diffs@2026.7.16",
+        },
+      },
+      candidates: [
+        {
+          ...createPluginCandidate({
+            idHint: "diffs/two",
+            rootDir: dir,
+            packageName: "@openclaw/diffs",
+            origin: "global",
+            installOwner: "diffs",
+          }),
+          effectivePluginId: "diffs/two",
+        },
+        {
+          ...createPluginCandidate({
+            idHint: "diffs/one",
+            rootDir: dir,
+            packageName: "@openclaw/diffs",
+            origin: "global",
+            installOwner: "diffs",
+          }),
+          effectivePluginId: "diffs/one",
+        },
+      ],
+    });
+
+    expect(
+      registry.plugins.map((plugin) => ({
+        id: plugin.id,
+        trustedOfficialInstall: plugin.trustedOfficialInstall,
+        installOwner: resolvePluginManifestInstallOwner(plugin),
+      })),
+    ).toEqual([
+      { id: "diffs/two", trustedOfficialInstall: true, installOwner: "diffs" },
+      { id: "diffs/one", trustedOfficialInstall: true, installOwner: "diffs" },
+    ]);
   });
 
   it.each([
@@ -1051,7 +1112,7 @@ describe("loadPluginManifestRegistry", () => {
   it("does not trust a stale source path after switching to ClawHub", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       installRecords: {
         msteams: createMsteamsClawHubInstallRecord(makeTempDir(), { sourcePath: dir }),
       },
@@ -1072,7 +1133,7 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       installRecords: {
         "diagnostics-otel": {
           source: "clawhub",
@@ -1089,6 +1150,7 @@ describe("loadPluginManifestRegistry", () => {
           rootDir: dir,
           packageName: "@openclaw/diagnostics-otel",
           origin: "global",
+          installOwner: "diagnostics-otel",
         }),
       ],
     });
@@ -1100,7 +1162,7 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       installRecords: {
         "diagnostics-otel": {
           source: "clawhub",
@@ -1114,6 +1176,7 @@ describe("loadPluginManifestRegistry", () => {
           rootDir: dir,
           packageName: "@openclaw/diagnostics-otel",
           origin: "global",
+          installOwner: "diagnostics-otel",
         }),
       ],
     });
@@ -1125,7 +1188,7 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       installRecords: {
         "diagnostics-otel": {
           source: "npm",
@@ -1142,6 +1205,7 @@ describe("loadPluginManifestRegistry", () => {
           rootDir: dir,
           packageName: "@openclaw/diagnostics-otel",
           origin: "config",
+          installOwner: "diagnostics-otel",
         }),
       ],
     });
@@ -1157,7 +1221,7 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-prometheus", configSchema: { type: "object" } });
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       installRecords: {
         "diagnostics-prometheus": {
           source: "npm",
@@ -1172,12 +1236,14 @@ describe("loadPluginManifestRegistry", () => {
           rootDir: dir,
           packageName: "@openclaw/diagnostics-prometheus",
           origin: "global",
+          installOwner: "diagnostics-prometheus",
         }),
         createPluginCandidate({
           idHint: "diagnostics-prometheus",
           rootDir: dir,
           packageName: "@openclaw/diagnostics-prometheus",
           origin: "config",
+          installOwner: "diagnostics-prometheus",
         }),
       ],
     });
@@ -1193,7 +1259,7 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-prometheus", configSchema: { type: "object" } });
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       installRecords: {},
       candidates: [
         createPluginCandidate({
@@ -1212,7 +1278,7 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       installRecords: {},
       candidates: [
         createPluginCandidate({
@@ -1663,8 +1729,8 @@ describe("loadPluginManifestRegistry", () => {
       },
     });
 
-    const registry = loadPluginManifestRegistry({
-      bundledChannelConfigCollector: collectBundledChannelConfigs,
+    const registry = loadPluginManifestRegistryCore({
+      bundledChannelConfigCollector: collectBundledChannelConfigsCore,
       candidates: [candidate],
     });
 
@@ -1683,7 +1749,7 @@ describe("loadPluginManifestRegistry", () => {
         manifestOnly: { help: "manifest hint" },
       },
     });
-    expect(collectChannelSchemaMetadata(registry)).toEqual([
+    expect(collectChannelSchemaMetadataCore(registry)).toEqual([
       {
         id: "alpha",
         label: "Alpha",
@@ -2834,7 +2900,7 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "codex", configSchema: { type: "object" } });
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       installRecords: {
         codex: {
           source: "npm",
@@ -2842,18 +2908,21 @@ describe("loadPluginManifestRegistry", () => {
         },
       },
       candidates: [
-        createPluginCandidate({
-          idHint: "codex",
-          rootDir: dir,
-          packageDir: dir,
-          origin: "global",
-          packageManifest: {
-            install: {
-              npmSpec: "@openclaw/codex",
-              minHostVersion: "2026.3.22",
+        {
+          ...createPluginCandidate({
+            idHint: "codex",
+            rootDir: dir,
+            packageDir: dir,
+            origin: "global",
+            packageManifest: {
+              install: {
+                npmSpec: "@openclaw/codex",
+                minHostVersion: "2026.3.22",
+              },
             },
-          },
-        }),
+            installOwner: "codex",
+          }),
+        },
       ],
     });
 
@@ -2865,7 +2934,7 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "codex", configSchema: { type: "object" } });
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       candidates: [
         createPluginCandidate({
           idHint: "codex",
@@ -3247,7 +3316,7 @@ describe("loadPluginManifestRegistry", () => {
     if (!fixture.linked) {
       return;
     }
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       env: hermeticEnv({ OPENCLAW_NIX_MODE: "1" }),
       candidates: [
         createPluginCandidate({
@@ -3303,7 +3372,7 @@ describe("loadPluginManifestRegistry", () => {
       },
     };
 
-    const first = loadPluginManifestRegistry({
+    const first = loadPluginManifestRegistryCore({
       config,
       env: hermeticEnv({
         HOME: homeA,
@@ -3311,7 +3380,7 @@ describe("loadPluginManifestRegistry", () => {
         OPENCLAW_STATE_DIR: path.join(homeA, ".state"),
       }),
     });
-    const second = loadPluginManifestRegistry({
+    const second = loadPluginManifestRegistryCore({
       config,
       env: hermeticEnv({
         HOME: homeB,
@@ -3348,13 +3417,13 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ];
 
-    const olderHost = loadPluginManifestRegistry({
+    const olderHost = loadPluginManifestRegistryCore({
       candidates,
       env: hermeticEnv({
         OPENCLAW_VERSION: "2026.3.21",
       }),
     });
-    const newerHost = loadPluginManifestRegistry({
+    const newerHost = loadPluginManifestRegistryCore({
       candidates,
       env: hermeticEnv({
         OPENCLAW_VERSION: "2026.3.22",

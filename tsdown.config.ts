@@ -11,17 +11,17 @@ import {
   pluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
-} from "./scripts/lib/plugin-sdk-entries.mjs";
+} from "./scripts/lib/plugin-sdk-entries.mts";
 import {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
-} from "./scripts/lib/state-schema-inline-plugin.mjs";
+} from "./scripts/lib/state-schema-inline-plugin.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
-} from "./scripts/lib/tsdown-config-groups.mjs";
-import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mjs";
+} from "./scripts/lib/tsdown-config-groups.mts";
+import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
@@ -221,7 +221,6 @@ const explicitNeverBundleDependencies = [
   "jimp",
   "matrix-js-sdk",
   "prism-media",
-  "qrcode-terminal",
   "sharp",
   "typescript",
   "vitest",
@@ -231,6 +230,10 @@ function shouldNeverBundleDependency(id: string): boolean {
   return explicitNeverBundleDependencies.some((dependency) => {
     return id === dependency || id.startsWith(`${dependency}/`);
   });
+}
+
+function shouldNeverBundleDeclarationDependency(id: string): boolean {
+  return shouldNeverBundleDependency(id) || id === "zod" || id.startsWith("zod/");
 }
 
 function shouldAlwaysBundleDependency(id: string): boolean {
@@ -289,7 +292,10 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
+    "agents/prepared-model-catalog.worker": "src/agents/prepared-model-catalog.worker.ts",
     "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
+    "config/sessions/session-accessor.sqlite-archive.worker":
+      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
     "config/sessions/session-transcript-reconcile.worker":
       "src/config/sessions/session-transcript-reconcile.worker.ts",
     "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
@@ -299,11 +305,13 @@ function buildCoreDistEntries(): Record<string, string> {
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
+    "gateway/plugin-channel-reload-targets": "src/gateway/plugin-channel-reload-targets.ts",
     "gateway/worker-environments/runtime": "src/gateway/worker-environments/runtime.ts",
+    "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
     "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
-    "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
+    "subagent-registry.runtime": "src/agents/subagents/registry/subagent-registry.runtime.ts",
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
@@ -346,9 +354,6 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-system-agent": "src/auto-reply/reply/commands-system-agent.ts",
     "cli/run-main": "src/cli/run-main.ts",
-    "commitments/runtime": "src/commitments/runtime.ts",
-    "commitments/runtime.test-support": "src/commitments/runtime.test-support.ts",
-    "commitments/store": "src/commitments/store.ts",
     "config/config": "src/config/config.ts",
     "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
     "system-agent/audit": "src/system-agent/audit.ts",
@@ -520,9 +525,8 @@ function buildUnifiedDistEntries(): Record<string, string> {
           "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
         }
       : {}),
-    "memory-core-local-embedding-worker":
-      "packages/memory-host-sdk/src/host/embeddings-worker-child.ts",
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
+    "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     ...bundledHookEntries,
   };
 }
@@ -613,8 +617,8 @@ const unifiedDistEntries = buildUnifiedDistEntries();
 const unifiedDeps = {
   alwaysBundle: shouldAlwaysBundleDependency,
   neverBundle: shouldNeverBundleDependency,
-  // Keep dts generation from inlining externalized package types.
-  dts: { neverBundle: shouldNeverBundleDependency },
+  // Keep dependency-owned types canonical across independently emitted declaration graphs.
+  dts: { neverBundle: shouldNeverBundleDeclarationDependency },
 };
 
 const configs = [

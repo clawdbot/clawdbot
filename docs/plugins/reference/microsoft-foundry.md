@@ -74,9 +74,11 @@ name in the request `model` field:
 {
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "microsoft-foundry/<deployment-name>",
-        timeoutMs: 600000,
+      mediaModels: {
+        image: {
+          primary: "microsoft-foundry/<deployment-name>",
+          timeoutMs: 600000,
+        },
       },
     },
   },

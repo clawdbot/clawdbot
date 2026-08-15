@@ -12,11 +12,10 @@ import {
   buildVideoGenerationTaskStatusText,
   findActiveVideoGenerationTaskForSession,
   findDuplicateGuardVideoGenerationTaskForSession,
-} from "../video-generation-task-status.js";
+} from "../media-generation-task-status.js";
 import {
-  createMediaGenerateDuplicateGuardResult,
   createMediaGenerateProviderListActionResult,
-  createMediaGenerateTaskStatusActions,
+  createMediaGenerateTaskActions,
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
@@ -129,29 +128,15 @@ export function createVideoGenerateListActionResult(
   });
 }
 
-const videoGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
+export const {
+  createStatusActionResult: createVideoGenerateStatusActionResult,
+  createDuplicateGuardResult: createVideoGenerateDuplicateGuardResult,
+} = createMediaGenerateTaskActions({
   inactiveText: "No active video generation task is currently running for this session.",
-  findActiveTask: (sessionKey) => findActiveVideoGenerationTaskForSession(sessionKey) ?? undefined,
+  findActiveTask: (sessionKey, agentId) =>
+    findActiveVideoGenerationTaskForSession(sessionKey, { agentId }),
+  findDuplicateTask: (sessionKey, request) =>
+    findDuplicateGuardVideoGenerationTaskForSession(sessionKey, request),
   buildStatusText: buildVideoGenerationTaskStatusText,
   buildStatusDetails: buildVideoGenerationTaskStatusDetails,
 });
-
-export function createVideoGenerateStatusActionResult(
-  sessionKey?: string,
-): VideoGenerateActionResult {
-  return videoGenerateTaskStatusActions.createStatusActionResult(sessionKey);
-}
-
-export function createVideoGenerateDuplicateGuardResult(
-  sessionKey?: string,
-  params?: { prompt?: string; requestKey?: string },
-): VideoGenerateActionResult | undefined {
-  return createMediaGenerateDuplicateGuardResult({
-    sessionKey,
-    prompt: params?.prompt,
-    requestKey: params?.requestKey,
-    findDuplicateTask: findDuplicateGuardVideoGenerationTaskForSession,
-    buildStatusText: buildVideoGenerationTaskStatusText,
-    buildStatusDetails: buildVideoGenerationTaskStatusDetails,
-  });
-}

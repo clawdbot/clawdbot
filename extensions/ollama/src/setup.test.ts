@@ -4,11 +4,11 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  checkOllamaCloudAuth,
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
 } from "./setup.js";
+import { checkOllamaCloudAuth } from "./setup.runtime.js";
 
 const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
@@ -153,6 +153,8 @@ describe("ollama setup", () => {
     const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
 
     expect(modelIds?.[0]).toBe("gemma4");
+    expect(result.config.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(result.credential).toBeUndefined();
   });
 
   it("Docker setup defaults to the host Ollama endpoint", async () => {
@@ -249,7 +251,8 @@ describe("ollama setup", () => {
       "llama3:8b",
     ]);
     expect(result.config.models?.providers?.ollama?.baseUrl).toBe("http://127.0.0.1:11434");
-    expect(result.credential).toBe("ollama-local");
+    expect(result.config.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(result.credential).toBeUndefined();
   });
 
   it("mode selection affects model ordering (local)", async () => {
@@ -980,7 +983,8 @@ describe("ollama setup", () => {
       primary: "ollama/qwen2.5-coder:7b",
       fallbacks: ["anthropic/claude-sonnet-4-5"],
     });
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
+    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it("normalizes ollama/ prefix in non-interactive custom model download", async () => {
@@ -1003,7 +1007,8 @@ describe("ollama setup", () => {
     const pullRequest = mockCallArg(fetchMock, 1, 1) as RequestInit | undefined;
     expect(JSON.parse(requestBodyText(pullRequest?.body))).toEqual({ model: "llama3.2:latest" });
     expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.2:latest" });
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
+    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it("uses the discovered latest tag as the non-interactive default without pulling", async () => {
@@ -1027,7 +1032,8 @@ describe("ollama setup", () => {
     ]);
     expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/gemma4:latest" });
     expect(runtime.log).toHaveBeenCalledWith("Default Ollama model: gemma4:latest");
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
+    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it.each(["kimi-k2.5:cloud", "gpt-oss:120b-cloud"])(

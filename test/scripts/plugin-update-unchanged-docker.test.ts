@@ -4,8 +4,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { loadInstalledPluginIndex } from "../../src/plugins/installed-plugin-index.js";
+import { resolveInstalledPluginPackageOwnership } from "../../src/plugins/installed-plugin-package-ownership.js";
 
 const PLUGIN_UPDATE_DOCKER_SCRIPT = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
@@ -13,6 +16,29 @@ const CORRUPT_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/corrupt-up
 const PLUGIN_UPDATE_PROBE_SCRIPT = "scripts/e2e/lib/plugin-update/probe.mjs";
 const PLUGIN_UPDATE_REGISTRY_SCRIPT = "scripts/e2e/lib/plugin-update/registry-server.mjs";
 const CORRUPT_PLUGIN_ID = "demo-corrupt-plugin";
+const PLUGIN_INDEX_MODULE_URL = pathToFileURL(
+  path.resolve("scripts/e2e/lib/plugin-index-sqlite.mjs"),
+).href;
+
+function seedInstallState(root: string) {
+  const stateDir = path.join(root, ".openclaw");
+  const configPath = path.join(stateDir, "openclaw.json");
+  const env = {
+    ...process.env,
+    HOME: root,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_VERSION: "2026.8.1",
+    VITEST: "true",
+  };
+  execFileSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, "seed"], {
+    encoding: "utf8",
+    env,
+    stdio: "pipe",
+  });
+  return { configPath, env, stateDir };
+}
 
 function runProbe(command: string, payload: unknown): void {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-probe-"));
@@ -75,7 +101,7 @@ async function waitForPortFile(portFile: string): Promise<number> {
 }
 
 describe("plugin update unchanged Docker E2E", () => {
-  it("seeds current plugin install ledger state before checking config stability", () => {
+  it("seeds current plugin install ledger state before checking config stability", async () => {
     const runner = readFileSync(PLUGIN_UPDATE_DOCKER_SCRIPT, "utf8");
     const scenario = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
     const probe = readFileSync(PLUGIN_UPDATE_PROBE_SCRIPT, "utf8");
@@ -88,6 +114,48 @@ describe("plugin update unchanged Docker E2E", () => {
     );
     expect(probe).toContain("installRecords: {");
     expect(probe).toContain('"lossless-claw": {');
+
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-seed-"));
+    try {
+      const { configPath, env, stateDir } = seedInstallState(root);
+      const config = JSON.parse(readFileSync(configPath, "utf8")) as {
+        plugins?: Record<string, unknown>;
+      };
+      expect(config).toEqual({ plugins: {} });
+
+      const { readPluginInstallIndex } = await import(PLUGIN_INDEX_MODULE_URL);
+      const persisted = readPluginInstallIndex({ configPath, stateDir });
+      expect(persisted.installRecords).toMatchObject({
+        "lossless-claw": {
+          source: "npm",
+          installPath: "~/.openclaw/extensions/lossless-claw",
+        },
+      });
+      expect(persisted.plugins).toEqual([
+        expect.objectContaining({
+          pluginId: "lossless-claw",
+          installOwner: "lossless-claw",
+          rootDir: path.join(stateDir, "extensions", "lossless-claw"),
+        }),
+      ]);
+
+      const liveIndex = loadInstalledPluginIndex({
+        config,
+        env,
+        stateDir,
+      });
+      expect(resolveInstalledPluginPackageOwnership(liveIndex, "lossless-claw", env)).toMatchObject(
+        {
+          ok: true,
+          value: {
+            installOwner: "lossless-claw",
+            pluginIds: ["lossless-claw"],
+          },
+        },
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("bounds the update command and prints diagnostics on hangs", () => {

@@ -11,9 +11,11 @@ import type {
   ChannelId,
   ChannelMessageActionContext,
   ChannelOutboundAdapter,
+  ChannelPlugin,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeMessagePresentation,
@@ -26,7 +28,6 @@ import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { NormalizedOutboundPayload, OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
@@ -51,7 +52,9 @@ type OutboundGatewayContext = {
 type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
+  plugin: ChannelPlugin;
   params: Record<string, unknown>;
+  idempotencyKey?: string;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
   sessionKey?: string;
@@ -172,11 +175,13 @@ async function sendCoreMessage(params: {
     queuePolicy: params.queuePolicy,
     deps: params.ctx.deps,
     gateway: params.ctx.gateway,
+    idempotencyKey: params.ctx.idempotencyKey,
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
     mediaAccess: params.ctx.mediaAccess,
     preparedMessageId: params.ctx.preparedMessageId,
+    preparedPlugin: params.ctx.plugin,
     gatewayOwnedDelivery: params.ctx.gatewayOwnedDelivery,
     deliveryIntentId: params.ctx.deliveryIntentId,
     deliveryCompletion: params.ctx.deliveryCompletion,
@@ -290,10 +295,7 @@ async function preparePluginSendPayload(params: {
   replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number;
 }): Promise<PluginSendPayloadPreparation> {
-  const plugin = resolveOutboundChannelPlugin({
-    channel: params.ctx.channel,
-    cfg: params.ctx.cfg,
-  });
+  const plugin = params.ctx.plugin;
   if (!plugin?.outbound) {
     return { kind: "unavailable" };
   }
@@ -363,10 +365,7 @@ export async function executeSendAction(params: {
         replyToIdSource: params.replyToIdSource,
         threadId: params.threadId,
       });
-  const channelPlugin = resolveOutboundChannelPlugin({
-    channel: params.ctx.channel,
-    cfg: params.ctx.cfg,
-  });
+  const channelPlugin = params.ctx.plugin;
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
   const corePayload = requiresCoreDelivery
     ? defaultPayload
@@ -433,10 +432,15 @@ export async function executeSendAction(params: {
             params.mediaUrls ??
             (params.mediaUrl ? [params.mediaUrl] : undefined);
           try {
+            const writerFence = getOwnedSessionTranscriptWriterFence();
             const mirrorResult = await appendAssistantMessageToSessionTranscript({
               agentId: params.ctx.mirror.agentId,
               sessionKey: params.ctx.mirror.sessionKey,
               expectedSessionId: params.ctx.mirror.expectedSessionId,
+              ...(writerFence?.expectedLifecycleRevision !== undefined
+                ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
+                : {}),
+              ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
               text: mirrorText,
               mediaUrls: mirrorMediaUrls,
               idempotencyKey: params.ctx.mirror.idempotencyKey,
@@ -516,6 +520,8 @@ export async function executePollAction(params: {
     isAnonymous: corePoll.isAnonymous ?? undefined,
     dryRun: params.ctx.dryRun,
     gateway: params.ctx.gateway,
+    idempotencyKey: params.ctx.idempotencyKey,
+    preparedPlugin: params.ctx.plugin,
   });
 
   return {

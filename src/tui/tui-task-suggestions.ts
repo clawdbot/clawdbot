@@ -10,8 +10,8 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type { TaskSuggestion } from "../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
-import { selectListTheme, theme } from "./theme/theme.js";
-import type { TuiBackend } from "./tui-backend.js";
+import { selectListTheme, tuiTheme as theme } from "./theme/theme.js";
+import type { TuiBackend, TuiTaskSuggestionAcceptMode } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 
 type TaskSelector = Component & {
@@ -26,6 +26,7 @@ type TaskSuggestionControllerDeps = {
     TuiBackend,
     | "getTaskSuggestionActionCapabilities"
     | "listTaskSuggestions"
+    | "listCloudWorkerProfiles"
     | "acceptTaskSuggestion"
     | "dismissTaskSuggestion"
   >;
@@ -45,18 +46,65 @@ const TASK_DETAIL_PAGE_LINES = TASK_DETAIL_VIEWPORT_LINES - 1;
 const PAGE_UP_INPUT = "\u001b[5~";
 const PAGE_DOWN_INPUT = "\u001b[6~";
 
-const TASK_ACTIONS = [
-  {
+type TaskAction = SelectItem & {
+  kind: "accept" | "dismiss";
+  mode?: TuiTaskSuggestionAcceptMode;
+  cloudProfileId?: string;
+};
+
+const TASK_ACTIONS = {
+  worktree: {
     value: "accept",
     label: "Start in worktree",
     description: "Create an isolated session and begin this task",
+    kind: "accept",
+    mode: "worktree",
   },
-  {
+  local: {
+    value: "accept-local",
+    label: "Start locally",
+    description: "Start a new session in this checkout",
+    kind: "accept",
+    mode: "local",
+  },
+  session: {
+    value: "accept-session",
+    label: "Fix in this session",
+    description: "Deliver the task into this transcript",
+    kind: "accept",
+    mode: "session",
+  },
+  dismiss: {
     value: "dismiss",
     label: "Dismiss",
     description: "Leave the repository untouched",
+    kind: "dismiss",
   },
-] satisfies SelectItem[];
+} as const satisfies Record<string, TaskAction>;
+
+function taskActions(cloudProfileIds: string[]): TaskAction[] {
+  return [
+    TASK_ACTIONS.local,
+    ...cloudProfileIds.map(
+      (profileId): TaskAction => ({
+        value: "accept-cloud",
+        label: `Send to cloud · ${clean(profileId)}`,
+        description: "Start a new session on this cloud worker",
+        kind: "accept",
+        mode: "cloud",
+        cloudProfileId: profileId,
+      }),
+    ),
+    TASK_ACTIONS.session,
+    // Keep the established one-Up shortcut from the default Dismiss selection.
+    TASK_ACTIONS.worktree,
+    TASK_ACTIONS.dismiss,
+  ];
+}
+
+function taskActionKey(action: SelectItem): string {
+  return `${action.value}\0${(action as TaskAction).cloudProfileId ?? ""}`;
+}
 
 function clean(text: string): string {
   return sanitizeTaskText(text.replace(/\s+/g, " ").trim());
@@ -202,6 +250,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
   let activeOverlay: OverlayHandle | null = null;
   let activeSelector: TaskSelector | null = null;
   let activeActionKey: string | null = null;
+  let cloudProfileIds: string[] = [];
   let revision = 0;
   let disposed = false;
 
@@ -231,10 +280,14 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
   const availableActions = () => {
     const capabilities = deps.client.getTaskSuggestionActionCapabilities?.() ?? {
       canAccept: Boolean(deps.client.acceptTaskSuggestion),
+      canAcceptModes: false,
       canDismiss: Boolean(deps.client.dismissTaskSuggestion),
     };
-    return TASK_ACTIONS.filter((action) =>
-      action.value === "accept" ? capabilities.canAccept : capabilities.canDismiss,
+    const actions: TaskAction[] = capabilities.canAcceptModes
+      ? taskActions(cloudProfileIds)
+      : [TASK_ACTIONS.worktree, TASK_ACTIONS.dismiss];
+    return actions.filter((action) =>
+      action.kind === "accept" ? capabilities.canAccept : capabilities.canDismiss,
     );
   };
 
@@ -243,7 +296,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       return;
     }
     const actions = availableActions();
-    const actionKey = actions.map((action) => action.value).join(",");
+    const actionKey = actions.map(taskActionKey).join(",");
     if (activeId) {
       if (activeActionKey === actionKey) {
         return;
@@ -270,7 +323,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
     let acceptArmed = false;
     let prompt: TaskPrompt | null = null;
 
-    const resolve = async (action: "accept" | "dismiss") => {
+    const resolve = async (action: TaskAction) => {
       if (activeId !== suggestion.id || activeSelector !== selector) {
         return;
       }
@@ -278,14 +331,22 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       hiddenIds.add(suggestion.id);
       deps.requestRender();
       try {
-        if (action === "accept") {
+        if (action.kind === "accept") {
           if (!deps.client.acceptTaskSuggestion) {
             throw new Error("task suggestion acceptance is unavailable");
           }
-          const result = await deps.client.acceptTaskSuggestion(suggestion.id);
+          const result = action.cloudProfileId
+            ? await deps.client.acceptTaskSuggestion(
+                suggestion.id,
+                action.mode,
+                action.cloudProfileId,
+              )
+            : action.mode === "worktree"
+              ? await deps.client.acceptTaskSuggestion(suggestion.id)
+              : await deps.client.acceptTaskSuggestion(suggestion.id, action.mode);
           remove(suggestion.id);
           deps.chatLog.addSystem(`follow-up task started in ${result.key}`);
-          if (matchesSession(suggestion)) {
+          if (action.mode !== "session" && matchesSession(suggestion)) {
             await deps.onAccepted(result.key);
           }
         } else {
@@ -322,25 +383,28 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       if (activeSelector !== selector) {
         return;
       }
-      if (!availableActions().some((action) => action.value === item.value)) {
+      const selectedAction = actions.find(
+        (action) => taskActionKey(action) === taskActionKey(item),
+      );
+      if (
+        !selectedAction ||
+        !availableActions().some((action) => taskActionKey(action) === taskActionKey(item))
+      ) {
         closeActive();
         presentNext();
         deps.requestRender();
         return;
       }
-      if (item.value === "dismiss") {
-        void resolve("dismiss");
-        return;
-      }
-      if (item.value !== "accept") {
+      if (selectedAction.kind === "dismiss") {
+        void resolve(selectedAction);
         return;
       }
       if (acceptArmed) {
-        void resolve("accept");
+        void resolve(selectedAction);
         return;
       }
       acceptArmed = true;
-      prompt?.setConfirmation("Press Enter again to start this task in a worktree.");
+      prompt?.setConfirmation("Press Enter again to start this task.");
       deps.requestRender();
     };
     selector.onCancel = () => {
@@ -361,7 +425,10 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
   const refreshRunner = createTuiRefreshCoalescer(
     async (requestRerun) => {
       const startRevision = revision;
-      const listed = await deps.client.listTaskSuggestions?.();
+      const [listed, profiles] = await Promise.all([
+        deps.client.listTaskSuggestions?.(),
+        deps.client.listCloudWorkerProfiles?.() ?? Promise.resolve([]),
+      ]);
       if (disposed || !listed) {
         return false;
       }
@@ -371,6 +438,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
         return true;
       }
       suggestions.clear();
+      cloudProfileIds = profiles;
       for (const value of listed) {
         const suggestion = parseTuiTaskSuggestion(value);
         if (suggestion) {

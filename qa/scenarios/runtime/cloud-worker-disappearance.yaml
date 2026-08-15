@@ -1,0 +1,35 @@
+title: Cloud worker disappearance recovery
+
+scenario:
+  id: cloud-worker-disappearance
+  surface: gateway
+  category: gateway.session-apis
+  coverage:
+    secondary:
+      - gateway.session-apis-sessions-list
+      - gateway.restart-and-stop-gateway-restart
+  objective: Prove an isolated Gateway records an unexpected worker disappearance as a durable per-session failure and keeps another session on the same environment isolated.
+  successCriteria:
+    - A real qa-channel turn succeeds through the mock OpenAI provider before worker state is injected.
+    - The static-SSH mock worker provider reports its seeded active lease as unknown during restart reconciliation.
+    - The active placement becomes failed with a bounded cloud-worker-disappeared terminal reason and timestamp.
+    - A second failed session referencing the same environment retains its own distinct terminal reason.
+    - Two additional Gateway replacements preserve both terminal reasons and the original terminal timestamps.
+    - environments.list continues to expose the environment-scoped orphaned error independently.
+  docsRefs:
+    - docs/gateway/cloud-workers.md
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/gateway/worker-environments/placement-pending-failure.ts
+    - src/gateway/worker-environments/placement-dispatch-recovery.ts
+    - src/gateway/worker-environments/placement-projector.ts
+    - test/e2e/qa-lab/runtime/cloud-worker-disappearance-proof.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/cloud-worker-disappearance-proof.ts
+    summary: Runs qa-channel and mock OpenAI through an isolated child Gateway, seeds a static-SSH lease that becomes unknown, restarts three times, and writes a per-session isolation verdict.
+    timeoutMs: 240000
+    args:
+      - --artifact-base
+      - ${outputDir}

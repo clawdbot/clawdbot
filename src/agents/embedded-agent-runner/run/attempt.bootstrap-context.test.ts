@@ -1,6 +1,6 @@
 // Coverage for attempt context path remapping.
 import { describe, expect, it } from "vitest";
-import { remapInjectedContextFilesToWorkspace } from "./attempt.bootstrap-context.js";
+import { remapInjectedContextFilesToWorkspace } from "./attempt-setup.js";
 
 describe("remapInjectedContextFilesToWorkspace", () => {
   it("rewrites injected file paths onto the effective workspace when the tool root changes", () => {

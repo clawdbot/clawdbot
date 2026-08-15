@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   asOptionalRecord as readRecord,

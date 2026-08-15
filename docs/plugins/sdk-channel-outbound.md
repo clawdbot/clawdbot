@@ -47,13 +47,15 @@ the transport callback instead of dispatching an event that was not made
 durable. At claim time it decodes the versioned payload, re-runs `inspect`, and
 rejects an id or lane mismatch before delivery.
 
-`deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`,
-`onAbandoned`, and `abortSignal`. Returning without an explicit handoff marks a
-terminal no-dispatch event adopted. `admission` is always `exclusive`. A
-deferred handoff keeps the claim held, while shutdown or abort leaves unadopted
-work retryable. The monitor tracks delivery independently from claim settlement
-because adoption can tombstone a row before the channel's delivery promise
-returns.
+`deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`, `onFailed`,
+`onCancelled`, `onAbandoned`, and `abortSignal`. Use `onFailed` for delivery
+errors, `onCancelled` for explicit pre-adoption cancellation that must preserve
+retry accounting, and `onAbandoned` when a non-adopted turn should consume a
+retry attempt. Returning without an explicit handoff marks a terminal
+no-dispatch event adopted. `admission` is always `exclusive`. A deferred handoff
+keeps the claim held, while shutdown or abort leaves unadopted work retryable.
+The monitor tracks delivery independently from claim settlement because
+adoption can tombstone a row before the channel's delivery promise returns.
 
 Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
@@ -200,6 +202,13 @@ Runtime send helpers also live on `channel-outbound`:
 Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed
 payloads. Do not infer hook cancellation from an empty legacy
 direct-delivery result.
+
+When a transport creates a thread during its first successful send, the
+outbound adapter may implement `adoptTargetFromDelivery(...)`. Return the
+typed thread ID from the platform receipt and core carries it into later
+payloads, pins, and post-delivery hooks in that durable batch. Core never
+replaces an explicit caller thread, and it does not infer adoption from
+`receipt.threadId` without the adapter opt-in.
 
 ### Automatic unknown-send reconciliation
 

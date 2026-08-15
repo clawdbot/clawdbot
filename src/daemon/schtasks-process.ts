@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
-import { inspectPortUsage, type PortListener } from "../infra/ports.js";
+import { inspectPortUsage } from "../infra/ports-inspect.js";
+import type { PortListener } from "../infra/ports-types.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import {
   getWindowsPowerShellExePath,

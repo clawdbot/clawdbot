@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -22,6 +23,7 @@ import {
   emitJsonOrText,
   formatEnvelopeForText,
   parseOptionalPositiveInteger,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
 } from "./shared.js";
 
@@ -178,10 +180,13 @@ export function registerWebCapabilityCommands(capability: Command): void {
   web
     .command("providers")
     .description("List web providers")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
+        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
+        const agentDir = resolveAgentDir(cfg, agentId);
         const selectedSearchProvider =
           typeof cfg.tools?.web?.search?.provider === "string"
             ? normalizeLowercaseStringOrEmpty(cfg.tools.web.search.provider)
@@ -193,7 +198,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
         const result = {
           search: listWebSearchProviders({ config: cfg }).map((provider) => ({
             available: true,
-            configured: isWebSearchProviderConfigured({ provider, config: cfg }),
+            configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir }),
             selected: provider.id === selectedSearchProvider,
             id: provider.id,
             envVars: provider.envVars,

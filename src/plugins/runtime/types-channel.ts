@@ -145,7 +145,7 @@ export type PluginRuntimeChannel = {
   };
   session: {
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
-    resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+    resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
     readSessionUpdatedAt: ReadSessionUpdatedAt;
     recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
@@ -184,12 +184,12 @@ export type PluginRuntimeChannel = {
   };
   inbound: {
     buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
-    run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
+    run: typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
     /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
-    runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
-    dispatch: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundTurn;
+    runPreparedReply: typeof import("../../channels/turn/execution.js").runPreparedChannelTurn;
+    dispatch: typeof import("../../channels/turn/lifecycle.js").dispatchRoutedChannelTurn;
     /** Compatibility escape hatch; prefer `dispatch`, which keeps session wiring in core. */
-    dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
+    dispatchReply: typeof import("../../channels/turn/lifecycle.js").dispatchAssembledChannelTurn;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

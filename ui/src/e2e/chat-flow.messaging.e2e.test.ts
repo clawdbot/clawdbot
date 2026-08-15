@@ -136,6 +136,122 @@ suite.define(() => {
     });
   });
 
+  it("keeps a previous final above a newer active turn when events arrive late", async () => {
+    await withChatPage(async (page) => {
+      const gateway = await installMockGateway(page, { historyMessages: [] });
+      const previousRunId = "previous-run";
+      const previousPrompt = "What are groups?";
+      const previousFinal = "Groups organize conversations.";
+      const currentPrompt = "Why were my sessions missing?";
+      const currentPartial = "Checking external sessions...";
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        clientRunId: previousRunId,
+        hasActiveRun: false,
+        message: {
+          content: [{ text: previousPrompt, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        messageId: "previous-user",
+        messageSeq: 1,
+        session: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "main",
+          kind: "direct",
+          status: "done",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill(currentPrompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const currentRunId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "current chat run id",
+      );
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [currentRunId],
+        clientRunId: currentRunId,
+        hasActiveRun: true,
+        message: {
+          content: [{ text: currentPrompt, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        messageId: "current-user",
+        messageSeq: 3,
+        session: {
+          activeRunIds: [currentRunId],
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: currentPartial,
+        message: {
+          content: [{ text: currentPartial, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId: currentRunId,
+        seq: 1,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [currentRunId],
+        clientRunId: previousRunId,
+        hasActiveRun: true,
+        message: {
+          content: [{ text: previousFinal, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        messageId: "previous-final",
+        messageSeq: 2,
+        session: {
+          activeRunIds: [currentRunId],
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+
+      const visibleTexts = [previousPrompt, previousFinal, currentPrompt, currentPartial];
+      const expectVisibleOrder = async () => {
+        await expect
+          .poll(() =>
+            page.locator(".chat-thread-inner").evaluate((thread, texts) => {
+              const rows = Array.from(thread.querySelectorAll(".chat-bubble"));
+              return texts.map((text) => rows.findIndex((row) => row.textContent?.includes(text)));
+            }, visibleTexts),
+          )
+          .toEqual([0, 1, 2, 3]);
+      };
+      await expectVisibleOrder();
+
+      await gateway.emitChatFinal({ runId: previousRunId, text: previousFinal });
+      await expectVisibleOrder();
+      await expect
+        .poll(() => page.locator(".chat-group.assistant", { hasText: previousFinal }).count())
+        .toBe(1);
+    });
+  });
+
   it("preserves distinct same-text peer messages through conflicting envelopes and stale history", async () => {
     await withChatPage(async (page) => {
       const gateway = await installMockGateway(page, { historyMessages: [] });
@@ -772,7 +888,7 @@ suite.define(() => {
     });
   });
 
-  it("steers an active run when the session row only reports hasActiveRun", async () => {
+  it("steers the exact run with the current leaf reported by the session row", async () => {
     await withChatPage(async (page) => {
       const sessionKey = "main";
       const gateway = await installMockGateway(page, {
@@ -787,6 +903,8 @@ suite.define(() => {
           "sessions.list": chatSessionListResponse([
             {
               hasActiveRun: true,
+              activeRunIds: ["active-run"],
+              activeLeafEntryId: "leaf-before-steer",
               key: "agent:main:main",
               kind: "direct",
               label: "Main",
@@ -811,6 +929,8 @@ suite.define(() => {
       expect(params.sessionKey).toBe(sessionKey);
       expect(params.message).toBe("use the smaller fix");
       expect(params.deliver).toBe(false);
+      expect(params.expectedRunId).toBe("active-run");
+      expect(params.expectedLeafEntryId).toBe("leaf-before-steer");
 
       await page.getByText("Steered.", { exact: true }).waitFor({ timeout: 10_000 });
       expect(await page.getByText("No active run").count()).toBe(0);

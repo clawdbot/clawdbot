@@ -7,7 +7,7 @@ import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
   discoverStaticExtensionAssets,
-} from "../../scripts/lib/static-extension-assets.mjs";
+} from "../../scripts/lib/static-extension-assets.mts";
 import {
   listStaticExtensionAssetOutputs,
   rewriteRootRuntimeImportsToStableAliases,
@@ -15,7 +15,7 @@ import {
   writeLegacyCliExitCompatChunks,
   writeLegacyRootRuntimeCompatAliases,
   writeStableRootRuntimeAliases,
-} from "../../scripts/runtime-postbuild.mjs";
+} from "../../scripts/runtime-postbuild.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -89,7 +89,7 @@ describe("runtime postbuild static assets", () => {
       outputs: string[];
       sources: string[];
     }>(`
-      const assets = await import("./scripts/lib/static-extension-assets.mjs");
+      const assets = await import("./scripts/lib/static-extension-assets.mts");
       return {
         outputs: assets.listStaticExtensionAssetOutputs(),
         sources: assets.listStaticExtensionAssetSources(),
@@ -142,6 +142,29 @@ describe("runtime postbuild static assets", () => {
         dest: "dist/extensions/demo/assets/runtime.js",
       },
     ]);
+  });
+
+  it.each([
+    { name: "top-level array", packageJson: [] },
+    { name: "array openclaw section", packageJson: { openclaw: [] } },
+    { name: "array build section", packageJson: { openclaw: { build: [] } } },
+    {
+      name: "non-record asset entries",
+      packageJson: {
+        openclaw: {
+          build: {
+            staticAssets: [[], "asset", null, { source: 42, output: [] }],
+          },
+        },
+      },
+    },
+  ])("ignores malformed $name metadata", async ({ packageJson }) => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-malformed-");
+    const packageDir = path.join(rootDir, "extensions", "demo");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "package.json"), JSON.stringify(packageJson), "utf8");
+
+    expect(discoverStaticExtensionAssets({ rootDir })).toEqual([]);
   });
 
   it("excludes external plugin (bundledDist: false) static assets by default", async () => {

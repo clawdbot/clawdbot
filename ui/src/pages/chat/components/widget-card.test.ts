@@ -58,7 +58,7 @@ describe("widget-card", () => {
     expect(host.querySelector("iframe")?.getAttribute("src")).toContain("/__openclaw__/cap/three/");
   });
 
-  it("keeps a reported frame height across a capability rotation", () => {
+  it("keeps a short reported frame height across a capability rotation", () => {
     const preview = {
       kind: "canvas",
       surface: "assistant_message",
@@ -79,11 +79,11 @@ describe("widget-card", () => {
     frame?.dispatchEvent(new Event("load"));
     window.dispatchEvent(
       new MessageEvent("message", {
-        data: { type: "openclaw:widget-size", height: 640 },
+        data: { type: "openclaw:widget-size", height: 48 },
         source: frame?.contentWindow,
       }),
     );
-    expect(frame?.style.height).toBe("640px");
+    expect(frame?.style.height).toBe("48px");
 
     // Re-render at the same URL so the style binding itself carries the
     // remembered height; only then can a later rotation clear it.
@@ -93,7 +93,7 @@ describe("widget-card", () => {
       }),
       host,
     );
-    expect(frame?.getAttribute("style")).toContain("640px");
+    expect(frame?.getAttribute("style")).toContain("48px");
 
     // The in-frame reporter only posts when its own height changes, so a
     // rotation that lost the remembered height would strand the frame at its
@@ -105,7 +105,7 @@ describe("widget-card", () => {
       host,
     );
     expect(host.querySelector("iframe")).toBe(frame);
-    expect(frame?.getAttribute("style")).toContain("640px");
+    expect(frame?.getAttribute("style")).toContain("48px");
     host.remove();
   });
 
@@ -298,7 +298,7 @@ describe("widget-card", () => {
       pinned,
     );
     expect(pinned.querySelector<HTMLButtonElement>("[data-pin-widget]")?.disabled).toBe(true);
-    expect(pinned.querySelector("[data-pin-widget]")?.textContent).toContain("Pinned");
+    expect(pinned.querySelector("[data-pin-widget]")?.getAttribute("aria-label")).toBe("Pinned");
 
     const external = document.createElement("div");
     render(
@@ -370,6 +370,55 @@ describe("widget-card", () => {
       app,
     );
     expect(app.querySelector("[data-pin-widget]")).toBeNull();
+  });
+
+  it("announces a failed Canvas dashboard pin and leaves it retryable", async () => {
+    const pinWidget = vi.fn(async () => {
+      throw new Error("canvas document is stale");
+    });
+    const provider = {
+      sessionKey: "agent:main:main",
+      canPinWidgets: true,
+      pinWidget,
+      snapshot$: {
+        value: {
+          sessionKey: "agent:main:main",
+          revision: 0,
+          tabs: [],
+          widgets: [],
+        },
+        subscribe: () => () => {},
+      },
+    } as unknown as BoardProvider;
+    const toastHost = document.body.appendChild(document.createElement("openclaw-toast-host"));
+    const canvas = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_stale",
+          url: "/__openclaw__/canvas/documents/cv_stale/index.html",
+          sandbox: "scripts",
+        },
+        "chat_message",
+        { boardProvider: provider },
+      ),
+      canvas,
+    );
+
+    const button = canvas.querySelector<HTMLButtonElement>("[data-pin-widget]");
+    button?.click();
+
+    await vi.waitFor(() => {
+      expect(pinWidget).toHaveBeenCalledOnce();
+      expect(button?.disabled).toBe(false);
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
+        "Could not pin to dashboard. Try again.",
+      );
+    });
+    toastHost.remove();
   });
 
   it("pins an MCP App using only its view identity", async () => {

@@ -27,8 +27,6 @@ import { resolveTelegramAdoptionStallTimeoutMs } from "./telegram-ingress-drain.
 import {
   resolveTelegramIngressSpoolDir,
   resolveTelegramUpdateId,
-  telegramSpooledUpdateLaneKey,
-  writeTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
 import {
   createTelegramIngressWorker,
@@ -88,7 +86,9 @@ type TelegramPollingSessionOpts = {
   token: string;
   config: NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
   accountId: string;
+  ownerAgentId?: string;
   runtime: Parameters<typeof createTelegramBot>[0]["runtime"];
+  buildContext?: Parameters<typeof createTelegramBot>[0]["buildContext"];
   proxyFetch: Parameters<typeof createTelegramBot>[0]["proxyFetch"];
   botInfo?: Parameters<typeof createTelegramBot>[0]["botInfo"];
   abortSignal?: AbortSignal;
@@ -309,11 +309,14 @@ export class TelegramPollingSession {
       return createTelegramBot({
         token: this.opts.token,
         runtime: this.opts.runtime,
+        buildContext: this.opts.buildContext,
         proxyFetch: this.opts.proxyFetch,
         config: this.opts.config,
         accountId: this.opts.accountId,
+        ownerAgentId: this.opts.ownerAgentId,
         botInfo: this.opts.botInfo,
         ...(botApiAbortSignal ? { fetchAbortSignal: botApiAbortSignal } : {}),
+        ...(this.opts.abortSignal ? { accountAbortSignal: this.opts.abortSignal } : {}),
         mediaAbortSignal: cycleAbortSignal,
         minimumClientTimeoutSeconds: TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS,
         ...(updateOffset ? { updateOffset } : {}),
@@ -413,6 +416,19 @@ export class TelegramPollingSession {
     const botInfo = bot.botInfo;
     const spoolDir =
       ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
+    const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
+    const ingressAbortSignal = cycleAbortController
+      ? this.opts.abortSignal
+        ? AbortSignal.any([cycleAbortController.signal, this.opts.abortSignal])
+        : cycleAbortController.signal
+      : this.opts.abortSignal;
+    const ingressMonitor = this.#getOrCreateSpooledMonitor({
+      bot,
+      botInfo,
+      spoolDir,
+      pollIntervalMs: drainIntervalMs,
+      ...(ingressAbortSignal ? { abortSignal: ingressAbortSignal } : {}),
+    });
     const workerFactory = ingress.createWorker ?? createTelegramIngressWorker;
     const worker = workerFactory({
       token: this.opts.token,
@@ -459,19 +475,6 @@ export class TelegramPollingSession {
     const endCycle = () => {
       abortMedia();
     };
-    const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
-    const ingressAbortSignal = cycleAbortController
-      ? this.opts.abortSignal
-        ? AbortSignal.any([cycleAbortController.signal, this.opts.abortSignal])
-        : cycleAbortController.signal
-      : this.opts.abortSignal;
-    const ingressMonitor = this.#getOrCreateSpooledMonitor({
-      bot,
-      botInfo,
-      spoolDir,
-      pollIntervalMs: drainIntervalMs,
-      ...(ingressAbortSignal ? { abortSignal: ingressAbortSignal } : {}),
-    });
     requestImmediateDrain = ingressMonitor.requestDrain;
     const unsubscribe = worker.onMessage((message) => {
       const ackSpooledUpdate = (
@@ -516,7 +519,14 @@ export class TelegramPollingSession {
       }
       if (message.type === "poll-error") {
         this.#rearmPendingDeliveryDrain();
-        liveness.noteGetUpdatesError(new Error(message.message), message.finishedAt);
+        const retryAfterMs =
+          message.errorCode === 429 &&
+          message.retryAfterMs !== undefined &&
+          Number.isFinite(message.retryAfterMs) &&
+          message.retryAfterMs > 0
+            ? Math.min(message.retryAfterMs, MAX_POLL_STALL_THRESHOLD_MS)
+            : undefined;
+        liveness.noteGetUpdatesError(new Error(message.message), message.finishedAt, retryAfterMs);
         liveness.noteGetUpdatesFinished();
         pollState.outcome = "error";
         pollState.error = message.message;
@@ -532,13 +542,16 @@ export class TelegramPollingSession {
         // The committed spool enqueue is the ACK boundary; offset persistence is
         // monotonic catch-up and must not stall intake during a state-store outage.
         void (async () => {
-          let updateId: number;
-          try {
-            updateId = await writeTelegramSpooledUpdate({
-              spoolDir,
-              update: message.update,
-              laneKey: telegramSpooledUpdateLaneKey(message.update, botInfo),
+          const updateId = resolveTelegramUpdateId(message.update);
+          if (updateId === null) {
+            ackSpooledUpdate(message.requestId, {
+              ok: false,
+              message: "Telegram update missing numeric update_id.",
             });
+            return;
+          }
+          try {
+            await ingressMonitor.admit(message.update);
             this.opts.log(`[telegram][diag] isolated polling update spooled updateId=${updateId}`);
           } catch (err: unknown) {
             this.opts.log(
@@ -561,7 +574,6 @@ export class TelegramPollingSession {
           });
           this.opts.log(`[telegram][diag] isolated polling offset queued updateId=${updateId}`);
           ackSpooledUpdate(message.requestId, { ok: true, updateId });
-          requestImmediateDrain();
         })();
         return;
       }

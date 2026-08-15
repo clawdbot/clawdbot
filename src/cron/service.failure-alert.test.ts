@@ -37,15 +37,20 @@ async function withFailureAlertCron(
   params: {
     failureAlert: FailureAlertConfig;
     runResult?: IsolatedAgentRunResult;
+    useFallback?: boolean;
   },
   run: (context: {
     cron: CronService;
+    enqueueSystemEvent: ReturnType<typeof vi.fn>;
+    requestHeartbeat: ReturnType<typeof vi.fn>;
     sendCronFailureAlert: ReturnType<typeof vi.fn>;
     addJob: (name: string, overrides?: Partial<CronJobCreate>) => ReturnType<CronService["add"]>;
   }) => Promise<void>,
 ): Promise<void> {
   const store = await makeStorePath();
   const sendCronFailureAlert = vi.fn(async () => undefined);
+  const enqueueSystemEvent = vi.fn();
+  const requestHeartbeat = vi.fn();
   const runResult = params.runResult ?? {
     status: "error",
     error: "temporary upstream error",
@@ -55,16 +60,18 @@ async function withFailureAlertCron(
     cronEnabled: true,
     cronConfig: { failureAlert: params.failureAlert },
     log: noopLogger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSystemEvent,
+    requestHeartbeat,
     runIsolatedAgentJob: vi.fn(async () => runResult),
-    sendCronFailureAlert,
+    ...(params.useFallback ? {} : { sendCronFailureAlert }),
   });
 
   await cron.start();
   try {
     await run({
       cron,
+      enqueueSystemEvent,
+      requestHeartbeat,
       sendCronFailureAlert,
       addJob: async (name, overrides) => await cron.add(createFailureAlertJob(name, overrides)),
     });
@@ -81,7 +88,11 @@ function alertCallArg(
   if (!value || typeof value !== "object") {
     throw new Error(`expected failure alert call ${callIndex}`);
   }
-  return value as Record<string, unknown>;
+  const alert = value as Record<string, unknown>;
+  const payload = alert.payload;
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? { ...alert, ...(payload as Record<string, unknown>) }
+    : alert;
 }
 
 function expectAlertFields(
@@ -110,6 +121,34 @@ function expectAlertTextContaining(
 }
 
 describe("CronService failure alerts", () => {
+  it("keeps fallback events and immediate wakes on the failing job owner", async () => {
+    await withFailureAlertCron(
+      { failureAlert: { enabled: true, after: 1 }, useFallback: true },
+      async ({ cron, enqueueSystemEvent, requestHeartbeat, addJob }) => {
+        const sessionKey = "agent:work:cron:failure-alert";
+        const job = await addJob("work-owned failure", {
+          agentId: "work",
+          sessionKey,
+          wakeMode: "now",
+        });
+
+        await cron.run(job.id, "force");
+
+        expect(enqueueSystemEvent).toHaveBeenCalledWith(
+          expect.stringContaining('Automation "work-owned failure" failed 1 times'),
+          { agentId: "work", sessionKey },
+        );
+        expect(requestHeartbeat).toHaveBeenCalledWith({
+          source: "cron",
+          intent: "immediate",
+          reason: `cron:${job.id}:failure-alert`,
+          agentId: "work",
+          sessionKey,
+        });
+      },
+    );
+  });
+
   it("alerts after configured consecutive failures and honors cooldown", async () => {
     await withFailureAlertCron(
       {
@@ -618,8 +657,8 @@ describe("CronService failure alerts", () => {
         if (typeof alertText !== "string") {
           throw new Error("expected failure alert text");
         }
-        expect(alertText).toMatch(
-          /Automation "gateway restart" skipped 2 times\nSkip reason: disabled/,
+        expect(alertText).toBe(
+          'Automation "gateway restart" skipped 2 times\nCheck automation history for details.',
         );
 
         const skippedJob = cron.getJob(job.id);
@@ -629,7 +668,7 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("surfaces classified causes before raw errors in failure alerts", async () => {
+  it("keeps classified raw errors out of chat failure alerts", async () => {
     await withFailureAlertCron(
       {
         failureAlert: { enabled: true, after: 1 },
@@ -644,39 +683,65 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
         const alertText = alertCallArg(sendCronFailureAlert).text;
-        expect(alertText).toBe(
-          'Automation "timeout cause alert" failed 1 times\n' +
-            "Cause: timeout\n" +
-            "Last error: cron: job execution timed out",
-        );
+        expect(alertText).toBe('Automation "timeout cause alert" failed 1 times\nCause: timeout');
       },
     );
   });
 
-  it("uses provider context when surfacing failure alert causes", async () => {
+  it("adds Codex login recovery to OpenAI OAuth refresh failures", async () => {
     await withFailureAlertCron(
       {
         failureAlert: { enabled: true, after: 1 },
         runResult: {
           status: "error",
-          error: "403 Key limit exceeded (monthly limit)",
-          provider: "openrouter",
+          provider: "openai",
+          errorClassification: { kind: "reason", reason: "auth_permanent" },
+          error:
+            'FailoverError: OAuth token refresh failed for openai: OpenAI Codex token refresh failed (401): {"error":{"message":"Your session has ended. Please log in again.","type":"invalid_request_error"}}',
         },
       },
       async ({ cron, sendCronFailureAlert, addJob }) => {
-        const job = await addJob("provider limit alert", {
-          payload: { kind: "agentTurn", message: "ping" },
+        const job = await addJob("Sunday Magic Drop (Tax Payers)", {
           delivery: createTelegramDelivery(),
         });
 
         await cron.run(job.id, "force");
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-        const alertText = alertCallArg(sendCronFailureAlert).text;
-        expect(alertText).toBe(
-          'Automation "provider limit alert" failed 1 times\n' +
-            "Cause: billing\n" +
-            "Last error: 403 Key limit exceeded (monthly limit)",
-        );
+
+        const alert = alertCallArg(sendCronFailureAlert);
+        expect(alert.text).toContain("Cause: auth_permanent");
+        expect(alert.presentation).toEqual({
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Log in to Codex",
+                  action: { type: "command", command: "/login codex" },
+                },
+              ],
+            },
+          ],
+        });
+      },
+    );
+  });
+
+  it("does not offer Codex login for non-OAuth authentication failures", async () => {
+    await withFailureAlertCron(
+      {
+        failureAlert: { enabled: true, after: 1 },
+        runResult: {
+          status: "error",
+          provider: "openai",
+          error: "401 invalid API key",
+        },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("API key job", { delivery: createTelegramDelivery() });
+
+        await cron.run(job.id, "force");
+
+        expect(alertCallArg(sendCronFailureAlert).presentation).toBeUndefined();
       },
     );
   });
@@ -701,7 +766,7 @@ describe("CronService failure alerts", () => {
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
         expect(alertCallArg(sendCronFailureAlert).text).toBe(
           'Automation "permanent script alert" failed 1 times\n' +
-            "Last error: cron script failed after a tool side effect: request timed out",
+            "Check automation history for details.",
         );
       },
     );
@@ -723,7 +788,8 @@ describe("CronService failure alerts", () => {
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
         const alertText = alertCallArg(sendCronFailureAlert).text;
         expect(alertText).toBe(
-          'Automation "skipped timeout" skipped 1 times\nSkip reason: cron: job execution timed out',
+          'Automation "skipped timeout" skipped 1 times\n' +
+            "Check automation history for details.",
         );
       },
     );
@@ -749,12 +815,17 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("truncates failure alert error text on UTF-16 code-point boundary", async () => {
+  it("truncates webhook failure alert error text on UTF-16 code-point boundary", async () => {
     // 209 code units: emoji (surrogate pair) at positions 199-200 straddles the 200-unit boundary
     const longError = `${"x".repeat(199)}🎉trailing`;
     await withFailureAlertCron(
       {
-        failureAlert: { enabled: true, after: 1 },
+        failureAlert: {
+          enabled: true,
+          after: 1,
+          mode: "webhook",
+          to: "https://alerts.example.test/failures",
+        },
         runResult: { status: "error", error: longError },
       },
       async ({ cron, sendCronFailureAlert, addJob }) => {

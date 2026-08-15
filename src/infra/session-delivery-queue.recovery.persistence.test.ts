@@ -1,19 +1,21 @@
 // Covers real session-delivery retry failures against the persistent SQLite queue.
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   drainPendingSessionDeliveries,
+  recoverPendingSessionDeliveries,
+} from "./session-delivery-queue-recovery.js";
+import {
   enqueueSessionDelivery,
   loadPendingSessionDeliveries,
-  recoverPendingSessionDeliveries,
-} from "./session-delivery-queue.js";
+} from "./session-delivery-queue-storage.js";
 
 describe("session-delivery recovery persistence", () => {
   it.each(["startup", "targeted drain"] as const)(
     "surfaces real SQLite retry-persistence failures during %s recovery",
     async (mode) => {
-      await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
         const id = await enqueueSessionDelivery(
           {
             kind: "systemEvent",

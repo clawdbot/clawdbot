@@ -8,7 +8,7 @@ import {
   deleteSessionUpstreamLink,
   upsertSessionUpstreamLink,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import { codexLastTerminalTurnId, codexUpstreamBaseline } from "../session-upstream-marker.js";
@@ -32,7 +32,7 @@ function readConnectionFingerprint(ref: unknown): string | undefined {
 }
 
 function normalizeTurnId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return normalizeOptionalString(value);
 }
 
 export async function forkCodexUpstreamSession(

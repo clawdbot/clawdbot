@@ -17,8 +17,8 @@ import {
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { MOONSHOT_BASE_URL } from "./provider-catalog.js";
 
-const DEFAULT_MOONSHOT_VIDEO_BASE_URL = "https://api.moonshot.ai/v1";
 // Media defaults are capability-specific and intentionally independent from chat onboarding.
 const DEFAULT_MOONSHOT_IMAGE_MODEL =
   manifest.mediaUnderstandingProviderMetadata.moonshot.defaultModels.image;
@@ -36,7 +36,7 @@ async function describeMoonshotVideo(
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: params.baseUrl,
-      defaultBaseUrl: DEFAULT_MOONSHOT_VIDEO_BASE_URL,
+      defaultBaseUrl: MOONSHOT_BASE_URL,
       headers: params.headers,
       request: params.request,
       defaultHeaders: {

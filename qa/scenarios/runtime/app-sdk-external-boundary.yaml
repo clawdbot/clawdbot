@@ -5,12 +5,13 @@ scenario:
   surface: app-sdk
   coverage:
     primary:
+      - app-sdk.sdk-entrypoints
       - app-sdk.app-plugin-boundary
       - app-sdk.custom-transport
   objective: Verify a clean external consumer can install the packed preview App SDK, import only its exported entrypoint, inject a custom transport, and execute its operations without plugin-internal imports.
   successCriteria:
     - A clean temporary consumer installs the packed @openclaw/sdk tarball and its packed workspace dependencies.
-    - The consumer imports OpenClaw and public helpers only from @openclaw/sdk.
+    - The preview package root exports GatewayClientTransport, OpenClaw, and normalizeGatewayEvent, and event normalization executes from the installed artifact.
     - A hand-written custom transport serves agent, run, artifact, and environment operations through the public client.
     - Run wait parameters and transport-level timeout ownership remain intact.
     - Closing the SDK client closes the injected transport.
@@ -19,6 +20,7 @@ scenario:
     - docs/gateway/protocol.md
     - docs/help/testing.md
   codeRefs:
+    - packages/sdk/package.json
     - packages/sdk/src/index.ts
     - packages/sdk/src/client.ts
     - packages/sdk/src/app-sdk-external-boundary.e2e.test.ts

@@ -41,6 +41,7 @@ export function makeEmptyClawUpdatePlan(params: {
     },
     actions: [],
     capabilityChanges: [],
+    readiness: { ready: true, requirements: [] },
     blockers: params.blockers,
     diagnostics: params.diagnostics ?? [],
   };

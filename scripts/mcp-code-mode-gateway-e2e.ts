@@ -56,10 +56,10 @@ async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> 
       timeoutPromise,
     ]);
     const text = await readBoundedResponseText(response, url, 1024 * 1024, {
-      createTooLargeError(message) {
+      createTooLargeError(message: string) {
         return Object.assign(new Error(message), { code: "ETOOBIG" });
       },
-      formatTooLargeMessage(targetUrl, byteLimit) {
+      formatTooLargeMessage(targetUrl: string, byteLimit: number) {
         return `HTTP response from ${targetUrl} exceeded ${byteLimit} bytes`;
       },
       timeoutPromise,

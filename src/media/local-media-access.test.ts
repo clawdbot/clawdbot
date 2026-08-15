@@ -204,7 +204,8 @@ describe("assertLocalMediaAllowed", () => {
             inboundRoots: [path.join(base, "*", "Attachments")],
             maxBytes: 1024,
           }),
-        ).rejects.toMatchObject({ code: "path-not-allowed" });
+          // fs-safe 0.5.2 reports pre-open identity drift as path-mismatch.
+        ).rejects.toMatchObject({ code: "path-mismatch" });
       } finally {
         await fs.rm(base, { recursive: true, force: true });
       }

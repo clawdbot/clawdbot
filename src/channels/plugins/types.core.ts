@@ -266,6 +266,8 @@ export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
   audioFileFormats?: readonly string[];
+  /** Voice notes can carry the final reply text as a visible caption. */
+  captionedFinalText?: boolean;
   /**
    * Optional preferred audio container the channel wants for voice-memo
    * delivery. When set and the host can transcode (e.g. `afconvert` on
@@ -830,6 +832,8 @@ export type ChannelPollContext = {
   silent?: boolean;
   isAnonymous?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** @internal Refresh durable timing before recipient-visible platform I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 /** Minimal base for all channel probe results. Channel-specific probes extend this. */

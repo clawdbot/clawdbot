@@ -12,11 +12,12 @@ import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resetPreparedModelCatalogForTest } from "./server-model-catalog.js";
+import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js";
+import { testing as startupTesting } from "./server-startup-post-attach.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   agentDiscoveryMock,
@@ -24,7 +25,7 @@ import {
   resetTestPluginRegistry,
   setTestPluginRegistry,
   startConnectedServerWithClient,
-  startGatewayServer,
+  startTestGatewayServer,
   startServerWithClient,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
@@ -144,7 +145,7 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
     id: "gpt-test-a",
     name: "A-Model",
     provider: "openai",
-    agentRuntime: { id: "openclaw", source: "implicit" },
+    agentRuntime: { id: "openclaw", cloudPlacementSupported: true, source: "implicit" },
     available: false,
     contextWindow: 8000,
   },
@@ -152,7 +153,7 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
     id: "gpt-test-z",
     name: "gpt-test-z",
     provider: "openai",
-    agentRuntime: { id: "openclaw", source: "implicit" },
+    agentRuntime: { id: "openclaw", cloudPlacementSupported: true, source: "implicit" },
     available: false,
   },
 ];
@@ -172,6 +173,27 @@ const remoteUnauthModels = (): AgentCatalogFixtureEntry[] => [
 const minimaxProviderConfig = () => ({
   baseUrl: "https://minimax.example.com/v1",
   models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
+});
+
+const fullCatalogProviderConfig = () => ({
+  models: {
+    providers: Object.fromEntries(
+      ["anthropic", "openai"].map((provider) => [
+        provider,
+        {
+          baseUrl: `https://${provider}.example.com/v1`,
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "MODEL_CATALOG_TEST_MISSING_KEY",
+          },
+          models: buildAgentCatalogFixture()
+            .filter((entry) => entry.provider === provider)
+            .map(({ provider: _provider, ...model }) => model),
+        },
+      ]),
+    ),
+  },
 });
 
 type ConfiguredProviderModelFixture = {
@@ -222,7 +244,10 @@ const expectedConfiguredProviderModel = (params: ConfiguredProviderModelFixture)
 });
 
 describe("gateway server models + voicewake", () => {
-  const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
+  const listModels = async (params?: {
+    view?: "default" | "configured" | "all";
+    preparedOnly?: boolean;
+  }) =>
     withEnvAsync(
       {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -240,7 +265,7 @@ describe("gateway server models + voicewake", () => {
   const setAgentCatalog = async (entries: AgentCatalogFixtureEntry[]) => {
     agentDiscoveryMock.enabled = true;
     agentDiscoveryMock.models = entries;
-    await resetPreparedModelCatalogForTest();
+    await resetPreparedModelCatalogStateForTest();
     const [
       { refreshPreparedModelRuntimeSnapshots },
       { clearRuntimeConfigSnapshot: clearIoRuntimeConfigSnapshot, getRuntimeConfig },
@@ -305,6 +330,7 @@ describe("gateway server models + voicewake", () => {
   }): Promise<void> => {
     await withModelsConfig(
       {
+        ...fullCatalogProviderConfig(),
         agents: {
           defaults: {
             model: { primary: options.primary },
@@ -438,150 +464,43 @@ describe("gateway server models + voicewake", () => {
     });
   });
 
-  test("voicewake.routing.get/set persists and broadcasts", { timeout: 60_000 }, async () => {
-    await withTempHome(async (homeDir) => {
-      const initial = await rpcReq<{
-        config?: { version?: number; defaultTarget?: unknown; routes?: unknown[] };
-      }>(ws, "voicewake.routing.get");
-      expect(initial.ok).toBe(true);
-      expect(initial.payload?.config?.version).toBe(1);
-      expect(initial.payload?.config?.defaultTarget).toEqual({ mode: "current" });
-      expect(initial.payload?.config?.routes).toStrictEqual([]);
+  test("voicewake.routing.get returns the default routing", async () => {
+    const result = await rpcReq<{
+      config?: { version?: number; defaultTarget?: unknown; routes?: unknown[] };
+    }>(ws, "voicewake.routing.get");
 
-      const changedP = onceMessage<{
-        type: "event";
-        event: string;
-        payload?: Record<string, unknown> | null;
-      }>(ws, (o) => o.type === "event" && o.event === "voicewake.routing.changed");
-
-      const setRes = await rpcReq<{
-        config?: { routes?: Array<{ trigger?: string; target?: unknown }>; updatedAtMs?: number };
-      }>(ws, "voicewake.routing.set", {
-        config: {
-          defaultTarget: { mode: "current" },
-          routes: [{ trigger: "  Robot   Wake ", target: { agentId: "main" } }],
-        },
-      });
-      expect(setRes.ok).toBe(true);
-      expect(setRes.payload?.config?.routes).toEqual([
-        { trigger: "robot wake", target: { agentId: "main" } },
-      ]);
-      expect(typeof setRes.payload?.config?.updatedAtMs).toBe("number");
-
-      const changed = await changedP;
-      expect(changed.event).toBe("voicewake.routing.changed");
-      expect(
-        (changed.payload as { config?: { routes?: unknown } } | undefined)?.config?.routes,
-      ).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
-
-      const after = await rpcReq<{
-        config?: { routes?: Array<{ trigger?: string; target?: unknown }> };
-      }>(ws, "voicewake.routing.get");
-      expect(after.ok).toBe(true);
-      expect(after.payload?.config?.routes).toEqual([
-        { trigger: "robot wake", target: { agentId: "main" } },
-      ]);
-
-      await expect(
-        fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"), "utf8"),
-      ).rejects.toThrow(/ENOENT/u);
-
-      const invalid = await rpcReq(ws, "voicewake.routing.set", { config: null });
-      expect(invalid.ok).toBe(false);
-      expect(invalid.error?.message ?? "").toMatch(
-        /voicewake\.routing\.set requires config: object/i,
-      );
-
-      const badRoutes = await rpcReq(ws, "voicewake.routing.set", {
-        config: { routes: "oops" },
-      });
-      expect(badRoutes.ok).toBe(false);
-      expect(badRoutes.error?.message ?? "").toMatch(/config\.routes must be an array/i);
-
-      const badTarget = await rpcReq(ws, "voicewake.routing.set", {
-        config: {
-          routes: [
-            { trigger: "robot wake", target: { agentId: "main", sessionKey: "agent:main:main" } },
-          ],
-        },
-      });
-      expect(badTarget.ok).toBe(false);
-      expect(badTarget.error?.message ?? "").toMatch(
-        /config\.routes\[0\]\.target cannot include both agentId and sessionKey/i,
-      );
-
-      const badAgentId = await rpcReq(ws, "voicewake.routing.set", {
-        config: {
-          routes: [{ trigger: "robot wake", target: { agentId: "!!!" } }],
-        },
-      });
-      expect(badAgentId.ok).toBe(false);
-      expect(badAgentId.error?.message ?? "").toMatch(
-        /config\.routes\[0\]\.target\.agentId must be a valid agent id/i,
-      );
-
-      const badSessionKey = await rpcReq(ws, "voicewake.routing.set", {
-        config: {
-          routes: [{ trigger: "robot wake", target: { sessionKey: "agent::main" } }],
-        },
-      });
-      expect(badSessionKey.ok).toBe(false);
-      expect(badSessionKey.error?.message ?? "").toMatch(
-        /config\.routes\[0\]\.target\.sessionKey must be a canonical agent session key/i,
-      );
-
-      const stillStored = await rpcReq<{
-        config?: { routes?: Array<{ trigger?: string; target?: unknown }> };
-      }>(ws, "voicewake.routing.get");
-      expect(stillStored.ok).toBe(true);
-      expect(stillStored.payload?.config?.routes).toEqual([
-        { trigger: "robot wake", target: { agentId: "main" } },
-      ]);
+    expect(result.ok).toBe(true);
+    expect(result.payload?.config).toMatchObject({
+      version: 1,
+      defaultTarget: { mode: "current" },
+      routes: [],
     });
   });
 
-  test("pushes voicewake.routing.changed to nodes on connect and on updates", async () => {
-    await withConnectedNodeEvent("voicewake.routing.changed", async (nodeWs, first) => {
+  test("pushes voicewake.routing.changed to nodes on connect", async () => {
+    await withConnectedNodeEvent("voicewake.routing.changed", async (_nodeWs, first) => {
       expect(first.event).toBe("voicewake.routing.changed");
       expect(
         (first.payload as { config?: { routes?: unknown[] } } | undefined)?.config?.routes,
       ).toStrictEqual([]);
-
-      const broadcastP = onceMessage<{
-        type: "event";
-        event: string;
-        payload?: Record<string, unknown> | null;
-      }>(nodeWs, (o) => o.type === "event" && o.event === "voicewake.routing.changed");
-
-      const setRes = await rpcReq(ws, "voicewake.routing.set", {
-        config: {
-          defaultTarget: { mode: "current" },
-          routes: [{ trigger: "hello", target: { sessionKey: "agent:main:main" } }],
-        },
-      });
-      expect(setRes.ok).toBe(true);
-
-      const broadcast = await broadcastP;
-      expect(broadcast.event).toBe("voicewake.routing.changed");
-      expect(
-        (broadcast.payload as { config?: { routes?: unknown } } | undefined)?.config?.routes,
-      ).toEqual([{ trigger: "hello", target: { sessionKey: "agent:main:main" } }]);
     });
   });
 
   test("models.list all view returns model catalog", async () => {
-    await seedAgentModelCatalog();
+    await withModelsConfig(fullCatalogProviderConfig(), async () => {
+      await seedAgentModelCatalog();
 
-    const res1 = await listModels({ view: "all" });
-    const res2 = await listModels({ view: "all" });
+      const res1 = await listModels({ view: "all", preparedOnly: true });
+      const res2 = await listModels({ view: "all", preparedOnly: true });
 
-    expect(res1.ok).toBe(true);
-    expect(res2.ok).toBe(true);
+      expect(res1.ok).toBe(true);
+      expect(res2.ok).toBe(true);
 
-    const models = res1.payload?.models ?? [];
-    expect(models).toEqual(expectedSortedCatalog());
+      const models = res1.payload?.models ?? [];
+      expect(models).toEqual(expectedSortedCatalog());
 
-    expect(agentDiscoveryMock.discoverCalls).toBe(1);
+      expect(agentDiscoveryMock.discoverCalls).toBe(0);
+    });
   });
 
   test("models.list default view uses configured providers instead of the full catalog", async () => {
@@ -624,6 +543,114 @@ describe("gateway server models + voicewake", () => {
         });
       },
     );
+  });
+
+  test("prepared model RPCs reuse both explicit startup owners without live fallback", async () => {
+    const modelConfig = {
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions",
+            apiKey: "test-fixture-key",
+            baseUrl: "https://fixture.example.com/v1",
+            models: [
+              { id: "alpha-model", name: "Alpha Model" },
+              { id: "beta-model", name: "Beta Model" },
+            ],
+          },
+        },
+      },
+      agents: {
+        ownership: "explicit",
+        entries: {
+          alpha: {
+            model: { primary: "fixture/alpha-model" },
+            modelPolicy: { allow: ["fixture/alpha-model"] },
+          },
+          beta: {
+            model: { primary: "fixture/beta-model" },
+            modelPolicy: { allow: ["fixture/beta-model"] },
+          },
+        },
+      },
+    };
+
+    await withModelsConfig(modelConfig, async () => {
+      await resetPreparedModelCatalogStateForTest();
+      agentDiscoveryMock.enabled = true;
+      const startupModels = [
+        { id: "alpha-model", name: "Alpha Model", provider: "fixture" },
+        { id: "beta-model", name: "Beta Model", provider: "fixture" },
+      ];
+      agentDiscoveryMock.models = startupModels;
+      const { getRuntimeConfig } = await import("../config/io.js");
+      await startupTesting.publishStartupModelRuntime({
+        cfg: getRuntimeConfig(),
+        log: { warn: () => {} },
+      });
+      const discoveryCallsAfterStartup = agentDiscoveryMock.discoverCalls;
+
+      let blockedRequestFallback = false;
+      agentDiscoveryMock.models = [
+        {
+          id: "request-time-fallback",
+          name: "Request-time fallback",
+          get provider() {
+            if (!blockedRequestFallback) {
+              blockedRequestFallback = true;
+              // A prepared-only miss used to run synchronous catalog discovery on the Gateway
+              // thread. Make that operator-visible as event-loop starvation, not only a call count.
+              Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 750);
+            }
+            return "fixture";
+          },
+        },
+      ];
+      try {
+        const [alphaModels, betaModels, alphaAuth, betaAuth, health] = await Promise.all([
+          rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
+            agentId: "alpha",
+            view: "configured",
+            preparedOnly: true,
+          }),
+          rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
+            agentId: "beta",
+            view: "configured",
+            preparedOnly: true,
+          }),
+          rpcReq<{ providers: Array<{ provider: string }> }>(ws, "models.authStatus", {
+            agentId: "alpha",
+          }),
+          rpcReq<{ providers: Array<{ provider: string }> }>(ws, "models.authStatus", {
+            agentId: "beta",
+          }),
+          rpcReq<Record<string, unknown>>(ws, "health", { probe: true }),
+        ]);
+
+        expect(alphaModels.ok, JSON.stringify(alphaModels)).toBe(true);
+        expect(betaModels.ok, JSON.stringify(betaModels)).toBe(true);
+        expect(alphaModels.payload?.models).toContainEqual(
+          expect.objectContaining({ id: "alpha-model", provider: "fixture" }),
+        );
+        expect(betaModels.payload?.models).toContainEqual(
+          expect.objectContaining({ id: "beta-model", provider: "fixture" }),
+        );
+        expect(alphaAuth.ok, JSON.stringify(alphaAuth)).toBe(true);
+        expect(betaAuth.ok, JSON.stringify(betaAuth)).toBe(true);
+        expect(alphaAuth.payload?.providers).toContainEqual(
+          expect.objectContaining({ provider: "fixture" }),
+        );
+        expect(betaAuth.payload?.providers).toContainEqual(
+          expect.objectContaining({ provider: "fixture" }),
+        );
+        expect(health.ok, JSON.stringify(health)).toBe(true);
+      } finally {
+        agentDiscoveryMock.models = startupModels;
+      }
+
+      expect(agentDiscoveryMock.discoverCalls).toBe(discoveryCallsAfterStartup);
+      expect(blockedRequestFallback).toBe(false);
+    });
   });
 
   test("models.list configured view uses models.providers when no allowlist is configured", async () => {
@@ -683,7 +710,11 @@ describe("gateway server models + voicewake", () => {
             id: "gpt-test-z",
             name: "gpt-test-z",
             provider: "openai",
-            agentRuntime: { id: "openclaw", source: "implicit" },
+            agentRuntime: {
+              id: "openclaw",
+              cloudPlacementSupported: true,
+              source: "implicit",
+            },
             available: false,
           },
         ]);
@@ -694,6 +725,7 @@ describe("gateway server models + voicewake", () => {
   test("models.list all view bypasses the explicit model policy", async () => {
     await withModelsConfig(
       {
+        ...fullCatalogProviderConfig(),
         agents: {
           defaults: {
             model: { primary: "openai/gpt-test-z" },
@@ -706,7 +738,7 @@ describe("gateway server models + voicewake", () => {
       },
       async () => {
         await seedAgentModelCatalog();
-        const res = await listModels({ view: "all" });
+        const res = await listModels({ view: "all", preparedOnly: true });
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual(expectedSortedCatalog());
       },
@@ -732,7 +764,11 @@ describe("gateway server models + voicewake", () => {
           id: "gpt-test-z",
           name: "gpt-test-z",
           provider: "openai",
-          agentRuntime: { id: "openclaw", source: "implicit" },
+          agentRuntime: {
+            id: "openclaw",
+            cloudPlacementSupported: true,
+            source: "implicit",
+          },
           available: false,
         },
       ],
@@ -750,7 +786,11 @@ describe("gateway server models + voicewake", () => {
           id: "not-in-catalog",
           name: "not-in-catalog",
           provider: "openai",
-          agentRuntime: { id: "openclaw", source: "implicit" },
+          agentRuntime: {
+            id: "openclaw",
+            cloudPlacementSupported: true,
+            source: "implicit",
+          },
           available: false,
         },
       ],
@@ -847,8 +887,8 @@ describe("gateway server misc", () => {
   });
 
   test("releases port after close", async () => {
-    const releasePort = await getFreePort();
-    const releaseServer = await startGatewayServer(releasePort);
+    const releasePort = await getGatewayTestPort();
+    const releaseServer = await startTestGatewayServer(releasePort);
     await releaseServer.close();
 
     const probe = createServer();

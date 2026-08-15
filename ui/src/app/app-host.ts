@@ -44,6 +44,7 @@ import { selectShellRouteState, type ShellRouteState } from "./app-host-route-st
 import { OpenClawApp } from "./app-root.ts";
 import {
   isBrowserPanelAvailable,
+  isDesktopPanelAvailable,
   ShellChromeOwner,
   type ShellChromeHost,
 } from "./app-shell-chrome.ts";
@@ -62,6 +63,7 @@ import {
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
   CUSTODIAN_PANEL_ELEMENT,
+  DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   preloadOptionalElement,
   TERMINAL_PANEL_ELEMENT,
@@ -130,6 +132,7 @@ class OpenClawShell
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
+  readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
   readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
@@ -175,6 +178,33 @@ class OpenClawShell
   criticalNoticeRuntime: Promise<
     typeof import("../pages/chat/critical-observer-notice.runtime.ts")
   > | null = null;
+  // Lazy for the same reason: the pairing modal is opened from Settings, not at
+  // boot, so its template, icons, and strings stay off the startup chunk.
+  @state() devicePairSetupRenderer:
+    | typeof import("../pages/devices/view-pairing.runtime.ts").renderDevicePairSetup
+    | null = null;
+  // A rejected chunk must stay visible: the overlay is already open, so the
+  // shell renders a recoverable failure instead of an empty dialog frame.
+  @state() devicePairSetupLoadFailed = false;
+  private devicePairSetupRuntime: Promise<unknown> | null = null;
+
+  loadDevicePairSetupRenderer(): void {
+    this.devicePairSetupRuntime ??= import("../pages/devices/view-pairing.runtime.ts")
+      .then((module) => {
+        this.devicePairSetupRenderer = module.renderDevicePairSetup;
+        this.devicePairSetupLoadFailed = false;
+      })
+      .catch(() => {
+        // Clearing the promise is what makes the retry below able to refetch.
+        this.devicePairSetupLoadFailed = true;
+        this.devicePairSetupRuntime = null;
+      });
+  }
+
+  retryDevicePairSetupRenderer(): void {
+    this.devicePairSetupLoadFailed = false;
+    this.loadDevicePairSetupRenderer();
+  }
   private readonly subscriptions = new SubscriptionsController(this);
   private readonly shellNavigation = new ShellNavigationOwner(this);
   private readonly shellWorkboard = new ShellWorkboardOwner(this);
@@ -237,6 +267,10 @@ class OpenClawShell
       .watch(
         () => this.context?.navigation,
         (navigation, notify) => navigation.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.agentSelection,
+        (selection, notify) => selection.subscribe(notify),
       )
       .watch(
         () => this.context?.gateway,
@@ -424,7 +458,7 @@ class OpenClawShell
   }
 
   replaceChatWithCurrentSession() {
-    this.shellNavigation.replaceChatWithCurrentSession();
+    return this.shellNavigation.replaceChatWithCurrentSession();
   }
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
@@ -472,8 +506,6 @@ class OpenClawShell
     this.shellChrome.handleDeferredTerminalToggle(event);
   readonly handleDeferredBrowserToggle = (event: Event) =>
     this.shellChrome.handleDeferredBrowserToggle(event);
-  readonly handleDeferredCustodianToggle = (event: Event) =>
-    this.shellChrome.handleDeferredCustodianToggle(event);
   readonly handleCommandPaletteSlashCommand = (command: string) =>
     this.shellChrome.handleCommandPaletteSlashCommand(command);
 
@@ -520,11 +552,18 @@ class OpenClawShell
     }
     const gatewaySnapshot = context.gateway?.snapshot;
     if (gatewaySnapshot) {
+      const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+      if (this.commandPalette) {
+        this.commandPalette.desktopAvailable = desktopAvailable;
+      }
       if (isTerminalAvailable(gatewaySnapshot, context.config?.current.terminalEnabled ?? false)) {
         preloadOptionalElement(this, this.terminalPanelElement);
       }
       if (isBrowserPanelAvailable(gatewaySnapshot)) {
         preloadOptionalElement(this, this.browserPanelElement);
+      }
+      if (desktopAvailable) {
+        preloadOptionalElement(this, this.desktopPanelElement);
       }
       if (isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true) {
         preloadOptionalElement(this, this.custodianPanelElement);
@@ -573,9 +612,9 @@ class OpenClawShell
       : ROUTE_IDS_WITHOUT_WORKBOARD;
   }
 
-  /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */
-  draftSessionAgentId(): string {
-    return this.shellNavigation.draftSessionAgentId();
+  /** Agent targeted by the open new-session route, keyed off its ?agent param. */
+  newSessionRouteAgentId(): string {
+    return this.shellNavigation.newSessionRouteAgentId();
   }
 
   ensureAgentsList(

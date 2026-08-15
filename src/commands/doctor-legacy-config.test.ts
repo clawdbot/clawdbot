@@ -93,19 +93,19 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
   });
 
   it("pins the previous default mode when delivery-only aliases create the streaming object", () => {
-    // Discord previews default to progress only while `streaming` is absent;
-    // without aliasOnlyMode the migrated object would resolve to off.
+    // Some channels distinguish an absent streaming object from a mode-free
+    // object, so aliasOnlyMode preserves that channel-owned default.
     const res = normalizeStreaming({
       entry: { blockStreaming: true },
-      pathPrefix: "channels.discord",
+      pathPrefix: "channels.layered",
       resolvedMode: "off",
       aliasOnlyMode: "progress",
     });
 
     expect(res.entry.streaming).toEqual({ mode: "progress", block: { enabled: true } });
     expect(res.changes).toEqual([
-      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
-      "Set channels.discord.streaming.mode (progress) to keep the previous default while migrating flat streaming keys.",
+      "Moved channels.layered.blockStreaming → channels.layered.streaming.block.enabled.",
+      "Set channels.layered.streaming.mode (progress) to keep the previous default while migrating flat streaming keys.",
     ]);
   });
 
@@ -125,15 +125,15 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
   it("does not apply aliasOnlyMode when a legacy mode source exists", () => {
     const res = normalizeStreaming({
       entry: { streamMode: "partial", blockStreaming: true },
-      pathPrefix: "channels.discord",
+      pathPrefix: "channels.layered",
       resolvedMode: "partial",
       aliasOnlyMode: "progress",
     });
 
     expect(res.entry.streaming).toEqual({ mode: "partial", block: { enabled: true } });
     expect(res.changes).toEqual([
-      "Moved channels.discord.streamMode → channels.discord.streaming.mode (partial).",
-      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
+      "Moved channels.layered.streamMode → channels.layered.streaming.mode (partial).",
+      "Moved channels.layered.blockStreaming → channels.layered.streaming.block.enabled.",
     ]);
   });
 
@@ -142,14 +142,14 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     // semantics, so pinning a mode would change behavior instead of keeping it.
     const res = normalizeStreaming({
       entry: { streaming: { chunkMode: "newline" }, blockStreaming: true },
-      pathPrefix: "channels.discord",
+      pathPrefix: "channels.layered",
       resolvedMode: "off",
       aliasOnlyMode: "progress",
     });
 
     expect(res.entry.streaming).toEqual({ chunkMode: "newline", block: { enabled: true } });
     expect(res.changes).toEqual([
-      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
+      "Moved channels.layered.blockStreaming → channels.layered.streaming.block.enabled.",
     ]);
   });
 
@@ -174,8 +174,8 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
 });
 
 describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
-  // Discord-shaped options: object-without-mode default "off", absent default
-  // "progress", account merge replaces the root streaming object wholesale.
+  // Synthetic replace-semantics channel: object-without-mode default "off",
+  // absent default "progress", and account streaming replaces the root object.
   function normalizeChannel(
     entry: Record<string, unknown>,
     options?: { seedAccountStreamingFromRoot?: boolean },
@@ -183,7 +183,7 @@ describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
     const changes: string[] = [];
     const result = normalizeLegacyChannelAliases({
       entry,
-      pathPrefix: "channels.discord",
+      pathPrefix: "channels.layered",
       changes,
       seedAccountStreamingFromRoot: options?.seedAccountStreamingFromRoot ?? true,
       resolveStreamingOptions: (value) => ({
@@ -211,8 +211,8 @@ describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
       block: { enabled: true },
     });
     expect(res.changes).toEqual([
-      "Moved channels.discord.accounts.work.blockStreaming → channels.discord.accounts.work.streaming.block.enabled.",
-      "Set channels.discord.accounts.work.streaming.mode (progress) to keep the previous default while migrating flat streaming keys.",
+      "Moved channels.layered.accounts.work.blockStreaming → channels.layered.accounts.work.streaming.block.enabled.",
+      "Set channels.layered.accounts.work.streaming.mode (progress) to keep the previous default while migrating flat streaming keys.",
     ]);
   });
 
@@ -231,8 +231,8 @@ describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
     });
     expect(res.entry.streaming).toEqual({ mode: "block", block: { coalesce: { idleMs: 5 } } });
     expect(res.changes).toEqual([
-      "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
-      "Copied channels.discord.streaming into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
+      "Moved channels.layered.accounts.work.chunkMode → channels.layered.accounts.work.streaming.chunkMode.",
+      "Copied channels.layered.streaming into channels.layered.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 
@@ -251,8 +251,8 @@ describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
     });
     expect(streaming.mode).toBeUndefined();
     expect(res.changes).toEqual([
-      "Moved channels.discord.accounts.work.blockStreaming → channels.discord.accounts.work.streaming.block.enabled.",
-      "Copied channels.discord.streaming into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
+      "Moved channels.layered.accounts.work.blockStreaming → channels.layered.accounts.work.streaming.block.enabled.",
+      "Copied channels.layered.streaming into channels.layered.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
     ]);
   });
 
@@ -309,7 +309,7 @@ describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
       mode: "off",
     });
     expect(res.changes).toEqual([
-      "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
+      "Moved channels.layered.accounts.work.streaming (boolean) → channels.layered.accounts.work.streaming.mode (off).",
     ]);
   });
 
@@ -326,7 +326,7 @@ describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
 
     expect(workStreaming(res.entry)).toEqual({ chunkMode: "newline" });
     expect(res.changes).toEqual([
-      "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
+      "Moved channels.layered.accounts.work.chunkMode → channels.layered.accounts.work.streaming.chunkMode.",
     ]);
   });
 });

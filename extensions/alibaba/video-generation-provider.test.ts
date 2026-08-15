@@ -1,4 +1,3 @@
-// Alibaba tests cover video generation provider plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +8,7 @@ import {
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
+  requireFirstPostJsonRecordRequest as requireFirstPostJsonRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import {
   expectDashscopeVideoTaskPoll,
@@ -16,6 +16,8 @@ import {
   expectSuccessfulDashscopeVideoResult,
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
+// Alibaba tests cover video generation provider plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import {
   DASHSCOPE_WAN_VIDEO_MODELS,
   DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
@@ -50,20 +52,7 @@ function clearAlibabaAuthEnvironment(): void {
   }
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireFirstPostJsonRequest(label: string): Record<string, unknown> {
-  const [call] = postJsonRequestMock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return requireRecord(call[0], label);
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 describe("alibaba video generation provider", () => {
   it("declares explicit mode capabilities", () => {
@@ -274,7 +263,7 @@ describe("alibaba video generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const request = requireFirstPostJsonRequest("DashScope request");
+    const request = requireFirstPostJsonRequest(postJsonRequestMock, "DashScope request");
     expect(request.url).toBe(
       "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
     );
@@ -282,10 +271,10 @@ describe("alibaba video generation provider", () => {
     expect(body.model).toBe("wan2.6-r2v-flash");
     const input = requireRecord(body.input, "DashScope request input");
     expect(input.prompt).toBe("animate this shot");
-    expect(input.img_url).toBe("https://example.com/ref.png");
+    expect(input.reference_urls).toEqual(["https://example.com/ref.png"]);
     const parameters = requireRecord(body.parameters, "DashScope request parameters");
     expect(parameters.duration).toBe(6);
-    expect(parameters.enable_audio).toBe(true);
+    expect(parameters.audio).toBe(true);
     expect(parameters.watermark).toBe(false);
     expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
     expectSuccessfulDashscopeVideoResult(result);
@@ -338,7 +327,10 @@ describe("alibaba video generation provider", () => {
         request: requestPolicy,
       }),
     );
-    const request = requireFirstPostJsonRequest("DashScope request with request policy");
+    const request = requireFirstPostJsonRequest(
+      postJsonRequestMock,
+      "DashScope request with request policy",
+    );
     expect(request.allowPrivateNetwork).toBe(true);
     expect(request.dispatcherPolicy).toBe(dispatcherPolicy);
     expect(request.headers).toBeInstanceOf(Headers);

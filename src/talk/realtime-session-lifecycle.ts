@@ -5,6 +5,7 @@ type RealtimeVoiceAudioOverflowPolicy = "drop-oldest" | "reject-newest";
 
 export type RealtimeVoiceAudioQueue = {
   clear: () => void;
+  dequeue: () => Buffer | undefined;
   drain: () => Buffer[];
   enqueue: (audio: Buffer) => boolean;
 };
@@ -22,6 +23,13 @@ export function createRealtimeVoiceAudioQueue(
 
   return {
     clear,
+    dequeue: () => {
+      const chunk = chunks.shift();
+      if (chunk) {
+        bytes -= chunk.byteLength;
+      }
+      return chunk;
+    },
     drain: () => {
       const drained = chunks;
       clear();

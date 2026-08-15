@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolvePluginNpmProjectDir } from "../plugins/install-paths.js";
 import {
@@ -14,6 +15,7 @@ import {
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   detectPluginRegistryHealthIssues,
   maybeRepairPluginRegistryState,
@@ -450,16 +452,17 @@ describe("maybeRepairPluginRegistryState", () => {
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
     await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+    const candidate = createCandidate(pluginDir);
 
     const nextConfig = await maybeRepairPluginRegistryState({
       stateDir,
-      candidates: [createCandidate(pluginDir)],
+      candidates: [candidate],
       env: hermeticEnv(),
       config: {},
       prompter: { shouldRepair: true },
     });
 
-    expect(nextConfig).toStrictEqual({});
+    expect(nextConfig).toStrictEqual({ config: {}, pluginInventoryChanged: true });
     const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
     expect(persisted.refreshReason).toBe("migration");
     expect(persisted.plugins).toStrictEqual([
@@ -469,6 +472,15 @@ describe("maybeRepairPluginRegistryState", () => {
         origin: "global",
       }),
     ]);
+    await expect(
+      maybeRepairPluginRegistryState({
+        stateDir,
+        candidates: [candidate],
+        env: hermeticEnv(),
+        config: {},
+        prompter: { shouldRepair: true },
+      }),
+    ).resolves.toStrictEqual({ config: {} });
   });
 
   it("warns about stale managed npm packages that shadow bundled plugins", async () => {
@@ -513,6 +525,97 @@ describe("maybeRepairPluginRegistryState", () => {
     );
     expect(vi.mocked(note).mock.calls.join("\n")).toContain("@openclaw/google-meet@2026.5.2");
     expect(fs.existsSync(managed.packageDir)).toBe(true);
+  });
+
+  it("does not mutate stale packages when config install records are invalid", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled", "google-meet");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "google-meet",
+      packageName: "@openclaw/google-meet",
+      version: "2026.5.2",
+    });
+    const config = JSON.parse(
+      '{"plugins":{"installs":{"__proto__":{"source":"bogus"}}}}',
+    ) as OpenClawConfig;
+
+    await expect(
+      maybeRepairPluginRegistryState({
+        stateDir,
+        candidates: [
+          createBundledCandidate({
+            rootDir: bundledDir,
+            id: "google-meet",
+            packageName: "@openclaw/google-meet",
+            version: "2026.5.3",
+          }),
+        ],
+        env: hermeticEnv(),
+        config,
+        prompter: { shouldRepair: true },
+      }),
+    ).resolves.toEqual({ config });
+
+    expect(fs.existsSync(managed.packageDir)).toBe(true);
+    const notes = vi.mocked(note).mock.calls.join("\n");
+    expect(notes).toContain("plugins.installs contains invalid records");
+    expect(notes).toContain("Back up openclaw.json");
+    expect(notes).toContain("rerun `openclaw doctor --fix`");
+    expect(fs.existsSync(resolveInstalledPluginIndexStorePath({ stateDir }))).toBe(false);
+  });
+
+  it("reports the supported manual recovery for invalid persisted records", async () => {
+    const stateDir = makeTempDir();
+    const config: OpenClawConfig = {};
+    const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        db.prepare(
+          `
+            INSERT OR REPLACE INTO installed_plugin_index (
+              index_key, version, host_contract_version, compat_registry_version,
+              migration_version, policy_hash, generated_at_ms, refresh_reason,
+              install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
+            ) VALUES (
+              'installed-plugin-index', 1, 'test', 'test',
+              1, 'test', 1, NULL,
+              ?, '[]', '[]', NULL, 123
+            )
+          `,
+        ).run(installRecordsJson);
+      },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+    );
+
+    await expect(
+      maybeRepairPluginRegistryState({
+        stateDir,
+        env: hermeticEnv(),
+        config,
+        prompter: { shouldRepair: true },
+      }),
+    ).resolves.toEqual({ config });
+
+    const notes = vi.mocked(note).mock.calls.join("\n");
+    expect(notes).toContain("Stop the Gateway");
+    expect(notes).toContain(
+      "delete only the installed_plugin_index row with index_key='installed-plugin-index'",
+    );
+    expect(notes).toContain("rerun `openclaw doctor --fix`");
+    const row = runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare(
+            `SELECT install_records_json, updated_at_ms
+               FROM installed_plugin_index
+              WHERE index_key = 'installed-plugin-index'`,
+          )
+          .get() as { install_records_json: string; updated_at_ms: number | bigint },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+    );
+    expect(row).toEqual({ install_records_json: installRecordsJson, updated_at_ms: 123 });
   });
 
   it("removes stale managed npm packages that shadow bundled plugins during repair", async () => {
@@ -588,7 +691,15 @@ describe("maybeRepairPluginRegistryState", () => {
       retainedAt: "2026-04-25T00:00:00.000Z",
       reason: "test-retained-generation",
     });
-    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "google-meet",
+        packageName: "@openclaw/google-meet",
+        packageDir: managed.packageDir,
+        version: "2026.5.2",
+      }),
+      { stateDir },
+    );
 
     await maybeRepairPluginRegistryState({
       stateDir,
@@ -616,6 +727,13 @@ describe("maybeRepairPluginRegistryState", () => {
     });
 
     expect(fs.existsSync(managed.packageDir)).toBe(true);
+    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    expect(persisted.installRecords["google-meet"]).toMatchObject({
+      source: "npm",
+      installPath: managed.packageDir,
+      resolvedName: "@openclaw/google-meet",
+      resolvedVersion: "2026.5.2",
+    });
     expect(vi.mocked(note).mock.calls.join("\n")).not.toContain(
       "Removed stale managed npm plugin package",
     );
@@ -668,7 +786,8 @@ describe("maybeRepairPluginRegistryState", () => {
 
     expect(fs.existsSync(managed.packageDir)).toBe(false);
     const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
-    expect(persisted.installRecords).toStrictEqual({});
+    expect(Object.keys(persisted.installRecords)).toEqual([]);
+    expect(Object.getPrototypeOf(persisted.installRecords)).toBeNull();
     expect(persisted.refreshReason).toBe("migration");
     expect(persisted.plugins).toStrictEqual([
       expectedPluginIndexRecord({
@@ -772,7 +891,8 @@ describe("maybeRepairPluginRegistryState", () => {
     });
 
     const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
-    expect(persisted.installRecords).toStrictEqual({});
+    expect(Object.keys(persisted.installRecords)).toEqual([]);
+    expect(Object.getPrototypeOf(persisted.installRecords)).toBeNull();
     expect(persisted.refreshReason).toBe("migration");
     expect(persisted.plugins).toStrictEqual([
       expectedPluginIndexRecord({
@@ -931,7 +1051,7 @@ describe("maybeRepairPluginRegistryState", () => {
         config: {},
         prompter: { shouldRepair: false },
       }),
-    ).resolves.toEqual({});
+    ).resolves.toEqual({ config: {} });
 
     const notes = vi.mocked(note).mock.calls.join("\n");
     expect(notes).toContain("Managed npm plugin packages could not be inspected");

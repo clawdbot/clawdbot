@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ loadPreparedModelCatalogOwnerSnapshot: vi.fn() }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogOwnerSnapshot: mocks.loadPreparedModelCatalogOwnerSnapshot,
 }));
 

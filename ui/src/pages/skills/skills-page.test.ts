@@ -138,7 +138,7 @@ describe("skills page route-loaded reports", () => {
               ok: true,
               decision: "pass",
               reasons: [],
-              requestedSlug: "agentreceipt@1.2.3",
+              requestedSlug: "agentreceipt",
               requestedVersion: "1.2.3",
               slug: "agentreceipt",
               version: "1.2.3",

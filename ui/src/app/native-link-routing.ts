@@ -1,6 +1,7 @@
 import { promoteToPopoverTopLayer } from "../components/menu-surface.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "../components/native-link-menu.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 
 type NativeLinkTarget = "inline" | "external";
 
@@ -179,14 +180,7 @@ export function startNativeLinkRouting(): NativeLinkRouting {
   };
 
   const handleClick = (event: MouseEvent) => {
-    if (
-      event.defaultPrevented ||
-      event.button !== 0 ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey
-    ) {
+    if (!shouldHandleNavigationClick(event)) {
       return;
     }
     const appLink = trustedExternalAppUrl(event);

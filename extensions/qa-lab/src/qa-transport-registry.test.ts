@@ -4,6 +4,7 @@ import { createQaBusState } from "./bus-state.js";
 import {
   createQaTransportAdapter,
   normalizeQaTransportId,
+  qaTransportSupportsModuleFlows,
   type QaTransportAdapterFactory,
   type QaTransportFactoryContext,
 } from "./qa-transport-registry.js";
@@ -117,6 +118,50 @@ describe("qa transport registry", () => {
     });
     expect(skippedCreate).not.toHaveBeenCalled();
     expect(selectedCreate).toHaveBeenCalledOnce();
+  });
+
+  it("reads module-flow support from the selected factory", () => {
+    const factories: QaTransportAdapterFactory[] = [
+      { id: "skipped", matches: () => false, create: vi.fn() },
+      {
+        id: "selected",
+        supportsModuleFlows: true,
+        matches: () => true,
+        create: vi.fn(),
+      },
+    ];
+
+    expect(
+      qaTransportSupportsModuleFlows(factories, { channelId: "selected", driver: "live" }),
+    ).toBe(true);
+    expect(qaTransportSupportsModuleFlows([], { channelId: "selected", driver: "live" })).toBe(
+      false,
+    );
+  });
+
+  it("rejects module-flow support when the created adapter lacks prepareFlow", async () => {
+    const cleanup = vi.fn(async () => {
+      throw new Error("cleanup failed");
+    });
+    const cleanupAfterGatewayStop = vi.fn(async () => undefined);
+    const factory: QaTransportAdapterFactory = {
+      id: "selected",
+      supportsModuleFlows: true,
+      matches: () => true,
+      async create() {
+        return createAdapterDefinition(cleanup, cleanupAfterGatewayStop);
+      },
+    };
+
+    await expect(
+      createQaTransportAdapter(createFactoryContext({ channelId: "selected", driver: "live" }), [
+        factory,
+      ]),
+    ).rejects.toThrow(
+      'QA transport factory "selected" supports module flows but its adapter does not implement prepareFlow',
+    );
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
   });
 
   it("returns cleanup owned by the selected adapter", async () => {

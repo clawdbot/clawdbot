@@ -247,16 +247,16 @@ export function resolveEligibleNodeFromList(
 }
 
 /** Loads nodes from the Gateway and resolves the requested or default node id. */
-export async function resolveNodeId(
+export async function resolveAgentNodeId(
   opts: GatewayCallOptions,
   query?: string,
   allowDefault = false,
 ) {
-  return (await resolveNode(opts, query, allowDefault)).nodeId;
+  return (await resolveAgentNode(opts, query, allowDefault)).nodeId;
 }
 
 /** Loads nodes from the Gateway and returns the requested or default node record. */
-export async function resolveNode(
+export async function resolveAgentNode(
   opts: GatewayCallOptions,
   query?: string,
   allowDefault = false,

@@ -170,11 +170,8 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  closeAllMemorySearchManagers,
-  getMemorySearchManager,
-  type MemoryIndexManager,
-} from "./index.js";
+import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 describe("memory watcher config", () => {
@@ -317,6 +314,40 @@ describe("memory watcher config", () => {
     expect(
       ignored?.(path.join(workspaceDir, "memory", "project"), { isDirectory: () => true }),
     ).toBe(false);
+  });
+
+  it("filters patterned extra path file events while watching the directory root", async () => {
+    await setupWatcherWorkspace({ name: "seed.md", contents: "seed" });
+    await fs.mkdir(path.join(extraDir, "notes"), { recursive: true });
+    await fs.mkdir(path.join(extraDir, "drafts"), { recursive: true });
+    await fs.writeFile(path.join(extraDir, "notes", "keep.md"), "keep");
+    await fs.writeFile(path.join(extraDir, "drafts", "skip.md"), "skip");
+    const cfg = createWatcherConfig({
+      extraPaths: [{ path: extraDir, pattern: "notes/**/*.md" }],
+    });
+
+    await expectWatcherManager(cfg);
+    const extraWatcher = createdNativeWatchers.find(
+      (watcher) => watcher.dir === extraDir && watcher.recursive,
+    );
+    expect(extraWatcher).toBeDefined();
+    vi.useFakeTimers();
+    const syncSpy = vi
+      .spyOn(
+        manager as unknown as {
+          sync: (params?: { reason?: string }) => Promise<void>;
+        },
+        "sync",
+      )
+      .mockResolvedValue(undefined);
+
+    extraWatcher?.emit("change", path.join("drafts", "skip.md"));
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    expect(syncSpy).not.toHaveBeenCalled();
+
+    extraWatcher?.emit("change", path.join("notes", "keep.md"));
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
   });
 
   it("does not start watchers for one-shot CLI managers", async () => {

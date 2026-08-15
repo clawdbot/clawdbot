@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -12,15 +12,16 @@ const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 function createFakeGh() {
   const tempDir = tempDirs.make("openclaw-pr-ci-dispatch-");
-  const fakeGh = join(tempDir, "gh");
+  const binDir = join(tempDir, "bin");
+  const pathGh = join(binDir, "gh");
+  const realGh = join(tempDir, "real-gh");
   const calls = join(tempDir, "calls.log");
   const dispatched = join(tempDir, "dispatched");
   const seenRunList = join(tempDir, "seen-run-list");
-  writeFileSync(
-    fakeGh,
-    `#!/usr/bin/env bash
+  mkdirSync(binDir);
+  const fakeGhScript = `#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\\n' "$*" >> "$OPENCLAW_TEST_GH_CALLS"
+printf '%s\\t%s\\n' "$(basename "$0")" "$*" >> "$OPENCLAW_TEST_GH_CALLS"
 case "$1 $2" in
   "run list")
     if [ "\${OPENCLAW_TEST_GH_MODE:-}" = "pending-head-change" ]; then
@@ -42,10 +43,12 @@ case "$1 $2" in
   "workflow run") : > "$OPENCLAW_TEST_GH_DISPATCHED" ;;
   *) echo "unexpected gh invocation: $*" >&2; exit 2 ;;
 esac
-`,
-  );
-  chmodSync(fakeGh, 0o755);
-  return { calls, dispatched, fakeGh, seenRunList };
+`;
+  writeFileSync(pathGh, fakeGhScript);
+  writeFileSync(realGh, fakeGhScript);
+  chmodSync(pathGh, 0o755);
+  chmodSync(realGh, 0o755);
+  return { binDir, calls, dispatched, realGh, seenRunList };
 }
 
 function runDispatch(
@@ -71,13 +74,14 @@ function runDispatch(
       env: {
         ...process.env,
         NODE_OPTIONS: nodeOptions,
-        OPENCLAW_GH_BIN: fakeGh.fakeGh,
+        OPENCLAW_GH_BIN: fakeGh.realGh,
         OPENCLAW_TEST_CHANGED_HEAD_SHA: changedSha,
         OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
         OPENCLAW_TEST_GH_DISPATCHED: fakeGh.dispatched,
         OPENCLAW_TEST_GH_MODE: options.mode ?? "",
         OPENCLAW_TEST_GH_SEEN_RUN_LIST: fakeGh.seenRunList,
         OPENCLAW_TEST_HEAD_SHA: sha,
+        PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
       },
     },
   );
@@ -119,9 +123,14 @@ describePosix("scripts/pr ci-dispatch", () => {
     expect(result.stdout).toContain(
       "observed_run_url=https://github.com/openclaw/openclaw/actions/runs/99",
     );
-    expect(readFileSync(fakeGh.calls, "utf8")).toContain(
-      `workflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${sha} -f release_gate=true -f pull_request_number=12345`,
+    const calls = readFileSync(fakeGh.calls, "utf8");
+    const callLines = calls.trim().split("\n");
+    expect(callLines).toContain(
+      `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${sha} -f release_gate=true -f pull_request_number=12345`,
     );
+    expect(callLines.some((call) => call.startsWith(`gh\trun list --commit ${sha}`))).toBe(true);
+    expect(callLines.some((call) => call.startsWith("gh\tpr view 12345"))).toBe(true);
+    expect(callLines.some((call) => /^real-gh\t(?:run list|pr view)/u.test(call))).toBe(false);
   });
 
   it("refuses a fork-local branch name before invoking GitHub", () => {
@@ -133,11 +142,12 @@ describePosix("scripts/pr ci-dispatch", () => {
         encoding: "utf8",
         env: {
           ...process.env,
-          OPENCLAW_GH_BIN: fakeGh.fakeGh,
+          OPENCLAW_GH_BIN: fakeGh.realGh,
           OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
           OPENCLAW_TEST_GH_DISPATCHED: fakeGh.dispatched,
           OPENCLAW_TEST_GH_SEEN_RUN_LIST: fakeGh.seenRunList,
           OPENCLAW_TEST_HEAD_SHA: sha,
+          PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
         },
       },
     );

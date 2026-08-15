@@ -77,15 +77,13 @@ export async function removeOwnReactionsDiscord(
   const { rest, request } = isDiscordReactionRuntimeContext(opts)
     ? createDiscordReactionRuntimeClient(opts)
     : resolveDiscordReactionClient(opts);
-  const message = (await request(
+  const message = await request(
     () => getChannelMessage(rest, channelId, messageId),
     "reaction-list",
-  )) as {
-    reactions?: Array<{ emoji: { id?: string | null; name?: string | null } }>;
-  };
+  );
   const identifiers = new Set<string>();
   for (const reaction of message.reactions ?? []) {
-    const identifier = buildReactionIdentifier(reaction.emoji);
+    const identifier = reaction.me ? buildReactionIdentifier(reaction.emoji) : undefined;
     if (identifier) {
       identifiers.add(identifier);
     }
@@ -116,15 +114,10 @@ export async function fetchReactionsDiscord(
   const { rest, request } = isDiscordReactionRuntimeContext(opts)
     ? createDiscordReactionRuntimeClient(opts)
     : resolveDiscordReactionClient(opts);
-  const message = (await request(
+  const message = await request(
     () => getChannelMessage(rest, channelId, messageId),
     "reaction-list",
-  )) as {
-    reactions?: Array<{
-      count: number;
-      emoji: { id?: string | null; name?: string | null };
-    }>;
-  };
+  );
   const reactions = message.reactions ?? [];
   if (reactions.length === 0) {
     return [];

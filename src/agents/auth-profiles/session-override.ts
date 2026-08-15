@@ -3,6 +3,7 @@
  * Keeps automatic profile choice stable within a session while still rotating
  * across new sessions, compactions, provider changes, and cooldowns.
  */
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -112,7 +113,7 @@ async function persistSessionAuthProfileOverrideState(params: {
   }
   const persisted = await (
     await loadSessionAccessor()
-  ).patchSessionEntry(
+  ).patchSessionEntryCore(
     { storePath, sessionKey },
     (current) => {
       // Compare inside the canonical SQLite writer so a concurrent /model pin
@@ -272,13 +273,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     ),
   ];
   let current = sessionEntry.authProfileOverride?.trim();
-  const source =
-    sessionEntry.authProfileOverrideSource ??
-    (typeof sessionEntry.authProfileOverrideCompactionCount === "number"
-      ? "auto"
-      : current
-        ? "user"
-        : undefined);
+  const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
 
   const currentProfileId = current;
   if (
@@ -301,8 +296,13 @@ export async function resolveSessionAuthProfileOverride(params: {
     current = undefined;
   }
 
-  // Explicit user picks should survive provider rotation order changes.
-  if (current && order.length > 0 && !order.includes(current) && source !== "user") {
+  // Explicit user pins are strict until the profile disappears or changes provider.
+  if (source === "user" && current) {
+    return current;
+  }
+
+  // Automatic pins must stay inside the currently configured rotation order.
+  if (current && order.length > 0 && !order.includes(current)) {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
@@ -311,10 +311,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     return undefined;
   }
 
-  if (
-    (source !== "user" || !current) &&
-    order.every((profileId) => isProfileGloballyInCooldown(store, profileId))
-  ) {
+  if (order.every((profileId) => isProfileGloballyInCooldown(store, profileId))) {
     // An automatic pin must not trap later turns on an unavailable provider.
     if (current) {
       const latest = await persistSessionAuthProfileOverrideState({
@@ -335,13 +332,7 @@ export async function resolveSessionAuthProfileOverride(params: {
         },
       });
       const latestProfileId = latest?.authProfileOverride;
-      const latestSource =
-        latest?.authProfileOverrideSource ??
-        (typeof latest?.authProfileOverrideCompactionCount === "number"
-          ? "auto"
-          : latestProfileId
-            ? "user"
-            : undefined);
+      const latestSource = resolveSessionAuthProfileOverrideSource(latest);
       return latestProfileId &&
         latestSource === "user" &&
         isProfileForProvider({ cfg, providers, profileId: latestProfileId, store })
@@ -351,8 +342,10 @@ export async function resolveSessionAuthProfileOverride(params: {
     return undefined;
   }
 
+  const isProfileUnavailableForSessionModel = (profileId: string) =>
+    isProfileInCooldown(store, profileId, undefined, sessionEntry.model);
   const pickFirstAvailable = () =>
-    order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
+    order.find((profileId) => !isProfileUnavailableForSessionModel(profileId)) ?? order[0];
   const pickNextAvailable = (active: string) => {
     const startIndex = order.indexOf(active);
     if (startIndex < 0) {
@@ -360,7 +353,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     }
     for (let offset = 1; offset <= order.length; offset += 1) {
       const candidate = order[(startIndex + offset) % order.length];
-      if (candidate && !isProfileInCooldown(store, candidate)) {
+      if (candidate && !isProfileUnavailableForSessionModel(candidate)) {
         return candidate;
       }
     }
@@ -373,16 +366,13 @@ export async function resolveSessionAuthProfileOverride(params: {
       ? sessionEntry.authProfileOverrideCompactionCount
       : compactionCount;
   const replacementForUnusableCurrent =
-    current && isProfileInCooldown(store, current)
-      ? order.find((profileId) => profileId !== current && !isProfileInCooldown(store, profileId))
+    current && isProfileUnavailableForSessionModel(current)
+      ? order.find(
+          (profileId) => profileId !== current && !isProfileUnavailableForSessionModel(profileId),
+        )
       : undefined;
-  // User-pinned profiles persist unless unusable/mismatched. Auto-selected
-  // profiles rotate on new sessions or compaction boundaries.
   if (replacementForUnusableCurrent) {
     current = undefined;
-  }
-  if (source === "user" && current && !isNewSession) {
-    return current;
   }
 
   let next = current;
@@ -392,7 +382,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     next = current ? pickNextAvailable(current) : pickFirstAvailable();
   } else if (current && compactionCount > storedCompaction) {
     next = pickNextAvailable(current);
-  } else if (!current || isProfileInCooldown(store, current)) {
+  } else if (!current || isProfileUnavailableForSessionModel(current)) {
     next = pickFirstAvailable();
   }
 

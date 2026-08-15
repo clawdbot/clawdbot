@@ -5,6 +5,7 @@ import {
   type BoardActionParams,
   type BoardDataReadParams,
   type BoardEventParams,
+  type BoardGetParams,
   type BoardPromptAuthorizeParams,
   type BoardWidgetAppViewParams,
   type BoardUpdateParams,
@@ -50,6 +51,9 @@ import {
   resolveMcpAppAllowedToolNames,
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
+import { sessionObserverScopeKey } from "../session-observer-model.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveSessionStoreKey } from "../session-store-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type NoticeAppender = typeof appendBoardEventNotice;
@@ -100,6 +104,25 @@ function respondBoardError(
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
 }
 
+function resolveBoardSessionKey(
+  params: { sessionKey: string; agentId?: string | undefined },
+  context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
+  respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
+): string | undefined {
+  const cfg = context.getRuntimeConfig();
+  const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
+  if (!requested.ok) {
+    respond(false, undefined, requested.error);
+    return undefined;
+  }
+  const canonicalKey = resolveSessionStoreKey({
+    cfg,
+    sessionKey: params.sessionKey,
+    storeAgentId: requested.agentId,
+  });
+  return sessionObserverScopeKey(canonicalKey, requested.agentId);
+}
+
 function assertCapabilityParamsSize(
   params: Record<string, unknown>,
   capability: "action" | "data binding",
@@ -135,9 +158,12 @@ export function createBoardHandlers(
         invalidParams("board.get", validateBoardGetParams.errors, respond);
         return;
       }
-      const { snapshot, htmlViewMetadata } = store.getSnapshotWithHtmlViewMetadata(
-        params.sessionKey,
-      );
+      const boardParams = params as BoardGetParams;
+      const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
+      if (!boardSessionKey) {
+        return;
+      }
+      const { snapshot, htmlViewMetadata } = store.getSnapshotWithHtmlViewMetadata(boardSessionKey);
       let sandboxPort = context.getMcpAppSandboxPort?.();
       let sandboxOrigin: string | undefined;
       let sandboxOriginResolved = false;
@@ -193,7 +219,11 @@ export function createBoardHandlers(
       }
       try {
         const boardParams = params as BoardUpdateParams;
-        const snapshot = store.applyOps(boardParams.sessionKey, boardParams.ops);
+        const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
+        if (!boardSessionKey) {
+          return;
+        }
+        const snapshot = store.applyOps(boardSessionKey, boardParams.ops);
         if (boardParams.ops.length > 0) {
           context.broadcast("board.changed", {
             sessionKey: snapshot.sessionKey,
@@ -212,8 +242,16 @@ export function createBoardHandlers(
       }
       try {
         const requestParams = params as BoardWidgetPutParams;
-        const boardSessionKey = store.getSnapshot(requestParams.sessionKey).sessionKey;
-        const { declared: requestDeclared, ...requestWithoutDeclared } = requestParams;
+        const requestedBoardSessionKey = resolveBoardSessionKey(requestParams, context, respond);
+        if (!requestedBoardSessionKey) {
+          return;
+        }
+        const boardSessionKey = store.getSnapshot(requestedBoardSessionKey).sessionKey;
+        const {
+          agentId: _agentId,
+          declared: requestDeclared,
+          ...requestWithoutDeclared
+        } = requestParams;
         let content: BoardWidgetMaterializedPutParams["content"];
         let declared = requestDeclared;
         if (requestParams.content.kind === "canvas-doc") {
@@ -306,8 +344,12 @@ export function createBoardHandlers(
       }
       try {
         const boardParams = params as BoardWidgetGrantParams;
+        const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
+        if (!boardSessionKey) {
+          return;
+        }
         const snapshot = store.grant(
-          boardParams.sessionKey,
+          boardSessionKey,
           boardParams.name,
           boardParams.decision,
           boardParams.revision,
@@ -329,7 +371,11 @@ export function createBoardHandlers(
       }
       try {
         const boardParams = params as BoardWidgetAppViewParams;
-        const snapshot = store.getSnapshot(boardParams.sessionKey);
+        const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
+        if (!boardSessionKey) {
+          return;
+        }
+        const snapshot = store.getSnapshot(boardSessionKey);
         const widget = snapshot.widgets.find((candidate) => candidate.name === boardParams.name);
         const document = store.readWidgetMcpApp(snapshot.sessionKey, boardParams.name);
         if (
@@ -377,7 +423,7 @@ export function createBoardHandlers(
         respondBoardError(error, respond);
       }
     },
-    "board.event": ({ params, respond }) => {
+    "board.event": ({ params, respond, context }) => {
       if (!validateBoardEventParams(params)) {
         invalidParams("board.event", validateBoardEventParams.errors, respond);
         return;
@@ -388,7 +434,11 @@ export function createBoardHandlers(
           "ticket" in boardParams
             ? resolveAuthorizedBoardWidgetView(store, boardParams.ticket)
             : (() => {
-                const snapshot = store.getSnapshot(boardParams.sessionKey);
+                const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
+                if (!boardSessionKey) {
+                  return undefined;
+                }
+                const snapshot = store.getSnapshot(boardSessionKey);
                 const widget = snapshot.widgets.some(
                   (candidate) => candidate.name === boardParams.widget,
                 );
@@ -400,6 +450,9 @@ export function createBoardHandlers(
                 }
                 return { sessionKey: snapshot.sessionKey, name: boardParams.widget };
               })();
+        if (!identity) {
+          return;
+        }
         const appended = appendNotice({
           sessionKey: identity.sessionKey,
           widget: identity.name,

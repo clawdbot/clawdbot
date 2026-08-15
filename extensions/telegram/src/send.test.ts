@@ -2,13 +2,14 @@
 import fs from "node:fs";
 import type { Bot } from "grammy";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markdownToTelegramHtml, telegramHtmlToPlainTextFallback } from "./format.js";
 import {
@@ -22,8 +23,20 @@ import {
   hasProviderObservedTelegramThreadBinding,
 } from "./message-cache.js";
 import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
+import {
+  beginTelegramPollRegistration,
+  getPreparedTelegramPollAnswer,
+  prepareTelegramPollAnswerContext,
+  settleTelegramPollAnswerContext,
+} from "./poll-answer-context.js";
+import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
 import { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
-import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
+import {
+  countInputRichBlockMedia,
+  countInputRichBlocks,
+  inputRichBlocksToPlainText,
+  type InputRichBlock,
+} from "./rich-block-model.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
@@ -37,12 +50,11 @@ import {
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
+import { recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 import {
   TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
-  recordSentMessage,
-  wasSentByBot,
-} from "./sent-message-cache.js";
+} from "./sent-message-cache.legacy-state.js";
 
 installTelegramSendTestHooks();
 
@@ -58,6 +70,8 @@ const {
   probeVideoDimensions,
 } = getTelegramSendTestMocks();
 const telegramSendModule = await importTelegramSendModule();
+const { PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime");
+const { TelegramRequestNotStartedError } = await import("./network-errors.js");
 const { getChildLogger, resetLogger, setLoggerOverride } =
   await import("openclaw/plugin-sdk/runtime-env");
 const {
@@ -99,11 +113,11 @@ type RichRawTextTestApi = Omit<TelegramApiOverride, "raw" | "sendMessage"> & {
   ) => Promise<unknown>;
 };
 
-function richTextForTest(richMessage: {
-  blocks?: InputRichBlock[];
-  markdown?: string;
-  html?: string;
-}): string {
+type RichMessageTestPayload = Parameters<
+  NonNullable<NonNullable<RichRawTextTestApi["raw"]>["sendRichMessage"]>
+>[0]["rich_message"];
+
+function richTextForTest(richMessage: RichMessageTestPayload): string {
   if (richMessage.blocks) {
     return inputRichBlocksToPlainText(richMessage.blocks);
   }
@@ -151,6 +165,12 @@ const sendMessageTelegram: typeof sendMessageTelegramImpl = async (to, text, opt
   );
 
 const TELEGRAM_TEST_CFG = {};
+const TELEGRAM_POLL_REGISTRY_NAMESPACE = "telegram.poll-registry";
+const TELEGRAM_POLL_REGISTRY_MAX_ENTRIES = 10_000;
+type TelegramPollRegistryEntry = Omit<
+  Parameters<typeof recordTelegramPollRegistryEntry>[0],
+  "accountId" | "env"
+> & { createdAt: number };
 type PersistedSentMessageForTest = {
   scopeKey: string;
   chatId: string;
@@ -170,7 +190,7 @@ function markdownTable(columns: number): string {
 }
 
 function countTelegramRichBlocks(blocks: readonly InputRichBlock[] | undefined): number {
-  return blocks?.length ?? 0;
+  return countInputRichBlocks(blocks ?? []);
 }
 
 beforeEach(() => {
@@ -194,7 +214,13 @@ function installTelegramStateRuntimeForTest(
           "telegram",
           options,
         )) as TelegramRuntime["state"]["openKeyedStore"],
-      openSyncKeyedStore: (() => syncStore) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      openSyncKeyedStore: ((options) =>
+        options.namespace === TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE
+          ? syncStore
+          : createPluginStateSyncKeyedStoreForTests(
+              "telegram",
+              options,
+            )) as TelegramRuntime["state"]["openSyncKeyedStore"],
     },
     channel: {},
   } as TelegramRuntime);
@@ -346,12 +372,7 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectMediaSendCall(
   call: unknown[] | undefined,
@@ -567,6 +588,38 @@ describe("sent-message-cache", () => {
       fs.rmSync(customStorePath, { force: true });
       fs.rmSync(`${customStorePath}.telegram-sent-messages.json`, { force: true });
     }
+  });
+
+  it("keeps sent-message ownership isolated across differently routed accounts", () => {
+    const multiAgentCfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: {} },
+      },
+      channels: {
+        telegram: {
+          accounts: {
+            primary: { botToken: "123456:primary" },
+            alerts: { botToken: "123456:alerts" },
+          },
+        },
+      },
+      bindings: [
+        { agentId: "main", match: { channel: "telegram", accountId: "primary" } },
+        { agentId: "ops", match: { channel: "telegram", accountId: "alerts" } },
+      ],
+      session: {
+        store: "/tmp/openclaw-telegram-sent-owner/{agentId}/sessions.json",
+      },
+    } as OpenClawConfig;
+
+    recordSentMessage(123, 1, multiAgentCfg, { accountId: "primary" });
+
+    expect(wasSentByBot(123, 1, multiAgentCfg, { accountId: "primary" })).toBe(true);
+    expect(wasSentByBot(123, 1, multiAgentCfg, { accountId: "alerts" })).toBe(false);
+
+    recordSentMessage(123, 1, multiAgentCfg, { accountId: "alerts" });
+    expect(wasSentByBot(123, 1, multiAgentCfg, { accountId: "alerts" })).toBe(true);
   });
 
   it("shares sent-message state across distinct module instances", async () => {
@@ -1094,6 +1147,34 @@ describe("sendMessageTelegram", () => {
     expect(cursor.nextPartIndex).toBe(1);
   });
 
+  it("invalidates the projection cursor when a later chunk fails terminally", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-terminal-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-final",
+    });
+    const invalidate = vi.spyOn(cursor, "invalidate");
+    botApi.sendMessage
+      .mockResolvedValueOnce({
+        message_id: 1601,
+        date: 1_779_394_745,
+        chat: { id: "123", type: "private" },
+        from: { id: 42, is_bot: true, first_name: "Kelaw" },
+        text: "page one",
+      })
+      .mockRejectedValueOnce(new Error("400: Bad Request: chat not found"));
+
+    await expect(
+      sendMessageTelegram("123", "A".repeat(4200), {
+        cfg,
+        token: "tok",
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      }),
+    ).rejects.toThrow();
+
+    expect(invalidate).toHaveBeenCalled();
+  });
+
   it("records transcript projection metadata for native locations", async () => {
     const storePath = `/tmp/openclaw-telegram-location-context-${process.pid}-${Date.now()}.json`;
     const cfg = { session: { store: storePath } };
@@ -1402,6 +1483,53 @@ describe("sendMessageTelegram", () => {
       .map((call) => inputRichBlocksToPlainText(call[0]?.rich_message.blocks ?? []))
       .join("\n");
     expect(plain).toContain("paragraph 500");
+  });
+
+  it("keeps recursive list and album payloads within Telegram transport limits", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const list = Array.from({ length: 250 }, (_, index) => `${index + 1}. item ${index + 1}`).join(
+      "\n",
+    );
+    const photos = Array.from(
+      { length: 51 },
+      (_, index) => `<img src="https://example.com/${index}.jpg"/>`,
+    ).join("");
+
+    await sendMessageTelegram(
+      "123",
+      `${list}\n\n<tg-collage>${photos}<figcaption>Album</figcaption></tg-collage>`,
+      {
+        cfg: { channels: { telegram: { richMessages: true } } },
+        token: "tok",
+      },
+    );
+
+    const requests: Array<RichMessageTestPayload | undefined> =
+      botRawApi.sendRichMessage.mock.calls.map((call) => call[0]?.rich_message);
+    const blocks = requests.flatMap((request) => request?.blocks ?? []);
+    const items = blocks.flatMap((block) => (block.type === "list" ? block.items : []));
+    const albums = blocks.filter((block) => block.type === "collage");
+
+    expect(requests.length).toBeGreaterThan(1);
+    expect(requests.every((request) => countInputRichBlocks(request?.blocks ?? []) <= 500)).toBe(
+      true,
+    );
+    expect(
+      requests.every(
+        (request) =>
+          (request?.blocks ?? []).reduce(
+            (total, block) => total + countInputRichBlockMedia(block),
+            0,
+          ) <= 50,
+      ),
+    ).toBe(true);
+    expect(items.map((item) => item.value)).toEqual(
+      Array.from({ length: 250 }, (_, index) => index + 1),
+    );
+    expect(albums.flatMap((album) => album.blocks)).toHaveLength(51);
+    expect(albums.flatMap((album) => (album.caption ? [album.caption.text] : []))).toEqual([
+      "Album",
+    ]);
   });
 
   it("applies rich entity detection skip to every chunk of the document", async () => {
@@ -1831,6 +1959,107 @@ describe("sendMessageTelegram", () => {
     expect(cursor.complete).toBe(false);
   });
 
+  it("finalizes the visible chunk when Telegram rejects an invisible tail", async () => {
+    const storePath = `/tmp/openclaw-telegram-empty-tail-${process.pid}-${Date.now()}.json`;
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-empty-tail",
+    });
+    const onDeliveryResult = vi.fn();
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 71, chat: { id: "123" } })
+      .mockRejectedValueOnce(new Error("Bad Request: text must be non-empty"))
+      .mockRejectedValueOnce(new Error("Bad Request: text must be non-empty"));
+    botApi.editMessageReplyMarkup.mockResolvedValueOnce({ message_id: 71 });
+
+    const result = await sendMessageTelegram("123", `${"A".repeat(4000)}\u200B\u200B`, {
+      cfg: { session: { store: storePath } },
+      token: "tok",
+      textMode: "html",
+      buttons: [[{ text: "OK", callback_data: "ok" }]],
+      onDeliveryResult,
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(3);
+    expect(botApi.editMessageReplyMarkup).toHaveBeenCalledWith("123", 71, {
+      reply_markup: { inline_keyboard: [[{ text: "OK", callback_data: "ok" }]] },
+    });
+    expect(result.messageId).toBe("71");
+    expect(result.meta?.telegramHasInlineKeyboard).toBe(true);
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.meta?.telegramHasInlineKeyboard).toBe(false);
+    const cached = await createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    }).get({ accountId: "default", chatId: "123", messageId: "71" });
+    expect(cached?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: { ...cursor.source, partIndex: 0, finalPart: true },
+    });
+  });
+
+  it("reports partial delivery when the final keyboard retrofit fails", async () => {
+    const storePath = `/tmp/openclaw-telegram-empty-tail-keyboard-failure-${process.pid}-${Date.now()}.json`;
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-empty-tail-keyboard-failure",
+    });
+    const emptyError = new Error("Bad Request: text must be non-empty");
+    const retrofitError = new Error("keyboard retrofit failed");
+    const onDeliveryResult = vi.fn();
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 72, chat: { id: "123" } })
+      .mockRejectedValueOnce(emptyError)
+      .mockRejectedValueOnce(emptyError);
+    botApi.editMessageReplyMarkup.mockRejectedValueOnce(retrofitError);
+
+    let observed: unknown;
+    try {
+      await sendMessageTelegram("123", `${"A".repeat(4000)}\u200B\u200B`, {
+        cfg: { session: { store: storePath } },
+        token: "tok",
+        textMode: "html",
+        buttons: [[{ text: "OK", callback_data: "ok" }]],
+        onDeliveryResult,
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["72"]);
+    expect(botApi.editMessageReplyMarkup).toHaveBeenCalledWith("123", 72, {
+      reply_markup: { inline_keyboard: [[{ text: "OK", callback_data: "ok" }]] },
+    });
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.messageId).toBe("72");
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.meta?.telegramHasInlineKeyboard).toBe(false);
+    const cached = await createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    }).get({ accountId: "default", chatId: "123", messageId: "72" });
+    expect(cached?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: { ...cursor.source, partIndex: 0, finalPart: true },
+    });
+  });
+
+  it("fails when every Telegram chunk renders empty", async () => {
+    const emptyError = new Error("Bad Request: text must be non-empty");
+    botApi.sendMessage.mockRejectedValue(emptyError);
+
+    await expect(
+      sendMessageTelegram("123", "\u200B\u200B", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        textMode: "html",
+      }),
+    ).rejects.toBe(emptyError);
+
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("fails when every Telegram chunk is rejected", async () => {
     const rejection = createChunkRejection();
     botApi.sendMessage.mockRejectedValue(rejection);
@@ -2201,6 +2430,7 @@ describe("sendMessageTelegram", () => {
     const chatId = "-1001234567890";
     const sendPhoto = vi.fn().mockResolvedValue({
       message_id: 58,
+      message_thread_id: 99,
       chat: { id: chatId },
     });
     const api = { sendPhoto } as unknown as {
@@ -2234,10 +2464,12 @@ describe("sendMessageTelegram", () => {
 
     const sendPhoto = vi.fn().mockResolvedValue({
       message_id: 70,
+      message_thread_id: 271,
       chat: { id: chatId },
     });
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 71,
+      message_thread_id: 271,
       chat: { id: chatId },
     });
     const api = { sendPhoto, sendMessage } as unknown as {
@@ -2277,6 +2509,123 @@ describe("sendMessageTelegram", () => {
       { platformMessageId: "70", kind: "media", index: 0 },
       { platformMessageId: "71", kind: "text", index: 1 },
     ]);
+  });
+
+  it("stops an oversized-caption follow-up when media lands in the wrong topic", async () => {
+    const chatId = "-1001234567890";
+    const longText = "A".repeat(1100);
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 70,
+      message_thread_id: 272,
+      chat: { id: chatId, type: "supergroup" },
+    });
+    const sendMessage = vi.fn();
+    const onDeliveryResult = vi.fn();
+    const api = { sendPhoto, sendMessage } as unknown as TelegramApiOverride;
+    mockLoadedMedia({ contentType: "image/jpeg", fileName: "photo.jpg" });
+
+    let observed: unknown;
+    try {
+      await sendMessageTelegram(chatId, longText, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        mediaUrl: "https://example.com/photo.jpg",
+        messageThreadId: 271,
+        onDeliveryResult,
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
+      caption: undefined,
+      message_thread_id: 271,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(observed.deliveryResult.messageIds).toEqual(["70"]);
+    expect(observed.deliveryResult.receipt).toMatchObject({
+      primaryPlatformMessageId: "70",
+      platformMessageIds: ["70"],
+      threadId: "272",
+      parts: [expect.objectContaining({ platformMessageId: "70", kind: "media" })],
+    });
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.receipt?.threadId).toBe("272");
+  });
+
+  it("sends oversized voice captions as a voice note followed by text", async () => {
+    const chatId = "123";
+    const longText = "A".repeat(1100);
+    botApi.sendVoice.mockResolvedValue({ message_id: 70, chat: { id: chatId } });
+    botApi.sendMessage.mockResolvedValue({ message_id: 71, chat: { id: chatId } });
+    mockLoadedMedia({
+      buffer: Buffer.from("voice"),
+      contentType: "audio/ogg",
+      fileName: "voice.ogg",
+    });
+
+    const result = await sendMessageTelegram(chatId, longText, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      mediaUrl: "https://example.com/voice.ogg",
+      asVoice: true,
+    });
+
+    expectMediaSendCall(
+      firstMockCall(botApi.sendVoice, "send voice call"),
+      "send voice call",
+      chatId,
+      { caption: undefined },
+    );
+    expect(botApi.sendMessage).toHaveBeenCalledWith(chatId, longText, { parse_mode: "HTML" });
+    expect(result.receipt?.platformMessageIds).toEqual(["70", "71"]);
+  });
+
+  it("finalizes media when its separate text renders empty", async () => {
+    const storePath = `/tmp/openclaw-telegram-empty-media-follow-up-${process.pid}-${Date.now()}.json`;
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-empty-media-follow-up",
+    });
+    const emptyError = new Error("Bad Request: text must be non-empty");
+    const onDeliveryResult = vi.fn();
+    botApi.sendPhoto.mockResolvedValueOnce({ message_id: 70, chat: { id: "123" } });
+    botApi.sendMessage.mockRejectedValue(emptyError);
+    botApi.editMessageReplyMarkup.mockResolvedValueOnce({ message_id: 70 });
+    mockLoadedMedia({ contentType: "image/jpeg", fileName: "photo.jpg" });
+
+    const result = await sendMessageTelegram("123", "\u200B".repeat(1025), {
+      cfg: { session: { store: storePath } },
+      token: "tok",
+      textMode: "html",
+      mediaUrl: "https://example.com/photo.jpg",
+      buttons: [[{ text: "OK", callback_data: "ok" }]],
+      onDeliveryResult,
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    expect(result).toEqual({
+      messageId: "70",
+      chatId: "123",
+      meta: { telegramHasInlineKeyboard: true },
+    });
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(botApi.editMessageReplyMarkup).toHaveBeenCalledWith("123", 70, {
+      reply_markup: { inline_keyboard: [[{ text: "OK", callback_data: "ok" }]] },
+    });
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.meta?.telegramHasInlineKeyboard).toBe(false);
+    const cached = await createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    }).get({ accountId: "default", chatId: "123", messageId: "70" });
+    expect(cached?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: { ...cursor.source, partIndex: 0, finalPart: true },
+    });
   });
 
   it("reports delivered media before a caption follow-up fails", async () => {
@@ -2325,10 +2674,12 @@ describe("sendMessageTelegram", () => {
 
     const sendPhoto = vi.fn().mockResolvedValue({
       message_id: 70,
+      message_thread_id: 271,
       chat: { id: chatId },
     });
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 71,
+      message_thread_id: 271,
       chat: { id: chatId },
     });
     const api = { sendPhoto, sendMessage } as unknown as {
@@ -2778,6 +3129,50 @@ describe("sendMessageTelegram", () => {
     expect(wasSentByBot(chatId, 302)).toBe(true);
   });
 
+  it.each([
+    {
+      name: "location",
+      location: { latitude: 48.858844, longitude: 2.294351 },
+    },
+    {
+      name: "venue",
+      location: {
+        latitude: 48.858844,
+        longitude: 2.294351,
+        name: "Eiffel Tower",
+        address: "Champ de Mars",
+      },
+    },
+  ])("rejects a provider topic mismatch for a native $name", async ({ location }) => {
+    const chatId = "-1001234567890";
+    const providerResult = {
+      message_id: 303,
+      message_thread_id: 100,
+      chat: { id: chatId, type: "supergroup" },
+    };
+    const sendLocation = vi.fn().mockResolvedValue(providerResult);
+    const sendVenue = vi.fn().mockResolvedValue(providerResult);
+
+    let observed: unknown;
+    try {
+      await sendLocationTelegram(`${chatId}:topic:99`, location, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api: { sendLocation, sendVenue } as unknown as TelegramApiOverride,
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["303"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("100");
+    expect(observed).toHaveProperty("message", expect.stringContaining("expected topic 99"));
+  });
+
   it("rejects incomplete Telegram venues", async () => {
     await expect(
       sendLocationTelegram(
@@ -3059,6 +3454,49 @@ describe("sendMessageTelegram", () => {
     vi.useRealTimers();
   });
 
+  it("maps an exhausted request-not-started marker to durable no-dispatch custody", async () => {
+    const chatId = "123";
+    const terminal = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+      name: "HttpError",
+      error: new TelegramRequestNotStartedError(),
+    });
+    const sendMessage = vi.fn().mockRejectedValue(terminal);
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    let observed: unknown;
+    try {
+      await sendMessageTelegram(chatId, "hi", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(observed).toHaveProperty("cause", terminal);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps broad 421-shaped durable send errors ambiguous", async () => {
+    const chatId = "123";
+    const edgeError = Object.assign(new Error("421 Misdirected Request"), { status: 421 });
+    const sendMessage = vi.fn().mockRejectedValue(edgeError);
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    await expect(
+      sendMessageTelegram(chatId, "hi", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).rejects.toBe(edgeError);
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
+
   it("does not retry on non-transient errors", async () => {
     const chatId = "123";
     const sendMessage = vi.fn().mockRejectedValue(new Error("400: Bad Request"));
@@ -3168,6 +3606,7 @@ describe("sendMessageTelegram", () => {
       const sendPhoto = vi.fn().mockRejectedValueOnce(new Error(`400: Bad Request: ${reason}`));
       const sendDocument = vi.fn().mockResolvedValue({
         message_id: 10,
+        message_thread_id: 42,
         chat: { id: "123" },
       });
       mockLoadedMedia({ contentType: "image/png", fileName: "photo.png" });
@@ -3213,6 +3652,117 @@ describe("sendMessageTelegram", () => {
     ).rejects.toThrow("chat migrated");
 
     expect(sendDocument).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "preserves delivery context for voice privacy fallback with rich messages %s",
+    async (richMessages) => {
+      const chatId = "-1001234567890";
+      const storePath = `/tmp/openclaw-telegram-voice-fallback-${process.pid}-${richMessages}.json`;
+      const onDeliveryResult = vi.fn();
+      const cursor = createTelegramPromptContextProjectionCursor({
+        transcriptMessageId: "assistant-voice-fallback",
+      });
+      const buttons = [[{ text: "Open", callback_data: "open" }]];
+      botApi.sendVoice.mockRejectedValueOnce({
+        description: "Bad Request: VOICE_MESSAGES_FORBIDDEN",
+      });
+      const deliveredFallback = {
+        message_id: 77,
+        message_thread_id: 271,
+        chat: { id: chatId },
+      };
+      botApi.sendMessage.mockResolvedValueOnce(deliveredFallback);
+      botRawApi.sendRichMessage.mockResolvedValueOnce(deliveredFallback);
+      mockLoadedMedia({
+        buffer: Buffer.from("voice"),
+        contentType: "audio/ogg",
+        fileName: "note.ogg",
+      });
+
+      const result = await sendMessageTelegram(chatId, "Hello **there**", {
+        cfg: {
+          channels: { telegram: { richMessages } },
+          session: { store: storePath },
+        },
+        token: "tok",
+        mediaUrl: "https://example.com/note.ogg",
+        asVoice: true,
+        messageThreadId: 271,
+        replyToMessageId: 500,
+        buttons,
+        silent: true,
+        onDeliveryResult,
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      });
+
+      expect(botApi.sendVoice).toHaveBeenCalledOnce();
+      const fallback = richMessages ? botRawApi.sendRichMessage : botApi.sendMessage;
+      const unusedFallback = richMessages ? botApi.sendMessage : botRawApi.sendRichMessage;
+      expect(fallback).toHaveBeenCalledOnce();
+      expect(unusedFallback).not.toHaveBeenCalled();
+      const fallbackOptions = richMessages
+        ? botRawApi.sendRichMessage.mock.calls[0]?.[0]
+        : botApi.sendMessage.mock.calls[0]?.[2];
+      expect(fallbackOptions).toEqual(
+        expect.objectContaining({
+          message_thread_id: 271,
+          disable_notification: true,
+          ...(richMessages
+            ? { reply_parameters: { message_id: 500, allow_sending_without_reply: true } }
+            : { reply_to_message_id: 500, allow_sending_without_reply: true }),
+          reply_markup: { inline_keyboard: buttons },
+        }),
+      );
+      expect(onDeliveryResult).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: "77",
+          chatId,
+          meta: { telegramDeliveredText: "Hello there", telegramHasInlineKeyboard: true },
+          receipt: expect.objectContaining({
+            primaryPlatformMessageId: "77",
+            platformMessageIds: ["77"],
+            threadId: "271",
+          }),
+        }),
+      );
+      const cached = await createTelegramMessageCache({
+        scope: resolveTelegramMessageCacheScope(storePath),
+      }).get({ accountId: "default", chatId, messageId: "77" });
+      expect(cached?.promptContextProjectionMarker).toEqual({
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 0, finalPart: true },
+      });
+      expect(result).toMatchObject({
+        messageId: "77",
+        chatId,
+        receipt: { primaryPlatformMessageId: "77", platformMessageIds: ["77"], threadId: "271" },
+      });
+    },
+  );
+
+  it.each([
+    { name: "without visible text", text: "   ", reason: "VOICE_MESSAGES_FORBIDDEN" },
+    { name: "for unrelated errors", text: "Visible", reason: "VOICE_MESSAGE_INVALID" },
+  ])("rethrows voice failure $name", async ({ text, reason }) => {
+    const voiceError = new Error(`Bad Request: ${reason}`);
+    botApi.sendVoice.mockRejectedValueOnce(voiceError);
+    mockLoadedMedia({
+      buffer: Buffer.from("voice"),
+      contentType: "audio/ogg",
+      fileName: "note.ogg",
+    });
+
+    await expect(
+      sendMessageTelegram("123", text, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        mediaUrl: "https://example.com/note.ogg",
+        asVoice: true,
+      }),
+    ).rejects.toBe(voiceError);
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -3482,10 +4032,16 @@ describe("sendMessageTelegram", () => {
     for (const testCase of cases) {
       const sendAudio = vi.fn().mockResolvedValue({
         message_id: 10,
+        ...("messageThreadId" in testCase && testCase.messageThreadId !== undefined
+          ? { message_thread_id: testCase.messageThreadId }
+          : {}),
         chat: { id: testCase.chatId },
       });
       const sendVoice = vi.fn().mockResolvedValue({
         message_id: 11,
+        ...("messageThreadId" in testCase && testCase.messageThreadId !== undefined
+          ? { message_thread_id: testCase.messageThreadId }
+          : {}),
         chat: { id: testCase.chatId },
       });
       const api = { sendAudio, sendVoice } as unknown as {
@@ -3551,13 +4107,14 @@ describe("sendMessageTelegram", () => {
     for (const testCase of cases) {
       const sendMessage = vi.fn().mockResolvedValue({
         message_id: testCase.messageId,
+        message_thread_id: 271,
         chat: { id: testCase.chatId },
       });
       const api = { sendMessage } as unknown as {
         sendMessage: typeof sendMessage;
       };
 
-      await sendMessageTelegram(testCase.chatId, testCase.text, {
+      const result = await sendMessageTelegram(testCase.chatId, testCase.text, {
         cfg: TELEGRAM_TEST_CFG,
         token: "tok",
         api,
@@ -3568,15 +4125,114 @@ describe("sendMessageTelegram", () => {
         parse_mode: "HTML",
         message_thread_id: 271,
       });
+      expect(result.receipt?.threadId, testCase.name).toBe("271");
     }
+  });
+
+  it("records the accepted message before rejecting a mismatched topic", async () => {
+    const chatId = "-1001234567890";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 55,
+      message_thread_id: 272,
+      chat: { id: chatId, type: "supergroup" },
+    });
+    const onDeliveryResult = vi.fn();
+
+    let observed: unknown;
+    try {
+      await sendMessageTelegram(chatId, "hello forum", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api: { sendMessage } as unknown as TelegramApiOverride,
+        messageThreadId: 271,
+        onDeliveryResult,
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["55"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("272");
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "55",
+        receipt: expect.objectContaining({ threadId: "272" }),
+      }),
+    );
+  });
+
+  it("stops multipart text after the first provider topic mismatch", async () => {
+    const chatId = "-1001234567890";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 55,
+      message_thread_id: 272,
+      chat: { id: chatId, type: "supergroup" },
+    });
+    const onDeliveryResult = vi.fn();
+
+    let observed: unknown;
+    try {
+      await sendMessageTelegram(chatId, "A".repeat(9000), {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api: { sendMessage } as unknown as TelegramApiOverride,
+        textMode: "html",
+        messageThreadId: 271,
+        buttons: [[{ text: "OK", callback_data: "ok" }]],
+        onDeliveryResult,
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(observed.deliveryResult.messageIds).toEqual(["55"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("272");
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+  });
+
+  it("does not infer a missing private-chat topic as the General forum topic", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 56,
+      chat: { id: "123456789", type: "private" },
+    });
+
+    await expect(
+      sendMessageTelegram("123456789", "hello private topic", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api: { sendMessage } as unknown as TelegramApiOverride,
+        messageThreadId: 1,
+      }),
+    ).rejects.toThrow("topic unknown; expected topic 1");
   });
 
   it("returns a multipart receipt and avoids native replies for chunked first-mode text", async () => {
     const sendMessage = vi
       .fn()
-      .mockResolvedValueOnce({ message_id: 101, chat: { id: "-1001234567890" } })
-      .mockResolvedValueOnce({ message_id: 102, chat: { id: "-1001234567890" } })
-      .mockResolvedValueOnce({ message_id: 103, chat: { id: "-1001234567890" } });
+      .mockResolvedValueOnce({
+        message_id: 101,
+        message_thread_id: 271,
+        chat: { id: "-1001234567890" },
+      })
+      .mockResolvedValueOnce({
+        message_id: 102,
+        message_thread_id: 271,
+        chat: { id: "-1001234567890" },
+      })
+      .mockResolvedValueOnce({
+        message_id: 103,
+        message_thread_id: 271,
+        chat: { id: "-1001234567890" },
+      });
     const api = { sendMessage } as unknown as {
       sendMessage: typeof sendMessage;
     };
@@ -3787,6 +4443,7 @@ describe("sendMessageTelegram", () => {
     const chatId = "-1001234567890";
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 55,
+      message_thread_id: 271,
       chat: { id: chatId },
     });
     const api = { sendMessage } as unknown as {
@@ -3811,6 +4468,7 @@ describe("sendMessageTelegram", () => {
     const body = "incident reply body should stay private";
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 321,
+      message_thread_id: 271,
       chat: { id: chatId },
     });
     const api = { sendMessage } as unknown as {
@@ -3876,6 +4534,7 @@ describe("sendMessageTelegram", () => {
     const fileName = "private-photo.jpg";
     const sendPhoto = vi.fn().mockResolvedValue({
       message_id: 654,
+      message_thread_id: 45,
       chat: { id: chatId },
     });
     const api = { sendPhoto } as unknown as {
@@ -4764,6 +5423,23 @@ describe("editMessageTelegram", () => {
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to plain text when an HTML edit renders empty", async () => {
+    botApi.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: message text is empty"))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "<b>visible</b>", {
+      token: "tok",
+      cfg: {},
+      textMode: "html",
+    });
+
+    expect(botApi.editMessageText).toHaveBeenNthCalledWith(1, "123", 1, "<b>visible</b>", {
+      parse_mode: "HTML",
+    });
+    expect(botApi.editMessageText).toHaveBeenNthCalledWith(2, "123", 1, "visible");
+  });
+
   it("uses editMessageCaption when requested for media captions", async () => {
     botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 
@@ -4964,7 +5640,12 @@ describe("editMessageTelegram", () => {
   ])("refreshes cached $name from Telegram's authoritative edit response", async (testCase) => {
     const storePath = `/tmp/openclaw-telegram-edited-context-${process.pid}-${Date.now()}-${testCase.name}.json`;
     const cfg = { session: { store: storePath } };
-    const chat = { id: -100123, type: "supergroup" as const, title: "Ops" };
+    const chat = {
+      id: -100123,
+      type: "supergroup" as const,
+      title: "Ops",
+      is_forum: true as const,
+    };
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
     });
@@ -5091,6 +5772,16 @@ describe("editMessageTelegram", () => {
 });
 
 describe("sendPollTelegram", () => {
+  async function installPollRegistryStore() {
+    const store = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await store.clear();
+    return store;
+  }
+
   it("sends polls with 12 options", async () => {
     const api = {
       sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
@@ -5168,7 +5859,12 @@ describe("sendPollTelegram", () => {
       { cfg: TELEGRAM_TEST_CFG, token: "t", api: api as unknown as Bot["api"] },
     );
 
-    expect(res).toEqual({ messageId: "123", chatId: "555", pollId: "p1" });
+    expect(res).toMatchObject({
+      messageId: "123",
+      chatId: "555",
+      pollId: "p1",
+      pollAnswerRouting: "unavailable",
+    });
     expect(api.sendPoll).toHaveBeenCalledTimes(1);
     const sendPollMock = api.sendPoll as ReturnType<typeof vi.fn>;
     const sendPollCall = firstMockCall(sendPollMock, "send poll call");
@@ -5177,6 +5873,419 @@ describe("sendPollTelegram", () => {
     expect(sendPollCall[2]).toEqual(["A", "B"]);
     expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(60);
     expect(wasSentByBot("123", 123)).toBe(true);
+  });
+
+  it("records a public poll origin with its resolved topic", async () => {
+    const store = await installPollRegistryStore();
+    botApi.getChatMember.mockResolvedValue({ status: "administrator" });
+    botApi.sendPoll.mockResolvedValue({
+      message_id: 123,
+      message_thread_id: 99,
+      chat: {
+        id: -1001234567890,
+        type: "supergroup",
+        title: "Reviewers",
+        is_forum: true,
+      },
+      poll: { id: "poll-public" },
+    });
+
+    const result = await sendPollTelegram(
+      "-1001234567890:topic:99",
+      { question: " Ready? ", options: [" Yes ", "No "] },
+      {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "999:token",
+        isAnonymous: false,
+      },
+    );
+
+    expect(result.pollAnswerRouting).toBe("enabled");
+    expect(botApi.getChatMember).toHaveBeenCalledWith(-1001234567890, 999);
+    expect(await store.entries()).toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({
+          pollId: "poll-public",
+          chat: {
+            id: -1001234567890,
+            type: "supergroup",
+            title: "Reviewers",
+            is_forum: true,
+          },
+          messageId: 123,
+          threadSpec: { scope: "forum", id: 99 },
+          question: "Ready?",
+          options: ["Yes", "No"],
+        }),
+      }),
+    ]);
+  });
+
+  it.each([
+    {
+      name: "base private chat",
+      to: "555",
+      chat: { id: 555, type: "private" as const, first_name: "Ada" },
+      expected: { scope: "dm" as const },
+    },
+    {
+      name: "bot-private topic",
+      to: "555:topic:42",
+      chat: { id: 555, type: "private" as const, first_name: "Ada" },
+      messageThreadId: 42,
+      expected: { scope: "dm" as const, id: 42 },
+    },
+    {
+      name: "regular group",
+      to: "-100555",
+      chat: { id: -100555, type: "supergroup" as const, title: "Reviewers" },
+      expected: { scope: "none" as const },
+    },
+  ])("records the canonical $name poll scope", async (testCase) => {
+    const store = await installPollRegistryStore();
+    botApi.getChatMember.mockResolvedValue({ status: "administrator" });
+    botApi.sendPoll.mockResolvedValue({
+      message_id: 126,
+      ...(testCase.messageThreadId === undefined
+        ? {}
+        : { message_thread_id: testCase.messageThreadId }),
+      chat: testCase.chat,
+      poll: { id: `poll-${testCase.expected.scope}` },
+    });
+
+    await expect(
+      sendPollTelegram(
+        testCase.to,
+        { question: "Ready?", options: ["Yes", "No"] },
+        { cfg: TELEGRAM_TEST_CFG, token: "999:token", isAnonymous: false },
+      ),
+    ).resolves.toMatchObject({ pollAnswerRouting: "enabled" });
+    expect(await store.entries()).toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({ threadSpec: testCase.expected }),
+      }),
+    ]);
+  });
+
+  it("preserves the accepted General forum scope when Telegram omits its thread id", async () => {
+    const store = await installPollRegistryStore();
+    botApi.getChatMember.mockResolvedValue({ status: "administrator" });
+    botApi.sendPoll.mockResolvedValue({
+      message_id: 127,
+      chat: { id: -100556, type: "supergroup", title: "Forum", is_forum: true },
+      poll: { id: "poll-general" },
+    });
+
+    await expect(
+      sendPollTelegram(
+        "-100556:topic:1",
+        { question: "Ready?", options: ["Yes", "No"] },
+        { cfg: TELEGRAM_TEST_CFG, token: "999:token", isAnonymous: false },
+      ),
+    ).resolves.toMatchObject({ pollAnswerRouting: "enabled" });
+    expect(await store.entries()).toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({ threadSpec: { scope: "forum", id: 1 } }),
+      }),
+    ]);
+  });
+
+  it("reports unavailable routing when the bot cannot verify group voters", async () => {
+    const store = await installPollRegistryStore();
+    botApi.getChatMember.mockResolvedValue({ status: "member" });
+    botApi.sendPoll.mockResolvedValue({
+      message_id: 124,
+      chat: { id: -1001234567890, type: "supergroup", title: "Reviewers" },
+      poll: { id: "poll-non-admin" },
+    });
+
+    await expect(
+      sendPollTelegram(
+        "-1001234567890",
+        { question: "Ready?", options: ["Yes", "No"] },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "999:token",
+          isAnonymous: false,
+        },
+      ),
+    ).resolves.toMatchObject({
+      pollAnswerRouting: "unavailable",
+      warning: expect.stringContaining("not an administrator"),
+    });
+    expect(await store.entries()).toHaveLength(0);
+  });
+
+  const disabledPollRouteCases: Array<{
+    name: string;
+    cfg: Parameters<typeof sendPollTelegram>[2]["cfg"];
+    messageThreadId?: number;
+    omitResultThreadId?: boolean;
+  }> = [
+    {
+      name: "account policy",
+      cfg: { channels: { telegram: { groupPolicy: "disabled" as const } } },
+      messageThreadId: undefined,
+    },
+    {
+      name: "group scope",
+      cfg: {
+        channels: {
+          telegram: {
+            groups: { "-1001234567890": { enabled: false } },
+          },
+        },
+      },
+      messageThreadId: undefined,
+    },
+    {
+      name: "topic policy",
+      cfg: {
+        channels: {
+          telegram: {
+            groupPolicy: "open" as const,
+            groups: {
+              "-1001234567890": {
+                topics: { "99": { groupPolicy: "disabled" as const } },
+              },
+            },
+          },
+        },
+      },
+      messageThreadId: 99,
+    },
+    {
+      name: "General topic policy without a returned thread id",
+      cfg: {
+        channels: {
+          telegram: {
+            groupPolicy: "open" as const,
+            groups: {
+              "-1001234567890": {
+                topics: { "1": { groupPolicy: "disabled" as const } },
+              },
+            },
+          },
+        },
+      },
+      messageThreadId: 1,
+      omitResultThreadId: true,
+    },
+    {
+      name: "topic scope",
+      cfg: {
+        channels: {
+          telegram: {
+            groups: {
+              "-1001234567890": { topics: { "99": { enabled: false } } },
+            },
+          },
+        },
+      },
+      messageThreadId: 99,
+    },
+  ];
+
+  it.each(disabledPollRouteCases)(
+    "reports unavailable routing for disabled $name",
+    async ({ cfg, messageThreadId, omitResultThreadId }) => {
+      const store = await installPollRegistryStore();
+      botApi.sendPoll.mockResolvedValue({
+        message_id: 125,
+        ...(messageThreadId === undefined || omitResultThreadId
+          ? {}
+          : { message_thread_id: messageThreadId }),
+        chat: { id: -1001234567890, type: "supergroup", title: "Reviewers" },
+        poll: { id: "poll-disabled" },
+      });
+
+      await expect(
+        sendPollTelegram(
+          "-1001234567890",
+          { question: "Ready?", options: ["Yes", "No"] },
+          {
+            cfg,
+            token: "999:token",
+            isAnonymous: false,
+            ...(messageThreadId === undefined ? {} : { messageThreadId }),
+          },
+        ),
+      ).resolves.toMatchObject({
+        pollAnswerRouting: "unavailable",
+        warning: expect.stringContaining("inbound messages are disabled"),
+      });
+      expect(botApi.getChatMember).not.toHaveBeenCalled();
+      expect(await store.entries()).toHaveLength(0);
+    },
+  );
+
+  it("reports unavailable routing for channel polls", async () => {
+    const store = await installPollRegistryStore();
+    botApi.sendPoll.mockResolvedValue({
+      message_id: 125,
+      chat: { id: -1001234567890, type: "channel", title: "Announcements" },
+      poll: { id: "poll-channel" },
+    });
+
+    await expect(
+      sendPollTelegram(
+        "-1001234567890",
+        { question: "Ready?", options: ["Yes", "No"] },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "999:token",
+          isAnonymous: false,
+        },
+      ),
+    ).resolves.toMatchObject({
+      pollAnswerRouting: "unavailable",
+      warning: expect.stringContaining("not supported for Telegram channels"),
+    });
+    expect(botApi.getChatMember).not.toHaveBeenCalled();
+    expect(await store.entries()).toHaveLength(0);
+  });
+
+  it("prepares a fast poll route without waiting for registration", async () => {
+    const entry = {
+      pollId: "poll-fast-answer",
+      chat: { id: -1001234567890, type: "supergroup" as const, title: "Reviewers" },
+      messageId: 125,
+      threadSpec: { scope: "none" as const },
+      question: "Ready?",
+      options: ["Yes", "No"],
+    };
+    const registration = beginTelegramPollRegistration({ entry });
+    const update = {
+      poll_answer: {
+        poll_id: "poll-fast-answer",
+        option_ids: [0],
+        user: { id: 9, first_name: "Ada", is_bot: false },
+      },
+    };
+    prepareTelegramPollAnswerContext({ update });
+    expect(getPreparedTelegramPollAnswer(update)).toMatchObject({
+      entry: { pollId: "poll-fast-answer", chat: { id: -1001234567890 } },
+      registrationPending: true,
+    });
+
+    let settlementFinished = false;
+    const settlement = settleTelegramPollAnswerContext({ update }).then(() => {
+      settlementFinished = true;
+    });
+    await Promise.resolve();
+    expect(settlementFinished).toBe(false);
+    registration.complete(entry);
+    await settlement;
+    expect(getPreparedTelegramPollAnswer(update)).toEqual({ entry });
+  });
+
+  it("does not reread or delay unknown poll answers", async () => {
+    const store = await installPollRegistryStore();
+    const syncStore = createPluginStateSyncKeyedStoreForTests<TelegramPollRegistryEntry>(
+      "telegram",
+      {
+        namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+        maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      },
+    );
+    const lookup = vi.spyOn(syncStore, "lookup");
+    setTelegramRuntime({
+      state: {
+        openKeyedStore: (() => store) as TelegramRuntime["state"]["openKeyedStore"],
+        openSyncKeyedStore: (() => syncStore) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+    const update = {
+      update_id: 13,
+      poll_answer: {
+        poll_id: "poll-unknown",
+        user: { id: 10, is_bot: false, first_name: "Ada" },
+        option_ids: [0],
+      },
+    };
+
+    prepareTelegramPollAnswerContext({ update });
+
+    expect(getPreparedTelegramPollAnswer(update)?.entry).toBeNull();
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports default anonymous polls as unavailable without registering them", async () => {
+    const store = await installPollRegistryStore();
+    const api = {
+      sendPoll: vi.fn(async () => ({
+        message_id: 123,
+        chat: { id: 555, type: "private", first_name: "Ada" },
+        poll: { id: "poll-anonymous" },
+      })),
+    };
+
+    await expect(
+      sendPollTelegram(
+        "555",
+        { question: "Ready?", options: ["Yes", "No"] },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "t",
+          api: api as unknown as Bot["api"],
+        },
+      ),
+    ).resolves.toMatchObject({
+      pollAnswerRouting: "unavailable",
+      warning: expect.stringContaining("Send a public poll"),
+    });
+
+    expect(await store.entries()).toHaveLength(0);
+  });
+
+  it("does not retry an already-sent poll when origin storage fails", async () => {
+    const pollRegistryKey = "default:poll-write-error";
+    const register = vi.fn(async (key: string) => {
+      if (key === pollRegistryKey) {
+        throw new Error("registry db unavailable");
+      }
+    });
+    setTelegramRuntime({
+      state: {
+        openKeyedStore: (() => ({
+          register,
+        })) as unknown as TelegramRuntime["state"]["openKeyedStore"],
+        openSyncKeyedStore: (() =>
+          sentMessageStore) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+    const api = {
+      sendPoll: vi.fn(async () => ({
+        message_id: 123,
+        chat: { id: 555, type: "private", first_name: "Ada" },
+        poll: { id: "poll-write-error" },
+      })),
+    };
+
+    await expect(
+      sendPollTelegram(
+        "555",
+        { question: "Ready?", options: ["Yes", "No"] },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "t",
+          api: api as unknown as Bot["api"],
+          isAnonymous: false,
+        },
+      ),
+    ).resolves.toEqual({
+      messageId: "123",
+      chatId: "555",
+      pollId: "poll-write-error",
+      pollAnswerRouting: "unavailable",
+      warning:
+        "Poll sent, but answers cannot reach the agent because routing state could not be saved. Ask the user to reply in text.",
+    });
+    expect(api.sendPoll).toHaveBeenCalledTimes(1);
+    expect(register.mock.calls.filter(([key]) => key === pollRegistryKey)).toHaveLength(1);
   });
 
   it("fails poll sends instead of retrying without message_thread_id", async () => {

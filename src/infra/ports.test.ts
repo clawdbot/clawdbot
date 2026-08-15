@@ -1,4 +1,6 @@
 // Covers gateway port availability and diagnostics behavior.
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import net from "node:net";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
@@ -23,6 +25,7 @@ let handlePortError: typeof import("./ports.js").handlePortError;
 let PortInUseError: typeof import("./ports.js").PortInUseError;
 
 const describeUnix = process.platform === "win32" ? describe.skip : describe;
+const describeWindows = process.platform === "win32" ? describe : describe.skip;
 
 type CommandResult = { stdout: string; stderr: string; code: number };
 type CommandReply = CommandResult | Error;
@@ -155,6 +158,13 @@ afterEach(() => {
 });
 
 describe("ports helpers", () => {
+  it("keeps process inspection behind the busy-port diagnostics boundary", () => {
+    const source = readFileSync(new URL("./ports.ts", import.meta.url), "utf8");
+
+    expect(source).not.toMatch(/(?:import|export)[^;]+from "\.\/ports-inspect\.js"/u);
+    expect(source).toContain('await import("./ports-inspect.js")');
+  });
+
   it("ensurePortAvailable rejects when port busy", async () => {
     const server = net.createServer();
     const address = await listenServer(server, 0);
@@ -655,13 +665,109 @@ describeUnix("inspectPortUsage", () => {
 });
 
 describe("inspectPortUsage on Windows", () => {
+  it("classifies SSH through locale-independent tasklist CSV output", async () => {
+    setPlatform("win32");
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (command === getWindowsSystem32ExePath("netstat.exe")) {
+        return commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n");
+      }
+      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
+        return argv.includes("CSV")
+          ? commandOutput('"ssh.exe","4242","Console","1","10,000 K"\r\n')
+          : commandOutput("Abbildname: ssh.exe\r\n");
+      }
+      return failedCommand();
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.listeners[0]?.command).toBe("ssh.exe");
+    expect(result.hints).toContain(
+      "SSH tunnel already bound to this port. Close the tunnel or use a different local port in -L.",
+    );
+    expect(result.hints).not.toContain("Another process is listening on this port.");
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      [getWindowsSystem32ExePath("tasklist.exe"), "/FI", "PID eq 4242", "/FO", "CSV", "/NH"],
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    {
+      name: "accepts a quoted image name containing a comma",
+      output: '"ssh,helper.exe","4242","Console","1","10,000 K"\r\n',
+      command: "ssh,helper.exe",
+    },
+    {
+      name: "rejects a row for a different PID",
+      output: '"ssh.exe","4243","Console","1","10,000 K"\r\n',
+      command: undefined,
+    },
+    {
+      name: "rejects localized no-task information",
+      output: "INFORMATION: Keine Tasks entsprechen den angegebenen Kriterien.\r\n",
+      command: undefined,
+    },
+    {
+      name: "rejects an unquoted row",
+      output: "ssh.exe,4242,Console,1,10,000 K\r\n",
+      command: undefined,
+    },
+    {
+      name: "rejects a truncated quoted row",
+      output: '"ssh.exe","4242"\r\n',
+      command: undefined,
+    },
+  ])("$name", async ({ output, command }) => {
+    mockWindowsCommands({
+      netstat: commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"),
+      tasklist: commandOutput(output),
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.listeners[0]?.command).toBe(command);
+  });
+
+  it.each([
+    { name: "nonzero tasklist exit", tasklist: commandOutput("", 1, "access denied") },
+    { name: "tasklist timeout", tasklist: new Error("tasklist timed out") },
+  ])("keeps generic diagnostics after $name", async ({ tasklist }) => {
+    mockWindowsCommands({
+      netstat: commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"),
+      tasklist,
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.listeners[0]?.command).toBeUndefined();
+    expect(result.hints).toContain("Another process is listening on this port.");
+  });
+
+  it("preserves command-line classification when tasklist output is unavailable", async () => {
+    mockWindowsCommands({
+      netstat: commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"),
+      tasklist: commandOutput("", 1),
+      powershell: commandOutput(
+        '"C:\\Windows\\System32\\OpenSSH\\ssh.exe" -N -L 18789:localhost:18789 host\r\n',
+      ),
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.hints).toContain(
+      "SSH tunnel already bound to this port. Close the tunnel or use a different local port in -L.",
+    );
+  });
+
   it("reports established gateway client connections from netstat", async () => {
     mockWindowsCommands({
       netstat: commandOutput(
         "  TCP    127.0.0.1:50123    127.0.0.1:18789    ESTABLISHED    4242\r\n" +
           "  TCP    127.0.0.1:50124    198.51.100.7:18789  ESTABLISHED    5000\r\n",
       ),
-      tasklist: commandOutput("Image Name: node.exe\r\n"),
+      tasklist: commandOutput('"node.exe","4242","Console","1","10,000 K"\r\n'),
       powershell: commandOutput(
         '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js logs --follow\r\n',
       ),
@@ -681,7 +787,7 @@ describe("inspectPortUsage on Windows", () => {
   it("uses PowerShell process command lines to classify OpenClaw listeners", async () => {
     mockWindowsCommands({
       netstat: commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"),
-      tasklist: commandOutput("Image Name: node.exe\r\n"),
+      tasklist: commandOutput('"node.exe","4242","Console","1","10,000 K"\r\n'),
       powershell: commandOutput(
         '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway run\r\n',
       ),
@@ -706,7 +812,10 @@ describe("inspectPortUsage on Windows", () => {
           "  TCP    127.0.0.1:18789    127.0.0.1:0      ABHOEREN       8999\r\n" +
           "  TCP    127.0.0.1:18789    127.0.0.1:50123  HERGESTELLT    9000\r\n",
       ),
-      tasklist: commandOutput("Image Name: node.exe\r\n"),
+      tasklist: commandOutput(
+        '"node.exe","4242","Console","1","10,000 K"\r\n' +
+          '"node.exe","4243","Console","1","10,000 K"\r\n',
+      ),
       powershell: commandOutput("node.exe C:\\openclaw\\dist\\index.js gateway run\r\n"),
     });
 
@@ -736,7 +845,7 @@ describe("inspectPortUsage on Windows", () => {
   it("falls back to wmic when PowerShell cannot read the command line", async () => {
     mockWindowsCommands({
       netstat: commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"),
-      tasklist: commandOutput("Image Name: node.exe\r\n"),
+      tasklist: commandOutput('"node.exe","4242","Console","1","10,000 K"\r\n'),
       powershell: commandOutput("", 1, "access denied"),
       wmic: commandOutput("CommandLine=node.exe C:\\openclaw\\dist\\index.js gateway run\r\n"),
     });
@@ -746,5 +855,18 @@ describe("inspectPortUsage on Windows", () => {
     expect(result.listeners[0]?.commandLine).toContain("openclaw");
     const commandNames = runCommandWithTimeoutMock.mock.calls.map(([argv]) => argv[0]);
     expect(commandNames).toContain(getWindowsWmicExePath());
+  });
+});
+
+describeWindows("native tasklist CSV contract", () => {
+  it("emits a quoted image and exact PID row", () => {
+    const result = spawnSync(
+      getWindowsSystem32ExePath("tasklist.exe"),
+      ["/FI", `PID eq ${process.pid}`, "/FO", "CSV", "/NH"],
+      { encoding: "utf8", windowsHide: true },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(new RegExp(`^"[^"]+","${process.pid}",`, "m"));
   });
 });

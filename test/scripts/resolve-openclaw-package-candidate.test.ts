@@ -5,6 +5,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
@@ -22,7 +23,7 @@ import {
   runCommandForTest,
   signalChildProcessTree,
   validateOpenClawPackageSpec,
-} from "../../scripts/resolve-openclaw-package-candidate.mjs";
+} from "../../scripts/resolve-openclaw-package-candidate.mts";
 
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
@@ -110,7 +111,7 @@ afterEach(async () => {
 
 describe("resolve-openclaw-package-candidate", () => {
   it("allows Unreleased notes when packaging an exact ref candidate", () => {
-    const script = readFileSync("scripts/resolve-openclaw-package-candidate.mjs", "utf8");
+    const script = readFileSync("scripts/resolve-openclaw-package-candidate.mts", "utf8");
     const refPackageBuild = script.slice(
       script.indexOf('if (options.source === "ref")'),
       script.indexOf('} else if (options.source === "npm")'),
@@ -179,6 +180,8 @@ describe("resolve-openclaw-package-candidate", () => {
       packageRef: "release/2026.4.27",
       packageSpec: "openclaw@beta",
       packageUrl: "",
+      pluginRegistryOutputDir: "",
+      requiredPluginPackagesJson: "[]",
       source: "npm",
       trustedSourceId: "",
       trustedSourcePolicy: ".github/package-trusted-sources.json",
@@ -640,7 +643,7 @@ describe("resolve-openclaw-package-candidate", () => {
     tempDirs.push(dir);
     const childPidPath = path.join(dir, "child.pid");
     const scriptUrl = pathToFileURL(
-      path.resolve("scripts/resolve-openclaw-package-candidate.mjs"),
+      path.resolve("scripts/resolve-openclaw-package-candidate.mts"),
     ).href;
     let childPid: number | undefined;
     let runnerPid: number | undefined;
@@ -1431,17 +1434,3 @@ describe("resolve-openclaw-package-candidate", () => {
     );
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

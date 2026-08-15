@@ -31,7 +31,7 @@ export function renderConnectCommand(command: string) {
           copyCommand(event);
         }}
       >
-        <code>${command}</code>
+        <code translate="no">${command}</code>
         ${renderCopyButton(command, copyLabel)}
       </div>
     </openclaw-tooltip>

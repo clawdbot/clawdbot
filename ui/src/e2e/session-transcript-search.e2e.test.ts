@@ -146,7 +146,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await captureUiProof("01-initial.png");
 
@@ -232,7 +232,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
     });
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
-    const input = page.getByRole("searchbox", { name: "Search thread transcripts" });
+    const input = page.getByRole("searchbox", { name: "Search session transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await gateway.setMethodResponse("sessions.list", {
       cases: [
@@ -314,7 +314,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await input.fill("needle");
     await input.press("Enter");
@@ -368,7 +368,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
     const submit = search.getByRole("button", { name: "Search" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await input.fill("   ");
@@ -449,7 +449,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(() => input.isDisabled()).toBe(true);
     await page

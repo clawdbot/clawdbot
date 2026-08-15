@@ -1,4 +1,5 @@
 import type { Model } from "../../../llm/types.js";
+import { resolveAgentConfig, resolveSessionAgentIds } from "../../agent-scope.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
@@ -31,6 +32,15 @@ export function resolveEmbeddedRunEffectiveModel(
     nativeModelOwned: boolean;
   },
 ) {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.runParams.sessionKey,
+    config: params.runParams.config,
+    agentId: params.runParams.agentId,
+  });
+  const agentContextTokens = resolveAgentConfig(
+    params.runParams.config ?? {},
+    sessionAgentId,
+  )?.contextTokens;
   return resolveEmbeddedRuntimeModelPolicy({
     cfg: params.runParams.config,
     provider: params.provider,
@@ -42,6 +52,7 @@ export function resolveEmbeddedRunEffectiveModel(
     modelId: params.modelId,
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,
+    agentContextTokens,
   });
 }
 

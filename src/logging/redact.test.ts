@@ -1815,11 +1815,14 @@ describe("redactSensitiveText", () => {
       },
     }`);
 
-    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () =>
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
       expect(redactSensitiveText("ticket internal-12345 should hide")).toBe(
         "ticket *** should hide",
-      ),
-    );
+      );
+      expect(redactSecrets({ detail: "ticket internal-12345 should hide" })).toEqual({
+        detail: "ticket *** should hide",
+      });
+    });
   });
 
   it("redacts built-in query parameters after the default prefilter", () => {

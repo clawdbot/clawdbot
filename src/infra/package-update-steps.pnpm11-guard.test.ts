@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import type { CommandRunner, ResolvedGlobalInstallTarget } from "./update-global.js";
 
@@ -66,7 +66,7 @@ async function expectPathMissing(filePath: string): Promise<void> {
 
 describe("pnpm 11 isolated install preflight", () => {
   it("rejects grouped installs before dropping sibling packages", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-pnpm-group-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-pnpm-group-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");
       await writePnpmIsolatedPackage({
         globalRoot,
@@ -107,7 +107,7 @@ describe("pnpm 11 isolated install preflight", () => {
   });
 
   it("rejects multiple standalone installs before an alias-wide update", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-pnpm-multiple-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-pnpm-multiple-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");
       await writePnpmIsolatedPackage({
         globalRoot,
@@ -147,7 +147,7 @@ describe("pnpm 11 isolated install preflight", () => {
   });
 
   it("rejects an orphaned invoking install before manager probes", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-pnpm-invoking-orphan-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-pnpm-invoking-orphan-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");
       const packageRoot = path.join(globalRoot, "orphan", "node_modules", "openclaw");
       await writePackageRoot(packageRoot, "1.0.0");
@@ -178,7 +178,7 @@ describe("pnpm 11 isolated install preflight", () => {
   });
 
   it("rejects an orphan whose package symlink shares the active store target", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-pnpm-shared-store-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-pnpm-shared-store-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");
       const activeInstallRoot = path.join(globalRoot, "active");
       const orphanInstallRoot = path.join(globalRoot, "orphan");
@@ -234,7 +234,7 @@ describe("pnpm 11 isolated install preflight", () => {
   });
 
   it("uses the owner-reported custom bin without changing pnpm command resolution", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-pnpm-isolated-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-pnpm-isolated-" }, async (base) => {
       const globalDir = path.join(base, "pnpm-home", "global");
       const globalRoot = path.join(globalDir, "v11");
       const ownerBinDir = path.join(base, "custom-global-bin");
@@ -382,7 +382,7 @@ describe("pnpm 11 isolated install preflight", () => {
   });
 
   it("accepts a replacement pnpm project that reuses the same shared-store package", async () => {
-    await withTempDir(
+    await withTestDir(
       { prefix: "openclaw-package-update-pnpm-shared-replacement-" },
       async (base) => {
         const globalDir = path.join(base, "pnpm-home", "global");
@@ -469,7 +469,7 @@ describe("pnpm 11 isolated install preflight", () => {
   });
 
   it("preserves pnpm local specs before mutating from the owner root", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-pnpm-relative-spec-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-pnpm-relative-spec-" }, async (base) => {
       const globalDir = path.join(base, "pnpm-home", "global");
       const globalRoot = path.join(globalDir, "v11");
       const globalBinDir = path.join(base, "pnpm-home", "bin");
@@ -576,7 +576,7 @@ describe("pnpm 11 isolated install preflight", () => {
   });
 
   it("probes pnpm from its owner root before rejecting a mismatched major", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-pnpm-major-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-pnpm-major-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");
       const globalBinDir = path.join(base, "pnpm-home", "bin");
       const { packageRoot } = await writePnpmIsolatedPackage({
@@ -630,7 +630,7 @@ describe("pnpm 11 isolated install preflight", () => {
   });
 
   it("rejects a pnpm command that owns another global root", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-pnpm-root-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-pnpm-root-" }, async (base) => {
       const globalRoot = path.join(base, "owner", "global", "v11");
       const otherGlobalRoot = path.join(base, "other", "global", "v11");
       const { packageRoot } = await writePnpmIsolatedPackage({
@@ -669,7 +669,7 @@ describe("pnpm 11 isolated install preflight", () => {
   });
 
   it("rejects a pnpm update that leaves only an orphaned old package root", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-pnpm-orphan-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-pnpm-orphan-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");
       const globalBinDir = path.join(base, "pnpm-home", "bin");
       const { activeLink, packageRoot } = await writePnpmIsolatedPackage({
@@ -730,7 +730,7 @@ describe("pnpm 11 isolated install preflight", () => {
   });
 
   it("retries interrupted pnpm package lifecycle repair", async () => {
-    await withTempDir({ prefix: "openclaw-package-update-pnpm-lifecycle-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-package-update-pnpm-lifecycle-" }, async (base) => {
       const globalRoot = path.join(base, "global");
       const packageRoot = path.join(globalRoot, "openclaw");
       await writePackageRoot(packageRoot, "1.0.0");

@@ -49,9 +49,11 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
     env: params.env,
   });
 
-  const [{ resolveManifestProviderAuthChoice }, { resolvePluginSetupProvider }] = await Promise.all(
-    [import("../plugins/provider-auth-choices.js"), import("../plugins/setup-registry.js")],
-  );
+  const [{ resolveManifestProviderAuthChoice }, { resolvePluginSetupProviderCore }] =
+    await Promise.all([
+      import("../plugins/provider-auth-choices.js"),
+      import("../plugins/setup-registry.js"),
+    ]);
   const manifestChoice = resolveManifestProviderAuthChoice(params.authChoice, {
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -59,7 +61,7 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
     includeUntrustedWorkspacePlugins: false,
   });
   if (manifestChoice) {
-    const setupProvider = resolvePluginSetupProvider({
+    const setupProvider = resolvePluginSetupProviderCore({
       provider: manifestChoice.providerId,
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -331,6 +333,7 @@ export async function runSetupModelAuthStep(params: {
     await warnIfModelConfigLooksOff(nextConfig, prompter, {
       agentId: validationTarget.agentId,
       agentDir: validationTarget.agentDir,
+      pendingAuthProfiles: authProfiles,
       validateCatalog: false,
     });
     break;

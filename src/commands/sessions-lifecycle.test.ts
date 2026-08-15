@@ -90,7 +90,7 @@ describe("sessions lifecycle commands", () => {
         expectedSessionId: "session-1",
         archived: true,
       },
-      { defaultTimeoutMs: 30_000 },
+      { defaultTimeoutMs: 10 * 60_000 },
     );
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {
@@ -136,6 +136,39 @@ describe("sessions lifecycle commands", () => {
       2,
     );
   });
+
+  it.each([
+    ["archive", sessionsArchiveCommand, {}],
+    ["delete", sessionsDeleteCommand, { yes: true }],
+  ] as const)(
+    "rejects a key-only listed session before %s mutation",
+    async (_operation, command, options) => {
+      mocks.callGateway.mockResolvedValueOnce(listResult([{ key: "agent:main:key-only" }]));
+      const runtime = createRuntime();
+
+      await command({ keys: ["agent:main:key-only"], ...options, json: true }, runtime);
+
+      expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+      expect(mocks.callGateway.mock.calls[0]?.[0]).toBe("sessions.list");
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        {
+          ok: false,
+          operation: _operation,
+          dryRun: false,
+          results: [
+            {
+              key: "agent:main:key-only",
+              ok: false,
+              status: "failed",
+              error: "Session has no durable identity; lifecycle mutation was not attempted.",
+            },
+          ],
+        },
+        2,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
 
   it("deletes archived sessions with the same gated artifact contract as Control UI", async () => {
     mocks.callGateway

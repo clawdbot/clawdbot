@@ -1332,18 +1332,4 @@ function decodeBedrockBase64(data: string, errorMessage: string): Uint8Array {
   return bytes;
 }
 
-/** Test-only hooks for Bedrock runtime conversion and endpoint policy. */
-const testing = {
-  buildAdditionalModelRequestFields,
-  convertMessages,
-  getConfiguredBedrockRegion,
-  hasConfiguredBedrockProfile,
-  mapThinkingLevelToEffort,
-  resolveSimpleBedrockOptions,
-  shouldUseExplicitBedrockEndpoint,
-};
-
-if (process.env.VITEST === "true") {
-  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockStreamTestApi"), testing);
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

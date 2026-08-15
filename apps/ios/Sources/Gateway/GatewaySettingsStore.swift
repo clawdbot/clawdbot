@@ -70,7 +70,28 @@ enum GatewaySettingsStore {
         var host: String?
         var port: Int?
         var useTLS: Bool
+        var contextPath: String?
         var lastConnectedAtMs: Int?
+
+        init(
+            stableID: String,
+            kind: Kind,
+            name: String,
+            host: String?,
+            port: Int?,
+            useTLS: Bool,
+            contextPath: String? = nil,
+            lastConnectedAtMs: Int?)
+        {
+            self.stableID = stableID
+            self.kind = kind
+            self.name = name
+            self.host = host
+            self.port = port
+            self.useTLS = useTLS
+            self.contextPath = contextPath
+            self.lastConnectedAtMs = lastConnectedAtMs
+        }
 
         var id: GatewayStableIdentifier.Key {
             GatewayStableIdentifier.Key(self.stableID)
@@ -83,6 +104,7 @@ enum GatewaySettingsStore {
                 lhs.host == rhs.host &&
                 lhs.port == rhs.port &&
                 lhs.useTLS == rhs.useTLS &&
+                lhs.contextPath == rhs.contextPath &&
                 lhs.lastConnectedAtMs == rhs.lastConnectedAtMs
         }
     }
@@ -628,6 +650,11 @@ enum GatewaySettingsStore {
         if entry.kind == .manual {
             let host = entry.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !host.isEmpty, let port = entry.port, (1...65535).contains(port) else { return nil }
+            let contextPath = GatewayConnectEndpoint(
+                host: host,
+                port: port,
+                tls: entry.useTLS,
+                contextPath: entry.contextPath).contextPath
             return GatewayRegistryEntry(
                 stableID: stableID,
                 kind: .manual,
@@ -635,6 +662,7 @@ enum GatewaySettingsStore {
                 host: host,
                 port: port,
                 useTLS: entry.useTLS,
+                contextPath: contextPath,
                 lastConnectedAtMs: entry.lastConnectedAtMs)
         }
         return GatewayRegistryEntry(

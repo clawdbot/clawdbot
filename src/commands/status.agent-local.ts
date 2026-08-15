@@ -3,10 +3,10 @@
 
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { listGatewayAgentsBasic, type GatewayAgentOwnership } from "../gateway/agent-list.js";
 import { pathExists } from "../infra/fs-safe.js";
 
 export type AgentLocalStatus = {
@@ -21,7 +21,9 @@ export type AgentLocalStatus = {
 };
 
 type AgentLocalStatusesResult = {
-  defaultId: string;
+  defaultId: string | null;
+  ownership: GatewayAgentOwnership;
+  selectionRequired: boolean;
   agents: AgentLocalStatus[];
   totalSessions: number;
   bootstrapPendingCount: number;
@@ -49,7 +51,7 @@ export async function getAgentLocalStatuses(
     const bootstrapPath = workspaceDir != null ? path.join(workspaceDir, "BOOTSTRAP.md") : null;
     const bootstrapPending = bootstrapPath != null ? await pathExists(bootstrapPath) : null;
 
-    const sessionsPath = resolveStorePath(cfg.session?.store, { agentId });
+    const sessionsPath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const sessions = listSessionEntriesReadOnly({ agentId, storePath: sessionsPath })
       // Global/unknown buckets are aggregate compatibility entries, not agent activity.
       .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
@@ -74,7 +76,11 @@ export async function getAgentLocalStatuses(
   const totalSessions = statuses.reduce((sum, s) => sum + s.sessionsCount, 0);
   const bootstrapPendingCount = statuses.reduce((sum, s) => sum + (s.bootstrapPending ? 1 : 0), 0);
   return {
-    defaultId: agentList.defaultId,
+    // The gateway keeps a projected first id for wire compatibility. Local status must
+    // preserve the selection state so read-only consumers never treat that id as an owner.
+    defaultId: agentList.selectionRequired ? null : agentList.defaultId,
+    ownership: agentList.ownership ?? (agentList.selectionRequired === true ? "explicit" : "sole"),
+    selectionRequired: agentList.selectionRequired === true,
     agents: statuses,
     totalSessions,
     bootstrapPendingCount,

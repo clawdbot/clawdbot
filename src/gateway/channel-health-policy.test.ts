@@ -407,7 +407,14 @@ describe("resolveChannelHealthState", () => {
     const evaluation = evaluateHealth(snapshot);
 
     expect(evaluation).toEqual({ healthy: false, reason: "terminal-disconnect" });
-    expect(resolveChannelHealthState(snapshot, evaluation)).toBe("conflict");
+    expect(
+      resolveChannelHealthState(snapshot, {
+        channelId: "discord",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      }),
+    ).toBe("conflict");
   });
 });
 

@@ -654,6 +654,7 @@ export async function searchKeyword(params: {
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
   boostFallbackRanking?: boolean;
+  rankingQuery?: string;
 }): Promise<Array<SearchRowResult & { textScore: number }>> {
   if (params.limit <= 0) {
     return [];
@@ -738,7 +739,7 @@ export async function searchKeyword(params: {
     const textScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
     const score = params.boostFallbackRanking
       ? scoreFallbackKeywordResult({
-          query: params.query,
+          query: params.rankingQuery ?? params.query,
           path: row.path,
           text: row.text,
           ftsScore: textScore,

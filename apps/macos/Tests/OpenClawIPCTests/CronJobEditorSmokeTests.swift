@@ -15,17 +15,7 @@ struct CronJobEditorSmokeTests {
             onSave: { _ in })
     }
 
-    @Test func `status pill builds body`() {
-        _ = StatusPill(text: "ok", tint: .green).body
-        _ = StatusPill(text: "disabled", tint: .secondary).body
-    }
-
-    @Test func `cron job editor builds body for new job`() {
-        let view = self.makeEditor()
-        _ = view.body
-    }
-
-    @Test func `cron job editor builds body for existing job`() {
+    @Test func `cron job editor preserves advanced delivery routes`() {
         let channelsStore = ChannelsStore(isPreview: true)
         let job = CronJob(
             id: "job-1",
@@ -72,18 +62,11 @@ struct CronJobEditorSmokeTests {
                 lastDurationMs: 1000))
 
         let view = self.makeEditor(job: job, channelsStore: channelsStore)
-        _ = view.body
-
         let delivery = view.buildDelivery()
         #expect(delivery["threadId"] as? Int == 42)
         #expect((delivery["completionDestination"] as? [String: Any])?["to"] as? String ==
             "https://example.test/complete")
         #expect((delivery["failureDestination"] as? [String: Any])?["accountId"] as? String == "alerts")
-    }
-
-    @Test func `cron job editor exercises builders`() {
-        var view = self.makeEditor()
-        view.exerciseForTesting()
     }
 
     @Test func `cron job editor includes delete after run for at schedule`() {

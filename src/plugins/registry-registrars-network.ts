@@ -11,7 +11,11 @@ import {
   resolvePluginRegistrationCapabilities,
   type PluginRegistryState,
 } from "./registry-state.js";
-import type { PluginHttpRouteRegistration, PluginRecord } from "./registry-types.js";
+import type {
+  PluginChannelRegistration,
+  PluginHttpRouteRegistration,
+  PluginRecord,
+} from "./registry-types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginChannelRegistration,
@@ -40,6 +44,7 @@ function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): Gatewa
 export function createNetworkRegistrars(state: PluginRegistryState) {
   const { registry, coreGatewayMethods, pluginsWithChannelRegistrationConflict, pushDiagnostic } =
     state;
+  let reportedLegacyCatalogSkip = false;
 
   const registerGatewayMethod = (
     record: PluginRecord,
@@ -91,6 +96,19 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         source: record.source,
         message: "session catalog requires non-empty id and label",
       });
+      return;
+    }
+    if (!state.allowProcessHomeSessionCatalogs && provider.supportsProcessHomeIsolation !== true) {
+      if (!reportedLegacyCatalogSkip) {
+        reportedLegacyCatalogSkip = true;
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            "external session catalog skipped in isolated state: provider must declare supportsProcessHomeIsolation",
+        });
+      }
       return;
     }
     const existing = registry.sessionCatalogs.find((entry) => entry.provider.id === id);
@@ -284,6 +302,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
     mode: PluginRegistrationMode = "full",
+    resolveChannelRuntime?: PluginChannelRegistration["resolveChannelRuntime"],
   ) => {
     if (record.origin === "workspace" && !record.enabled) {
       pushDiagnostic({
@@ -314,6 +333,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       if (existingRuntime.pluginId === record.id) {
         existingRuntime.plugin = plugin;
         existingRuntime.pluginName = record.name;
+        existingRuntime.resolveChannelRuntime = resolveChannelRuntime;
         existingRuntime.origin = record.origin;
         existingRuntime.source = record.source;
         existingRuntime.rootDir = record.rootDir;
@@ -376,6 +396,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
+      resolveChannelRuntime,
       origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,

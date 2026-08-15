@@ -152,7 +152,7 @@ describe("gateway startup log", () => {
     ]);
   });
 
-  it("logs one dev suppression notice without an ambient configured-channel warning", async () => {
+  it("logs one suppression notice without an ambient configured-channel warning", async () => {
     const manifestRecords = [
       createManifestRecord({
         id: "discord",
@@ -185,7 +185,7 @@ describe("gateway startup log", () => {
 
     expect(warn.mock.calls).toEqual([
       [
-        "dev gateway suppressed ambient channel auto-configuration for 1 channel: discord. Use --dev-ambient-channels to re-enable ambient channel triggers.",
+        "gateway suppressed ambient channel auto-configuration for 1 channel: discord. Configure channels.<id> (openclaw channels add <id>) to enable the channel, or pass --ambient-channels to allow ambient env credentials.",
       ],
     ]);
     expect(warn.mock.calls.flat().join("\n")).not.toContain("channels.discord is configured");

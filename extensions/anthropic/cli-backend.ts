@@ -11,6 +11,7 @@ import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
+import { parseClaudeCliJsonlEvent } from "./cli-output.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -149,6 +150,38 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     toolAvailabilityEnforcement: "execution-args",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
+    manualCompaction: {
+      buildPrompt: (customInstructions) => {
+        const instructions = customInstructions?.trim();
+        return instructions ? `/compact ${instructions}` : "/compact";
+      },
+      input: "arg",
+      validateOutput: (rawOutput) => {
+        for (const line of rawOutput.split("\n")) {
+          try {
+            const event = JSON.parse(line) as {
+              compact_result?: unknown;
+              type?: unknown;
+              subtype?: unknown;
+            };
+            // Claude Code 2.0.76, 2.1.225, and 2.1.226 emit these terminal
+            // records; system/status with status=compacting is progress only.
+            if (
+              event.compact_result === "success" ||
+              (event.type === "system" && event.subtype === "compact_boundary")
+            ) {
+              return { ok: true };
+            }
+          } catch {
+            // Ignore non-JSON process noise; the positive acknowledgement is authoritative.
+          }
+        }
+        return {
+          ok: false,
+          reason: "Claude CLI did not confirm that native compaction ran.",
+        };
+      },
+    },
     // Anthropic routes direct anthropic-messages calls on subscription OAuth
     // tokens to metered extra-usage billing (or rejects them without balance);
     // opted-in embedded runs on subscription credentials execute through this
@@ -237,6 +270,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
           }
         : undefined;
     },
+    parseJsonlEvent: parseClaudeCliJsonlEvent,
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
   };
 }

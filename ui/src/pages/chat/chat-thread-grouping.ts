@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -7,13 +8,13 @@ import type { ChatItem, MessageGroup, ToolCard } from "../../lib/chat/chat-types
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
-import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { resolveMessageToolUseId, resolveToolBlockId } from "./chat-thread-items.ts";
 import {
-  resolveMessageToolUseId,
-  resolveToolBlockId,
+  assistantGroupIsForwardedBoundary,
+  chatItemStartsUserTurn,
   safeNormalizeMessage,
-} from "./chat-thread-items.ts";
+} from "./chat-turn-boundary.ts";
 
 export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
   const record = asRecord(message);
@@ -347,10 +348,8 @@ function resolveToolResultCallId(item: ChatItem): string | undefined {
       }
     }
   }
-  if (resultIds.size > 1) {
-    return undefined;
-  }
-  return resultIds.values().next().value ?? resolveMessageToolUseId(message);
+  const resultId = resultIds.values().next().value;
+  return resultIds.size > 1 ? undefined : (resultId ?? resolveMessageToolUseId(message));
 }
 
 function refreshOpenCallIds(
@@ -363,24 +362,23 @@ function refreshOpenCallIds(
       openCallIndexes.delete(callId);
     }
   }
-  const item = coalesced[callIndex];
-  if (!item) {
-    return;
-  }
-  for (const callId of unresolvedToolCallIds(item)) {
+  for (const callId of unresolvedToolCallIds(coalesced[callIndex]!)) {
     openCallIndexes.set(callId, callIndex);
   }
 }
 
 export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
   const coalesced: ChatItem[] = [];
+  // Defer backward-pair removal so all call-id indexes stay stable.
+  const suppressedIndexes = new Set<number>();
   // Parallel calls can outnumber any fixed lookback window, so each unresolved
   // call id owns its current transcript item until a non-tool boundary.
   const openCallIndexes = new Map<string, number>();
+  // Keep earlier result slots by call id so later calls can restore complete cards.
+  const openResultIndexes = new Map<string, number>();
   for (const item of items) {
     const resultItems = splitBundledToolResultItems(item);
     const unmatchedResultItems: ChatItem[] = [];
-    let mergedResult = false;
     for (const resultItem of resultItems) {
       const callId = resolveToolResultCallId(resultItem);
       const callIndex = callId ? openCallIndexes.get(callId) : undefined;
@@ -393,16 +391,41 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
       }
       coalesced[callIndex] = merged;
       refreshOpenCallIds(openCallIndexes, coalesced, callIndex);
-      mergedResult = true;
     }
-    if (mergedResult) {
-      for (const unmatched of unmatchedResultItems) {
-        coalesced.push(unmatched);
+    const hasMergedResult = unmatchedResultItems.length < resultItems.length;
+    if (hasMergedResult || resultItems.length > 1) {
+      const orphanResults = hasMergedResult ? unmatchedResultItems : resultItems;
+      for (const orphanResult of orphanResults) {
+        const callId = resolveToolResultCallId(orphanResult);
+        if (callId) {
+          openResultIndexes.set(callId, openResultIndexes.get(callId) ?? coalesced.length);
+        }
+        coalesced.push(orphanResult);
       }
       continue;
     }
 
     const unresolvedCallIds = unresolvedToolCallIds(item);
+    let backwardMerged = item;
+    const matchedResultIndexes: number[] = [];
+    for (const callId of unresolvedCallIds) {
+      const resultIndex = openResultIndexes.get(callId);
+      const orphanResult = resultIndex === undefined ? undefined : coalesced[resultIndex];
+      const merged = orphanResult ? mergeToolCallResultPair(backwardMerged, orphanResult) : null;
+      if (merged && resultIndex !== undefined) {
+        backwardMerged = merged;
+        matchedResultIndexes.push(resultIndex);
+        openResultIndexes.delete(callId);
+      }
+    }
+    if (matchedResultIndexes.length > 0) {
+      const resultIndex = Math.min(...matchedResultIndexes);
+      coalesced[resultIndex] = backwardMerged;
+      matchedResultIndexes.forEach((index) => suppressedIndexes.add(index));
+      suppressedIndexes.delete(resultIndex);
+      refreshOpenCallIds(openCallIndexes, coalesced, resultIndex);
+      continue;
+    }
     if (unresolvedCallIds.size === 1) {
       const callId = unresolvedCallIds.values().next().value;
       const previousIndex = callId ? openCallIndexes.get(callId) : undefined;
@@ -424,66 +447,17 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     }
     if (isToolTimelineItem(item)) {
       // Orphan results keep the window open for later siblings.
+      const callId = resolveToolResultCallId(item);
+      if (callId) {
+        openResultIndexes.set(callId, openResultIndexes.get(callId) ?? coalesced.length - 1);
+      }
       continue;
     }
     // Any other content (user text, assistant reply, dividers) closes the run.
     openCallIndexes.clear();
+    openResultIndexes.clear();
   }
-  return coalesced;
-}
-
-function assistantGroupHasReplyText(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    if (extractTextCached(message)?.trim()) {
-      return true;
-    }
-    return safeNormalizeMessage(message)?.content.some((block) => block.type === "canvas") ?? false;
-  });
-}
-
-function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    const provenance = asRecord(asRecord(message)?.provenance);
-    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
-  });
-}
-
-function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
-  return asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true;
-}
-
-export function annotateToolTurnOutcome(
-  items: Array<ChatItem | MessageGroup>,
-): Array<ChatItem | MessageGroup> {
-  let sawAssistantReply = false;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (!item || item.kind !== "group") {
-      continue;
-    }
-    const role = item.role.toLowerCase();
-    const forwardedBoundary = role === "assistant" && assistantGroupIsForwardedBoundary(item);
-    const projectedBoundary = groupStartsProjectedTurnBoundary(item);
-    if (role === "user") {
-      sawAssistantReply = false;
-    } else if (role === "assistant") {
-      if (forwardedBoundary) {
-        // Gateway preserves sessions_send provenance when projecting inputs as assistant groups.
-        // Those groups start a new autonomous turn; they are not replies to an earlier tool.
-        sawAssistantReply = false;
-      } else if (assistantGroupHasReplyText(item)) {
-        sawAssistantReply = true;
-      }
-    } else if (role === "tool") {
-      item.turnSucceeded = sawAssistantReply;
-    }
-    if (role !== "user" && !forwardedBoundary && projectedBoundary) {
-      // This group belongs to the new hidden-input turn. Reset only after
-      // processing it so replies from this turn cannot classify older tools.
-      sawAssistantReply = false;
-    }
-  }
-  return items;
+  return coalesced.filter((_, index) => !suppressedIndexes.has(index));
 }
 
 type RenderChatItem = ChatItem | MessageGroup;
@@ -529,19 +503,15 @@ type WorkGroupRenderItem = {
   key: string;
   groups: MessageGroup[];
   durationMs: number | null;
-  hasError: boolean;
+};
+
+type ActivityRunRenderItem = {
+  kind: "activity-run";
+  key: string;
+  groups: MessageGroup[];
 };
 
 type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
-
-function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
-  if (item.kind !== "group") {
-    return false;
-  }
-  // sessions_send projections start a new autonomous turn, same contract as
-  // annotateToolTurnOutcome; they are inputs, not work produced by this turn.
-  return messageGroupStartsTurnBoundary(item);
-}
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (item.kind !== "group" || item.isStreaming) {
@@ -578,15 +548,6 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
   );
 }
 
-function messageGroupStartsTurnBoundary(group: MessageGroup): boolean {
-  const role = group.role.toLowerCase();
-  return (
-    role === "user" ||
-    groupStartsProjectedTurnBoundary(group) ||
-    (role === "assistant" && assistantGroupIsForwardedBoundary(group))
-  );
-}
-
 // History carries no final-vs-commentary marker (commentary exists only as
 // live stream segments), so the last assistant group with visible content
 // stands in for the final reply. Turns whose last content is commentary
@@ -596,17 +557,6 @@ function isFinalReplyGroup(item: TurnRenderItem): boolean {
     isCollapsibleWorkGroup(item) &&
     item.role.toLowerCase() === "assistant" &&
     assistantGroupHasVisibleReplyContent(item)
-  );
-}
-
-function workGroupHasError(groups: MessageGroup[]): boolean {
-  return groups.some(
-    (group) =>
-      group.role.toLowerCase() === "tool" &&
-      group.turnSucceeded !== true &&
-      group.messages.some((entry) =>
-        extractToolCardsCached(entry.message, entry.key).some(isToolCardError),
-      ),
   );
 }
 
@@ -637,7 +587,7 @@ export function collapseCompletedTurnWork(
   const turns: TurnRenderItem[][] = [];
   let currentTurn: TurnRenderItem[] = [];
   for (const item of items) {
-    if (isTurnBoundaryGroup(item) && currentTurn.length > 0) {
+    if (item.kind !== "stream-run" && chatItemStartsUserTurn(item) && currentTurn.length > 0) {
       turns.push(currentTurn);
       currentTurn = [];
     }
@@ -691,10 +641,14 @@ export function collapseCompletedTurnWork(
       continue;
     }
     const boundary = turn[0];
-    const startTimestamp =
-      boundary && boundary.kind === "group" && isTurnBoundaryGroup(boundary)
+    const boundaryTimestamp =
+      boundary &&
+      boundary.kind !== "stream-run" &&
+      chatItemStartsUserTurn(boundary) &&
+      "timestamp" in boundary
         ? boundary.timestamp
-        : firstGroup.timestamp;
+        : null;
+    const startTimestamp = boundaryTimestamp == null ? firstGroup.timestamp : boundaryTimestamp;
     const finalReply = turn[finalReplyIndex] as MessageGroup;
     const endTimestamp = finalReply.timestamp;
     const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
@@ -705,9 +659,42 @@ export function collapseCompletedTurnWork(
       key: `work:${finalReply.key}`,
       groups,
       durationMs,
-      hasError: workGroupHasError(groups),
     });
     result.push(...turn.slice(segmentEnd + 1));
   }
+  return result;
+}
+
+type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
+
+/** Presentation-only rollup for tool groups separated by projected turn boundaries. */
+export function coalesceActivityRuns(
+  items: CompletedTurnRenderItem[],
+  opts: { searchActive?: boolean } = {},
+): Array<CompletedTurnRenderItem | ActivityRunRenderItem> {
+  if (opts.searchActive) {
+    return items;
+  }
+  const result: Array<CompletedTurnRenderItem | ActivityRunRenderItem> = [];
+  let groups: MessageGroup[] = [];
+  const flush = () => {
+    const [first] = groups;
+    if (!first) {
+      return;
+    }
+    result.push(
+      groups.length === 1 ? first : { kind: "activity-run", key: `activity:${first.key}`, groups },
+    );
+    groups = [];
+  };
+  for (const item of items) {
+    if (item.kind === "group" && item.role.toLowerCase() === "tool") {
+      groups.push(item);
+      continue;
+    }
+    flush();
+    result.push(item);
+  }
+  flush();
   return result;
 }

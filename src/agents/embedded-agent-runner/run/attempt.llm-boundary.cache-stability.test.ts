@@ -38,7 +38,7 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   relocateCurrentRuntimeContextCarrierToTail,
 } from "../../internal-runtime-context.js";
-import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

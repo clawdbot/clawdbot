@@ -5,9 +5,10 @@ import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/se
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -29,15 +30,18 @@ import {
   loadSessionUpdatesRuntime,
   routeThreadIdsMatch,
 } from "./get-reply-run-helpers.js";
-import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
+import {
+  REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
+  resolvePreparedReplyQueueState,
+} from "./get-reply-run-queue.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   abortReplyRunBySessionId,
   isReplyRunActiveForSessionId,
-  isReplyRunStreamingForSessionId,
   resolveActiveReplyRunThreadId,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
@@ -48,6 +52,7 @@ import {
   resolveRoutedDeliveryThreadId,
 } from "./routed-delivery-thread.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { getReplySystemEventSessionKey } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
   const {
@@ -67,7 +72,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     workspaceDir,
     isMainSession,
     inboundUserContextPromptJoiner,
-    heartbeatRunScope,
     effectiveQueueMode,
     effectiveResetTriggered,
     explicitThinkingLevelOverride,
@@ -130,19 +134,31 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
-  const rebuildPromptBodies = async () => {
-    if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
+  const drainSystemEventBlocks = async () => {
+    if (useFastReplyRuntime) {
+      return;
+    }
+    const routeSystemEventSessionKey = normalizeOptionalString(getReplySystemEventSessionKey(opts));
+    const systemEventSessionKeys =
+      routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+        ? [routeSystemEventSessionKey, sessionKey]
+        : [sessionKey];
+    for (const systemEventSessionKey of systemEventSessionKeys) {
+      const isCurrentSession = systemEventSessionKey === sessionKey;
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
-        sessionKey,
-        isMainSession,
-        isNewSession,
+        agentId,
+        sessionKey: systemEventSessionKey,
+        isMainSession: isCurrentSession && isMainSession,
+        isNewSession: isCurrentSession && isNewSession,
         suppressHeartbeatOwnedEvents: context.isHeartbeat,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
       }
     }
+  };
+  const rebuildPromptBodies = () => {
     const { activeGoalContext, inboundUserContext } = context.getInboundContext();
     return buildReplyPromptEnvelope({
       ctx,
@@ -278,21 +294,20 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resolveCommandTurnTargetSessionKey(ctx) !== undefined
       ? sessionKey
       : undefined;
-  if (
-    commandTurnContinuationTargetKey === undefined &&
-    providedReplyOperation !== undefined &&
-    providedReplyOperation.result === null &&
-    providedReplyOperation.phase === "queued" &&
-    sessionId !== undefined &&
-    sessionId !== providedReplyOperation.sessionId
-  ) {
-    // Dispatch reserves a queued operation before session init. If stale init
-    // rotates the session, move the reservation so later steer/abort paths
-    // target the session that will actually run. Command-turn continuations
-    // rebind after slot adoption below: rebinding first would collide with a
-    // still-active target operation that owns the same session ID.
-    providedReplyOperation.updateSessionId(sessionId);
-  }
+  const rebindProvidedReplyOperation = (nextSessionId: string) => {
+    if (
+      commandTurnContinuationTargetKey === undefined &&
+      providedReplyOperation !== undefined &&
+      providedReplyOperation.result === null &&
+      providedReplyOperation.phase === "queued" &&
+      nextSessionId !== providedReplyOperation.sessionId
+    ) {
+      // Dispatch can reserve a queued operation before session init discovers the
+      // authoritative row. Keep steer/abort and durable admission on that session.
+      // Command continuations rebind only after adopting the target slot below.
+      providedReplyOperation.updateSessionId(nextSessionId);
+    }
+  };
   const isOwnPreDispatchOperationSession = (candidateSessionId: string | undefined): boolean =>
     providedReplyOperation !== undefined &&
     providedReplyOperation.result === null &&
@@ -316,10 +331,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           sessionEntry)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
+    rebindProvidedReplyOperation(latestSessionId);
     opts?.onSessionPrepared?.({ sessionKey, sessionId: latestSessionId, storePath });
     const sessionFile = storePath
       ? formatSqliteSessionFileMarker({ agentId, sessionId: latestSessionId, storePath })
-      : resolveSessionFilePath(latestSessionId, latestSessionEntry, sessionFilePathOptions);
+      : resolveSessionFilePathCore(latestSessionId, latestSessionEntry, sessionFilePathOptions);
     return { sessionEntry: latestSessionEntry, sessionId: latestSessionId, sessionFile };
   };
   let preparedSessionState = resolvePreparedSessionState();
@@ -349,6 +365,23 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   )
     ? undefined
     : rawActiveSessionIdForInterrupt;
+  const shouldPreemptHeartbeat =
+    !isRoomEvent && !context.isHeartbeat && rawActiveSessionIdForInterrupt !== undefined;
+  const heartbeatPreemption =
+    shouldPreemptHeartbeat && embeddedAgentRuntime
+      ? await embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun(
+          rawActiveSessionIdForInterrupt,
+          REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+        )
+      : "not-heartbeat";
+  if (heartbeatPreemption === "timed-out") {
+    typing.cleanup();
+    return {
+      kind: "reply",
+      reply: { text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT },
+    } as const;
+  }
+  const visibleTurnPreemptsHeartbeat = heartbeatPreemption === "drained";
   if (
     activeRunQueueMode === "interrupt" &&
     !isRoomEvent &&
@@ -382,7 +415,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (useFastReplyRuntime) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
-        authProfileIdSource: preparedSessionState.sessionEntry?.authProfileOverrideSource,
+        authProfileIdSource: resolveSessionAuthProfileOverrideSource(
+          preparedSessionState.sessionEntry,
+        ),
       };
     }
     const shouldUseEphemeralSession = params.autoFallbackPrimaryProbe !== undefined;
@@ -413,7 +448,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       authProfileId: resolvedAuthProfileId,
       authProfileIdSource:
         resolvedAuthProfileId && authSessionEntry?.authProfileOverride === resolvedAuthProfileId
-          ? authSessionEntry.authProfileOverrideSource
+          ? resolveSessionAuthProfileOverrideSource(authSessionEntry)
           : undefined,
     };
   };
@@ -446,10 +481,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const activeSessionId =
       embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
     if (!activeSessionId || (!embeddedAgentRuntime && !replyOperationActiveSessionId)) {
-      return { activeSessionId: undefined, isActive: false, isStreaming: false };
+      return { activeSessionId: undefined, isActive: false };
     }
     if (isOwnPreDispatchOperationSession(activeSessionId)) {
-      return { activeSessionId, isActive: false, isStreaming: false };
+      return { activeSessionId, isActive: false };
     }
     const replyOperationActive =
       replyOperationActiveSessionId != null &&
@@ -460,11 +495,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         (embeddedActiveSessionId != null &&
           (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
         replyOperationActive,
-      isStreaming:
-        (embeddedActiveSessionId != null &&
-          (embeddedAgentRuntime?.isEmbeddedAgentRunStreaming(embeddedActiveSessionId) ?? false)) ||
-        (replyOperationActiveSessionId != null &&
-          isReplyRunStreamingForSessionId(replyOperationActiveSessionId)),
     };
   };
   if (commandTurnContinuationTargetKey && providedReplyOperation) {
@@ -496,21 +526,33 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       providedReplyOperation.updateSessionId(sessionId);
     }
   }
-  const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
+  const { activeSessionId, isActive } = resolveQueueBusyState();
+  const pendingQueue = getExistingFollowupQueue(queueKey);
+  const queueAdmissionState = !pendingQueue
+    ? "empty"
+    : pendingQueue.items.some((item) => !item.steerPending) ||
+        pendingQueue.inFlight.size > 0 ||
+        pendingQueue.droppedCount > 0
+      ? "ready"
+      : "steering";
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const shouldSteer =
     !isRoomEvent &&
+    queueAdmissionState !== "ready" &&
     activeRunAcceptsCurrentThread &&
     !context.isHeartbeat &&
     !effectiveResetTriggered &&
+    !visibleTurnPreemptsHeartbeat &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
+    !visibleTurnPreemptsHeartbeat &&
     ((isRoomEvent && isActive) ||
       resolvedQueue.mode === "steer" ||
       resolvedQueue.mode === "followup" ||
       resolvedQueue.mode === "collect");
   const activeRunQueueAction = resolveActiveRunQueueAction({
+    queueAdmissionState,
     isActive,
     isHeartbeat: context.isHeartbeat,
     shouldFollowup,
@@ -558,6 +600,17 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       return { kind: "reply", reply: queueState.reply } as const;
     }
   }
+  if (activeRunQueueAction !== "drop") {
+    await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
+    ({
+      prefixedCommandBody,
+      queuedBody,
+      transcriptBody,
+      transcriptCommandBody,
+      media: promptMedia,
+      currentInboundContext,
+    } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
+  }
 
   return {
     kind: "ready",
@@ -584,8 +637,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     queueKey,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState,
     isActive,
-    isStreaming,
     authProfileId,
     authProfileIdSource,
   } as const;

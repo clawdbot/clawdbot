@@ -1,9 +1,11 @@
 import { vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
-import type { PortUsage } from "../../infra/ports.js";
+import type { PortUsage } from "../../infra/ports-types.js";
 
-type PortListenerKind = ReturnType<typeof import("../../infra/ports.js").classifyPortListener>;
+type PortListenerKind = ReturnType<
+  typeof import("../../infra/ports-format.js").classifyPortListener
+>;
 
 export const inspectPortUsage =
   vi.fn<(port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>>();
@@ -26,11 +28,17 @@ export const resolveGatewayServiceProbeHosts = vi.fn<
   (_params?: unknown) => Promise<readonly string[]>
 >(async () => ["127.0.0.1"]);
 
-vi.mock("../../infra/ports.js", () => ({
+vi.mock("../../infra/ports-format.js", () => ({
   classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
   formatPortDiagnostics: vi.fn(() => []),
+}));
+
+vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: (port: number, options?: { probeHosts?: readonly string[] }) =>
     inspectPortUsage(port, options),
+}));
+
+vi.mock("../../infra/ports-probe.js", () => ({
   LOOPBACK_PORT_PROBE_HOSTS: ["127.0.0.1"],
 }));
 

@@ -1,7 +1,7 @@
 // Sandbox config preservation tests cover cron runs keeping sandbox settings intact.
 import { describe, expect, it } from "vitest";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
-import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveCronAgentConfig } from "./run-config.js";
 
 function makeCfg() {
   return {
@@ -30,15 +30,14 @@ function makeCfg() {
 
 function buildRunCfg(agentId: string, agentConfigOverride?: Record<string, unknown>) {
   const cfg = makeCfg();
-  const agentDefaults = buildCronAgentDefaultsConfig({
-    defaults: cfg.agents.defaults,
+  const { cfgWithAgentDefaults } = resolveCronAgentConfig({
+    config: cfg,
     agentConfigOverride: agentConfigOverride as never,
   });
   return {
-    ...cfg,
+    ...cfgWithAgentDefaults,
     agents: {
-      ...cfg.agents,
-      defaults: agentDefaults,
+      ...cfgWithAgentDefaults.agents,
       list: [{ id: agentId, ...agentConfigOverride }],
     },
   };
