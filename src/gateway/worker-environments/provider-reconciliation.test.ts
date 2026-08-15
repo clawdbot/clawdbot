@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
+import { createPlacementFailureActions } from "./placement-dispatch-failure.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-force-abandon.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
@@ -339,6 +342,92 @@ describe("worker environment service", () => {
     expect(
       placements.completeWorkspaceResultAndReleaseTurn(claim, { reclaim: true }),
     ).toMatchObject({ state: "reclaimed", turnClaim: null });
+  });
+
+  it("retries force-abandoned teardown through the real service fence", async () => {
+    const environmentId = "worker-force-abandoned-retry";
+    const ready = support.seedReady(environmentId);
+    const attached = support.testState.store.transition({
+      environmentId,
+      from: ready.state,
+      to: "attached",
+      patch: support.attachedPatch(environmentId, REQUEST.sessionId),
+    });
+    const placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => support.testState.nowMs,
+    });
+    const active = seedActivePlacement(placements, {
+      environmentId,
+      ownerEpoch: attached.ownerEpoch,
+    });
+    if (active.state !== "active") {
+      throw new Error("expected active placement owner");
+    }
+    const owner = {
+      sessionId: active.sessionId,
+      environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
+    };
+    placements.beginWorkspaceReconciliation(owner, {
+      version: 1,
+      temporaryNonce: "f".repeat(32),
+      baseManifestRef: active.workspaceBaseManifestRef,
+      currentManifestRef: `sha256:${"f".repeat(64)}`,
+      baseEntries: [],
+      appliedEntries: [],
+      baseTree: "f".repeat(40),
+      basePackSha256: createHash("sha256").update("").digest("hex"),
+      basePack: Buffer.alloc(0),
+    });
+    placements.retainWorkspaceReconciliationForForcedAbandonment(owner);
+    const draining = placements.startDrain({
+      sessionId: active.sessionId,
+      environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    const reconciling = placements.startReconcile({
+      sessionId: active.sessionId,
+      environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: draining.generation,
+    });
+    const failed = placements.fail({
+      sessionId: active.sessionId,
+      expectedGeneration: reconciling.generation,
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+    });
+    if (failed.state !== "failed") {
+      throw new Error("expected failed force-abandoned placement");
+    }
+
+    let providerFails = true;
+    const destroy = vi.fn(async () => {
+      if (providerFails) {
+        throw new Error("provider teardown timed out");
+      }
+    });
+    const workerService = support.createService(support.createProvider({ destroy }), {
+      placementStore: createWorkerSessionPlacementGate(placements),
+    });
+    await expect(
+      workerService.destroyOwned(environmentId, () =>
+        placements.canDestroyForceAbandonedEnvironment(environmentId),
+      ),
+    ).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(support.testState.store.get(environmentId)?.state).toBe("destroying");
+
+    providerFails = false;
+    const failure = createPlacementFailureActions({ placements, environments: workerService });
+    await failure.retryFailedTeardown(failed);
+
+    expect(destroy).toHaveBeenCalledTimes(2);
+    expect(support.testState.store.get(environmentId)?.state).toBe("destroyed");
+    expect(placements.listWorkspaceReconciliationOwners()).toEqual([owner]);
   });
 
   it("does not resolve npm while an admitted receipt matches the local bundle", async () => {

@@ -155,6 +155,13 @@ describe("forced worker environment destruction", () => {
       harness.service.forceDestroyEnvironment(active.environmentId),
     ).resolves.toMatchObject({ state: "destroying" });
     expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(placementStore.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      terminalRecovery: {
+        action: "force-destroy-environment",
+        dataLoss: "unreconciled-workspace-result",
+      },
+    });
     vi.mocked(harness.environments.destroy).mockClear();
 
     await harness.service.reconcileActive(active.environmentId);

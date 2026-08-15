@@ -16,11 +16,7 @@ import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-pl
 import { createNodeWorkspaceRetainCoordinator } from "./worker-environments/node-workspace-retain-coordinator.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/placement-disk-space.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
-import {
-  createWorkerPlacementDispatchService,
-  type WorkerPlacementDispatchService,
-} from "./worker-environments/placement-dispatch.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
+import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";

@@ -291,8 +291,8 @@ export function findWorkerTerminalRecovery(
       ])
       .where("session_id", "=", placement.sessionId),
   ).rows[0];
-  if (
-    !pending ||
+  const retainedPendingOwner =
+    pending &&
     classifyPendingWorkspaceResultOwner(placement, {
       sessionId: pending.session_id,
       environmentId: pending.environment_id,
@@ -300,8 +300,17 @@ export function findWorkerTerminalRecovery(
       placementGeneration: pending.placement_generation,
       claimId: pending.claim_id,
       runId: pending.run_id,
-    }) !== "retained-failed"
-  ) {
+    }) === "retained-failed";
+  const retainedJournalOwner =
+    !retainedPendingOwner &&
+    canDestroyForceAbandonedEnvironment(db, placement.environmentId) &&
+    listEnvironmentTeardownFences(db, placement.environmentId).some(
+      (fence) =>
+        fence.kind === "workspace-reconciliation" &&
+        fence.ownerState === "retained-failed" &&
+        fence.sessionId === placement.sessionId,
+    );
+  if (!retainedPendingOwner && !retainedJournalOwner) {
     return undefined;
   }
   return {

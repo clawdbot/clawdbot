@@ -1,5 +1,5 @@
 import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
-import { placementTurnOwner } from "./placement-record.js";
+import { placementTurnOwner, type WorkerSessionTurnClaim } from "./placement-record.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   cleanupWorkerWorkspaceResultRef,
@@ -177,7 +177,7 @@ export async function forceAbandonWorkerEnvironment(params: {
           runId: current.turnClaim.runId,
           placementGeneration: current.turnClaim.generation,
           owner: placementTurnOwner(current),
-        };
+        } satisfies WorkerSessionTurnClaim;
         await placements.closeWorkerTurnToolState(claim);
         const abandoned = placements.forceAbandonWorkerTurn({
           claim,

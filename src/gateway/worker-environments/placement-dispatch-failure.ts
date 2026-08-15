@@ -126,6 +126,7 @@ export function createPlacementFailureActions(deps: {
   const cleanupEnvironment = async (params: {
     environmentId: string;
     ownerEpoch: number | null;
+    authorizeTeardown?: () => boolean;
   }): Promise<string[]> => {
     const teardownErrors: string[] = [];
     try {
@@ -134,7 +135,11 @@ export function createPlacementFailureActions(deps: {
       teardownErrors.push(`tunnel stop: ${boundedError(error)}`);
     }
     try {
-      await environments.destroy(params.environmentId);
+      if (params.authorizeTeardown) {
+        await environments.destroyOwned(params.environmentId, params.authorizeTeardown);
+      } else {
+        await environments.destroy(params.environmentId);
+      }
     } catch (error) {
       teardownErrors.push(`environment destroy: ${boundedError(error)}`);
     }
@@ -162,10 +167,11 @@ export function createPlacementFailureActions(deps: {
   };
 
   const retryFailedTeardown = async (placement: WorkerFailedDispatchPlacement): Promise<void> => {
-    if (!placement.environmentId) {
+    const environmentId = placement.environmentId;
+    if (!environmentId) {
       return;
     }
-    const environment = environments.get(placement.environmentId);
+    const environment = environments.get(environmentId);
     if (
       !environment ||
       environment.state === "destroyed" ||
@@ -175,8 +181,11 @@ export function createPlacementFailureActions(deps: {
       return;
     }
     const teardownErrors = await cleanupEnvironment({
-      environmentId: placement.environmentId,
+      environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
+      authorizeTeardown: placements.canDestroyForceAbandonedEnvironment(environmentId)
+        ? () => placements.canDestroyForceAbandonedEnvironment(environmentId)
+        : undefined,
     });
     if (teardownErrors.length > 0) {
       const recoveryError = [placement.recoveryError, ...teardownErrors].filter(Boolean).join("; ");
