@@ -6,6 +6,7 @@ import type {
   SkillProposalStatus,
 } from "../../skills/workshop/types.js";
 
+const SKILL_PROPOSAL_EVALUATION_MAX_CHARS = 999;
 const EVALUATION_TRUNCATION_MARKER =
   "\n[truncated: evaluator details exceed the model projection limit]";
 
@@ -73,23 +74,21 @@ export function formatProposalList(proposals: readonly SkillProposalManifestEntr
     .join("\n");
 }
 
-export function formatProposalEvaluationSummary(evaluation: SkillProposalEvaluation): string {
+export function formatProposalEvaluation(
+  evaluation: SkillProposalEvaluation,
+  proposalId?: string,
+): string {
+  const heading = proposalId
+    ? `Evaluated skill proposal ${proposalId} with ${evaluation.outcomes.length} evaluator result(s).`
+    : `Evaluation: ${evaluation.outcomes.length} result(s), ${evaluation.trigger}, ${evaluation.completedAt}`;
   const counts = { pass: 0, revise: 0, block: 0, none: 0, error: 0, skipped: 0 };
   for (const outcome of evaluation.outcomes) {
     counts[outcome.status === "completed" ? (outcome.result.decision ?? "none") : outcome.status]++;
   }
-  return `Decisions: pass=${counts.pass}, revise=${counts.revise}, block=${counts.block}, none=${counts.none}; errors=${counts.error}; skipped=${counts.skipped}.\nRun skill_workshop action=inspect for persisted evaluator summaries, reasons, findings, metrics, and errors.`;
-}
-
-function formatProposalEvaluationDetails(evaluation: SkillProposalEvaluation): string {
-  const text = JSON.stringify(
-    evaluation.outcomes.map(({ pluginId, evaluatorId, ...outcome }) => ({
-      by: `${pluginId}/${evaluatorId}`,
-      ...outcome,
-    })),
-  );
-  return text.length > 620
-    ? `${truncateUtf16Safe(text, 620 - EVALUATION_TRUNCATION_MARKER.length)}${EVALUATION_TRUNCATION_MARKER}`
+  const outcomes = JSON.stringify(evaluation.outcomes);
+  const text = `${heading}\nDecisions: pass=${counts.pass}, revise=${counts.revise}, block=${counts.block}, none=${counts.none}; errors=${counts.error}; skipped=${counts.skipped}.\nOutcomes: ${outcomes}`;
+  return text.length > SKILL_PROPOSAL_EVALUATION_MAX_CHARS
+    ? `${truncateUtf16Safe(text, SKILL_PROPOSAL_EVALUATION_MAX_CHARS - EVALUATION_TRUNCATION_MARKER.length)}${EVALUATION_TRUNCATION_MARKER}`
     : text;
 }
 
@@ -103,13 +102,7 @@ export function formatProposalInspect(proposal: SkillProposalReadResult): string
         ]
       : [];
   const evaluation = proposal.record.evaluation;
-  const evaluationLines = evaluation
-    ? [
-        "",
-        `Evaluation: ${evaluation.outcomes.length} result(s), ${evaluation.trigger}, ${evaluation.completedAt}`,
-        formatProposalEvaluationDetails(evaluation),
-      ]
-    : [];
+  const evaluationLines = evaluation ? [formatProposalEvaluation(evaluation)] : [];
   return [
     `Proposal: ${proposal.record.id}`,
     `Status: ${proposal.record.status}`,
