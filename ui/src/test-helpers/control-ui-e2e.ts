@@ -243,6 +243,7 @@ export type MockGatewayRequest = {
 };
 
 export type ControlUiMockGatewayScenario = {
+  attachmentMaxBytes?: number;
   agentModel?: string | null;
   assistantAgentId?: string;
   assistantName?: string;
@@ -277,6 +278,7 @@ export type ControlUiMockGatewayScenario = {
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
   omitFeatureMethods?: boolean;
   historyMessages?: unknown[];
+  maxPayload?: number;
   /** Static payloads, parameter-matched cases, or call-ordered sequences. */
   methodResponses?: Record<string, unknown>;
   /** URL prefixes that retain the browser's real WebSocket transport. */
@@ -825,6 +827,7 @@ function normalizeScenario(
       ? basePathWithSlash.slice(0, -1)
       : basePathWithSlash;
   return {
+    attachmentMaxBytes: scenario.attachmentMaxBytes ?? 1_048_576,
     agentModel:
       scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
@@ -853,6 +856,7 @@ function normalizeScenario(
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
     omitFeatureMethods: scenario.omitFeatureMethods ?? false,
     historyMessages: scenario.historyMessages ?? [],
+    maxPayload: scenario.maxPayload ?? 1_048_576,
     methodResponses: scenario.methodResponses ?? {},
     webSocketPassthroughPrefixes: scenario.webSocketPassthroughPrefixes ?? [],
     inFlightRun: scenario.inFlightRun ?? null,
@@ -1663,9 +1667,13 @@ function installControlUiMockGateway(
             version: scenario.serverVersion,
           },
           policy: {
-            maxPayload: 1_048_576,
+            maxPayload: scenario.maxPayload,
             maxBufferedBytes: 1_048_576,
             tickIntervalMs: 30_000,
+            attachments: {
+              maxBytes: scenario.attachmentMaxBytes,
+              maxImageBytes: scenario.attachmentMaxBytes,
+            },
             allowedSessionVisibilities: scenario.allowedSessionVisibilities,
             hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
           },

@@ -278,6 +278,7 @@ async function buildGatewayConnectDevice(params: {
 
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
+  private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   inboundActivitySeq = 0;
   private lastInboundActivityAtMs: number | null = null;
@@ -307,7 +308,10 @@ export class GatewayBrowserClient {
         this.buildConnectPlan(nonce, challengeTs, generation),
       buildConnectParams: (plan) => plan.params,
       onConnectHello: (hello, context) => this.handleConnectHello(hello, context.plan),
-      onHello: (hello) => this.opts.onHello?.(hello),
+      onHello: (hello) => {
+        this.maxPayloadBytes = hello.policy?.maxPayload;
+        this.opts.onHello?.(hello);
+      },
       onConnectFailure: (error, context) => {
         this.client.recordTiming("failed", context.generation, context.plan, {
           errorCode: error.code,
@@ -658,12 +662,19 @@ export class GatewayBrowserClient {
     });
   }
 
-  request<T = unknown>(
+  async request<T = unknown>(
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
-    return this.client.request<T>(method, params, options);
+    // The fixed request envelope outside this tuple uses a 36-byte UUID and 75 UTF-8 bytes.
+    const requestBytes = new TextEncoder().encode(JSON.stringify([method, params])).byteLength + 75;
+    if (this.maxPayloadBytes !== undefined && requestBytes > this.maxPayloadBytes) {
+      throw new Error(
+        "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
+      );
+    }
+    return await this.client.request<T>(method, params, options);
   }
 
   async requestScopeUpgrade(options: { onPending?: (requestId: string) => void } = {}) {
