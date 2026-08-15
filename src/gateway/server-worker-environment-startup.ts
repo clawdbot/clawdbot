@@ -26,6 +26,7 @@ import type { WorkerSessionPlacementStore } from "./worker-environments/placemen
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import type { WorkerTunnelManager } from "./worker-environments/tunnel.js";
+import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bundle-retention.js";
 
 type WorkerEnvironmentStore = ReturnType<
   typeof import("./worker-environments/store.js").createWorkerEnvironmentStore
@@ -139,14 +140,10 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore);
   const workerEnvironmentLog = params.log.child("worker-environments");
   const listRetainedBundleHashes = () =>
-    uniqueStrings([
-      ...params.startup.store
-        .list()
-        .flatMap((record) => (record.bootstrapReceipt ? [record.bootstrapReceipt.bundleHash] : [])),
-      ...params.startup.placementStore
-        .list()
-        .flatMap((placement) => (placement.workerBundleHash ? [placement.workerBundleHash] : [])),
-    ]);
+    listRetainedWorkerBundleHashes({
+      environments: params.startup.store.list(),
+      placements: params.startup.placementStore.list(),
+    });
   let workerBundleProducer: WorkerBundleProducer | undefined;
   let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
   const prepareInstallation = async (install: "bundle" | "npm") => {
