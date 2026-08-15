@@ -45,7 +45,7 @@
           "type": "function"
         },
         {
-          "description": "End turn to await a pending continuation (subagent spawn, async tool, cron add, or similar); results arrive next message. Calling it with nothing pending parks the session with no automatic wake, so do the requested work or reply instead.",
+          "description": "End turn to await a pending continuation (subagent spawn, async tool, scheduled automation, or similar); results arrive next message. Calling it with nothing pending parks the session with no automatic wake, so do the requested work or reply instead.",
           "inputSchema": {
             "properties": {
               "message": {
