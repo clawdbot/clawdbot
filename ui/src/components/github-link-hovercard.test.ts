@@ -5,6 +5,9 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { GitHubLinkHovercardProvider } from "./github-link-hovercard.runtime.ts";
 
+// Mirrors CLOSE_DELAY_MS in the runtime, like the 250ms open delay used below.
+const GITHUB_HOVERCARD_CLOSE_DELAY_MS = 120;
+
 const GITHUB_LINK_HOVERCARD_ELEMENT_NAME = `test-openclaw-github-link-hovercard-provider-${crypto.randomUUID()}`;
 
 customElements.define(
@@ -33,14 +36,18 @@ async function hover(anchor: HTMLAnchorElement): Promise<void> {
   await vi.advanceTimersByTimeAsync(250);
 }
 
-function leave(anchor: HTMLAnchorElement): void {
+function leave(anchor: HTMLAnchorElement, relatedTarget: EventTarget = document.body): void {
   anchor.dispatchEvent(
     new MouseEvent("pointerout", {
       bubbles: true,
       composed: true,
-      relatedTarget: document.body,
+      relatedTarget,
     }),
   );
+}
+
+function hovercard(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(".github-link-hovercard");
 }
 
 describe("openclaw-github-link-hovercard-provider", () => {
@@ -107,9 +114,50 @@ describe("openclaw-github-link-hovercard-provider", () => {
     );
 
     leave(anchor);
-    expect(document.querySelector(".github-link-hovercard")).toBeNull();
+    await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+    expect(hovercard()).toBeNull();
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays open while the pointer travels from the link onto the card", async () => {
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/issues/99815",
+      "#99815",
+    );
+    provider.client = {
+      request: vi.fn().mockResolvedValue({
+        comments: 2,
+        createdAt: "2026-07-05T08:00:00Z",
+        kind: "issue",
+        login: "octocat",
+        number: 99815,
+        owner: "openclaw",
+        repo: "openclaw",
+        state: "open",
+        title: "Keep hover previews reachable",
+        updatedAt: "2026-07-05T09:55:00Z",
+      }),
+    } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+    const card = hovercard();
+    expect(card).not.toBeNull();
+
+    // Crossing the gap between the link and the card leaves both unhovered.
+    leave(anchor, card as EventTarget);
+    await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS - 1);
+    expect(hovercard()).toBe(card);
+
+    card?.dispatchEvent(new MouseEvent("pointerenter"));
+    await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS * 10);
+    expect(hovercard()).toBe(card);
+
+    card?.dispatchEvent(new MouseEvent("pointerleave"));
+    expect(hovercard()).toBe(card);
+    await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+    expect(hovercard()).toBeNull();
+    expect(anchor.hasAttribute("aria-describedby")).toBe(false);
   });
 
   it("renders issue comments and supports focus plus Escape", async () => {

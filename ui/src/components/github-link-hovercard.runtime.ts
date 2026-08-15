@@ -19,6 +19,9 @@ const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 100;
 const VIEWPORT_PADDING = 12;
 const CARD_GAP = 10;
+// Traversal grace: the pointer has to cross CARD_GAP of unowned page between the
+// link and the card, and neither surface is hovered during that crossing.
+const CLOSE_DELAY_MS = 120;
 
 type GitHubPreview = GitHubLinkTarget & ControlUiGitHubPreview;
 
@@ -235,10 +238,12 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   private activeAnchor: HTMLAnchorElement | null = null;
   private activeTarget: GitHubLinkTarget | null = null;
   private card: HTMLDivElement | null = null;
+  private closeTimer: number | null = null;
   private describedBy: string | null = null;
   private focusInside = false;
   private openTimer: number | null = null;
   private pointerInside = false;
+  private pointerOverCard = false;
   private renderedPreview: GitHubPreview | null = null;
   private renderedUnavailable = false;
   private stopI18n: (() => void) | null = null;
@@ -340,9 +345,17 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       return;
     }
     this.pointerInside = false;
-    if (!this.focusInside) {
-      this.close();
-    }
+    this.scheduleClose();
+  };
+
+  private readonly handleCardPointerEnter = () => {
+    this.pointerOverCard = true;
+    this.clearCloseTimer();
+  };
+
+  private readonly handleCardPointerLeave = () => {
+    this.pointerOverCard = false;
+    this.scheduleClose();
   };
 
   private readonly handleFocusIn = (event: Event) => {
@@ -362,10 +375,41 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       return;
     }
     this.focusInside = false;
-    if (!this.pointerInside) {
-      this.close();
-    }
+    this.scheduleClose();
   };
+
+  private clearCloseTimer(): void {
+    if (this.closeTimer !== null) {
+      window.clearTimeout(this.closeTimer);
+      this.closeTimer = null;
+    }
+  }
+
+  // Hover intent spans link and card: dismissal waits out the traversal grace and
+  // re-checks every surface that holds the card open, so moving from one to the
+  // other keeps it alive and only leaving both closes it.
+  private scheduleClose(): void {
+    this.clearCloseTimer();
+    if (this.hoverIntentHeld) {
+      return;
+    }
+    // Without a card there is only a pending open timer, and no gap to cross:
+    // cancel the open now instead of granting grace to a card that never showed.
+    if (!this.card) {
+      this.close();
+      return;
+    }
+    this.closeTimer = window.setTimeout(() => {
+      this.closeTimer = null;
+      if (!this.hoverIntentHeld) {
+        this.close();
+      }
+    }, CLOSE_DELAY_MS);
+  }
+
+  private get hoverIntentHeld(): boolean {
+    return this.pointerInside || this.pointerOverCard || this.focusInside;
+  }
 
   private readonly handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
@@ -420,6 +464,10 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.renderedPreview = null;
     this.renderedUnavailable = false;
     renderLoading(card);
+    // The card is portaled to document.body, so the provider's delegated pointer
+    // listeners never see it; it reports its own hover to keep intent shared.
+    card.addEventListener("pointerenter", this.handleCardPointerEnter);
+    card.addEventListener("pointerleave", this.handleCardPointerLeave);
     document.body.append(card);
     this.card = card;
     anchor.setAttribute(
@@ -487,6 +535,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       window.clearTimeout(this.openTimer);
       this.openTimer = null;
     }
+    this.clearCloseTimer();
     this.activeAnchorObserver.disconnect();
     void this.previewTask.run([null]);
     if (this.activeAnchor) {
@@ -505,6 +554,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.describedBy = null;
     this.focusInside = false;
     this.pointerInside = false;
+    this.pointerOverCard = false;
     this.stopListeningForViewportChanges();
   }
 

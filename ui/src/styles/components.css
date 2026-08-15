@@ -754,7 +754,9 @@ openclaw-github-link-hovercard-provider {
   box-shadow: var(--shadow-lg);
   color: var(--text);
   font-family: var(--font-body);
-  pointer-events: none;
+  /* Interactive by design: hover intent and text selection both need the card to
+     receive pointer events (see github-link-hovercard.runtime.ts). */
+  pointer-events: auto;
   opacity: 0;
   transform: translateY(-5px) scale(0.99);
   transform-origin: bottom left;
