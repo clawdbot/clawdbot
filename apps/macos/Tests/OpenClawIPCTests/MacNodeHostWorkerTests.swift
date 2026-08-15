@@ -429,7 +429,7 @@ struct MacNodeHostWorkerTests {
     @Test func `ready worker exit notifies its route owner`() async throws {
         try await confirmation("unexpected worker exit") { confirmed in
             let exitGate = AsyncTestGate()
-            let worker = MacNodeHostWorker(session: GatewayNodeSession()) {
+            let worker = MacNodeHostWorker(session: GatewayNodeSession()) { _ in
                 confirmed()
                 exitGate.open()
             }
