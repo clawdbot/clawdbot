@@ -628,17 +628,6 @@ openclaw-chat-pane {
   justify-content: center;
 }
 
-.chat-pane__sharing-channel-icon {
-  border-radius: var(--radius-full);
-  background: var(--bg-muted);
-  color: var(--muted);
-}
-
-.chat-pane__sharing-channel-icon svg {
-  width: 13px;
-  height: 13px;
-}
-
 .chat-pane__sharing-member-label {
   display: block;
   overflow: hidden;

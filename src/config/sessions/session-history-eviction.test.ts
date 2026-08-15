@@ -301,6 +301,49 @@ describe("SQLite historical session disk budget", () => {
     }
   });
 
+  it("preserves every generation of a recently active session under physical pressure", async () => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const recentKey = "agent:main:recent-history";
+    const staleKey = "agent:main:stale-history";
+    await createHistoricalTranscript({
+      content: "recent history " + "r".repeat(64 * 1024),
+      nextSessionId: "recent-live",
+      sessionId: "recent-old",
+      sessionKey: recentKey,
+      updatedAt: now - 8 * dayMs,
+    });
+    await replaceSessionEntry(
+      { sessionKey: recentKey, storePath },
+      { sessionId: "recent-live", updatedAt: now },
+    );
+    await createHistoricalTranscript({
+      content: "stale history " + "s".repeat(64 * 1024),
+      nextSessionId: "stale-live",
+      sessionId: "stale-old",
+      sessionKey: staleKey,
+      updatedAt: now - 8 * dayMs,
+    });
+    settlePhysicalUsage();
+    const before = await measureSessionPhysicalDiskUsage(storePath);
+
+    const result = await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      maintenance: {
+        maxDiskBytes: before.totalBytes - 1,
+        highWaterBytes: 0,
+        preserveRecentMs: 7 * dayMs,
+      },
+    });
+
+    expect(result?.removedEntries).toBe(1);
+    expect(sessionExists("recent-old")).toBe(true);
+    expect(sessionExists("recent-live")).toBe(true);
+    expect(sessionExists("stale-old")).toBe(false);
+    expect(sessionExists("stale-live")).toBe(true);
+  });
+
   it("warn mode reports physical overage without extracting or deleting history", async () => {
     await createHistoricalTranscript({
       content: "warn history",
