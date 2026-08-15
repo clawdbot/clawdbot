@@ -216,6 +216,54 @@ describe("sessions page lifecycle", () => {
     });
   });
 
+  it("opens a transcript result in chat even when the session prefers dashboard", async () => {
+    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const result = {
+      count: 1,
+      sessions: [
+        {
+          key: sessionKey,
+          kind: "direct",
+          displayName: "Launch planning",
+          boardFace: "dashboard",
+        },
+      ],
+    } as SessionsListResult;
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const sessions = createSessions();
+    sessions.state.result = result;
+    sessions.state.agentId = "main";
+    const context = createContext(gateway, sessions);
+    const page = await createRenderedPage(context, result);
+    page.transcriptSearch = {
+      status: "results",
+      results: [
+        {
+          sessionKey,
+          sessionId: "history-session",
+          messageId: "history-message",
+          role: "assistant",
+          timestamp: 42,
+          snippet: "launch code",
+          score: 1,
+        },
+      ],
+      indexing: false,
+      truncated: false,
+    };
+    page.requestUpdate();
+    await page.updateComplete;
+
+    page.querySelector<HTMLButtonElement>(".sessions-transcript-search__result")?.click();
+
+    expect(context.navigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main/launch-planning-12345678",
+      search:
+        "?__openclawSessionKey=agent%3Amain%3Adashboard%3A12345678-90ab-cdef-1234-567890abcdef&__openclawHistorySessionId=history-session&__openclawHistoryMessageId=history-message",
+      hash: "",
+    });
+  });
+
   it("fans all-agent transcript search out by owning agent and merges ranked results", async () => {
     const request = vi.fn(async (_method: string, params: { agentId: string }) => ({
       results: [

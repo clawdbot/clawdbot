@@ -2,6 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import {
+  SESSION_HISTORY_MESSAGE_ID_PARAM,
+  SESSION_HISTORY_SESSION_ID_PARAM,
+} from "../../lib/sessions/history-anchor.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const keyUuid = "12345678-90ab-cdef-1234-567890abcdef";
@@ -157,6 +161,33 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it("decodes an exact transcript history anchor from internal navigation", async () => {
+    const { context, list } = contextFor(result([]));
+    const search = new URLSearchParams({
+      [SESSION_HISTORY_SESSION_ID_PARAM]: "historical-session",
+      [SESSION_HISTORY_MESSAGE_ID_PARAM]: "historical-message",
+    });
+
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/main/telegram/12345", search: `?${search}`, hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey: "agent:main:telegram:12345",
+      draft: undefined,
+      historyAnchor: {
+        sessionId: "historical-session",
+        messageId: "historical-message",
+      },
+      face: "chat",
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
+
   it("passes longer disambiguation prefixes directly to the gateway resolver", async () => {
     const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
     const { context, list, request } = contextFor(result([target]));
@@ -196,7 +227,8 @@ describe("loadChatRoute", () => {
       context,
       {
         pathname: "/dashboard/ignored/deploy-12345678",
-        search: "?draft=ship&__openclawComposerFocus=1",
+        search:
+          "?draft=ship&__openclawComposerFocus=1&__openclawHistorySessionId=history-session&__openclawHistoryMessageId=history-message",
         hash: "",
       },
       "dashboard",
@@ -207,8 +239,8 @@ describe("loadChatRoute", () => {
       throw new Error("expected an ambiguous route");
     }
     expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual([
-      "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1",
-      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1",
+      "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1&__openclawHistorySessionId=history-session&__openclawHistoryMessageId=history-message",
+      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1&__openclawHistorySessionId=history-session&__openclawHistoryMessageId=history-message",
     ]);
 
     for (const [candidate, expectedRow] of ambiguous.candidates.map(
@@ -230,6 +262,10 @@ describe("loadChatRoute", () => {
         sessionKey: expectedRow?.key,
         draft: "ship",
         focusComposer: true,
+        historyAnchor: {
+          sessionId: "history-session",
+          messageId: "history-message",
+        },
         face: "dashboard",
         shortId: candidate.idPrefix,
       });

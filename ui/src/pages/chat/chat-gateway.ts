@@ -9,6 +9,7 @@ import { extractText } from "../../lib/chat/message-extract.ts";
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import {
   chatScopedEventSessionMatches,
+  isChatHistoryAnchorIsolated,
   isHiddenAssistantStreamText,
   isSilentReplyStream,
   materializeVisibleAssistantStreamMessages,
@@ -63,6 +64,36 @@ function isPendingLocalChatRun(state: ChatState, runId: string): boolean {
 
 function isTerminalChatState(value: unknown): boolean {
   return value === "final" || value === "aborted" || value === "error";
+}
+
+function reconcileIsolatedTerminalRun(state: ChatState, payload: ChatEventPayload): void {
+  const runId = state.chatRunId;
+  if (!runId || payload.runId !== runId || !isTerminalChatState(payload.state)) {
+    return;
+  }
+  const sessionKeys = [state.sessionKey, payload.sessionKey];
+  if (payload.state === "final" && payload.yielded === true && payload.stopReason === "end_turn") {
+    reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+      yielded: true,
+      runId,
+      sessionKey: state.sessionKey,
+      sessionKeys,
+      clearLocalRun: true,
+      clearChatStream: true,
+    });
+    return;
+  }
+  reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    outcome: payload.state === "final" ? "done" : "interrupted",
+    sessionStatus:
+      payload.state === "final" ? "done" : payload.state === "aborted" ? "killed" : "failed",
+    runId,
+    sessionKey: state.sessionKey,
+    sessionKeys,
+    clearLocalRun: true,
+    clearChatStream: true,
+    armLocalTerminalReconcile: true,
+  });
 }
 
 function isEventForDifferentActiveRun(
@@ -495,6 +526,27 @@ function handleChatEvent(
 }
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
+  if (isChatHistoryAnchorIsolated(state) && payload && chatEventSessionMatches(state, payload)) {
+    if (isTerminalChatState(payload.state)) {
+      const activeRunIdBeforeEvent = state.chatRunId;
+      const preserveInCanonicalCache = { canonicalCacheOnly: true };
+      if (!isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)) {
+        retireSteeredChipsForTerminalRun(state, payload.runId, preserveInCanonicalCache);
+      }
+      retireSteeredChipsForRequestRun(state, payload.runId, preserveInCanonicalCache);
+    }
+    if (payload.state === "final") {
+      const finalMessage = normalizeFinalAssistantMessage(payload.message);
+      if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+        const cacheAgentId = isUiGlobalSessionKey(payload.sessionKey)
+          ? (payload.agentId ?? resolveUiDefaultAgentId(state))
+          : payload.agentId;
+        appendCachedChatMessage(state, payload.sessionKey, finalMessage, payload, cacheAgentId);
+      }
+    }
+    reconcileIsolatedTerminalRun(state, payload);
+    return payload.state ?? null;
+  }
   const activeRunIdBeforeEvent = state.chatRunId;
   let terminalKeyedStreamStartIndex: number | undefined;
   const terminalEventMatchesChat =

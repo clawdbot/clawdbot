@@ -343,7 +343,10 @@ describe("sessions view", () => {
     expect(container.textContent).toContain("Showing the first 25 matches.");
 
     result?.click();
-    expect(onNavigateToChat).toHaveBeenCalledWith("agent:main:launch");
+    expect(onNavigateToChat).toHaveBeenCalledWith("agent:main:launch", {
+      sessionId: "session-launch",
+      messageId: "message-1",
+    });
   });
 
   it("disables transcript search when the Gateway does not advertise it", async () => {

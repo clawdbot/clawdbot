@@ -14,6 +14,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  readActiveMessageRange,
   readTranscriptProjectionGeneration,
   readVisibleMessageRange,
   readVisibleTranscriptStats,
@@ -576,30 +577,26 @@ export function readSessionTranscriptMessageAnchorPage(
         .where("identity.event_id", "=", options.messageId)
         .where("active.message_position", "is not", null),
     );
-    const visible = resolveVisibleMessagePositions(projection);
-    const totalMessages = visible.total;
+    const rawTotalMessages = projection.state.activeMessageCount;
     if (anchor?.message_position === null || anchor?.message_position === undefined) {
       return {
         events: [],
         found: false,
         hasOverreadContext: false,
         offset: 0,
-        totalMessages,
+        totalMessages: rawTotalMessages,
       };
     }
-    const anchorVisiblePosition =
-      anchor.message_position >= visible.postStart
-        ? visible.kept.length + anchor.message_position - visible.postStart
-        : visible.kept.indexOf(anchor.message_position);
-    if (anchorVisiblePosition < 0) {
-      return {
-        events: [],
-        found: false,
-        hasOverreadContext: false,
-        offset: 0,
-        totalMessages,
-      };
-    }
+    const visible = resolveVisibleMessagePositions(projection);
+    const keptIndex = visible.kept.indexOf(anchor.message_position);
+    const visibleAnchorPosition =
+      keptIndex >= 0
+        ? keptIndex
+        : anchor.message_position >= visible.postStart
+          ? visible.kept.length + anchor.message_position - visible.postStart
+          : undefined;
+    const anchorPosition = visibleAnchorPosition ?? anchor.message_position;
+    const totalMessages = visibleAnchorPosition === undefined ? rawTotalMessages : visible.total;
     const pageSize = Math.max(
       1,
       Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 1),
@@ -607,11 +604,14 @@ export function readSessionTranscriptMessageAnchorPage(
     const newerMessages = Math.floor(pageSize / 2);
     const olderMessages = pageSize - newerMessages - 1;
     const latestStart = Math.max(0, totalMessages - pageSize);
-    const start = Math.min(Math.max(0, anchorVisiblePosition - olderMessages), latestStart);
+    const start = Math.min(Math.max(0, anchorPosition - olderMessages), latestStart);
     const endExclusive = Math.min(totalMessages, start + pageSize);
     const readStart = Math.max(0, start - 1);
     return {
-      events: readVisibleMessageRange(projection, readStart, endExclusive),
+      events:
+        visibleAnchorPosition === undefined
+          ? readActiveMessageRange(projection, readStart, endExclusive)
+          : readVisibleMessageRange(projection, readStart, endExclusive),
       found: true,
       hasOverreadContext: readStart < start,
       offset: totalMessages - endExclusive,

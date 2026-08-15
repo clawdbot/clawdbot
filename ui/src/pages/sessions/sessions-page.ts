@@ -40,6 +40,7 @@ import {
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
 import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
+import { withSessionHistoryAnchor } from "../../lib/sessions/history-anchor.ts";
 import {
   DEFAULT_SESSION_LIST_QUERY,
   filterSessionRows,
@@ -1711,16 +1712,19 @@ class SessionsPage extends OpenClawLightDomElement {
             this.selectedKeys = new Set();
           },
           onDeleteSelected: () => void this.deleteSelected(),
-          onNavigateToChat: (sessionKey) => {
-            const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+          onNavigateToChat: (sessionKey, historyAnchor) => {
+            const face = historyAnchor
+              ? "chat"
+              : resolveSessionPreferredFaceForKey(context, sessionKey);
+            const options = sessionNavigationTarget({
+              context,
+              face,
+              sessionKey,
+              agentId: this.sessionPathAgentId(sessionKey, context),
+              preferenceDerivedFace: historyAnchor === undefined,
+            }).options;
             context.navigate(face, {
-              ...sessionNavigationTarget({
-                context,
-                face,
-                sessionKey,
-                agentId: this.sessionPathAgentId(sessionKey, context),
-                preferenceDerivedFace: true,
-              }).options,
+              ...(historyAnchor ? withSessionHistoryAnchor(options, historyAnchor) : options),
               hash: "",
             });
           },

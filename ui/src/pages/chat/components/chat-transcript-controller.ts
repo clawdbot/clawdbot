@@ -38,8 +38,12 @@ export type ChatTranscriptSession = {
     announce: boolean,
     overlay?: unknown,
   ): TemplateResult;
-  syncMessageRows(messageRowKeysById: ReadonlyMap<string, string>): void;
+  syncMessageRows(
+    messageRowKeysById: ReadonlyMap<string, string>,
+    messageRowExpandersById?: ReadonlyMap<string, () => boolean>,
+  ): void;
   revealMessage(messageId: string): boolean;
+  scrollToMessage(messageId: string): Promise<boolean>;
   setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;
   handleFocusOut(event: FocusEvent): void;
@@ -200,6 +204,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
   private messageRowKeysById = new Map<string, string>();
+  private messageRowExpandersById = new Map<string, () => boolean>();
   private focusedRowKey: string | null = null;
   private announcementInitialized = false;
   private announcementKey: string | null = null;
@@ -350,6 +355,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     this.rowKeys = [];
     this.rowIndexesByKey.clear();
     this.messageRowKeysById.clear();
+    this.messageRowExpandersById.clear();
     this.focusedRowKey = null;
     this.pendingScrollOffset = null;
   }
@@ -430,40 +436,77 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     this.virtualizerController.getVirtualizer().scrollToOffset(offset);
   }
 
-  syncMessageRows(messageRowKeysById: ReadonlyMap<string, string>): void {
+  syncMessageRows(
+    messageRowKeysById: ReadonlyMap<string, string>,
+    messageRowExpandersById: ReadonlyMap<string, () => boolean> = new Map(),
+  ): void {
     this.messageRowKeysById = new Map(messageRowKeysById);
+    this.messageRowExpandersById = new Map(messageRowExpandersById);
   }
 
   revealMessage(messageId: string): boolean {
-    const rowKey = this.messageRowKeysById.get(messageId);
-    if (!rowKey) {
-      return false;
-    }
-    const rowIndex = this.rowIndexesByKey.get(rowKey);
+    const rowIndex = this.messageRowIndex(messageId);
     if (rowIndex === undefined) {
       return false;
     }
     this.virtualizerController.getVirtualizer().scrollToIndex(rowIndex, { align: "center" });
     this.host.requestUpdate();
     void this.host.updateComplete.then(() => {
-      const bubble = [
-        ...(this.threadInnerElement?.querySelectorAll<HTMLElement>(".chat-bubble") ?? []),
-      ].find((candidate) => candidate.dataset.entryId === messageId);
-      if (!bubble) {
-        return;
+      const bubble = this.findMessageElement(messageId, ".chat-bubble");
+      if (bubble) {
+        this.threadInnerElement
+          ?.querySelector(".chat-bubble--reply-target")
+          ?.classList.remove("chat-bubble--reply-target");
+        bubble.scrollIntoView?.({ behavior: "smooth", block: "center" });
+        bubble.classList.add("chat-bubble--reply-target");
+        bubble.addEventListener(
+          "animationend",
+          () => bubble.classList.remove("chat-bubble--reply-target"),
+          { once: true },
+        );
       }
-      this.threadInnerElement
-        ?.querySelector(".chat-bubble--reply-target")
-        ?.classList.remove("chat-bubble--reply-target");
-      bubble.scrollIntoView?.({ behavior: "smooth", block: "center" });
-      bubble.classList.add("chat-bubble--reply-target");
-      bubble.addEventListener(
-        "animationend",
-        () => bubble.classList.remove("chat-bubble--reply-target"),
-        { once: true },
-      );
     });
     return true;
+  }
+
+  async scrollToMessage(messageId: string): Promise<boolean> {
+    const rowIndex = this.messageRowIndex(messageId);
+    if (rowIndex === undefined) {
+      return false;
+    }
+    const expanded = this.messageRowExpandersById.get(messageId)?.() === true;
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    virtualizer.scrollToIndex(rowIndex, { align: "center" });
+    if (!expanded) {
+      return true;
+    }
+    const messageElement = await this.scrollToMessageElement(messageId);
+    if (!messageElement) {
+      return false;
+    }
+    const rowElement = messageElement.closest<HTMLElement>(".chat-virtual-row");
+    if (rowElement) {
+      virtualizer.measureElement(rowElement);
+    }
+    messageElement.scrollIntoView({ block: "center", inline: "nearest" });
+    return true;
+  }
+
+  private messageRowIndex(messageId: string): number | undefined {
+    const rowKey = this.messageRowKeysById.get(messageId);
+    return rowKey === undefined ? undefined : this.rowIndexesByKey.get(rowKey);
+  }
+
+  private async scrollToMessageElement(messageId: string): Promise<HTMLElement | undefined> {
+    this.host.requestUpdate();
+    await this.host.updateComplete;
+    return this.findMessageElement(messageId, "[data-entry-id]");
+  }
+
+  private findMessageElement(messageId: string, selector: string): HTMLElement | undefined {
+    return [...(this.threadInnerElement?.querySelectorAll<HTMLElement>(selector) ?? [])].find(
+      (candidate) => candidate.dataset.entryId === messageId,
+    );
   }
 
   getScrollOffset(): number | null {
@@ -688,6 +731,10 @@ export class ChatTranscriptController implements ReactiveController {
 
   revealMessage(messageId: string): boolean {
     return this.sessionVirtualizer?.revealMessage(messageId) ?? false;
+  }
+
+  async scrollToMessage(messageId: string): Promise<boolean> {
+    return (await this.sessionVirtualizer?.scrollToMessage(messageId)) ?? false;
   }
 
   pendingScrollOffsetFor(sessionKey: string): number | null {

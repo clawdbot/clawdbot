@@ -6436,6 +6436,105 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history reopens an explicit anchor hidden by a same-session reset", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      const scope = {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      await appendTranscriptMessage(scope, {
+        eventId: "before-reset",
+        parentId: null,
+        message: { role: "user", content: "hidden historical match" },
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: "kept-user",
+        parentId: "before-reset",
+        message: { role: "user", content: "kept question" },
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: "kept-assistant",
+        parentId: "kept-user",
+        message: { role: "assistant", content: "kept answer" },
+      });
+      await appendTranscriptEvent(scope, {
+        type: "reset",
+        id: "reset-boundary",
+        parentId: "kept-assistant",
+        timestamp: "2026-08-05T00:00:00.000Z",
+        reason: "new",
+        firstKeptEntryId: "kept-user",
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: "after-reset",
+        parentId: "reset-boundary",
+        message: { role: "user", content: "current tail" },
+      });
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: "main",
+        path: path.join(sessionDir, "openclaw-agent.sqlite"),
+      });
+
+      const ordinary = await rpcReq<{ messages?: Array<{ content?: string }> }>(
+        ws,
+        "chat.history",
+        { sessionKey: "main", limit: 10 },
+      );
+      expect(ordinary.ok).toBe(true);
+      expect(ordinary.payload?.messages).toEqual([
+        expect.objectContaining({ content: "kept question" }),
+        expect.objectContaining({ content: "kept answer" }),
+        expect.objectContaining({
+          __openclaw: expect.objectContaining({ id: "reset-boundary", kind: "reset" }),
+        }),
+        expect.objectContaining({ content: "current tail" }),
+      ]);
+
+      const anchored = await rpcReq<{ messages?: Array<{ content?: string }> }>(
+        ws,
+        "chat.history",
+        {
+          sessionKey: "main",
+          sessionId: "sess-main",
+          messageId: "before-reset",
+          limit: 3,
+        },
+      );
+      expect(anchored.ok).toBe(true);
+      expect(anchored.payload?.messages?.map((message) => message.content)).toEqual([
+        "hidden historical match",
+        "kept question",
+        "kept answer",
+      ]);
+
+      const visibleAnchor = await rpcReq<{ messages?: Array<{ content?: string }> }>(
+        ws,
+        "chat.history",
+        {
+          sessionKey: "main",
+          sessionId: "sess-main",
+          messageId: "kept-user",
+          limit: 3,
+        },
+      );
+      expect(visibleAnchor.ok).toBe(true);
+      expect(visibleAnchor.payload?.messages).toEqual([
+        expect.objectContaining({ content: "kept question" }),
+        expect.objectContaining({ content: "kept answer" }),
+        expect.objectContaining({
+          __openclaw: expect.objectContaining({ id: "reset-boundary", kind: "reset" }),
+        }),
+      ]);
+    });
+  });
+
   test("chat.history reopens a search anchor from a prior session id", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });

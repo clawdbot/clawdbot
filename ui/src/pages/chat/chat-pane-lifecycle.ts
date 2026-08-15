@@ -21,6 +21,7 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
+import { cancelPendingChatHistoryAnchor } from "./chat-history.ts";
 import {
   type ChatAttachmentGatewayOwner,
   discardStateStagedAttachments,
@@ -32,7 +33,7 @@ import {
   focusBrowserAnnotationComposerAfterUpdate,
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
-import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
+import { ChatPaneHistoryAnchor } from "./chat-pane-history-anchor.ts";
 import {
   CHAT_AUTOTYPE_EXEMPT_SELECTOR,
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
@@ -59,10 +60,9 @@ import { admitInitialUserMessageHandoff } from "./history-merge.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
-const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
-export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
+export abstract class ChatPaneLifecycle extends ChatPaneHistoryAnchor {
   private chatRouteReadyReported = false;
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
@@ -113,7 +113,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       if (this.composerPrefillAttentionTarget === input) {
         this.clearComposerPrefillAttention();
       }
-    }, COMPOSER_PREFILL_ATTENTION_DURATION_MS);
+    }, 1_200);
   }
 
   protected confirmConversationReset(): Promise<boolean> {
@@ -560,6 +560,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
+    this.loadHistoryAnchorIfNeeded();
     if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)) {
       // The outer router commit is not a meaningful chat paint. Keep the
       // handoff cover until this pane has committed its usable composer.
@@ -604,6 +605,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
           this.stagedAttachmentGatewayOwner,
         );
       }
+      cancelPendingChatHistoryAnchor(this.state);
     }
     this.stagedAttachmentGatewayOwner = null;
     this.clearComposerPrefillAttention();
@@ -627,10 +629,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.resetOlderMessagesViewport();
     this.nativeDraftCleanup?.();
     this.nativeDraftCleanup = null;
-    if (this.headerCopiedTimer !== null) {
-      window.clearTimeout(this.headerCopiedTimer);
-      this.headerCopiedTimer = null;
-    }
+    window.clearTimeout(this.headerCopiedTimer ?? undefined);
+    this.headerCopiedTimer = null;
     this.swarmHydrator?.dispose();
     this.swarmHydrator = null;
     this.headerWorktreePaths.clear();

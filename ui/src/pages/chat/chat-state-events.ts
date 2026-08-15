@@ -29,6 +29,7 @@ import {
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import {
   chatScopedEventSessionMatches,
+  isChatHistoryAnchorIsolated,
   isHiddenAssistantStreamText,
   loadChatBranches,
   loadChatHistory,
@@ -53,6 +54,7 @@ import {
   reconcileChatRunFromSessionRow,
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
+import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   preserveQueuedUserTurn,
   retirePersistedSteeredChips,
@@ -197,11 +199,13 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
   if (matchesChat) {
-    // A previous run can persist its final after the next local run starts.
-    // Admit that sequenced row now so the later unsequenced chat.final replay
-    // replaces it in place instead of appending below the newer user turn.
-    applyLiveSessionMessage(state, payload, event.hasActiveRun ?? undefined);
-    retirePersistedSteeredChips(state);
+    if (!isChatHistoryAnchorIsolated(state)) {
+      // A previous run can persist its final after the next local run starts.
+      // Admit that sequenced row now so the later unsequenced chat.final replay
+      // replaces it in place instead of appending below the newer user turn.
+      applyLiveSessionMessage(state, payload, event.hasActiveRun ?? undefined);
+      retirePersistedSteeredChips(state);
+    }
   }
   if (matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
@@ -236,7 +240,7 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     });
     return;
   }
-  if (matchesChat) {
+  if (matchesChat && !isChatHistoryAnchorIsolated(state)) {
     state.pendingSessionMessageReloadSessionKey = null;
     void loadChatHistory(state).finally(() => state.requestUpdate?.());
   }
@@ -278,11 +282,24 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     state.retireSessionCompanion?.(event.key, event.agentId);
   }
   const resetsSelectedSession = matchesChat && resetsSession;
+  const defersSelectedSessionReset =
+    resetsSelectedSession && state.chatHistoryAnchorPending != null;
   if (resetsSelectedSession) {
+    const anchoredMessages = defersSelectedSessionReset ? state.chatMessages : null;
+    const agentId = resolveChatAgentId(state);
+    if (state.chatMessagesBySession) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+        agentId,
+      });
+    }
     const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
     // Reset keeps the public session ID; the explicit reducer event is the
     // only proof that its old live and pending transcript no longer exists.
     reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
+    if (anchoredMessages) {
+      state.chatMessages = anchoredMessages;
+    }
   }
   if (
     matchesChat &&
@@ -301,6 +318,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   }
   if (
     matchesChat &&
+    !isChatHistoryAnchorIsolated(state) &&
     source?.phase === "message" &&
     source.message === undefined &&
     source.messageId === undefined &&
@@ -462,6 +480,11 @@ function observerDigestMatchesAuthoritativeRun(
 export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventFrame) {
   if (event.event === "chat") {
     const payload = event.payload as ChatEventPayload | undefined;
+    const isolatesHistoricalAnchor = Boolean(
+      isChatHistoryAnchorIsolated(state) &&
+      payload &&
+      chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
+    );
     if (
       payload?.state === "delta" &&
       typeof payload.runId === "string" &&
@@ -486,12 +509,19 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     const terminal =
       payload?.state === "final" || payload?.state === "aborted" || payload?.state === "error";
     const delivered = terminal ? rememberDeliveredQueuedUserTurn(state, payload?.runId) : null;
-    if (delivered) {
+    if (delivered && !isolatesHistoricalAnchor) {
       // The queued projection is the only local copy until history catches up.
       // Materialize it before the terminal assistant to preserve transcript order.
       preserveQueuedUserTurn(state, delivered);
     }
     const result = handleChatGatewayEvent(state as unknown as ChatState, payload);
+    if (
+      isolatesHistoricalAnchor &&
+      terminal &&
+      (state.chatHistoryAnchorPending != null || !state.chatLoading)
+    ) {
+      void loadChatHistory(state).finally(() => state.requestUpdate?.());
+    }
     if (shouldCelebrateFirstReply && result === "final") {
       fireFirstReplyConfetti();
     }

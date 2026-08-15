@@ -72,6 +72,99 @@ describe("chat transcript controller", () => {
     expect(transcriptRows(container)[1]?.style.transform).toBe("translateY(100px)");
   });
 
+  it("renders and centers a matched message inside a collapsed work group", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const messageId = "assistant-history-hit";
+    const previousScrollIntoView = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollIntoView",
+    );
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    try {
+      const props = {
+        ...threadProps("pane-anchor-group", "agent:main:dashboard:test-session", [
+          { role: "user", content: "do it", timestamp: 1_000 },
+          {
+            role: "assistant",
+            content: "Checking the workspace.",
+            timestamp: 2_000,
+            __openclaw: { id: messageId, seq: 2 },
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "bash",
+            content: "ok",
+            timestamp: 3_000,
+          },
+          { role: "assistant", content: "All done.", timestamp: 4_000 },
+        ]),
+        showToolCalls: true,
+        onRequestUpdate: rerender,
+      };
+      function rerender() {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostUpdated();
+      }
+
+      rerender();
+      transcript.hostConnected();
+      transcript.hostUpdated();
+      expect(container.querySelector(`[data-entry-id="${messageId}"]`)).toBeNull();
+
+      await expect(transcript.scrollToMessage(messageId)).resolves.toBe(true);
+
+      const matched = container.querySelector<HTMLElement>(`[data-entry-id="${messageId}"]`);
+      expect(matched).not.toBeNull();
+      expect(scrollIntoView).toHaveBeenCalledOnce();
+      expect(scrollIntoView.mock.instances[0]).toBe(matched);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", inline: "nearest" });
+      transcript.hostDisconnected();
+    } finally {
+      if (previousScrollIntoView) {
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", previousScrollIntoView);
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      }
+    }
+  });
+
+  it("keeps ordinary reply reveals on their virtualized row", () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const messageId = "reply-source";
+    const props = threadProps("pane-reply-source", "agent:main:main", [
+      {
+        role: "assistant",
+        content: "Original answer",
+        timestamp: 1_000,
+        __openclaw: { id: messageId, seq: 1 },
+      },
+    ]);
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    const virtualizer = (
+      transcript as unknown as {
+        sessionVirtualizer: {
+          virtualizerController: {
+            getVirtualizer: () => { scrollToIndex: (index: number, opts: unknown) => void };
+          };
+        };
+      }
+    ).sessionVirtualizer.virtualizerController.getVirtualizer();
+    const scrollToIndex = vi.spyOn(virtualizer, "scrollToIndex");
+
+    expect(transcript.revealMessage(messageId)).toBe(true);
+    expect(scrollToIndex).toHaveBeenCalledWith(0, { align: "center" });
+    transcript.hostDisconnected();
+  });
+
   it("pauses an unmeasurable restore until loading commits an empty transcript", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));

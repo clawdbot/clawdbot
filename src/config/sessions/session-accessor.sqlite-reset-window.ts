@@ -76,7 +76,7 @@ function parseMessageEventRow(row: {
   };
 }
 
-function readMessageRange(
+export function readActiveMessageRange(
   projection: ResetWindowProjection,
   start: number,
   endExclusive: number,
@@ -333,10 +333,10 @@ export function readVisibleMessageRange(
   const keptEnd = Math.min(boundedEnd, visible.kept.length);
   const keptEvents = visible.kept
     .slice(boundedStart, keptEnd)
-    .flatMap((position) => readMessageRange(projection, position, position + 1));
+    .flatMap((position) => readActiveMessageRange(projection, position, position + 1));
   const postVisibleStart = Math.max(boundedStart, visible.kept.length);
   const postVisibleEnd = Math.max(postVisibleStart, boundedEnd);
-  const postEvents = readMessageRange(
+  const postEvents = readActiveMessageRange(
     projection,
     visible.postStart + postVisibleStart - visible.kept.length,
     visible.postStart + postVisibleEnd - visible.kept.length,
