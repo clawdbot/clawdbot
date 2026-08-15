@@ -243,15 +243,6 @@ export function projectChatTranscript(
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
     const current = expandedAssistantMessages.get(messageId);
-    if (current?.status === "loaded") {
-      expandedAssistantMessages.set(messageId, {
-        ...current,
-        expanded: !current.expanded,
-        revision: current.revision + 1,
-      });
-      requestUpdate();
-      return;
-    }
     const loader = props.loadFullAssistantMessage;
     if (!loader || current?.status === "loading") {
       return;
@@ -278,7 +269,7 @@ export function projectChatTranscript(
           messageId,
           markdown === null
             ? { status: "error", revision: revision + 1 }
-            : { status: "loaded", expanded: true, markdown, revision: revision + 1 },
+            : { status: "loaded", markdown, revision: revision + 1 },
         );
         requestUpdate();
       },

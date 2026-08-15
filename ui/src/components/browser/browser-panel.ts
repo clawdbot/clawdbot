@@ -11,6 +11,7 @@ import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
+import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
 import { createDockPanelLayout } from "../dock-panel-layout.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
@@ -67,7 +68,12 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   });
   private observedViewportElement: Element | null = null;
 
-  static override styles = [panelTabStripStyles, dockPanelStyles, browserPanelStyles];
+  static override styles = [
+    panelTabStripStyles,
+    dockPanelStyles,
+    browserPanelStyles,
+    scrollbarShadowStyles,
+  ];
 
   override connectedCallback(): void {
     super.connectedCallback();

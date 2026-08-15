@@ -8,7 +8,6 @@ import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
   captureProjectUiProof,
-  captureUiProof,
   captureUiProofEnabled,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
@@ -23,14 +22,14 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it("keeps the pre-creation draft on the composer surface", async () => {
+  it("keeps the pre-submit draft on the composer and creates exactly one session", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       methodResponses: {
         "agents.list": {
           agents: [
@@ -47,17 +46,50 @@ suite.define(() => {
           scope: "agent",
         },
         "sessions.list": createdSessionListResult("agent:main:existing"),
+        "sessions.create": { key: "agent:main:draft-e2e" },
       },
     });
 
     try {
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       await page.getByRole("heading", { name: "Main" }).waitFor();
-      await page.locator(".new-session-page__message").waitFor();
-      await expect.poll(() => page.locator(".sidebar-recent-session--draft").count()).toBe(0);
-      await captureUiProof(page, "draft-row-after-light.png");
-      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
-      await captureUiProof(page, "draft-row-after-dark.png");
+      const message = page.locator(".new-session-page__message");
+      await message.waitFor();
+      await message.fill("fix the flaky draft test");
+
+      // Owner boundary: the New Session page (new-session-page.ts:228) keeps
+      // the draft message on DraftSubmissionFlow until the composer submits,
+      // so the route, the typed text, and the sidebar's canonical
+      // sessions.list row must all stay put with zero sessions.create
+      // requests before that happens.
+      expect(new URL(page.url()).pathname).toBe("/new");
+      expect(new URL(page.url()).search).toBe("?agent=main");
+      expect(await message.inputValue()).toBe("fix the flaky draft test");
+      expect(
+        await page
+          .locator('.sidebar-recent-session[data-session-key="agent:main:existing"]')
+          .count(),
+      ).toBe(1);
+      expect(await page.locator(".sidebar-recent-session").count()).toBe(1);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+      await page.getByRole("button", { name: "Start session" }).click();
+
+      const createRequest = await gateway.waitForRequest("sessions.create");
+      expect(createRequest.params).toMatchObject({
+        agentId: "main",
+        message: "fix the flaky draft test",
+      });
+
+      // Wait for the same canonical settle signal the neighboring submission
+      // test uses (navigation to the created session route) before counting
+      // requests: the exactly-once assert must observe the submission flow
+      // after it has fully resolved, not mid-flight, or a late duplicate
+      // sessions.create could land after a premature pass.
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:draft-e2e"));
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
     } finally {
       await context.close();
     }
