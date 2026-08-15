@@ -36,7 +36,17 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
           persist-credentials: false
-
+          
+      - name: Resolve Release Version
+        id: version
+        run: |
+          # 优先使用手动输入的 tag；如果没有输入，则读取仓库本身的 Android 版本号并拼上 'v'
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            pkg_ver="$(node -p 'require("./apps/android/version.json").version')"
+            echo "tag=v${pkg_ver}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -77,7 +87,7 @@ jobs:
 
       - name: Prepare and verify signed Android APK
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           export GIT_COMMIT="$(git rev-parse HEAD)"
@@ -126,7 +136,7 @@ jobs:
 
       - name: Summary
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
           {
             echo "## Signed Android APK published"
