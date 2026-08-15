@@ -1370,6 +1370,15 @@ export async function switchChatHistoryBranch(
   }
 }
 
+/** Branches for the current pane; equivalence covers alias-canonicalization windows (#124020 class). */
+export function displayedChatSessionBranches(
+  state: Pick<ChatState, "chatBranches" | "chatBranchesSessionKey" | "sessionKey">,
+): SessionBranch[] {
+  return areUiSessionKeysEquivalent(state.chatBranchesSessionKey, state.sessionKey)
+    ? (state.chatBranches ?? [])
+    : [];
+}
+
 export async function loadChatBranches(state: ChatState): Promise<void> {
   const sessions = state.sessions;
   const client = state.client;
