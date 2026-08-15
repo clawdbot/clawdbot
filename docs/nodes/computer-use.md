@@ -115,7 +115,7 @@ scripts/dev/computer-use-macos-live-rig.sh prepare-linux \
   cu-linux-live-proof 29431 "$scratch"
 ```
 
-Run the emitted `gateway`, `node`, and `fixture` commands in separate panes that inherit the same `DISPLAY` and `DBUS_SESSION_BUS_ADDRESS`. The isolated gateway silently approves loopback device identities, but the node command surface remains an explicit approval: run the emitted `nodes` command, read `.pending[0].requestId`, and pass it to `scripts/dev/computer-use-macos-live-rig.sh approve "$scratch" <request-id>`. Rerun `nodes` until exactly one connected node advertises `provider.id: "cua-computer"`.
+Run the emitted `gateway`, `node`, and `fixture` commands in separate panes that inherit the same `DISPLAY` and `DBUS_SESSION_BUS_ADDRESS`. The isolated configs share one scratch-only random Gateway token, and the gateway silently approves loopback node-device pairing. The node command surface remains an explicit approval: run the emitted `nodes` command after the node finishes reconnecting, read `.pending[0].requestId`, and pass it to `scripts/dev/computer-use-macos-live-rig.sh approve "$scratch" <request-id>`. Rerun `nodes` until exactly one connected node advertises `provider.id: "cua-computer"`.
 
 Execute the same proof runner against the non-frontmost GTK fixture:
 

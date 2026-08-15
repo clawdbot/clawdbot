@@ -266,14 +266,17 @@ prepare_linux() {
   mkdir -p "$scratch/agent-state" "$scratch/gateway-state" "$scratch/node-state"
   local gateway_config="$scratch/gateway.json"
   local node_config="$scratch/node.json"
+  local gateway_token
+  gateway_token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
 
-  node - "$port" >"$gateway_config" <<'NODE'
+  node - "$port" "$gateway_token" >"$gateway_config" <<'NODE'
 const port = Number(process.argv[2]);
+const token = process.argv[3];
 process.stdout.write(`${JSON.stringify({
   gateway: {
     mode: "local",
     port,
-    auth: { mode: "none" },
+    auth: { mode: "token", token },
     nodes: {
       commands: { allow: ["computer.act"] },
       pairing: { autoApproveLocal: true, sshVerify: false },
@@ -282,12 +285,13 @@ process.stdout.write(`${JSON.stringify({
 }, null, 2)}\n`);
 NODE
 
-  node - "$port" >"$node_config" <<'NODE'
+  node - "$port" "$gateway_token" >"$node_config" <<'NODE'
 const port = Number(process.argv[2]);
+const token = process.argv[3];
 process.stdout.write(`${JSON.stringify({
   gateway: {
     mode: "remote",
-    remote: { transport: "direct", url: `ws://127.0.0.1:${port}` },
+    remote: { transport: "direct", url: `ws://127.0.0.1:${port}`, token },
   },
   browser: { enabled: false },
   nodeHost: { browserProxy: { enabled: false } },
@@ -324,11 +328,13 @@ run_gateway() {
   [[ $# -eq 1 ]] || { usage; exit 2; }
   load_rig "$1"
   require_unoccupied_port "$OPENCLAW_CU_RIG_PORT"
+  local auth_mode="none"
+  [[ "$OPENCLAW_CU_RIG_PLATFORM" == "linux" ]] && auth_mode="token"
   exec env \
     OPENCLAW_CONFIG_PATH="$OPENCLAW_CU_RIG_GATEWAY_CONFIG" \
     OPENCLAW_STATE_DIR="$OPENCLAW_CU_RIG_GATEWAY_STATE" \
     node "$repo_root/scripts/run-node.mjs" --profile "$OPENCLAW_CU_RIG_PROFILE" \
-      gateway run --port "$OPENCLAW_CU_RIG_PORT" --auth none --verbose
+      gateway run --port "$OPENCLAW_CU_RIG_PORT" --auth "$auth_mode" --verbose
 }
 
 run_app() {
