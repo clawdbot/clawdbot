@@ -292,6 +292,29 @@ suite.define(() => {
           expect(shadowScrollbar).toEqual({ width: "12px", thumbBackground: expect.any(String) });
           expect(shadowScrollbar?.thumbBackground).not.toBe("rgba(0, 0, 0, 0)");
           await captureUiProof(page, `capability-menu-shadow-dom-${colorScheme}.png`);
+
+          // Genericity guard, not a second sample of the menu above: base.css
+          // reaches these parts through bare wa-dropdown/wa-select/wa-popover
+          // selectors, so every Web Awesome scroll part rendered on this page
+          // must report the canonical width -- including the ones no stylesheet
+          // names. A class allowlist would leave some at the platform default.
+          const shadowScrollbarWidths = await page.evaluate(() => {
+            // One part per host tag, matching the base.css rule exactly: sampling
+            // whichever part came first would read a part that rule never targets.
+            const partSelectorByTag: Record<string, string> = {
+              "WA-DROPDOWN": '[part~="menu"]',
+              "WA-POPOVER": '[part~="body"]',
+              "WA-SELECT": '[part~="listbox"]',
+            };
+            const hosts = document.querySelectorAll("wa-dropdown, wa-select, wa-popover");
+            return Array.from(hosts, (host) => {
+              const partSelector = partSelectorByTag[host.tagName];
+              const part = partSelector ? host.shadowRoot?.querySelector(partSelector) : null;
+              return part ? getComputedStyle(part, "::-webkit-scrollbar").width : null;
+            }).filter((width): width is string => width !== null);
+          });
+          expect(shadowScrollbarWidths.length).toBeGreaterThan(1);
+          expect([...new Set(shadowScrollbarWidths)]).toEqual(["12px"]);
         },
       );
     }

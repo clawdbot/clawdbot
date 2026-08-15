@@ -1109,47 +1109,30 @@ textarea,
 /* Canonical scrollbar for every scroll surface. scrollbar-color (:root above)
    inherits, including into shadow roots; scrollbar-width (* above) does not.
    Web Awesome shadow-DOM menus/listboxes are reachable via ::part(); no document
-   rule crosses that boundary on its own, so every rule below repeats this same
-   host group (:is() forbids pseudo-elements in its own argument, so ::part()
-   chains on afterward) rather than styling each surface separately. */
+   rule crosses that boundary on its own, so every rule below repeats the same
+   generic host group used for the shared corner treatment above. Enumerating
+   feature classes instead would leave every unlisted dropdown, listbox, and
+   popover on the raw platform scrollbar the moment one is added. */
 ::-webkit-scrollbar,
-:is(
-  .agent-chat__capability-menu,
-  .agent-select,
-  .chat-header-session-menu--compact,
-  .chat-pane__sharing-menu,
-  .model-setup-provider-select,
-  .sidebar-customize-menu
-)::part(menu)::-webkit-scrollbar,
-wa-select.settings-select::part(listbox)::-webkit-scrollbar {
+wa-dropdown::part(menu)::-webkit-scrollbar,
+wa-select::part(listbox)::-webkit-scrollbar,
+wa-popover::part(body)::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
 }
 
 ::-webkit-scrollbar-track,
 ::-webkit-scrollbar-corner,
-:is(
-  .agent-chat__capability-menu,
-  .agent-select,
-  .chat-header-session-menu--compact,
-  .chat-pane__sharing-menu,
-  .model-setup-provider-select,
-  .sidebar-customize-menu
-)::part(menu)::-webkit-scrollbar-track,
-wa-select.settings-select::part(listbox)::-webkit-scrollbar-track {
+wa-dropdown::part(menu)::-webkit-scrollbar-track,
+wa-select::part(listbox)::-webkit-scrollbar-track,
+wa-popover::part(body)::-webkit-scrollbar-track {
   background: transparent;
 }
 
 ::-webkit-scrollbar-thumb,
-:is(
-  .agent-chat__capability-menu,
-  .agent-select,
-  .chat-header-session-menu--compact,
-  .chat-pane__sharing-menu,
-  .model-setup-provider-select,
-  .sidebar-customize-menu
-)::part(menu)::-webkit-scrollbar-thumb,
-wa-select.settings-select::part(listbox)::-webkit-scrollbar-thumb {
+wa-dropdown::part(menu)::-webkit-scrollbar-thumb,
+wa-select::part(listbox)::-webkit-scrollbar-thumb,
+wa-popover::part(body)::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   background-clip: content-box;
   border: var(--scrollbar-thumb-inset) solid transparent;
@@ -1162,15 +1145,9 @@ wa-select.settings-select::part(listbox)::-webkit-scrollbar-thumb {
    surfaces get thumb-only hover; container hover can't chain through shadow. */
 ::-webkit-scrollbar-thumb:hover,
 :hover::-webkit-scrollbar-thumb,
-:is(
-  .agent-chat__capability-menu,
-  .agent-select,
-  .chat-header-session-menu--compact,
-  .chat-pane__sharing-menu,
-  .model-setup-provider-select,
-  .sidebar-customize-menu
-)::part(menu)::-webkit-scrollbar-thumb:hover,
-wa-select.settings-select::part(listbox)::-webkit-scrollbar-thumb:hover {
+wa-dropdown::part(menu)::-webkit-scrollbar-thumb:hover,
+wa-select::part(listbox)::-webkit-scrollbar-thumb:hover,
+wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
   background-clip: content-box;
 }
