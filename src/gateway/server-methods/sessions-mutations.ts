@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  missingScopeErrorShape,
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
   validateSessionsPluginPatchParams,
@@ -33,6 +34,19 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    if (
+      params.patch.permissionMode === "full" &&
+      client !== null &&
+      !scopes.includes(ADMIN_SCOPE)
+    ) {
+      respond(
+        false,
+        undefined,
+        missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+      );
+      return;
+    }
     const executed = await executeSessionPatchMany({
       client,
       context,
@@ -48,6 +62,15 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
   },
   "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
+      return;
+    }
+    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    if (params.permissionMode === "full" && client !== null && !scopes.includes(ADMIN_SCOPE)) {
+      respond(
+        false,
+        undefined,
+        missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+      );
       return;
     }
     const key = requireSessionKey(params.key, respond);

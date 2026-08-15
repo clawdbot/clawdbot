@@ -293,6 +293,8 @@ export async function createGatewaySession(params: {
     deny: string[];
   };
   spawnedCwd?: string;
+  sessionRoot?: string;
+  permissionMode?: SessionEntry["permissionMode"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */
   prepareLifecycle?: PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
@@ -705,6 +707,8 @@ export async function createGatewaySession(params: {
         commandSource: params.commandSource,
         ...(params.creation ? { creation: params.creation } : {}),
         ...(spawnedCwd ? { spawnedCwd } : {}),
+        ...(params.sessionRoot ? { sessionRoot: params.sessionRoot } : {}),
+        ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
         ...(params.prepareLifecycle ? { prepareLifecycle: params.prepareLifecycle } : {}),
         ...(params.onLifecycleCleanupError
           ? { onLifecycleCleanupError: params.onLifecycleCleanupError }
@@ -1028,6 +1032,9 @@ export async function createGatewaySession(params: {
         const spawnedCwd = normalizeOptionalString(
           preparedLifecycle?.spawnedCwd ?? params.spawnedCwd,
         );
+        const sessionRoot = normalizeOptionalString(
+          preparedLifecycle?.sessionRoot ?? params.sessionRoot,
+        );
         const execNode = normalizeOptionalString(params.execNode);
         const execCwd = normalizeOptionalString(params.execCwd);
         const initialAgentHarnessId = params.initialEntry
@@ -1086,6 +1093,8 @@ export async function createGatewaySession(params: {
           // Session worktrees adopt cwd only during admin-gated creation; public patching stays
           // restricted to spawned subagent and ACP lineage.
           ...(spawnedCwd ? { spawnedCwd } : {}),
+          ...(sessionRoot ? { sessionRoot } : {}),
+          ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
           ...(preparedLifecycle?.worktree ? { worktree: preparedLifecycle.worktree } : {}),
           ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
           ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),

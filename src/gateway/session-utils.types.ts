@@ -73,6 +73,8 @@ export type GatewaySessionRow = {
   swarmGroupId?: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
+  permissionMode?: SessionEntry["permissionMode"];
+  sessionRoot?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */
   worktree?: SessionEntry["worktree"];
   /** Session-scoped exec node binding (exec host=node routing). */

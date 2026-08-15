@@ -66,6 +66,8 @@ export function buildGatewaySessionEventFields(params: {
     swarmGroupId: sessionRow.swarmGroupId,
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
+    permissionMode: sessionRow.permissionMode ?? null,
+    sessionRoot: sessionRow.sessionRoot,
     forkedFromParent: sessionEntryForkedFromParent(sessionRow) ? true : undefined,
     spawnDepth: sessionRow.spawnDepth,
     subagentRole: sessionRow.subagentRole,

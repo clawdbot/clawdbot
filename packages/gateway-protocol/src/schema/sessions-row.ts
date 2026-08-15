@@ -5,6 +5,13 @@ import { NonEmptyString } from "./primitives.js";
 import { SessionClassificationSchema, SessionPeerKindSchema } from "./session-classification.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
+export const SessionPermissionModeSchema = Type.Union([
+  Type.Literal("read-only"),
+  Type.Literal("guarded"),
+  Type.Literal("workspace"),
+  Type.Literal("full"),
+]);
+
 export const SessionToolOverridesSchema = closedObject({
   mcpServers: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Boolean())),
   mcpToolsDeny: Type.Optional(
@@ -96,6 +103,8 @@ export const SessionRowSchema = Type.Object(
     execCwd: Type.Optional(Type.String()),
     spawnedWorkspaceDir: Type.Optional(Type.String()),
     spawnedCwd: Type.Optional(Type.String()),
+    permissionMode: Type.Optional(SessionPermissionModeSchema),
+    sessionRoot: Type.Optional(Type.String()),
     createdVia: Type.Optional(
       Type.Union([
         Type.Literal("operator"),
@@ -134,6 +143,7 @@ export const SessionRowSchema = Type.Object(
 );
 
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
+export type SessionPermissionMode = Static<typeof SessionPermissionModeSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
 export type SessionRunStatus = NonNullable<SessionRow["status"]>;

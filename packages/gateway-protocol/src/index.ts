@@ -14,8 +14,10 @@ export * from "./schema/ui-command.js";
 export * from "./schema/board.js";
 export {
   SessionCreatedActorSchema,
+  SessionPermissionModeSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
+  type SessionPermissionMode,
   type SessionRow,
   type SessionRunStatus,
   type SessionToolOverrides,

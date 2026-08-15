@@ -181,6 +181,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (p.permissionMode === "full" && client !== null && !clientScopes.includes(ADMIN_SCOPE)) {
+      respond(
+        false,
+        undefined,
+        missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+      );
+      return;
+    }
     if (requestedCwd && !requestedExecNode && !clientScopes.includes(ADMIN_SCOPE)) {
       const containment = await resolveWorkspacePathContainment(requestedCwd, cfg);
       if (!containment) {
@@ -281,6 +289,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
+    let sessionRoot: string | undefined;
     let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
     if (sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true)) {
       const targetAgentId = normalizeAgentId(
@@ -310,6 +319,33 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             requestedProjectId
               ? "sessions.create project is outside the sandboxed agent workspace"
               : "sessions.create cwd is outside the sandboxed agent workspace",
+          ),
+        );
+        return;
+      }
+    }
+    if (!requestedExecNode) {
+      const targetAgentId = normalizeAgentId(
+        sessionAgentId ??
+          parseAgentSessionKey(sessionKey ?? "")?.agentId ??
+          explicitlyRequestedAgent.agentId,
+      );
+      const rootCandidate = sessionCwd ?? resolveAgentWorkspaceDir(cfg, targetAgentId);
+      try {
+        if (!sessionCwd) {
+          fs.mkdirSync(rootCandidate, { recursive: true });
+        }
+        sessionRoot = fs.realpathSync(rootCandidate);
+        if (sessionCwd) {
+          sessionCwd = sessionRoot;
+        }
+      } catch (error) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `sessions.create cwd is unavailable: ${formatErrorMessage(error)}`,
           ),
         );
         return;
@@ -467,8 +503,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             sessionCwd = sessionWorktree.path;
           }
           const preparedWorktree = sessionWorktree;
+          const preparedSessionRoot = fs.realpathSync(preparedWorktree.path);
           return resultOk({
             spawnedCwd: sessionCwd,
+            sessionRoot: preparedSessionRoot,
             worktree: {
               id: preparedWorktree.id,
               branch: preparedWorktree.branch,
@@ -557,6 +595,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             }
           : undefined,
       spawnedCwd: p.worktree === true ? undefined : sessionCwd,
+      sessionRoot: p.worktree === true ? undefined : sessionRoot,
+      permissionMode: p.permissionMode ?? (p.worktree === true ? "workspace" : undefined),
       prepareLifecycle,
       onLifecycleCleanupError: (error) => {
         sessionLog.warn(

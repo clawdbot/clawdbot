@@ -31,6 +31,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "completionOwnerSessionKey",
   "spawnedWorkspaceDir",
   "spawnedCwd",
+  "permissionMode",
+  "sessionRoot",
   "sessionDiffBaseline",
   "worktree",
   "projectId",
