@@ -59,6 +59,7 @@ import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
+import { resolveConfiguredCatalogMode } from "./models-list-catalog-mode.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListEntry = Pick<
@@ -75,10 +76,9 @@ type ModelsListEntryEvaluation = ModelAuthAvailabilityEvaluation;
 type ModelsListResult = {
   models: ModelsListEntryWithCapabilities[];
   providerOutcomes?: readonly ProviderCatalogOutcome[];
+  catalogMode?: "replace";
 };
-
 let loggedSlowModelsListCatalog = false;
-
 // Unknown views are rejected by protocol validation first; this helper keeps the
 // handler default explicit for older clients that omit the field.
 function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBrowseView {
@@ -476,7 +476,6 @@ function apiKeyProviderCapabilities(params: {
     resolveProvider,
   };
 }
-
 type BuildModelsListResultParams = {
   context: GatewayRequestContext;
   agentId?: string;
@@ -716,7 +715,9 @@ export async function buildModelsListResult(
       });
     },
   });
+  const catalogMode = resolveConfiguredCatalogMode({ cfg, view, workspaceDir });
   return {
+    ...(catalogMode ? { catalogMode } : {}),
     models: await buildPublicModelsListEntries({
       catalog: models,
       cfg,

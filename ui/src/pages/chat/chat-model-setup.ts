@@ -1,4 +1,7 @@
+import type { ModelCatalogEntry } from "../../api/types.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChatModelCatalogMode } from "./chat-model-catalog.ts";
 import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
 
 type ChatModelSetupState = {
@@ -7,6 +10,12 @@ type ChatModelSetupState = {
   agentsLoaded: boolean;
   selectedAgentFound: boolean;
   agentModel?: string | null;
+};
+
+type ChatModelCatalogControlState = {
+  basePath: string;
+  chatModelCatalog: ModelCatalogEntry[];
+  chatModelCatalogMode?: ChatModelCatalogMode;
 };
 
 export function requiresChatModelSetup(state: ChatModelSetupState): boolean {
@@ -22,5 +31,16 @@ export function createChatModelSetupBanner(onAction: () => void): ChatComposerDi
     text: t("modelSetup.required.body"),
     actionLabel: t("modelSetup.required.action"),
     onAction,
+  };
+}
+
+export function catalogControlProps(state: ChatModelCatalogControlState) {
+  return {
+    modelCatalog: state.chatModelCatalog,
+    catalogMode: state.chatModelCatalogMode,
+    modelSettingsHref:
+      state.chatModelCatalogMode === "replace"
+        ? pathForRoute("model-providers", state.basePath)
+        : undefined,
   };
 }

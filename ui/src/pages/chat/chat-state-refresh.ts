@@ -7,6 +7,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import { loadChatHistory, type ChatMetadataResult } from "./chat-history.ts";
+import * as chatModelCatalog from "./chat-model-catalog.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -151,7 +152,7 @@ function applyChatMetadataResult(
 ): ChatMetadataApplyResult {
   const models = fields.models === false ? undefined : applyModelCatalogResult(result.models);
   if (models) {
-    host.chatModelCatalog = models;
+    chatModelCatalog.applyChatModelCatalog(host, models, result.catalogMode);
     host.chatModelCatalogError = null;
   }
   const commandsApplied =
@@ -182,12 +183,13 @@ async function refreshCompatibilityModelCatalog(
   if (!agentId) {
     return;
   }
-  const models = await loadModels(request.client, {
+  const result = await loadModels(request.client, {
     agentId,
     ...(opts?.refresh ? { refresh: true } : { preparedOnly: true }),
+    includeMetadata: true,
   });
   if (ownsChatMetadataRequest(request)) {
-    request.host.chatModelCatalog = models;
+    chatModelCatalog.applyChatModelCatalog(request.host, result.models, result.catalogMode);
     request.host.chatModelCatalogError = null;
   }
 }
@@ -229,7 +231,7 @@ export async function refreshChatMetadata(
   const requestVersion = opts?.requestVersion ?? ++host.chatMetadataRequestVersion;
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
+    chatModelCatalog.clearChatModelCatalog(host);
     host.chatModelCatalogError = null;
     return EMPTY_CHAT_METADATA_APPLY_RESULT;
   }
@@ -308,12 +310,13 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   host.chatModelCatalogError = null;
   host.requestUpdate?.();
   try {
-    const models = await loadModels(client, {
+    const result = await loadModels(client, {
       agentId,
       rejectOnFailure: true,
+      includeMetadata: true,
     });
     if (ownsRequest()) {
-      host.chatModelCatalog = models;
+      chatModelCatalog.applyChatModelCatalog(host, result.models, result.catalogMode);
       host.chatModelCatalogError = null;
     }
   } catch (error) {

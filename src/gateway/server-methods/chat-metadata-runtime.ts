@@ -96,7 +96,7 @@ type ChatMetadataRuntimeDeps = {
     facts: PreparedAgentFacts;
     preferredProfileId?: string;
     lockedProfileId?: string;
-  }) => Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }>;
+  }) => Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[]; catalogMode?: "replace" }>;
 };
 
 const CHAT_METADATA_CACHE_MAX_ENTRIES = 64;
@@ -219,7 +219,7 @@ async function defaultBuildProjection(params: {
   facts: PreparedAgentFacts;
   preferredProfileId?: string;
   lockedProfileId?: string;
-}): Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }> {
+}): Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[]; catalogMode?: "replace" }> {
   const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
     await import("./models-list-result.js");
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
@@ -254,7 +254,11 @@ async function defaultBuildProjection(params: {
       catalogProjector: projector,
     }),
   ]);
-  return { modelCatalog, models: metadata.models };
+  return {
+    modelCatalog,
+    models: metadata.models,
+    ...(metadata.catalogMode ? { catalogMode: metadata.catalogMode } : {}),
+  };
 }
 
 export function createGatewayChatMetadataRuntime(params: {

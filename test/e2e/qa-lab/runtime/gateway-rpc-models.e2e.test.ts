@@ -106,8 +106,10 @@ describe("gateway RPC model catalog", () => {
         const payload = (await started.client.request("models.list", {
           view: "configured",
         })) as {
+          catalogMode?: "replace";
           models: Array<Record<string, unknown>>;
         };
+        expect(payload.catalogMode).toBe("replace");
         expect(payload.models).toEqual([
           expect.objectContaining({
             alias: "Catalog Alias",

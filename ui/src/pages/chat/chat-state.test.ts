@@ -1527,6 +1527,24 @@ describe("refreshChatMetadata", () => {
     } as unknown as ChatPageHost;
   }
 
+  it("clears replace-mode catalog state while disconnected", async () => {
+    const request = vi.fn();
+    const state = createMetadataState(request, {
+      chatModelCatalog: [{ id: "stale-model", name: "Stale Model", provider: "openai" }],
+      chatModelCatalogMode: "replace",
+      chatModelsLoading: true,
+      client: null,
+      connected: false,
+    });
+
+    await refreshChatMetadata(state);
+
+    expect(state.chatModelCatalog).toEqual([]);
+    expect(state.chatModelCatalogMode).toBeUndefined();
+    expect(state.chatModelsLoading).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("applies agent-scoped metadata after a same-agent session switch", async () => {
     let resolveMetadata:
       | ((value: {
@@ -1537,11 +1555,13 @@ describe("refreshChatMetadata", () => {
             provider: string;
             available: boolean;
           }>;
+          catalogMode?: "replace";
         }) => void)
       | undefined;
     const metadata = new Promise<{
       commands: never[];
       models: Array<{ id: string; name: string; provider: string; available: boolean }>;
+      catalogMode?: "replace";
     }>((resolve) => {
       resolveMetadata = resolve;
     });
@@ -1556,6 +1576,7 @@ describe("refreshChatMetadata", () => {
     state.sessionKey = "agent:work:another";
     resolveMetadata?.({
       commands: [],
+      catalogMode: "replace",
       models: [{ id: "work-model", name: "Work Model", provider: "openai", available: true }],
     });
     await refresh;
@@ -1563,7 +1584,29 @@ describe("refreshChatMetadata", () => {
     expect(state.chatModelCatalog).toEqual([
       { id: "work-model", name: "Work Model", provider: "openai", available: true },
     ]);
+    expect(state.chatModelCatalogMode).toBe("replace");
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps replace-mode catalog state through a manual metadata refresh", async () => {
+    const metadata = {
+      commands: [],
+      catalogMode: "replace" as const,
+      models: [{ id: "work-model", name: "Work Model", provider: "openai", available: true }],
+    };
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      expect(method).toBe("chat.metadata");
+      expect(params).toEqual({ agentId: "work" });
+      return metadata;
+    });
+    const state = createMetadataState(request);
+
+    await refreshChatMetadata(state);
+    invalidateChatMetadataCache(state);
+    await refreshChatMetadata(state);
+
+    expect(state.chatModelCatalogMode).toBe("replace");
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("reuses same-agent metadata and fetches a cross-agent catalog", async () => {

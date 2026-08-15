@@ -5,6 +5,7 @@ import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { catalogControlProps } from "./chat-model-setup.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -60,7 +61,7 @@ export function renderChatPaneComposerControls(params: {
         connected: state.connected,
         gatewayAvailable: Boolean(state.client),
         loading: state.chatLoading,
-        modelCatalog: state.chatModelCatalog,
+        ...catalogControlProps(state),
         modelCatalogState: {
           hasSnapshot: hasModelSnapshot,
           onRetry: () => void refreshModelCatalog(),
