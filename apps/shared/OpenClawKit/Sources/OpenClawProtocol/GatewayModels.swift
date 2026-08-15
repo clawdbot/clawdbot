@@ -18952,6 +18952,7 @@ public struct CronAddParams: Codable, Sendable {
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
+    public let precheck: [String: AnyCodable]?
     public let delivery: AnyCodable?
     public let failurealert: AnyCodable?
 
@@ -18971,6 +18972,7 @@ public struct CronAddParams: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
+        precheck: [String: AnyCodable]? = nil,
         delivery: AnyCodable? = nil,
         failurealert: AnyCodable? = nil)
     {
@@ -18989,6 +18991,7 @@ public struct CronAddParams: Codable, Sendable {
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
         self.payload = payload
+        self.precheck = precheck
         self.delivery = delivery
         self.failurealert = failurealert
     }
@@ -19009,6 +19012,7 @@ public struct CronAddParams: Codable, Sendable {
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
         case payload
+        case precheck
         case delivery
         case failurealert = "failureAlert"
     }
