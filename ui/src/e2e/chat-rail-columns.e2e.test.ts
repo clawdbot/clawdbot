@@ -302,6 +302,103 @@ suite.define(() => {
             (element) => element.getBoundingClientRect().width,
           );
 
+          await sidePanel(page).getByRole("button", { name: "Dock to bottom" }).click();
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) =>
+                element.classList.contains("side-panel--bottom"),
+              ),
+            )
+            .toBe(true);
+          await expect
+            .poll(() =>
+              page.evaluate(() => {
+                const panel = document.querySelector<HTMLElement>(".side-panel");
+                const region = document.querySelector<HTMLElement>(".sidebar-region");
+                return Math.abs(
+                  (panel?.getBoundingClientRect().width ?? 0) -
+                    (region?.getBoundingClientRect().width ?? 0),
+                );
+              }),
+            )
+            .toBeLessThan(1);
+          await expect
+            .poll(() => divider.evaluate((element) => element.orientation))
+            .toBe("horizontal");
+          const bottomHeight = await sidePanel(page).evaluate(
+            (element) => element.getBoundingClientRect().height,
+          );
+          const bottomDividerBox = await divider.boundingBox();
+          expect(bottomDividerBox).not.toBeNull();
+          await page.mouse.move(
+            bottomDividerBox!.x + bottomDividerBox!.width / 2,
+            bottomDividerBox!.y + 1,
+          );
+          await page.mouse.down();
+          await page.mouse.move(
+            bottomDividerBox!.x + bottomDividerBox!.width / 2,
+            bottomDividerBox!.y - 70,
+          );
+          await page.mouse.up();
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) => element.getBoundingClientRect().height),
+            )
+            .toBeGreaterThan(bottomHeight + 50);
+          const resizedHeight = await sidePanel(page).evaluate(
+            (element) => element.getBoundingClientRect().height,
+          );
+          await page.mouse.move(80, 80);
+          await page.mouse.click(300, 100);
+          await captureRichPanel(page, `rails-tabs-bottom-${themeMode}`);
+
+          await sidePanel(page).getByRole("button", { name: "Minimize side panel" }).click();
+          await page.locator(".chat-side-panel-toggle").click();
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) =>
+                element.classList.contains("side-panel--bottom"),
+              ),
+            )
+            .toBe(true);
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) => element.getBoundingClientRect().height),
+            )
+            .toBeCloseTo(resizedHeight, 0);
+
+          await page.reload();
+          await page.locator(".chat-group").first().waitFor();
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) =>
+                element.classList.contains("side-panel--bottom"),
+              ),
+            )
+            .toBe(true);
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) => element.getBoundingClientRect().height),
+            )
+            .toBeCloseTo(resizedHeight, 0);
+
+          await sidePanel(page).getByRole("button", { name: "Dock to right" }).click();
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) =>
+                element.classList.contains("side-panel--bottom"),
+              ),
+            )
+            .toBe(false);
+          await expect
+            .poll(() => divider.evaluate((element) => element.orientation))
+            .toBe("vertical");
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+            )
+            .toBeCloseTo(resizedWidth, 0);
+
           await sidePanel(page).getByRole("button", { name: "Expand side panel" }).click();
           await expect
             .poll(() =>

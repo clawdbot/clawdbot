@@ -11,6 +11,7 @@ import {
   fitSidebarLayout,
   isSidebarRegionCollapsed,
   openSlot,
+  sidebarDock,
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
@@ -68,7 +69,7 @@ export function renderSidebarRegion(params: {
     class="sidebar-region ${collapsed && panelOpen ? "sidebar-region--narrow" : ""} ${panelOpen &&
     params.layout.expanded
       ? "sidebar-region--expanded"
-      : ""}"
+      : ""} ${panelOpen && sidebarDock(params.layout) === "bottom" ? "sidebar-region--bottom" : ""}"
   >
     <openclaw-chat-sidebar-region
       .layout=${params.layout}

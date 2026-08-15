@@ -43,7 +43,8 @@ import {
   activatePanel,
   fitSidebarLayout,
   openSlot,
-  resizeColumn,
+  resizeSidebarPanel,
+  sidebarDock,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
 
@@ -60,26 +61,28 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     state.updateSidebarLayout(fitted);
   }
 
-  protected commitSidebarColumnResize(
+  protected commitSidebarPanelResize(
     renderedLayout: SidebarLayout,
     columnId: string,
-    width: number,
+    size: number,
   ): void {
     const state = this.state;
     if (!state) {
       return;
     }
-    const resizedProjection = resizeColumn(renderedLayout, columnId, width);
+    const resizedProjection = resizeSidebarPanel(renderedLayout, columnId, size);
     const fittedProjection =
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(resizedProjection, this.paneWidth) ?? resizedProjection)
         : resizedProjection;
-    const fittedWidth = fittedProjection.columns.find((column) => column.id === columnId)?.width;
+    const fittedColumn = fittedProjection.columns.find((column) => column.id === columnId);
+    const fittedSize =
+      sidebarDock(fittedProjection) === "bottom" ? fittedColumn?.height : fittedColumn?.width;
     if (
-      fittedWidth !== undefined &&
+      fittedSize !== undefined &&
       state.sidebarLayout.columns.some((column) => column.id === columnId)
     ) {
-      state.updateSidebarLayout(resizeColumn(state.sidebarLayout, columnId, fittedWidth));
+      state.updateSidebarLayout(resizeSidebarPanel(state.sidebarLayout, columnId, fittedSize));
       return;
     }
     this.commitSidebarLayout(fittedProjection);

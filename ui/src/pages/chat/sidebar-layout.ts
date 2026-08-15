@@ -1,15 +1,24 @@
-import type { SidebarLayout, SidebarPanel, SidebarSlotId } from "./sidebar-layout-types.ts";
+import type {
+  SidebarDock,
+  SidebarLayout,
+  SidebarPanel,
+  SidebarSlotId,
+} from "./sidebar-layout-types.ts";
 
 export type {
   SidebarColumn,
+  SidebarDock,
   SidebarLayout,
   SidebarPanel,
   SidebarSlotId,
 } from "./sidebar-layout-types.ts";
 
 const SIDEBAR_DEFAULT_WIDTH_PX = 360;
+const SIDEBAR_DEFAULT_HEIGHT_PX = 360;
 export const SIDEBAR_MIN_WIDTH_PX = 260;
+export const SIDEBAR_MIN_HEIGHT_PX = 220;
 const SIDEBAR_MAX_WIDTH_PX = 1_200;
+const SIDEBAR_MAX_HEIGHT_PX = 800;
 const SIDEBAR_MAIN_MIN_WIDTH_PX = 312;
 export const SIDEBAR_NARROW_BREAKPOINT_PX = 680;
 const SIDEBAR_DIVIDER_WIDTH_PX = 4;
@@ -20,6 +29,14 @@ function cloneLayout(layout: SidebarLayout): SidebarLayout {
 
 function clampWidth(width: number): number {
   return Math.min(SIDEBAR_MAX_WIDTH_PX, Math.max(SIDEBAR_MIN_WIDTH_PX, width));
+}
+
+function clampHeight(height: number): number {
+  return Math.min(SIDEBAR_MAX_HEIGHT_PX, Math.max(SIDEBAR_MIN_HEIGHT_PX, height));
+}
+
+export function sidebarDock(layout: SidebarLayout): SidebarDock {
+  return layout.dock === "bottom" ? "bottom" : "right";
 }
 
 function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
@@ -78,6 +95,7 @@ export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLay
         side: "right",
         panels: [panel],
         activePanelId: panel.id,
+        height: SIDEBAR_DEFAULT_HEIGHT_PX,
         width: SIDEBAR_DEFAULT_WIDTH_PX,
       },
     ];
@@ -138,15 +156,23 @@ export function setSidebarExpanded(layout: SidebarLayout, expanded: boolean): Si
   return { ...cloneLayout(layout), expanded };
 }
 
-export function resizeColumn(
+export function setSidebarDock(layout: SidebarLayout, dock: SidebarDock): SidebarLayout {
+  return { ...cloneLayout(layout), dock };
+}
+
+export function resizeSidebarPanel(
   layout: SidebarLayout,
   columnId: string,
-  width: number,
+  size: number,
 ): SidebarLayout {
   const next = cloneLayout(layout);
   const column = next.columns.find((entry) => entry.id === columnId);
-  if (column && Number.isFinite(width)) {
-    column.width = clampWidth(width);
+  if (column && Number.isFinite(size)) {
+    if (sidebarDock(next) === "bottom") {
+      column.height = clampHeight(size);
+    } else {
+      column.width = clampWidth(size);
+    }
   }
   return next;
 }
@@ -164,6 +190,10 @@ export function fitSidebarLayout(
     return next;
   }
   next.columns = [column];
+  if (sidebarDock(next) === "bottom") {
+    column.height = clampHeight(column.height);
+    return next;
+  }
   const maxColumnWidth = Math.max(
     SIDEBAR_MIN_WIDTH_PX,
     Math.min(SIDEBAR_MAX_WIDTH_PX, availableWidth * 0.6),
@@ -181,8 +211,9 @@ export function isSidebarRegionCollapsed(_layout: SidebarLayout, availableWidth:
 }
 
 export function sidebarPrimaryWidth(layout: SidebarLayout, availableWidth: number): number {
-  const sidebarWidth = layout.open === true ? (layout.columns[0]?.width ?? 0) : 0;
-  const dividerCount = layout.open === true && layout.columns.length > 0 ? 1 : 0;
+  const sidePanelOpen = layout.open === true && sidebarDock(layout) === "right";
+  const sidebarWidth = sidePanelOpen ? (layout.columns[0]?.width ?? 0) : 0;
+  const dividerCount = sidePanelOpen && layout.columns.length > 0 ? 1 : 0;
   return Math.max(
     SIDEBAR_MAIN_MIN_WIDTH_PX,
     availableWidth - sidebarWidth - dividerCount * SIDEBAR_DIVIDER_WIDTH_PX,

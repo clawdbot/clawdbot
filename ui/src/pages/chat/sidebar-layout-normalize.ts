@@ -2,8 +2,11 @@ import { isRecord } from "@openclaw/normalization-core";
 import type { SidebarLayout, SidebarPanel, SidebarSlotId } from "./sidebar-layout-types.ts";
 
 const DEFAULT_WIDTH = 360;
+const DEFAULT_HEIGHT = 360;
 const MIN_WIDTH = 260;
+const MIN_HEIGHT = 220;
 const MAX_WIDTH = 1_200;
+const MAX_HEIGHT = 800;
 
 function isSlotId(value: unknown): value is SidebarSlotId {
   return (
@@ -21,6 +24,10 @@ function isSlotId(value: unknown): value is SidebarSlotId {
 
 function clampWidth(width: number): number {
   return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width));
+}
+
+function clampHeight(height: number): number {
+  return Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, height));
 }
 
 function uniqueId(value: unknown, fallback: string, used: Set<string>): string {
@@ -44,6 +51,7 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
   const panels: SidebarPanel[] = [];
   let activePanelId = "";
   let width = DEFAULT_WIDTH;
+  let height = DEFAULT_HEIGHT;
   for (const rawColumn of value.columns) {
     if (
       !isRecord(rawColumn) ||
@@ -78,6 +86,10 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
       typeof rawColumn.width === "number" && Number.isFinite(rawColumn.width)
         ? clampWidth(rawColumn.width)
         : width;
+    height =
+      typeof rawColumn.height === "number" && Number.isFinite(rawColumn.height)
+        ? clampHeight(rawColumn.height)
+        : height;
     panels.push(...columnPanels);
   }
   const columns = panels.length
@@ -89,12 +101,14 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
           activePanelId: panels.some((panel) => panel.id === activePanelId)
             ? activePanelId
             : panels[0]!.id,
+          height,
           width,
         },
       ]
     : [];
   return {
     columns,
+    dock: value.dock === "bottom" ? "bottom" : "right",
     open: typeof value.open === "boolean" ? value.open : columns.length > 0,
     expanded: value.expanded === true,
   };

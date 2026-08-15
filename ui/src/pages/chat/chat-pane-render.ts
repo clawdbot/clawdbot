@@ -67,6 +67,7 @@ import {
   closeSlot,
   openSlot,
   reorderPanel,
+  setSidebarDock,
   setSidebarExpanded,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
@@ -714,9 +715,10 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         state.updateSidebarLayout(
           reorderPanel(state.sidebarLayout, panelId, targetPanelId, placement),
         ),
-      resizeColumn: (columnId: string, width: number) => {
-        this.commitSidebarColumnResize(sidebarLayout, columnId, width);
+      resizePanel: (columnId: string, size: number) => {
+        this.commitSidebarPanelResize(sidebarLayout, columnId, size);
       },
+      setDock: (dock) => state.updateSidebarLayout(setSidebarDock(state.sidebarLayout, dock)),
       setExpanded: (expanded: boolean) =>
         state.updateSidebarLayout(setSidebarExpanded(state.sidebarLayout, expanded)),
       setOpen: (open: boolean) => this.setChatSidePanelOpen(open),

@@ -3,7 +3,12 @@
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../components/resizable-divider.ts";
-import { openSlot, setSidebarExpanded, type SidebarLayout } from "../sidebar-layout.ts";
+import {
+  openSlot,
+  setSidebarDock,
+  setSidebarExpanded,
+  type SidebarLayout,
+} from "../sidebar-layout.ts";
 import "./chat-sidebar-region.runtime.ts";
 
 type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"] & {
@@ -27,7 +32,8 @@ async function createRegion(layout: SidebarLayout = openSlot({ columns: [] }, "d
     activatePanel: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
-    resizeColumn: vi.fn(),
+    resizePanel: vi.fn(),
+    setDock: vi.fn(),
     setExpanded: vi.fn(),
     setOpen: vi.fn(),
   };
@@ -95,8 +101,10 @@ describe("chat sidebar region", () => {
 
     const separators = root(region).querySelectorAll(".tabstrip-separator");
     expect(separators).toHaveLength(1);
-    expect(separators[0]?.previousElementSibling).toHaveClass("tabstrip-tab__close");
-    expect(separators[0]?.nextElementSibling).toHaveClass("tabstrip-tab");
+    expect(separators[0]?.previousElementSibling?.classList.contains("tabstrip-tab__close")).toBe(
+      true,
+    );
+    expect(separators[0]?.nextElementSibling?.classList.contains("tabstrip-tab")).toBe(true);
   });
 
   it("delivers typed requests to the mounted panel owner", async () => {
@@ -143,17 +151,21 @@ describe("chat sidebar region", () => {
     region.panelTemplates = {
       browser: html`<div .handleToggleRequest=${handleToggleRequest}>Browser panel</div>`,
     };
+    region.availableSlots = [...region.availableSlots, "browser"];
     await region.updateComplete;
     const browserItem = Array.from(
       root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
     ).find((item) => Reflect.get(item, "value") === "browser");
 
-    browserItem?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: "browser" } },
-      }),
-    );
+    expect(browserItem).toBeDefined();
+    root(region)
+      .querySelector("wa-dropdown")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          detail: { item: { value: "browser" } },
+        }),
+      );
 
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("browser");
     expect(handleToggleRequest).toHaveBeenCalledWith(
@@ -206,7 +218,6 @@ describe("chat sidebar region", () => {
         item.textContent?.replace(/\s+/gu, " ").trim(),
       ),
     ).toEqual([
-      "Review",
       "Terminal Ctrl+`",
       "Browser",
       "Files ⇧⌘B",
@@ -265,7 +276,32 @@ describe("chat sidebar region", () => {
     divider.dispatchEvent(
       new CustomEvent("resize", { bubbles: true, detail: { splitRatio: 0.5 } }),
     );
-    expect(region.callbacks?.resizeColumn).toHaveBeenCalledWith(region.layout.columns[0]!.id, 580);
+    expect(region.callbacks?.resizePanel).toHaveBeenCalledWith(region.layout.columns[0]!.id, 580);
+  });
+
+  it("docks and resizes the same panel across right and bottom layouts", async () => {
+    const region = await createRegion(
+      setSidebarDock(openSlot({ columns: [] }, "detail"), "bottom"),
+    );
+    const primary = root(region).querySelector<HTMLElement>(".sidebar-region__primary")!;
+    const panel = root(region).querySelector<HTMLElement>(".side-panel")!;
+    const divider = root(region).querySelector<HTMLElement & { orientation: string }>(
+      "resizable-divider",
+    )!;
+    primary.getBoundingClientRect = () => ({ height: 440 }) as DOMRect;
+    panel.getBoundingClientRect = () => ({ height: 360 }) as DOMRect;
+    root(region).getBoundingClientRect = () => ({ height: 800 }) as DOMRect;
+
+    expect(panel.classList.contains("side-panel--bottom")).toBe(true);
+    expect(panel.style.height).toBe("360px");
+    expect(divider.orientation).toBe("horizontal");
+    divider.dispatchEvent(
+      new CustomEvent("resize", { bubbles: true, detail: { splitRatio: 0.5 } }),
+    );
+    root(region).querySelector<HTMLButtonElement>(".side-panel__dock-right")?.click();
+
+    expect(region.callbacks?.resizePanel).toHaveBeenCalledWith(region.layout.columns[0]!.id, 400);
+    expect(region.callbacks?.setDock).toHaveBeenCalledWith("right");
   });
 
   it("hides the runtime completely when the persisted panel state is minimized", async () => {

@@ -18,7 +18,8 @@ function callbacks() {
     activatePanel: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
-    resizeColumn: vi.fn(),
+    resizePanel: vi.fn(),
+    setDock: vi.fn(),
     setExpanded: vi.fn(),
     setOpen: vi.fn(),
   };
@@ -85,6 +86,19 @@ describe("chat pane sidebar layout", () => {
       container,
     );
     expect(container.querySelector(".sidebar-region--narrow")).toBeNull();
+  });
+
+  it("places the unified panel below the conversation when bottom-docked", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const layout = { ...openSlot({ columns: [] }, "detail"), dock: "bottom" as const };
+
+    await renderLayout(container, layout);
+
+    expect(container.querySelector(".sidebar-region--bottom")).not.toBeNull();
+    expect(container.querySelector(".side-panel--bottom")).not.toBeNull();
+    expect(container.querySelector("resizable-divider")?.orientation).toBe("horizontal");
   });
 
   it("puts side-docked board chat in the canonical panel regardless of legacy dock edge", () => {

@@ -10,7 +10,7 @@ import {
 import {
   activatePanel,
   openSlot,
-  resizeColumn,
+  resizeSidebarPanel,
   setSidebarExpanded,
   setSidebarOpen,
 } from "./sidebar-layout.ts";
@@ -41,7 +41,7 @@ describe("sidebar session layout settings", () => {
         "": openSlot({ columns: [] }, "discussion"),
       }),
     ).toEqual({
-      main: { ...openSlot({ columns: [] }, "detail"), expanded: false },
+      main: { ...openSlot({ columns: [] }, "detail"), dock: "right", expanded: false },
       broken: { columns: [], open: false, expanded: false },
     });
   });
@@ -49,12 +49,12 @@ describe("sidebar session layout settings", () => {
   it("persists tab order, active tab, width, visibility, and expanded state per session", () => {
     let layout = openSlot(openSlot({ columns: [] }, "workspace"), "terminal");
     layout = activatePanel(layout, layout.columns[0]!.panels[0]!.id);
-    layout = resizeColumn(layout, layout.columns[0]!.id, 512);
+    layout = resizeSidebarPanel(layout, layout.columns[0]!.id, 512);
     layout = setSidebarExpanded(layout, true);
     layout = setSidebarOpen(layout, false);
 
     const persisted = updateSidebarSessionLayout({}, "main", layout).main;
-    expect(persisted).toEqual(layout);
+    expect(persisted).toEqual({ ...layout, dock: "right" });
     expect(persisted?.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
       "workspace",
       "terminal",

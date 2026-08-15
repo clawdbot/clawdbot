@@ -113,6 +113,19 @@ openclaw-chat-sidebar-region,
   overflow: hidden;
 }
 
+.sidebar-region--bottom {
+  flex-direction: column;
+}
+
+.sidebar-region--bottom .sidebar-region__primary {
+  width: 100%;
+  min-height: 200px;
+}
+
+.sidebar-region--bottom .sidebar-column__divider {
+  width: 100%;
+}
+
 .sidebar-column {
   display: flex;
   flex: 0 0 auto;
@@ -256,6 +269,11 @@ openclaw-chat-sidebar-region,
   position: relative;
   flex: 0 0 auto;
   background: var(--bg);
+}
+
+.side-panel--bottom {
+  width: 100%;
+  min-width: 0;
 }
 
 .side-panel__header {

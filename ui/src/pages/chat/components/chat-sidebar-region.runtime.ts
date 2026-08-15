@@ -12,7 +12,9 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import {
+  SIDEBAR_MIN_HEIGHT_PX,
   SIDEBAR_MIN_WIDTH_PX,
+  sidebarDock,
   type SidebarColumn,
   type SidebarLayout,
   type SidebarPanel,
@@ -236,6 +238,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
                 >${icons.externalLink}</a
               >`
             : nothing}
+          ${this.renderDockControls()}
           <openclaw-tooltip
             .content=${t(this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand")}
           >
@@ -258,11 +261,44 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
               aria-label=${t("chat.sidePanel.minimize")}
               @click=${() => this.callbacks?.setOpen(false)}
             >
-              ${icons.panelRightClose}
+              ${sidebarDock(this.layout) === "bottom"
+                ? icons.panelBottomClose
+                : icons.panelRightClose}
             </button>
           </openclaw-tooltip>
         </div>
       </header>
+    `;
+  }
+
+  private renderDockControls() {
+    if (this.narrow) {
+      return nothing;
+    }
+    const dock = sidebarDock(this.layout);
+    return html`
+      <openclaw-tooltip .content=${t("browser.dockBottom")}>
+        <button
+          class="rail-header__action side-panel__dock-bottom"
+          type="button"
+          aria-pressed=${String(dock === "bottom")}
+          aria-label=${t("browser.dockBottom")}
+          @click=${() => this.callbacks?.setDock("bottom")}
+        >
+          ${icons.panelBottomOpen}
+        </button>
+      </openclaw-tooltip>
+      <openclaw-tooltip .content=${t("browser.dockRight")}>
+        <button
+          class="rail-header__action side-panel__dock-right"
+          type="button"
+          aria-pressed=${String(dock === "right")}
+          aria-label=${t("browser.dockRight")}
+          @click=${() => this.callbacks?.setDock("right")}
+        >
+          ${icons.panelRightOpen}
+        </button>
+      </openclaw-tooltip>
     `;
   }
 
@@ -315,38 +351,46 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderDivider(column: SidebarColumn) {
+    const dock = sidebarDock(this.layout);
     const measure = () => {
       const shell = this.parentElement;
       const primary = shell?.querySelector<HTMLElement>(".sidebar-region__primary");
       const panel = shell?.querySelector<HTMLElement>(".side-panel");
-      const primaryWidth = primary?.getBoundingClientRect().width ?? 0;
-      const panelWidth = panel?.getBoundingClientRect().width ?? column.width;
-      return { primaryWidth, total: primaryWidth + panelWidth };
+      const primarySize =
+        dock === "bottom"
+          ? (primary?.getBoundingClientRect().height ?? 0)
+          : (primary?.getBoundingClientRect().width ?? 0);
+      const panelSize =
+        dock === "bottom"
+          ? (panel?.getBoundingClientRect().height ?? column.height)
+          : (panel?.getBoundingClientRect().width ?? column.width);
+      return { primarySize, total: primarySize + panelSize };
     };
     return renderChatResizableDivider({
       className: "sidebar-column__divider",
       label: t("chat.sidePanel.resize"),
-      orientation: "vertical",
+      orientation: dock === "bottom" ? "horizontal" : "vertical",
       splitRatio: 0.5,
       minRatio: 0.05,
       maxRatio: 0.95,
       measureRatio: () => {
-        const { primaryWidth, total } = measure();
-        return total > 0 ? primaryWidth / total : 0.5;
+        const { primarySize, total } = measure();
+        return total > 0 ? primarySize / total : 0.5;
       },
       measureSize: () => measure().total,
       onResize: (event) => {
-        const regionWidth =
-          this.availableWidth > 0
-            ? this.availableWidth
-            : (this.parentElement?.getBoundingClientRect().width ?? 0);
-        const total = measure().total || regionWidth;
+        const bounds = this.parentElement?.getBoundingClientRect();
+        const regionSize =
+          dock === "bottom"
+            ? (bounds?.height ?? 0)
+            : this.availableWidth > 0
+              ? this.availableWidth
+              : (bounds?.width ?? 0);
+        const total = measure().total || regionSize;
         const requested = total * (1 - event.detail.splitRatio);
-        const maxWidth = Math.max(SIDEBAR_MIN_WIDTH_PX, regionWidth * 0.6);
-        this.callbacks?.resizeColumn(
-          column.id,
-          Math.max(SIDEBAR_MIN_WIDTH_PX, Math.min(requested, maxWidth)),
-        );
+        const minimum = dock === "bottom" ? SIDEBAR_MIN_HEIGHT_PX : SIDEBAR_MIN_WIDTH_PX;
+        const maximum = Math.max(minimum, regionSize * 0.6);
+        this.callbacks?.resizePanel(column.id, Math.max(minimum, Math.min(requested, maximum)));
       },
     });
   }
@@ -356,7 +400,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       return nothing;
     }
     const column = this.layout.columns[0];
-    const width = this.layout.expanded ? "100%" : `${column?.width ?? 360}px`;
+    const dock = sidebarDock(this.layout);
+    const width = this.layout.expanded || dock === "bottom" ? "100%" : `${column?.width ?? 360}px`;
+    const height = this.layout.expanded || dock === "right" ? "100%" : `${column?.height ?? 360}px`;
     return html`${!this.narrow && !this.layout.expanded && column
         ? this.renderDivider(column)
         : nothing}
@@ -364,8 +410,8 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         class="sidebar-column side-panel ${this.narrow ? "side-panel--narrow" : ""} ${this.layout
           .expanded
           ? "side-panel--expanded"
-          : ""}"
-        style=${styleMap({ width })}
+          : ""} ${dock === "bottom" ? "side-panel--bottom" : ""}"
+        style=${styleMap({ width, height })}
         aria-label=${t("chat.sidePanel.label")}
       >
         ${column
@@ -373,7 +419,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           : html`<header class="rail-header side-panel__header side-panel__header--empty">
               <strong class="side-panel__empty-header-title">${t("chat.sidePanel.label")}</strong>
               <div class="rail-header__actions side-panel__actions">
-                ${this.renderTypeMenu()}
+                ${this.renderTypeMenu()} ${this.renderDockControls()}
                 <openclaw-tooltip
                   .content=${t(
                     this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand",
@@ -397,7 +443,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
                   aria-label=${t("chat.sidePanel.minimize")}
                   @click=${() => this.callbacks?.setOpen(false)}
                 >
-                  ${icons.panelRightClose}
+                  ${dock === "bottom" ? icons.panelBottomClose : icons.panelRightClose}
                 </button>
               </div>
             </header>`}

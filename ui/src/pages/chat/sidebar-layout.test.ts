@@ -7,7 +7,8 @@ import {
   normalizeSidebarLayout,
   openSlot,
   reorderPanel,
-  resizeColumn,
+  resizeSidebarPanel,
+  setSidebarDock,
   setSidebarExpanded,
   setSidebarOpen,
   sidebarPrimaryWidth,
@@ -28,6 +29,7 @@ describe("sidebar layout", () => {
       "detail",
     ]);
     expect(layout.columns[0]?.activePanelId).toBe("detail");
+    expect(layout.columns[0]?.height).toBe(360);
     expect(layout.columns[0]?.width).toBe(360);
     expect(layout.open).toBe(true);
   });
@@ -87,12 +89,24 @@ describe("sidebar layout", () => {
   it("clamps and fits the single inherited resizable column", () => {
     const layout = openAll();
     const columnId = layout.columns[0]!.id;
-    expect(resizeColumn(layout, columnId, 1).columns[0]?.width).toBe(SIDEBAR_MIN_WIDTH_PX);
-    expect(resizeColumn(layout, columnId, Number.MAX_VALUE).columns[0]?.width).toBe(1_200);
-    expect(fitSidebarLayout(resizeColumn(layout, columnId, 1_000), 1_200)?.columns[0]?.width).toBe(
-      720,
-    );
+    expect(resizeSidebarPanel(layout, columnId, 1).columns[0]?.width).toBe(SIDEBAR_MIN_WIDTH_PX);
+    expect(resizeSidebarPanel(layout, columnId, Number.MAX_VALUE).columns[0]?.width).toBe(1_200);
+    expect(
+      fitSidebarLayout(resizeSidebarPanel(layout, columnId, 1_000), 1_200)?.columns[0]?.width,
+    ).toBe(720);
     expect(fitSidebarLayout(layout, 560)).toBeNull();
+  });
+
+  it("persists and resizes the same panel at the bottom", () => {
+    const layout = setSidebarDock(openAll(), "bottom");
+    const columnId = layout.columns[0]!.id;
+    const resized = resizeSidebarPanel(layout, columnId, 480);
+
+    expect(resized.dock).toBe("bottom");
+    expect(resized.columns[0]?.height).toBe(480);
+    expect(resized.columns[0]?.width).toBe(360);
+    expect(sidebarPrimaryWidth(resized, 1_000)).toBe(1_000);
+    expect(fitSidebarLayout(resized, 560)).toEqual(resized);
   });
 
   it("only subtracts the panel width while the panel is open", () => {
@@ -135,9 +149,11 @@ describe("sidebar layout", () => {
             { id: "detail", slot: "detail" },
           ],
           activePanelId: "detail",
+          height: 360,
           width: 500,
         },
       ],
+      dock: "right",
       open: true,
       expanded: false,
     });
@@ -187,9 +203,11 @@ describe("sidebar layout", () => {
             { id: "same-panel-2", slot: "discussion" },
           ],
           activePanelId: "same-panel-2",
+          height: 360,
           width: 1_200,
         },
       ],
+      dock: "right",
       open: false,
       expanded: true,
     });
