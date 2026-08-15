@@ -1,6 +1,8 @@
 import type { Message } from "grammy/types";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import { buildTelegramThreadParams, resolveTelegramThreadSpec } from "./bot/helpers.js";
+import { isTelegramMessageNotModifiedError } from "./network-errors.js";
+import { buildTelegramRichMarkdown, getTelegramRichRawApi } from "./rich-message.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export type TelegramCallbackButton = {
@@ -34,8 +36,9 @@ export function createTelegramCallbackMessageActions(params: {
   callbackMessage: Message;
   isGroup: boolean;
   isForum: boolean;
+  richMessages?: boolean;
 }): TelegramCallbackMessageActions {
-  const { bot, callbackMessage, isGroup, isForum } = params;
+  const { bot, callbackMessage, isGroup, isForum, richMessages = false } = params;
   const callbackBusinessParams =
     callbackMessage.business_connection_id !== undefined
       ? { business_connection_id: callbackMessage.business_connection_id }
@@ -47,6 +50,44 @@ export function createTelegramCallbackMessageActions(params: {
     text: string,
     editParams?: Parameters<typeof bot.api.editMessageText>[3],
   ) => {
+    // Rich-enabled accounts send picker messages through the rich raw API.
+    // Editing that same message through the legacy text path makes Telegram
+    // for iOS render the new body over the stale rich body. Mirror the rich
+    // send path for callback edits, keeping caller-authored HTML edits on
+    // the legacy parse_mode HTML funnel (rich wire path is blocks-only).
+    if (
+      richMessages &&
+      editParams?.parse_mode !== "HTML" &&
+      (bot.api as { raw?: unknown }).raw !== undefined
+    ) {
+      const richRawApi = getTelegramRichRawApi(bot.api);
+      const richMessage = buildTelegramRichMarkdown(text);
+      try {
+        const richEditParams = {
+          chat_id: callbackMessage.chat.id,
+          message_id: callbackMessage.message_id,
+          rich_message: richMessage,
+          ...(editParams?.reply_markup !== undefined
+            ? { reply_markup: editParams.reply_markup }
+            : {}),
+        };
+        return (await richRawApi.editMessageText(
+          callbackBusinessParams ? withCallbackBusinessParams(richEditParams) : richEditParams,
+        )) as unknown as Awaited<ReturnType<typeof bot.api.editMessageText>>;
+      } catch (richErr) {
+        // "message is not modified" is expected for idempotent picker edits.
+        if (isTelegramMessageNotModifiedError(richErr)) {
+          throw richErr;
+        }
+        // Fall back to the legacy text edit, mirroring the rich-send funnel.
+        return await bot.api.editMessageText(
+          callbackMessage.chat.id,
+          callbackMessage.message_id,
+          text,
+          editParams ? withCallbackBusinessParams(editParams) : callbackBusinessParams,
+        );
+      }
+    }
     return await bot.api.editMessageText(
       callbackMessage.chat.id,
       callbackMessage.message_id,

@@ -1,6 +1,7 @@
 // Telegram callback-query routing across approvals, plugin actions, selects, commands, and models.
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { mergeTelegramAccountConfig } from "./account-config.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   hasTelegramApprovalCallbackPrefix,
@@ -183,6 +184,7 @@ export function registerTelegramCallbackQueryHandler(
         callbackMessage,
         isGroup,
         isForum,
+        richMessages: mergeTelegramAccountConfig(runtimeCfg, accountId).richMessages === true,
       });
       const approvalRuntime = createTelegramCallbackApprovalRuntime({
         accountId,
