@@ -94,7 +94,6 @@ import {
   createSessionEventSubscriberRegistry,
   createChatAbortMarker,
   createSessionMessageSubscriberRegistry,
-  createToolEventRecipientRegistry,
   resolveChatErrorKindFromError,
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
@@ -169,7 +168,7 @@ describe("agent event handler", () => {
       vi.fn<NonNullable<AgentEventHandlerOptions["clearTrackedActiveRun"]>>();
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
-    const toolEventRecipients = createToolEventRecipientRegistry();
+    const toolEventRecipients = chatRunState.toolEventRecipients;
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
 
@@ -3289,8 +3288,8 @@ describe("agent event handler", () => {
 
   it.each([
     {
-      name: "older timestamp",
-      marker: () => 1_000,
+      name: "older sequence",
+      marker: () => ({ abortedAtMs: 1_000, sequence: -2 }),
     },
     {
       name: "same-millisecond older sequence",
@@ -4422,7 +4421,8 @@ describe("agent event handler", () => {
       isControlUiVisible: false,
       verboseLevel: "off",
     });
-    chatRunState.getOrCreate("run-hidden-commentary-aborted").abortMarker = 1_000;
+    chatRunState.getOrCreate("run-hidden-commentary-aborted").abortMarker =
+      createChatAbortMarker(1_000);
 
     emitAgentEvent(handler, "run-hidden-commentary-aborted", "assistant", {
       text: "This aborted commentary must not be mirrored.",

@@ -27,8 +27,7 @@ import {
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
-import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import { createChatRunRegistry } from "./server-chat.js";
+import { createChatRunState, createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
@@ -916,7 +915,7 @@ describe("gateway broadcaster", () => {
 
 describe("chat run registry", () => {
   test("queues and removes runs per session", () => {
-    const registry = createChatRunRegistry();
+    const registry = createChatRunState().registry;
 
     registry.add("s1", { sessionKey: "main", clientRunId: "c1" });
     registry.add("s1", { sessionKey: "main", clientRunId: "c2" });

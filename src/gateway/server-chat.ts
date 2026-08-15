@@ -68,11 +68,9 @@ import { formatForLog } from "./ws-log.js";
 
 export {
   createChatAbortMarker,
-  createChatRunRegistry,
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
-  createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 export type {
   ChatAbortMarker,
