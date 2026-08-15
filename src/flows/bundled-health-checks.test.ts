@@ -6,21 +6,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBundledHealthChecks } from "./bundled-health-checks.js";
 
 const mocks = vi.hoisted(() => ({
-  inspectLlamaCppManagedSetup: vi.fn(),
+  inspectEmbeddingProviderSetup: vi.fn(),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(() => ({
+    plugins: [],
+    diagnostics: [],
+  })),
   registerCuaDriverDoctorChecks: vi.fn(),
   registerMemoryCoreDoctorChecks: vi.fn(),
   registerPolicyDoctorChecks: vi.fn(),
   loadBundledPluginPublicArtifactModuleSync: vi.fn(({ dirName }: { dirName: string }) =>
-    dirName === "llama-cpp"
-      ? { inspectLlamaCppManagedSetup: mocks.inspectLlamaCppManagedSetup }
-      : dirName === "memory-core"
-        ? { registerMemoryCoreDoctorChecks: mocks.registerMemoryCoreDoctorChecks }
-        : dirName === "cua-computer"
-          ? { registerCuaDriverDoctorChecks: mocks.registerCuaDriverDoctorChecks }
-          : { registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks },
+    dirName === "memory-core"
+      ? { registerMemoryCoreDoctorChecks: mocks.registerMemoryCoreDoctorChecks }
+      : dirName === "cua-computer"
+        ? { registerCuaDriverDoctorChecks: mocks.registerCuaDriverDoctorChecks }
+        : { registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks },
   ),
+  resolveProviderPolicySurface: vi.fn(() => ({
+    inspectEmbeddingProviderSetup: mocks.inspectEmbeddingProviderSetup,
+  })),
 }));
 
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
+}));
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  resolveProviderPolicySurface: mocks.resolveProviderPolicySurface,
+}));
 vi.mock("../plugins/public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleSync: mocks.loadBundledPluginPublicArtifactModuleSync,
 }));
@@ -42,17 +53,28 @@ describe("registerBundledHealthChecks", () => {
     registerBundledHealthChecks({ cfg: {}, cwd: workspaceDir });
 
     expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
-      dirName: "llama-cpp",
-      artifactBasename: "doctor-contract-api.js",
-    });
-    expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "memory-core",
       artifactBasename: "api.js",
     });
-    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledWith({
+    expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalledWith(
+      expect.objectContaining({ dirName: "llama-cpp" }),
+    );
+    const host = mocks.registerMemoryCoreDoctorChecks.mock.calls[0]?.[0];
+    expect(host).toMatchObject({
       registerHealthCheck: expect.any(Function),
-      inspectManagedLocalEmbeddingSetup: mocks.inspectLlamaCppManagedSetup,
+      resolveEmbeddingProviderSetupInspector: expect.any(Function),
       memoryCoreActive: true,
+    });
+    expect(host?.resolveEmbeddingProviderSetupInspector("local")).toBe(
+      mocks.inspectEmbeddingProviderSetup,
+    );
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledWith({
+      config: {},
+      workspaceDir,
+      env: process.env,
+    });
+    expect(mocks.resolveProviderPolicySurface).toHaveBeenCalledWith("local", {
+      manifestRegistry: { plugins: [], diagnostics: [] },
     });
     expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
     expect(mocks.registerCuaDriverDoctorChecks).not.toHaveBeenCalled();
@@ -68,11 +90,13 @@ describe("registerBundledHealthChecks", () => {
   ])("keeps the check addressable but inactive when memory-core does not own memory", (plugins) => {
     registerBundledHealthChecks({ cfg: { plugins }, cwd: workspaceDir });
 
-    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledWith({
-      registerHealthCheck: expect.any(Function),
-      inspectManagedLocalEmbeddingSetup: mocks.inspectLlamaCppManagedSetup,
-      memoryCoreActive: false,
-    });
+    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        registerHealthCheck: expect.any(Function),
+        resolveEmbeddingProviderSetupInspector: expect.any(Function),
+        memoryCoreActive: false,
+      }),
+    );
   });
 
   it("honors an explicitly selected memory-core slot behind a restrictive allowlist", () => {
@@ -86,11 +110,21 @@ describe("registerBundledHealthChecks", () => {
       cwd: workspaceDir,
     });
 
-    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledWith({
-      registerHealthCheck: expect.any(Function),
-      inspectManagedLocalEmbeddingSetup: mocks.inspectLlamaCppManagedSetup,
-      memoryCoreActive: true,
-    });
+    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        registerHealthCheck: expect.any(Function),
+        resolveEmbeddingProviderSetupInspector: expect.any(Function),
+        memoryCoreActive: true,
+      }),
+    );
+  });
+
+  it("returns no inspector when the selected provider exposes no policy surface", () => {
+    mocks.resolveProviderPolicySurface.mockReturnValueOnce(null);
+    registerBundledHealthChecks({ cfg: {}, cwd: workspaceDir });
+
+    const host = mocks.registerMemoryCoreDoctorChecks.mock.calls[0]?.[0];
+    expect(host?.resolveEmbeddingProviderSetupInspector("local")).toBeUndefined();
   });
 
   it("loads bundled policy health checks when policy extension is enabled", () => {

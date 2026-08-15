@@ -8,10 +8,6 @@ import {
   resolveManagedLlamaServerPaths,
   selectLlamaServerAsset,
 } from "./src/llama-server-assets.js";
-import {
-  MANAGED_LLAMA_CPP_CONFIG_REQUIRED_MESSAGE,
-  resolveManagedLlamaCppProviderConfig,
-} from "./src/managed-provider-config.js";
 
 const LEGACY_BASE_URL = "local://llama-cpp";
 const PROVIDER_PATH = "models.providers.llama-cpp";
@@ -23,36 +19,6 @@ export const legacyConfigRules = [
     match: (value: unknown) => value === LEGACY_BASE_URL,
   },
 ];
-
-export function inspectLlamaCppManagedSetup(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  agentId: string;
-  provider: string;
-}): {
-  provider: string;
-  reason: string;
-  requirement: string;
-  fixHint: string;
-} | null {
-  if (params.provider !== "local") {
-    return null;
-  }
-  const fixHint =
-    `Run \`openclaw models --agent ${params.agentId} auth login --provider llama-cpp --method local\` ` +
-    "in an interactive terminal, then rerun this check.";
-  try {
-    resolveManagedLlamaCppProviderConfig(params.config);
-  } catch {
-    return {
-      provider: params.provider,
-      reason: MANAGED_LLAMA_CPP_CONFIG_REQUIRED_MESSAGE,
-      requirement: "managed-llama-cpp-setup",
-      fixHint,
-    };
-  }
-  return null;
-}
 
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;

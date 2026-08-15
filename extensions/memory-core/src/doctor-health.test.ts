@@ -11,7 +11,9 @@ import {
 
 type InspectManagedLocalEmbeddingSetup = Parameters<
   typeof registerMemoryCoreDoctorChecks
->[0]["inspectManagedLocalEmbeddingSetup"];
+>[0]["resolveEmbeddingProviderSetupInspector"] extends (provider: string) => infer T
+  ? Exclude<T, undefined>
+  : never;
 
 const roots = new Set<string>();
 
@@ -34,7 +36,7 @@ async function createSemanticIndex(stateDir: string, model = "embeddinggemma-300
 }
 
 function captureCheck(
-  inspectManagedLocalEmbeddingSetup: InspectManagedLocalEmbeddingSetup,
+  inspectManagedLocalEmbeddingSetup?: InspectManagedLocalEmbeddingSetup,
   memoryCoreActive = true,
 ): HealthCheck {
   const checks: HealthCheck[] = [];
@@ -42,7 +44,7 @@ function captureCheck(
     registerHealthCheck(check) {
       checks.push(check);
     },
-    inspectManagedLocalEmbeddingSetup,
+    resolveEmbeddingProviderSetupInspector: () => inspectManagedLocalEmbeddingSetup,
     memoryCoreActive,
   });
   const check = checks[0];
@@ -103,7 +105,7 @@ describe("managed local embedding setup health check", () => {
     await expect(fs.readFile(databasePath)).resolves.toEqual(databaseBefore);
   });
 
-  it("passes configured and non-local providers through the same scoped contract", async () => {
+  it("passes configured local setup and ignores non-local providers", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-controls-"));
     roots.add(stateDir);
     await createSemanticIndex(stateDir);
@@ -112,7 +114,24 @@ describe("managed local embedding setup health check", () => {
 
     await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([]);
     await expect(check.detect(context(stateDir, "openai"))).resolves.toEqual([]);
-    expect(inspect.mock.calls.map(([params]) => params.provider)).toEqual(["local", "openai"]);
+    expect(inspect.mock.calls.map(([params]) => params.provider)).toEqual(["local"]);
+  });
+
+  it("reports a structured blocker when the local provider plugin is unavailable", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-plugin-missing-"));
+    roots.add(stateDir);
+    await createSemanticIndex(stateDir);
+    const check = captureCheck();
+
+    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([
+      expect.objectContaining({
+        checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
+        target: "main/local",
+        requirement: "memory-embedding-provider-plugin",
+        message: expect.stringContaining("official llama.cpp provider plugin"),
+        fixHint: expect.stringContaining("openclaw plugins install @openclaw/llama-cpp-provider"),
+      }),
+    ]);
   });
 
   it("normalizes selected provider IDs like Gateway startup", async () => {

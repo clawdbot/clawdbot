@@ -3,6 +3,11 @@ import type { HealthCheck } from "openclaw/plugin-sdk/health";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  LLAMA_CPP_PROVIDER_INSTALL_COMMAND,
+  LOCAL_MEMORY_EMBEDDING_PROVIDER_ID,
+  MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE,
+} from "./memory/local-embedding-provider.js";
+import {
   collectVectorProviderFindings,
   type ProviderFailure,
 } from "./migration/doctor-vector-index-provider-diagnostic.js";
@@ -19,7 +24,9 @@ type InspectManagedLocalEmbeddingSetup = (params: {
 
 type MemoryCoreDoctorRegistrationHost = {
   registerHealthCheck: (check: HealthCheck) => void;
-  inspectManagedLocalEmbeddingSetup: InspectManagedLocalEmbeddingSetup;
+  resolveEmbeddingProviderSetupInspector: (
+    provider: string,
+  ) => InspectManagedLocalEmbeddingSetup | undefined;
   memoryCoreActive: boolean;
 };
 
@@ -42,7 +49,7 @@ function resolveSelectedMemoryProvider(
 }
 
 function createManagedLocalEmbeddingSetupCheck(
-  inspectManagedLocalEmbeddingSetup: InspectManagedLocalEmbeddingSetup,
+  resolveEmbeddingProviderSetupInspector: MemoryCoreDoctorRegistrationHost["resolveEmbeddingProviderSetupInspector"],
   memoryCoreActive: boolean,
 ): HealthCheck {
   return {
@@ -67,6 +74,21 @@ function createManagedLocalEmbeddingSetupCheck(
             const provider = resolveSelectedMemoryProvider(params.config, params.agentId);
             if (!provider || provider === "none") {
               return null;
+            }
+            if (provider !== LOCAL_MEMORY_EMBEDDING_PROVIDER_ID) {
+              return null;
+            }
+            const inspectManagedLocalEmbeddingSetup =
+              resolveEmbeddingProviderSetupInspector(provider);
+            if (!inspectManagedLocalEmbeddingSetup) {
+              return {
+                provider,
+                reason: MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE,
+                requirement: "memory-embedding-provider-plugin",
+                fixHint:
+                  `Run \`${LLAMA_CPP_PROVIDER_INSTALL_COMMAND}\`, ensure the plugin is enabled, ` +
+                  "then rerun this check.",
+              };
             }
             return await inspectManagedLocalEmbeddingSetup({
               config: params.config,
@@ -118,7 +140,7 @@ export function registerMemoryCoreDoctorChecks(host: MemoryCoreDoctorRegistratio
   }
   host.registerHealthCheck(
     createManagedLocalEmbeddingSetupCheck(
-      host.inspectManagedLocalEmbeddingSetup,
+      host.resolveEmbeddingProviderSetupInspector,
       host.memoryCoreActive,
     ),
   );

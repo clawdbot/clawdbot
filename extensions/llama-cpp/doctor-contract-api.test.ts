@@ -1,10 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import {
-  inspectLlamaCppManagedSetup,
-  legacyConfigRules,
-  normalizeCompatibilityConfig,
-} from "./doctor-contract-api.js";
+import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
+import { inspectEmbeddingProviderSetup } from "./provider-policy-api.js";
 import { buildLlamaCppProviderConfig } from "./src/defaults.js";
 
 describe("llama.cpp doctor migration", () => {
@@ -57,7 +54,7 @@ describe("llama.cpp doctor migration", () => {
 
   it("reports the direct-start managed setup blocker with the supported CLI remediation", async () => {
     expect(
-      inspectLlamaCppManagedSetup({
+      inspectEmbeddingProviderSetup({
         config: {},
         env: {},
         agentId: "main",
@@ -85,7 +82,7 @@ describe("llama.cpp doctor migration", () => {
     const configBefore = JSON.stringify(config);
 
     expect(
-      inspectLlamaCppManagedSetup({
+      inspectEmbeddingProviderSetup({
         config,
         env: {},
         agentId: "main",
@@ -98,7 +95,7 @@ describe("llama.cpp doctor migration", () => {
 
   it("does not apply managed llama.cpp setup to a non-local memory provider", async () => {
     expect(
-      inspectLlamaCppManagedSetup({
+      inspectEmbeddingProviderSetup({
         config: {},
         env: {},
         agentId: "main",
