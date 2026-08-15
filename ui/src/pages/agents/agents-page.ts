@@ -544,13 +544,13 @@ class AgentsPage
     }
   }
 
-  private ensureModelCatalog() {
+  private ensureModelCatalog(options: { refresh?: boolean } = {}) {
     const client = this.client;
     const agentId = this.resolveSelectedAgentId();
     if (!client || !this.connected || !agentId) {
       return;
     }
-    if (this.chatModelCatalogClient === client) {
+    if (!options.refresh && this.chatModelCatalogClient === client) {
       const cached = this.chatModelCatalogByAgentId.get(agentId);
       if (cached) {
         this.chatModelCatalog = cached;
@@ -1114,7 +1114,10 @@ class AgentsPage
             stageAgentPrimaryModel(this.context.runtimeConfig, agentId, modelId);
             void refreshVisibleToolsEffectiveForCurrentSession(this);
           },
-          onModelCatalogRetry: () => this.ensureModelCatalog(),
+          // Availability facts (provider keys added/removed, new models) go
+          // stale in the per-agent cache; opening the picker re-reads them,
+          // mirroring the chat composer's on-open refresh.
+          onModelCatalogRetry: () => this.ensureModelCatalog({ refresh: true }),
           onModelFallbacksChange: (agentId, fallbacks) => {
             if (this.canCall("config.set", "operator.admin")) {
               stageAgentModelFallbacks(this.context.runtimeConfig, agentId, fallbacks);
