@@ -71,9 +71,9 @@ jobs:
       - name: Prepare and verify signed Android APK
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          GIT_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
+          export GIT_COMMIT="$(git rev-parse HEAD)"
           mkdir -p dist
             base_dir="${RUNNER_TEMP}/fallback-android-release"
             mkdir -p "${base_dir}"
