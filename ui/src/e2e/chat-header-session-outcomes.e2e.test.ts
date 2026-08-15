@@ -62,17 +62,6 @@ suite.define(() => {
             .evaluate((pane) => (pane as HTMLElement & { sessionKey?: string }).sessionKey),
         )
         .toBe(sessionB);
-      await gateway.resolveDeferred("sessions.files.reveal", {
-        ok: false,
-        error: "Stale reveal failure must stay retired.",
-      });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
-
       await page
         .locator(
           `.sidebar-recent-session[data-session-key="${sessionA}"] a.sidebar-recent-session__link`,
@@ -86,6 +75,16 @@ suite.define(() => {
             .evaluate((pane) => (pane as HTMLElement & { sessionKey?: string }).sessionKey),
         )
         .toBe(sessionA);
+      await gateway.resolveDeferred("sessions.files.reveal", {
+        ok: false,
+        error: "Stale reveal failure must stay retired.",
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
       await expect
         .poll(() => page.getByText("Stale reveal failure must stay retired.").count())
         .toBe(0);

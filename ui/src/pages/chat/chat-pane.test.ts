@@ -404,9 +404,10 @@ describe("chat pane header state", () => {
 
   it.each([
     {
-      name: "navigating away",
+      name: "leaving and returning before settlement",
       retire: (pane: TestChatPane) => {
         pane.presented = false;
+        pane.presented = true;
       },
     },
     {
