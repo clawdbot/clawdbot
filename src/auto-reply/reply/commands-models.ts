@@ -172,6 +172,7 @@ export async function buildModelsProviderData(
     cfg,
     agentId,
     view: options.view ?? "default",
+    preparedOnly: options.view !== "all",
     loadCatalog: ({ readOnly }) =>
       loadPreparedModelCatalogSnapshot({
         config: cfg,

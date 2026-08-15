@@ -344,6 +344,22 @@ describe("handleModelsCommand", () => {
     expect(authCheckerParams?.allowPreparedRuntimeAuth).toBe(true);
   });
 
+  it("does not start live discovery for default browse with provider wildcards", async () => {
+    await handleModelsCommand(
+      buildParams("/models", {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            modelPolicy: { allow: ["openai/*"] },
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
+  });
+
   it("does not block default browse when read-only catalog loading is slow", async () => {
     vi.useFakeTimers();
     try {
