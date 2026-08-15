@@ -25,6 +25,26 @@ describe("resolveControlUiBuildMismatch", () => {
       mismatch,
     ],
     [
+      "matching explicit port",
+      {
+        ...bundled,
+        requestHost: "claw.example:18789",
+        requestOrigin: "https://claw.example:18789",
+        clientBuildId: "older-build",
+      },
+      mismatch,
+    ],
+    [
+      "same host with differing port",
+      {
+        ...bundled,
+        requestHost: "127.0.0.1:18789",
+        requestOrigin: "http://127.0.0.1:5173",
+        clientBuildId: "older-build",
+      },
+      null,
+    ],
+    [
       "missing origin",
       { ...bundled, requestOrigin: undefined, clientBuildId: "older-build" },
       null,
