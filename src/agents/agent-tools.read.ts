@@ -89,8 +89,8 @@ function eraseFileToolParameters<TParameters extends TSchema, TDetails>(
   tool: AgentTool<TParameters, TDetails>,
 ): AnyAgentTool {
   return Object.assign({}, tool, {
-    execute: (toolCallId, params, signal, onUpdate) =>
-      tool.execute(toolCallId, params as Static<TParameters>, signal, onUpdate),
+    execute: (...args: Parameters<AnyAgentTool["execute"]>) =>
+      tool.execute(args[0], args[1] as Static<TParameters>, args[2], args[3]),
   });
 }
 
