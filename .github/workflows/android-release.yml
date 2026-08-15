@@ -33,7 +33,8 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          # 如果有输入的 tag 则检出 tag，否则检出触发 push 的分支代码
+          ref: ${{ inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
           persist-credentials: false
           
