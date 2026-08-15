@@ -12,7 +12,10 @@ import {
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import { loadPreparedModelCatalogSnapshotForBrowse } from "../../agents/model-catalog-browse.js";
+import {
+  loadPreparedModelCatalogSnapshotForBrowse,
+  modelCatalogBrowseRequiresFullDiscovery,
+} from "../../agents/model-catalog-browse.js";
 import {
   resolveLogicalModelCatalogEntryState,
   resolveLogicalVisibleModelCatalog,
@@ -172,7 +175,13 @@ export async function buildModelsProviderData(
     cfg,
     agentId,
     view: options.view ?? "default",
-    preparedOnly: options.view !== "all",
+    preparedOnly:
+      options.view !== "all" &&
+      !modelCatalogBrowseRequiresFullDiscovery({
+        cfg,
+        agentId,
+        view: options.view ?? "default",
+      }),
     loadCatalog: ({ readOnly }) =>
       loadPreparedModelCatalogSnapshot({
         config: cfg,

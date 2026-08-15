@@ -66,6 +66,10 @@ const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
 
 const loadAgentDefaultsModule = createLazyRuntimeModule(() => import("../agents/defaults.js"));
 
+const loadModelSelectionSharedModule = createLazyRuntimeModule(
+  () => import("../agents/model-selection-shared.js"),
+);
+
 const loadAgentModelSelectionModule = createLazyRuntimeModule(
   () => import("../agents/model-selection.js"),
 );
@@ -506,11 +510,23 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
   log: { warn: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
 }): Promise<void> {
-  const { refreshPreparedModelRuntimeSnapshots } =
-    await import("../agents/prepared-model-runtime.js");
+  const [
+    { refreshPreparedModelRuntimeSnapshots },
+    { listAgentIds },
+    { parseConfiguredModelVisibilityEntries },
+  ] = await Promise.all([
+    import("../agents/prepared-model-runtime.js"),
+    import("../agents/agent-scope.js"),
+    loadModelSelectionSharedModule(),
+  ]);
+  const hasProviderWildcard = listAgentIds(params.cfg).some(
+    (agentId) =>
+      parseConfiguredModelVisibilityEntries({ cfg: params.cfg, agentId }).providerWildcards.size >
+      0,
+  );
   await refreshPreparedModelRuntimeSnapshots(params.cfg, {
     gatewayLifecycle: true,
-    catalogMode: "static",
+    catalogMode: hasProviderWildcard ? "live" : "static",
     allowGatewaySubagentBinding: true,
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
@@ -650,8 +666,9 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.model-auth", () =>
     hydrateConfiguredExternalCliAuth({ cfg: params.cfg, log: params.log }),
   );
-  // Agent RPC remains available when transports are disabled. Publish configured/static facts before
-  // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
+  // Agent RPC remains available when transports are disabled. Publish configured facts before
+  // accepting work; wildcard policies additionally prepare their complete catalogs here so browse
+  // requests do not need to rediscover providers in the request path.
   await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
     publishStartupModelRuntime(
       {

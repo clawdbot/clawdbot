@@ -344,7 +344,7 @@ describe("handleModelsCommand", () => {
     expect(authCheckerParams?.allowPreparedRuntimeAuth).toBe(true);
   });
 
-  it("does not start live discovery for default browse with provider wildcards", async () => {
+  it("uses the complete catalog for default browse with provider wildcards", async () => {
     await handleModelsCommand(
       buildParams("/models", {
         agents: {
@@ -357,7 +357,7 @@ describe("handleModelsCommand", () => {
       true,
     );
 
-    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
   });
 
   it("does not block default browse when read-only catalog loading is slow", async () => {
