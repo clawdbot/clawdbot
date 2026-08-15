@@ -28,10 +28,11 @@ export function resolveSessionStoreTargetsOrExit(params: {
   try {
     return resolveSessionStoreTargets(params.cfg, params.opts);
   } catch (error) {
-    if (error instanceof AgentSelectionRequiredError) {
-      error = new AgentSelectionRequiredError(error.agentIds, SESSION_STORE_SELECTION_CONTEXT);
-    }
-    params.runtime.error(formatErrorMessage(error));
+    const displayError =
+      error instanceof AgentSelectionRequiredError
+        ? new AgentSelectionRequiredError(error.agentIds, SESSION_STORE_SELECTION_CONTEXT)
+        : error;
+    params.runtime.error(formatErrorMessage(displayError));
     params.runtime.exit(1);
     return null;
   }
