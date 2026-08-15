@@ -18,7 +18,7 @@ on:
       - 'apps/android/**'                     # 监听到 Android 源码被修改也触发
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -141,7 +141,35 @@ jobs:
           name: OpenClaw-Android-Release
           path: dist/
           retention-days: 14
+          
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
 
+          if gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+
+            echo "Release $RELEASE_TAG already exists, updating assets"
+
+            gh release upload "$RELEASE_TAG" \
+              dist/OpenClaw-Android.apk \
+              dist/OpenClaw-Android-SHA256SUMS.txt \
+              --clobber \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            echo "Creating Release $RELEASE_TAG"
+
+            gh release create "$RELEASE_TAG" \
+              dist/OpenClaw-Android.apk \
+              dist/OpenClaw-Android-SHA256SUMS.txt \
+              --target "$GITHUB_SHA" \
+              --title "OpenClaw Android $RELEASE_TAG" \
+              --generate-notes \
+              --repo "$GITHUB_REPOSITORY"
+          fi
       - name: Remove materialized signing files
         if: ${{ always() }}
         run: rm -rf apps/android/build/release-signing
