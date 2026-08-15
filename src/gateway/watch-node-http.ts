@@ -69,10 +69,8 @@ import {
 } from "./http-common.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { isLoopbackAddress, resolveRequestClientIp } from "./net.js";
-import {
-  reconcileNodePairingOnConnect,
-  resolveEffectiveComputerUseDescriptor,
-} from "./node-connect-reconcile.js";
+import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
+import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 import type { NodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import type {
   NodeConnectivityResult,

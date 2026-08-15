@@ -22,7 +22,7 @@ import {
   parseComputerUseCapabilityDescriptor,
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
-import { resolveEffectiveComputerUseDescriptor } from "./node-connect-reconcile.js";
+import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
