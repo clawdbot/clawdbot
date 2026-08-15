@@ -4163,6 +4163,8 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
+    expect(payload.ReplyToIsQuote).toBe(true);
+    expect(payload.BodyForAgent).toBe("Sure, see below");
     const telegramPayload = payload as Record<string, unknown>;
     expect(telegramPayload.ReplyToQuoteText).toBe(" summarize this\n");
     expect(telegramPayload.ReplyToQuotePosition).toBe(8);
@@ -5343,6 +5345,11 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
     expect(payload.WasMentioned).toBe(true);
+    expect(payload.BodyForAgent).toBe("following up");
+    expect(payload.ReplyToId).toBe("42");
+    expect(payload.ReplyToBody).toBe("original reply");
+    expect(payload.ReplyToSender).toBe("openclaw_bot (you)");
+    expect(payload.ReplyToIsQuote).toBeUndefined();
   });
 
   it("prefers topic allowFrom over group allowFrom", async () => {
