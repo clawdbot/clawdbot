@@ -121,6 +121,7 @@ function transport(): NodeWorkerSupervisorTransport {
         workerRuns: BUILD,
       },
     ],
+    isCurrent: () => true,
     invoke: async () => ({ ok: false, error: { code: "UNAVAILABLE" } }),
   };
 }

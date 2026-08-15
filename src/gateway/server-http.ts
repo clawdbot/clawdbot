@@ -35,6 +35,7 @@ import type { ControlUiRootState } from "./control-ui.js";
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
+  classifyNodeWorkerBundleTransferPath,
   classifyNodeWorkspaceTransferPath,
   classifyWorkerGatewayPath,
 } from "./gateway-http-route-contracts.js";
@@ -63,6 +64,10 @@ import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 import { canonicalizeUserProfileAvatarPath } from "./user-profiles-http-path.js";
+import {
+  handleNodeWorkerBundleTransferHttpRequest,
+  type NodeWorkerBundleTransferHttpCallback,
+} from "./worker-environments/node-worker-bundle-transfer-http.js";
 import {
   handleNodeWorkspaceTransferHttpRequest,
   type NodeWorkspaceTransferHttpCallback,
@@ -174,6 +179,8 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   /** Strict limiter for the public join-code exchange, including loopback. */
   joinRateLimiter?: AuthRateLimiter;
+  /** Authenticator/dispatcher for the reserved node worker bundle namespace. */
+  handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
   /** Authenticator/dispatcher for the reserved node workspace transfer namespace. */
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   getReadiness?: ReadinessChecker;
@@ -334,6 +341,19 @@ export function createGatewayHttpServer(opts: {
         respondNotFound(res);
         return true;
       });
+
+      addAdmittedStage(
+        "worker-bundle-transfer",
+        classifyNodeWorkerBundleTransferPath(scopedRequestPath) !== "outside",
+        () =>
+          handleNodeWorkerBundleTransferHttpRequest({
+            req,
+            res,
+            clientIp: resolveRequestClientIp(req, trustedProxies, allowRealIpFallback),
+            rateLimiter: joinRateLimiter,
+            callback: opts.handleNodeWorkerBundleTransferRequest,
+          }),
+      );
 
       addAdmittedStage(
         "worker-transfer",

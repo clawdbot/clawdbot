@@ -29,6 +29,7 @@ import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { resolveNodeWorkerInstallation } from "./node-worker-build.js";
+import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
@@ -327,6 +328,9 @@ export async function prepareNodeHostRuntime(params?: {
       const workerWorkspace = workerInstallation
         ? new NodeWorkerWorkspaceRuntime({ env })
         : undefined;
+      const workerBundleInstaller = workerInstallation
+        ? new NodeWorkerBundleInstaller({ env })
+        : undefined;
       const workerSupervisor = workerInstallation
         ? createNodeWorkerSupervisor({
             env,
@@ -457,6 +461,7 @@ export async function prepareNodeHostRuntime(params?: {
               installedAppsSharingEnabled,
               installedAppsPlatform: platform,
               pluginCommandContext,
+              ...(workerBundleInstaller ? { workerBundleInstaller } : {}),
               ...(workerSupervisor ? { workerSupervisor } : {}),
               ...(workerWorkspace ? { workerWorkspace } : {}),
             });

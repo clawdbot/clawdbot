@@ -91,6 +91,7 @@ type WorkerEnvironmentServiceOptions = {
   resolveNodeWorkerBuild?: (deviceId: string) => Promise<WorkerAdmissionHandshake | undefined>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
+  stopNodeWorkerBundleTransfers?: () => void;
   reconcileIntervalMs?: number;
   providerCallTimeoutMs?: number;
   bootstrapCallTimeoutMs?: number;
@@ -388,6 +389,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     await inference.stop();
     credentialBroker.clear();
     options.liveEvents?.clear();
+    options.stopNodeWorkerBundleTransfers?.();
     await environmentAccess.stopAllTunnels();
     const reconciliation = reconcileInFlight;
     if (reconciliation) {

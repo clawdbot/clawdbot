@@ -73,6 +73,7 @@ function deviceRuntime(params: {
   if (params.listCurrentNodes) {
     runtime.bindNodeTransport({
       listCurrentNodes: params.listCurrentNodes,
+      isCurrent: () => true,
       invoke: async () => ({ ok: false }),
     });
   }

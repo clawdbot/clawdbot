@@ -84,6 +84,7 @@ function createHarness(
   }));
   const transport: NodeWorkerSupervisorTransport = {
     listCurrentNodes: async () => [node],
+    isCurrent: () => true,
     invoke,
   };
   const coordinator = createNodeWorkspaceRetainCoordinator({
