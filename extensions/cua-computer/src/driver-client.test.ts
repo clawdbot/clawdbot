@@ -74,7 +74,7 @@ describe("CUA Driver direct session", () => {
     });
   });
 
-  it("uses configured creation and one fixed trusted OpenClaw session", async () => {
+  it("uses configured creation and fixed window and desktop sessions", async () => {
     const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
     expect(driver.isAvailable()).toBe(true);
@@ -83,19 +83,21 @@ describe("CUA Driver direct session", () => {
       claudeCodeCompatibility: false,
       authorization,
     });
-    expect(mocks.createTrustedSession).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        publicSession: expect.stringMatching(/^openclaw-/),
-        mode: "unrestricted",
-        ttlSeconds: authorization.maxSessionTtlSeconds,
-        idleTtlSeconds: authorization.maxIdleTtlSeconds,
-      }),
-    );
+    expect(mocks.createTrustedSession).toHaveBeenCalledTimes(2);
+    for (const [, options] of mocks.createTrustedSession.mock.calls) {
+      expect(options).toEqual(
+        expect.objectContaining({
+          publicSession: expect.stringMatching(/^openclaw-(window|desktop)-/),
+          mode: "unrestricted",
+          ttlSeconds: authorization.maxSessionTtlSeconds,
+          idleTtlSeconds: authorization.maxIdleTtlSeconds,
+        }),
+      );
+    }
 
     await driver.dispose();
     await driver.dispose();
-    expect(mocks.close).toHaveBeenCalledOnce();
+    expect(mocks.close).toHaveBeenCalledTimes(2);
     expect(mocks.shutdown).toHaveBeenCalledOnce();
   });
 
@@ -103,7 +105,9 @@ describe("CUA Driver direct session", () => {
     const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
     await Promise.all([driver.getDesktopState(), driver.getDesktopState()]);
-    const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
+    const sessionOptions = mocks.createTrustedSession.mock.calls.find(([, options]) =>
+      options.publicSession.startsWith("openclaw-desktop-"),
+    )?.[1];
 
     expect(mocks.startSession).toHaveBeenCalledOnce();
     expect(mocks.startSession).toHaveBeenCalledWith(
@@ -119,30 +123,31 @@ describe("CUA Driver direct session", () => {
     expect(mocks.endSession).toHaveBeenCalledWith({ session: sessionOptions.publicSession });
   });
 
-  it("starts window-scoped generic tools and widens only for an explicit desktop call", async () => {
+  it("keeps window tools available after a desktop action", async () => {
     const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
+    await driver.getDesktopState();
     await driver.callTool("list_windows", {});
-    const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
+    const windowOptions = mocks.createTrustedSession.mock.calls.find(([, options]) =>
+      options.publicSession.startsWith("openclaw-window-"),
+    )?.[1];
+    const desktopOptions = mocks.createTrustedSession.mock.calls.find(([, options]) =>
+      options.publicSession.startsWith("openclaw-desktop-"),
+    )?.[1];
     expect(mocks.startSession).toHaveBeenCalledWith(
-      { session: sessionOptions.publicSession, captureScope: "window" },
+      { session: windowOptions.publicSession, captureScope: "window" },
+      undefined,
+    );
+    expect(mocks.startSession).toHaveBeenCalledWith(
+      { session: desktopOptions.publicSession, captureScope: "desktop" },
       undefined,
     );
     expect(mocks.callTool).toHaveBeenCalledWith(
       "list_windows",
-      JSON.stringify({ session: sessionOptions.publicSession }),
+      JSON.stringify({ session: windowOptions.publicSession }),
       undefined,
     );
-
-    await driver.getDesktopState();
-    expect(mocks.escalateSession).toHaveBeenCalledWith(
-      {
-        session: sessionOptions.publicSession,
-        reason: "other",
-        detail: "explicit desktop-scope OpenClaw action",
-      },
-      undefined,
-    );
+    expect(mocks.escalateSession).not.toHaveBeenCalled();
     await driver.dispose();
   });
 

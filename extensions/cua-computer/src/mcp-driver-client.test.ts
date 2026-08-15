@@ -177,6 +177,21 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
             }),
           );
           break;
+        case "browser_navigate":
+          fake.respond(
+            request,
+            toolResult({
+              status: "ok",
+              target_id: "target-1",
+              tab_id: "tab-1",
+              url: "https://example.com/",
+              refs_invalidated: true,
+            }),
+          );
+          break;
+        case "list_windows":
+          fake.respond(request, toolResult({ windows: [] }));
+          break;
         case "end_session":
           fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
           break;
@@ -209,6 +224,25 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         delivery: { mode: 0, deliveredCount: 1 },
         evidence: [{ kind: 0 }],
       });
+      await driver.callTool("browser_navigate", {
+        target_id: "target-1",
+        tab_id: "tab-1",
+        url: "https://example.com/",
+      });
+      await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
+        isError: false,
+      });
+
+      const startCalls = endpoint.requests.filter(
+        (request) => request.method === "tools/call" && request.params?.name === "start_session",
+      );
+      expect(startCalls).toHaveLength(2);
+      expect(startCalls.map((request) => request.params?.arguments?.capture_scope).sort()).toEqual([
+        "desktop",
+        "window",
+      ]);
+      expect(new Set(startCalls.map((request) => request.params?.arguments?.session)).size).toBe(2);
+
       await driver.dispose();
       await vi.waitFor(() => {
         closed = endpoint.requests.some(
