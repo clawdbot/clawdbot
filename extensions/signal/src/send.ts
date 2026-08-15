@@ -24,6 +24,7 @@ import {
   registerSignalApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
 import { signalRpcRequest, type SignalTransportKind } from "./client-adapter.js";
+import { filesToBase64DataUris } from "./client-container.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { registerSignalReplyContext } from "./reply-authors.js";
@@ -335,7 +336,19 @@ export async function sendMessageSignal(
       localRoots: opts.mediaLocalRoots,
       readFile: opts.mediaReadFile,
     });
-    attachments = [resolved.path];
+    const transportKind = opts.transportKind ?? accountInfo.transport.kind;
+    // External-native signal-cli often runs as a separate service user. The
+    // staged outbound file lives under ~/.openclaw/media/outbound (0700,
+    // gateway-owned), so a differently-privileged daemon cannot traverse the
+    // path — delivery fails at the last hop with AttachmentInvalidException.
+    // Pass the already-approved bytes as an RFC 2397 data URI over the open
+    // JSON-RPC connection instead of a filesystem path. The container REST
+    // transport performs the same base64 conversion itself, and managed-native
+    // shares the gateway uid, so both keep the path form.
+    attachments =
+      transportKind === "external-native"
+        ? await filesToBase64DataUris([resolved.path], maxBytes)
+        : [resolved.path];
     outboundMedia = {
       contentType: resolved.contentType,
       kind: kindFromMime(resolved.contentType ?? undefined) ?? "unknown",
