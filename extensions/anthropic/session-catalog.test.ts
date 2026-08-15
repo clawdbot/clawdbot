@@ -1311,9 +1311,26 @@ describe("Claude session catalog", () => {
       }),
     ]);
     expect(first.nextCursor).toEqual(expect.any(String));
-    await expect(
-      listLocalClaudeSessionPage({ limit: 1, cursor: ` ${first.nextCursor} ` }, home),
-    ).rejects.toThrow("catalog cursor is invalid");
+    if (!first.nextCursor) {
+      throw new Error("expected catalog cursor");
+    }
+    const catalogCursorPayload = JSON.parse(
+      Buffer.from(first.nextCursor, "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+    const nonEmittedCatalogCursor = Buffer.from(
+      JSON.stringify({ ...catalogCursorPayload, extra: true }),
+      "utf8",
+    ).toString("base64url");
+    for (const cursor of [
+      `${first.nextCursor}!`,
+      `${first.nextCursor}=`,
+      ` ${first.nextCursor} `,
+      nonEmittedCatalogCursor,
+    ]) {
+      await expect(listLocalClaudeSessionPage({ limit: 1, cursor }, home)).rejects.toThrow(
+        "catalog cursor is invalid",
+      );
+    }
     const runtime = { nodes: { list: vi.fn() } } as unknown as PluginRuntime;
     const provider = captureCatalogProvider(runtime);
     await expect(
@@ -2197,6 +2214,9 @@ describe("Claude session catalog", () => {
     const latest = await readLocalClaudeTranscriptPage({ threadId: sessionId, limit: 2 }, home);
     expect(latest.items.map((item) => item.text)).toEqual(["new assistant", "new user"]);
     expect(latest.nextCursor).toEqual(expect.any(String));
+    if (!latest.nextCursor) {
+      throw new Error("expected transcript cursor");
+    }
 
     const older = await readLocalClaudeTranscriptPage(
       { threadId: sessionId, limit: 2, cursor: latest.nextCursor },
@@ -2204,12 +2224,23 @@ describe("Claude session catalog", () => {
     );
     expect(older.items.map((item) => item.text)).toEqual(["old assistant", oldUser]);
     expect(older.nextCursor).toBeUndefined();
-    await expect(
-      readLocalClaudeTranscriptPage(
-        { threadId: sessionId, limit: 1, cursor: ` ${latest.nextCursor} ` },
-        home,
-      ),
-    ).rejects.toThrow("transcript cursor is invalid");
+    const transcriptCursorPayload = JSON.parse(
+      Buffer.from(latest.nextCursor, "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+    const nonEmittedTranscriptCursor = Buffer.from(
+      JSON.stringify({ ...transcriptCursorPayload, extra: true }),
+      "utf8",
+    ).toString("base64url");
+    for (const cursor of [
+      `${latest.nextCursor}!`,
+      `${latest.nextCursor}=`,
+      ` ${latest.nextCursor} `,
+      nonEmittedTranscriptCursor,
+    ]) {
+      await expect(
+        readLocalClaudeTranscriptPage({ threadId: sessionId, limit: 1, cursor }, home),
+      ).rejects.toThrow("transcript cursor is invalid");
+    }
     await expect(
       readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: " ", limit: 1 }, home),
     ).rejects.toThrow("transcript cursor is invalid");
