@@ -25,7 +25,6 @@ import {
   COMPUTER_ACT_V1_ACTION_NAMES,
   COMPUTER_CONTRACT_MISMATCH,
   COMPUTER_STALE_OBSERVATION,
-  COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES,
   COMPUTER_USE_V1_ACTION_NAMES,
   COMPUTER_USE_V2_ACTION_NAMES,
   parseComputerActResult,
@@ -79,9 +78,6 @@ const COMPUTER_TOOL_ACTIONS = COMPUTER_USE_V1_ACTION_NAMES;
 type ComputerToolAction = ComputerUseV2ActionName;
 
 const LOCAL_ACTIONS = new Set<ComputerUseV2ActionName>(["screenshot", "wait"]);
-const CONTRACT_ONLY_ACTIONS = new Set<ComputerUseV2ActionName>(
-  COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES,
-);
 const EXECUTION_OWNED_ACTIONS = new Set<ComputerUseV2ActionName>([
   "browser_set_input_files",
   "browser_download",
@@ -91,9 +87,7 @@ const EXECUTION_OWNED_ACTIONS = new Set<ComputerUseV2ActionName>([
   "replay_trajectory",
 ]);
 const INPUT_ACTIONS = new Set<ComputerUseV2ActionName>(
-  COMPUTER_USE_V2_ACTION_NAMES.filter(
-    (action) => !LOCAL_ACTIONS.has(action) && !CONTRACT_ONLY_ACTIONS.has(action),
-  ),
+  COMPUTER_USE_V2_ACTION_NAMES.filter((action) => !LOCAL_ACTIONS.has(action)),
 );
 
 function isComputerActAction(action: ComputerToolAction): boolean {
@@ -1049,8 +1043,6 @@ export function createComputerTool(options?: {
   idempotencyScope?: string;
   /** Tracks whether the current screenshot pixels still reach model context. */
   contextEpoch?: ComputerContextEpoch;
-  /** Preselected node declaration, when tool preparation already resolved one. */
-  capabilityDescriptor?: ComputerUseCapabilityDescriptor;
   /** Attempt owner for deterministic provider-execution cleanup. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
 }): AnyAgentTool {
@@ -1061,10 +1053,8 @@ export function createComputerTool(options?: {
       : actions.filter((action) => !EXECUTION_OWNED_ACTIONS.has(action));
   const configuredLimits = resolveImageSanitizationLimits(options?.config);
   const referenceWidth = resolveReferenceWidth(configuredLimits);
-  const parameterSchema = createComputerToolSchema(
-    availableActions(options?.capabilityDescriptor?.actions ?? COMPUTER_TOOL_ACTIONS),
-  );
-  let selectedCapabilities = options?.capabilityDescriptor;
+  const parameterSchema = createComputerToolSchema(availableActions(COMPUTER_TOOL_ACTIONS));
+  let selectedCapabilities: ComputerUseCapabilityDescriptor | undefined;
   let selectedCapabilityNodeId: string | undefined;
   let observationState:
     | { nodeId: string; providerGeneration: string; observationId: string }
@@ -1180,7 +1170,7 @@ export function createComputerTool(options?: {
     // model-visible screenshot block that coordinate actions depend on.
     catalogMode: "direct-only",
     executionMode: "sequential",
-    description: buildComputerToolDescription(options?.capabilityDescriptor),
+    description: buildComputerToolDescription(),
     parameters: parameterSchema,
     execute: (toolCallId, args, signal) =>
       serialize(async () => {
@@ -1237,11 +1227,6 @@ export function createComputerTool(options?: {
         if (!advertisedActions.includes(action)) {
           throw new Error(
             `${COMPUTER_CONTRACT_MISMATCH}: node ${nodeId} does not advertise action ${action}`,
-          );
-        }
-        if (CONTRACT_ONLY_ACTIONS.has(action)) {
-          throw new Error(
-            `${COMPUTER_CONTRACT_MISMATCH}: action ${action} is contract-only until its adapter lands`,
           );
         }
         validateCapabilityBoundInput({

@@ -177,18 +177,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
             }),
           );
           break;
-        case "browser_navigate":
-          fake.respond(
-            request,
-            toolResult({
-              status: "ok",
-              target_id: "target-1",
-              tab_id: "tab-1",
-              url: "https://example.com/",
-              refs_invalidated: true,
-            }),
-          );
-          break;
         case "list_windows":
           fake.respond(request, toolResult({ windows: [] }));
           break;
@@ -226,11 +214,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         route: 0,
         delivery: { mode: 0, deliveredCount: 1 },
         evidence: [{ kind: 0 }],
-      });
-      await driver.callTool("browser_navigate", {
-        target_id: "target-1",
-        tab_id: "tab-1",
-        url: "https://example.com/",
       });
       await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
         isError: false,

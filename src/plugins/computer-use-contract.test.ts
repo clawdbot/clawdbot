@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES,
   COMPUTER_USE_V2_ACTION_NAMES,
   parseComputerActParamsJSON,
   parseComputerActResult,
@@ -143,7 +142,6 @@ describe("Computer Use wire contract", () => {
 
   it("accepts the portable recording family without native path or helper inputs", () => {
     const resourceHandle = "openclaw:computer-resource:v1:123e4567-e89b-42d3-a456-426614174000";
-    expect(COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES).toEqual([]);
     for (const input of [
       { action: "get_recording_state" },
       { action: "start_recording", recordVideo: true },
