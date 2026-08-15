@@ -1019,7 +1019,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
       ...(hasIdentityFields ? { identity: identityPatch } : {}),
     };
     const nextConfig = applyAgentConfig(cfg, agentConfigUpdate);
-
     let ensuredWorkspace: Awaited<ReturnType<typeof ensureAgentWorkspace>> | undefined;
     if (workspaceDir) {
       const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
@@ -1030,45 +1029,56 @@ export const agentsHandlers: GatewayRequestHandlers = {
       });
     }
 
-    const persistedIdentity = normalizeIdentityForFile(resolveAgentIdentity(nextConfig, agentId));
-    if (workspaceDir || hasIdentityFields) {
-      const identityWorkspaceDir = resolveAgentWorkspaceDir(nextConfig, agentId);
-      const previousWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-      const fallbackWorkspaceDir =
-        workspaceDir && identityWorkspaceDir !== previousWorkspaceDir
-          ? previousWorkspaceDir
-          : undefined;
-      const builtIdentity = await buildIdentityMarkdownOrRespondUnsafe({
-        respond,
-        workspaceDir: identityWorkspaceDir,
-        identity: persistedIdentity ?? {},
-        clearFields: clearedIdentityFields,
-        fallbackWorkspaceDir,
-        preferFallbackWorkspaceContent:
-          Boolean(fallbackWorkspaceDir) && ensuredWorkspace?.identityPathCreated === true,
-      });
-      if (builtIdentity === null) {
-        return;
-      }
-      // Optional IDENTITY.md is intentionally absent when neither a source file nor
-      // persisted identity values exist. Clearing empty/null emoji/avatar must not
-      // synthesize a header-only file in that case.
-      const shouldWriteIdentityFile = builtIdentity.hadSourceFile || Boolean(persistedIdentity);
-      if (
-        shouldWriteIdentityFile &&
-        !(await writeWorkspaceFileOrRespond({
-          respond,
-          workspaceDir: identityWorkspaceDir,
-          name: DEFAULT_IDENTITY_FILENAME,
-          content: builtIdentity.content,
-        }))
-      ) {
-        return;
-      }
-    }
-
     try {
-      await updateAgentConfigEntry(agentConfigUpdate);
+      const mutationCompleted = await withConfigMutationExclusive(async (lockedConfig) => {
+        if (!isConfiguredAgent(lockedConfig, agentId)) {
+          throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
+        }
+        const nextConfig = applyAgentConfig(lockedConfig, agentConfigUpdate);
+        const persistedIdentity = normalizeIdentityForFile(
+          resolveAgentIdentity(nextConfig, agentId),
+        );
+        if (workspaceDir || hasIdentityFields) {
+          const identityWorkspaceDir = resolveAgentWorkspaceDir(nextConfig, agentId);
+          const previousWorkspaceDir = resolveAgentWorkspaceDir(lockedConfig, agentId);
+          const fallbackWorkspaceDir =
+            workspaceDir && identityWorkspaceDir !== previousWorkspaceDir
+              ? previousWorkspaceDir
+              : undefined;
+          const builtIdentity = await buildIdentityMarkdownOrRespondUnsafe({
+            respond,
+            workspaceDir: identityWorkspaceDir,
+            identity: persistedIdentity ?? {},
+            clearFields: clearedIdentityFields,
+            fallbackWorkspaceDir,
+            preferFallbackWorkspaceContent:
+              Boolean(fallbackWorkspaceDir) && ensuredWorkspace?.identityPathCreated === true,
+          });
+          if (builtIdentity === null) {
+            return false;
+          }
+          // Optional IDENTITY.md is intentionally absent when neither a source file nor
+          // persisted identity values exist. Clearing empty/null emoji/avatar must not
+          // synthesize a header-only file in that case.
+          const shouldWriteIdentityFile = builtIdentity.hadSourceFile || Boolean(persistedIdentity);
+          if (
+            shouldWriteIdentityFile &&
+            !(await writeWorkspaceFileOrRespond({
+              respond,
+              workspaceDir: identityWorkspaceDir,
+              name: DEFAULT_IDENTITY_FILENAME,
+              content: builtIdentity.content,
+            }))
+          ) {
+            return false;
+          }
+        }
+        await updateAgentConfigEntry(agentConfigUpdate);
+        return true;
+      });
+      if (!mutationCompleted) {
+        return;
+      }
     } catch (error) {
       if (error instanceof AgentConfigPreconditionError) {
         respondAgentNotFound(respond, agentId);

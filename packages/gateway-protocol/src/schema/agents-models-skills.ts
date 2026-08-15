@@ -165,7 +165,7 @@ export const AgentsUpdateParamsSchema = closedObject({
   name: Type.Optional(NonEmptyString),
   workspace: Type.Optional(NonEmptyString),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  // Empty string also clears (historical clients); prefer null like model.
+  // Null clears; empty and whitespace strings preserve existing identity values.
   emoji: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   avatar: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 });
