@@ -86,39 +86,49 @@ jobs:
           mkdir -p ~/.gradle
           cp "${signing_dir}/gradle.properties" ~/.gradle/gradle.properties
 
-      
       - name: Build Android APK
         run: |
           set -euo pipefail
-
+      
           mkdir -p dist
-
+      
           cd apps/android
-          ./gradlew :app:assembleThirdPartyRelease
+      
+          build_commit="$(git rev-parse HEAD)"
+          build_timestamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+      
+          echo "Build commit: ${build_commit}"
+          echo "Build timestamp: ${build_timestamp}"
+      
+          ./gradlew \
+            -PopenclawBuildCommit="${build_commit}" \
+            -PopenclawBuildTimestamp="${build_timestamp}" \
+            :app:assembleThirdPartyRelease
+      
           cd "$GITHUB_WORKSPACE"
-
+      
           mapfile -t apk_files < <(
             find apps/android/app/build/outputs/apk \
               -type f \
               -path "*/thirdParty/release/*.apk" \
               -print
           )
-
+      
           if [[ "${#apk_files[@]}" -ne 1 ]]; then
             echo "::error::Expected exactly one third-party release APK, found ${#apk_files[@]}"
             printf '%s\n' "${apk_files[@]}"
             exit 1
           fi
-
+      
           apk_path="${apk_files[0]}"
           test -s "$apk_path"
-
+      
           echo "APK found: $apk_path"
           cp "$apk_path" dist/OpenClaw-Android.apk
-
+      
           apksigner verify --verbose --print-certs \
             dist/OpenClaw-Android.apk
-
+      
           (
             cd dist
             sha256sum OpenClaw-Android.apk \
