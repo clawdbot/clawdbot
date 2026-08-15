@@ -1,0 +1,54 @@
+/**
+ * Looks up model catalog entries and input capability support.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
+
+/** Returns whether a catalog entry declares support for an input modality. */
+export function modelSupportsInput(
+  entry: ModelCatalogEntry | undefined,
+  input: ModelInputType,
+): boolean {
+  return entry?.input?.includes(input) ?? false;
+}
+
+/** Finds a provider-qualified model entry in a catalog. */
+export function findModelInCatalog(
+  catalog: ModelCatalogEntry[],
+  provider: string,
+  modelId: string,
+): ModelCatalogEntry | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  return catalog.find(
+    (entry) =>
+      normalizeProviderId(entry.provider) === normalizedProvider &&
+      normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
+  );
+}
+
+/** Finds a model entry, requiring uniqueness when provider is omitted. */
+export function findModelCatalogEntry(
+  catalog: ModelCatalogEntry[],
+  params: { provider?: string; modelId: string },
+): ModelCatalogEntry | undefined {
+  const modelId = normalizeOptionalString(params.modelId) ?? "";
+  if (!modelId) {
+    return undefined;
+  }
+
+  const provider = normalizeOptionalString(params.provider);
+  if (provider) {
+    return findModelInCatalog(catalog, provider, modelId);
+  }
+
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const matches = catalog.filter(
+    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+}

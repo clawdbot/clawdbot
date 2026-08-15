@@ -1,0 +1,22 @@
+title: Matrix reactions on bot replies are observed
+scenario:
+  id: matrix-reaction-notification
+  surface: channels
+  coverage:
+    primary:
+      - matrix.message-send-read-edit-delete
+  execution:
+    kind: flow
+    channel: matrix
+    suiteIsolation: isolated
+    isolationReason: Posts native reaction state against a fresh canary reply and cannot inherit a shared Matrix session.
+    timeoutMs: 45000
+    retryCount: 0
+    config:
+      matrixRequireCanary: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-reaction.js
+  call: runReactionNotificationScenario
+  args:
+    - expr: "scenarioContext"

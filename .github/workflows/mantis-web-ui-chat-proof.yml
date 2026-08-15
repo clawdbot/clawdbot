@@ -1,0 +1,276 @@
+name: Mantis Web UI Chat Proof
+
+on:
+  issue_comment: # zizmor: ignore[dangerous-triggers] maintainer-only Mantis command; candidate refs are trusted before execution and publishing runs in a separate job
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Ref, tag, or SHA expected to prove Control UI web chat behavior
+        required: true
+        default: main
+        type: string
+      pr_number:
+        description: Optional PR number to receive the QA evidence comment
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: mantis-web-ui-chat-proof-${{ github.event.issue.number || inputs.pr_number || inputs.candidate_ref || github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+
+jobs:
+  authorize_actor:
+    name: Authorize workflow actor
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request &&
+          (
+            contains(github.event.comment.body, '@openclaw-mantis') ||
+            contains(github.event.comment.body, '/openclaw-mantis')
+          )
+        )
+      }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
+    steps:
+      - name: Require maintainer-level repository access
+        id: permission
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            const permission = data.permission;
+            core.info(`Actor ${context.actor} permission: ${permission}`);
+            if (!allowed.has(permission)) {
+              core.notice(
+                `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
+              );
+              core.setOutput("authorized", "false");
+              return;
+            }
+            core.setOutput("authorized", "true");
+
+  resolve_request:
+    name: Resolve Mantis request
+    needs: authorize_actor
+    if: needs.authorize_actor.outputs.authorized == 'true'
+    uses: ./.github/workflows/mantis-resolve-request.yml
+    with:
+      request-pattern: 'web-ui-chat|web ui chat|(?=[\s\S]*web ui)(?=[\s\S]*chat)|(?=[\s\S]*control ui)(?=[\s\S]*chat)'
+      skip-notice: Comment mentioned Mantis but did not request web UI chat proof.
+      dispatch-params: ${{ github.event_name == 'workflow_dispatch' && toJSON(inputs) || '{}' }}
+      runner: blacksmith-8vcpu-ubuntu-2404
+    secrets:
+      MANTIS_GITHUB_APP_ID: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+      MANTIS_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+
+  validate_candidate:
+    name: Validate selected candidate
+    needs: resolve_request
+    if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      candidate_revision: ${{ steps.validate.outputs.candidate-revision }}
+    steps:
+      - name: Checkout harness ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate candidate ref is trusted
+        id: validate
+        uses: ./.github/actions/mantis-validate-trusted-ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          candidate-ref: ${{ needs.resolve_request.outputs.candidate_ref }}
+
+  run_web_ui_chat:
+    name: Run Control UI web chat proof
+    needs: [resolve_request, validate_candidate]
+    if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
+    permissions:
+      contents: read
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    outputs:
+      artifact_name: ${{ steps.run_mantis.outputs.artifact_name }}
+      output_dir: ${{ steps.run_mantis.outputs.output_dir }}
+      proof_status: ${{ steps.run_mantis.outputs.proof_status }}
+    steps:
+      - name: Checkout harness ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Prepare candidate worktree
+        env:
+          CANDIDATE_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          worktree_root=".artifacts/qa-e2e/mantis/web-ui-chat-proof-worktrees"
+          mkdir -p "$worktree_root"
+          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+          pnpm --dir "$worktree_root/candidate" install --frozen-lockfile --prefer-offline
+
+      - name: Run web UI chat proof
+        id: run_mantis
+        env:
+          CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
+          CANDIDATE_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          artifact_name="mantis-web-ui-chat-proof-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          candidate_repo="$(pwd)/.artifacts/qa-e2e/mantis/web-ui-chat-proof-worktrees/candidate"
+          output_rel=".artifacts/qa-e2e/mantis/web-ui-chat-proof"
+          root="$candidate_repo/$output_rel"
+          mkdir -p "$root"
+          echo "artifact_name=${artifact_name}" >> "$GITHUB_OUTPUT"
+          echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
+
+          install -D -m 0644 \
+            "${GITHUB_WORKSPACE}/ui/src/e2e/mantis-chat-proof.e2e.test.ts" \
+            "$candidate_repo/ui/src/e2e/mantis-chat-proof.e2e.test.ts"
+          install -D -m 0644 \
+            "${GITHUB_WORKSPACE}/ui/src/test-helpers/control-ui-e2e.ts" \
+            "$candidate_repo/ui/src/test-helpers/control-ui-e2e.ts"
+
+          cd "$candidate_repo"
+          node --import tsx scripts/ensure-playwright-chromium.mts
+
+          set +e
+          OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR="$root" \
+            node scripts/run-vitest.mjs run \
+              --config test/vitest/vitest.ui-e2e.config.ts \
+              --configLoader runner \
+              ui/src/e2e/mantis-chat-proof.e2e.test.ts \
+            2>&1 | tee "$root/vitest.log"
+          vitest_exit="${PIPESTATUS[0]}"
+          set -e
+
+          proof_status="pass"
+          if [[ "$vitest_exit" -ne 0 ]]; then
+            proof_status="fail"
+          fi
+          echo "proof_status=${proof_status}" >> "$GITHUB_OUTPUT"
+
+          node "${GITHUB_WORKSPACE}/scripts/mantis/build-web-ui-chat-evidence.mjs" \
+            --output-dir "$root" \
+            --candidate-ref "$CANDIDATE_REF" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --status "$proof_status"
+
+          cat "$root/mantis-report.md" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$vitest_exit" -ne 0 ]]; then
+            exit "$vitest_exit"
+          fi
+
+      - name: Upload Mantis web UI chat artifacts
+        if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.run_mantis.outputs.artifact_name }}
+          path: ${{ steps.run_mantis.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: error
+
+  publish_evidence:
+    name: Publish Mantis web UI chat evidence
+    needs: [resolve_request, run_web_ui_chat]
+    if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && needs.run_web_ui_chat.outputs.artifact_name != '' }}
+    runs-on: ubuntu-24.04
+    environment: qa-live-shared
+    steps:
+      - name: Checkout harness ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Download Mantis web UI chat artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ needs.run_web_ui_chat.outputs.artifact_name }}
+          path: .artifacts/qa-e2e/mantis/web-ui-chat-proof
+
+      - name: Create Mantis GitHub App token
+        id: mantis_app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Comment PR with inline QA evidence
+        env:
+          GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
+          MANTIS_ARTIFACT_R2_ACCESS_KEY_ID: ${{ secrets.MANTIS_ARTIFACT_R2_ACCESS_KEY_ID }}
+          MANTIS_ARTIFACT_R2_BUCKET: openclaw-crabbox-artifacts
+          MANTIS_ARTIFACT_R2_ENDPOINT: ${{ vars.MANTIS_ARTIFACT_R2_ENDPOINT }}
+          MANTIS_ARTIFACT_R2_PUBLIC_BASE_URL: https://artifacts.openclaw.ai
+          MANTIS_ARTIFACT_R2_REGION: auto
+          MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY: ${{ secrets.MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY }}
+          REQUEST_SOURCE: ${{ needs.resolve_request.outputs.request_source }}
+          TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".artifacts/qa-e2e/mantis/web-ui-chat-proof"
+          if [[ ! -f "$root/mantis-evidence.json" ]]; then
+            echo "No Mantis evidence manifest found; skipping PR evidence comment."
+            exit 0
+          fi
+          node scripts/mantis/publish-pr-evidence.mjs \
+            --manifest "$root/mantis-evidence.json" \
+            --target-pr "$TARGET_PR" \
+            --artifact-root "mantis/web-ui-chat-proof/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --marker "<!-- mantis-web-ui-chat-proof -->" \
+            --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --request-source "$REQUEST_SOURCE"
+
+  clear_issue_comment_reaction:
+    name: Clear Mantis command reaction
+    needs: [resolve_request, validate_candidate, run_web_ui_chat, publish_evidence]
+    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' && needs.resolve_request.outputs.reaction_id != '' }}
+    permissions: {}
+    uses: ./.github/workflows/mantis-clear-reaction.yml
+    with:
+      comment-id: ${{ format('{0}', github.event.comment.id) }}
+      reaction-id: ${{ needs.resolve_request.outputs.reaction_id }}
+    secrets:
+      MANTIS_GITHUB_APP_ID: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+      MANTIS_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}

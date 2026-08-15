@@ -1,0 +1,257 @@
+// Whatsapp plugin module implements quoted message behavior.
+import {
+  isHostedLidUser,
+  isHostedPnUser,
+  isLidUser,
+  isPnUser,
+  type MiscMessageGenerationOptions,
+} from "baileys";
+import {
+  formatMediaPlaceholderText,
+  type MediaPlaceholderTextFact,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { jidToE164 } from "./text-runtime.js";
+
+// ── Inbound message metadata cache ──────────────────────────────────────
+// Maps messageId → { participant, participantE164, body, fromMe } so the
+// outbound adapter can
+// populate the quote key with the sender JID and preview text even though
+// the outbound path only receives a bare messageId string.
+
+type QuotedMeta = {
+  participant?: string;
+  participantE164?: string;
+  body?: string;
+  media?: MediaPlaceholderTextFact;
+  fromMe?: boolean;
+};
+type CacheEntry = QuotedMeta & { ts: number };
+type QuotedMetaLookup = QuotedMeta & { remoteJid: string };
+
+export type WhatsAppQuotedMessageKey = {
+  id: string;
+  remoteJid: string;
+  fromMe: boolean;
+  participant?: string;
+  /** Target JID against which quote lookup proved the cached conversation equivalent. */
+  lookupTargetJid?: string;
+  messageText?: string;
+  media?: MediaPlaceholderTextFact;
+};
+
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_ENTRIES = 500;
+const cache = new Map<string, CacheEntry>();
+
+function makeCacheKey(accountId: string, remoteJid: string, messageId: string): string {
+  return `${accountId}:${remoteJid}:${messageId}`;
+}
+
+export function cacheInboundMessageMeta(
+  accountId: string,
+  remoteJid: string,
+  messageId: string,
+  meta: QuotedMeta,
+): void {
+  if (!accountId || !messageId || !remoteJid) {
+    return;
+  }
+  if (cache.size >= MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest) {
+      cache.delete(oldest);
+    }
+  }
+  cache.set(makeCacheKey(accountId, remoteJid, messageId), { ...meta, ts: Date.now() });
+}
+
+export function lookupInboundMessageMeta(
+  accountId: string,
+  remoteJid: string,
+  messageId: string,
+): QuotedMeta | undefined {
+  const cacheKey = makeCacheKey(accountId, remoteJid, messageId);
+  const entry = cache.get(cacheKey);
+  if (!entry) {
+    return undefined;
+  }
+  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+    cache.delete(cacheKey);
+    return undefined;
+  }
+  return {
+    participant: entry.participant,
+    participantE164: entry.participantE164,
+    body: entry.body,
+    media: entry.media,
+    fromMe: entry.fromMe,
+  };
+}
+
+function normalizeComparableJid(jid: string | undefined): string | undefined {
+  const normalized = jid?.trim().replace(/:\d+/, "").toLowerCase();
+  return normalized || undefined;
+}
+
+function isGroupJid(jid: string | undefined): boolean {
+  return Boolean(jid && jid.endsWith("@g.us"));
+}
+
+function areComparableE164sEqual(left: string | undefined, right: string | undefined): boolean {
+  const normalizedLeft = left?.trim();
+  const normalizedRight = right?.trim();
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+  return normalizedLeft === normalizedRight;
+}
+
+function areComparableJidsEqual(left: string | undefined, right: string | undefined): boolean {
+  const normalizedLeft = normalizeComparableJid(left);
+  const normalizedRight = normalizeComparableJid(right);
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+  if (normalizedLeft === normalizedRight) {
+    return true;
+  }
+  const leftE164 = jidToE164(normalizedLeft);
+  const rightE164 = jidToE164(normalizedRight);
+  return Boolean(leftE164 && rightE164 && leftE164 === rightE164);
+}
+
+function matchesQuotedConversationTarget(targetJid: string, candidate: QuotedMetaLookup): boolean {
+  if (areComparableJidsEqual(targetJid, candidate.remoteJid)) {
+    return true;
+  }
+  if (isGroupJid(targetJid) || isGroupJid(candidate.remoteJid)) {
+    return false;
+  }
+  return (
+    areComparableJidsEqual(targetJid, candidate.participant) ||
+    areComparableE164sEqual(jidToE164(targetJid) ?? undefined, candidate.participantE164)
+  );
+}
+
+export function lookupInboundMessageMetaForTarget(
+  accountId: string,
+  targetJid: string,
+  messageId: string,
+): QuotedMetaLookup | undefined {
+  if (!accountId || !messageId || !targetJid) {
+    return undefined;
+  }
+  const exact = lookupInboundMessageMeta(accountId, targetJid, messageId);
+  if (exact) {
+    return {
+      remoteJid: targetJid,
+      participant: exact.participant,
+      participantE164: exact.participantE164,
+      body: exact.body,
+      media: exact.media,
+      fromMe: exact.fromMe,
+    };
+  }
+  const prefix = `${accountId}:`;
+  const suffix = `:${messageId}`;
+  let matched: QuotedMetaLookup | undefined;
+  for (const [cacheKey, entry] of cache.entries()) {
+    if (!cacheKey.startsWith(prefix) || !cacheKey.endsWith(suffix)) {
+      continue;
+    }
+    if (Date.now() - entry.ts > CACHE_TTL_MS) {
+      cache.delete(cacheKey);
+      continue;
+    }
+    const remoteJid = cacheKey.slice(prefix.length, cacheKey.length - suffix.length);
+    const candidate = {
+      remoteJid,
+      participant: entry.participant,
+      participantE164: entry.participantE164,
+      body: entry.body,
+      media: entry.media,
+      fromMe: entry.fromMe,
+    };
+    if (!matchesQuotedConversationTarget(targetJid, candidate)) {
+      continue;
+    }
+    if (matched) {
+      return undefined;
+    }
+    matched = candidate;
+  }
+  return matched;
+}
+
+function resolveQuotedRemoteJid(params: {
+  destinationJid: string | undefined;
+  lookupTargetJid: string | undefined;
+  quotedRemoteJid: string;
+  requestedJid: string | undefined;
+}): string {
+  const destinationJid = params.destinationJid?.trim();
+  const requestedJid = params.requestedJid?.trim();
+  const lookupTargetJid = params.lookupTargetJid?.trim();
+  if (!destinationJid || !requestedJid) {
+    return params.quotedRemoteJid;
+  }
+
+  // Reconcile only a quote tied to this requested conversation. Other JIDs can
+  // intentionally represent status, group, or cross-conversation replies.
+  if (
+    params.quotedRemoteJid !== requestedJid &&
+    (!lookupTargetJid || lookupTargetJid !== requestedJid)
+  ) {
+    return params.quotedRemoteJid;
+  }
+
+  const destinationIsPn = isPnUser(destinationJid) || isHostedPnUser(destinationJid);
+  const destinationIsLid = isLidUser(destinationJid) || isHostedLidUser(destinationJid);
+  const quotedIsPn = isPnUser(params.quotedRemoteJid) || isHostedPnUser(params.quotedRemoteJid);
+  const quotedIsLid = isLidUser(params.quotedRemoteJid) || isHostedLidUser(params.quotedRemoteJid);
+  return (destinationIsPn && quotedIsLid) || (destinationIsLid && quotedIsPn)
+    ? destinationJid
+    : params.quotedRemoteJid;
+}
+
+export function buildQuotedMessageOptions(params: {
+  messageId?: string | null;
+  remoteJid?: string | null;
+  fromMe?: boolean;
+  participant?: string;
+  destinationJid?: string;
+  requestedJid?: string;
+  lookupTargetJid?: string;
+  /** Original message text — shown in the quote preview bubble. */
+  messageText?: string;
+  media?: MediaPlaceholderTextFact;
+}): MiscMessageGenerationOptions | undefined {
+  const id = params.messageId?.trim();
+  const quotedRemoteJid = params.remoteJid?.trim();
+  if (!id || !quotedRemoteJid) {
+    return undefined;
+  }
+  const remoteJid = resolveQuotedRemoteJid({
+    destinationJid: params.destinationJid,
+    lookupTargetJid: params.lookupTargetJid,
+    quotedRemoteJid,
+    requestedJid: params.requestedJid,
+  });
+  const previewText = [
+    params.messageText,
+    formatMediaPlaceholderText(params.media ? [params.media] : []),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return {
+    quoted: {
+      key: {
+        remoteJid,
+        id,
+        fromMe: params.fromMe ?? false,
+        participant: params.participant,
+      },
+      message: { conversation: previewText },
+    },
+  } as MiscMessageGenerationOptions;
+}

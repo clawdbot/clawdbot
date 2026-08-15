@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+base="$script_dir/pr"
+if common_git_dir=$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  canonical_base="$(dirname "$common_git_dir")/scripts/pr"
+  if [ -x "$canonical_base" ]; then
+    base="$canonical_base"
+  fi
+fi
+
+exec "$base" review-init "$@"

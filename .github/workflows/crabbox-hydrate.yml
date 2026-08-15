@@ -1,0 +1,855 @@
+name: Crabbox Hydrate
+
+on:
+  workflow_dispatch:
+    inputs:
+      crabbox_id:
+        description: "Crabbox lease ID"
+        required: true
+        type: string
+      ref:
+        description: "Git ref to hydrate"
+        required: false
+        type: string
+      crabbox_runner_label:
+        description: "Dynamic Crabbox runner label"
+        required: true
+        type: string
+      crabbox_job:
+        description: "Hydration job identifier expected by Crabbox"
+        required: false
+        default: "hydrate"
+        type: string
+      crabbox_keep_alive_minutes:
+        description: "Minutes to keep the hydrated job alive"
+        required: false
+        default: "90"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PNPM_CONFIG_CHILD_CONCURRENCY: "1"
+  PNPM_CONFIG_MODULES_DIR: "/var/tmp/openclaw-pnpm/node_modules"
+  PNPM_CONFIG_NETWORK_CONCURRENCY: "1"
+  PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
+  PNPM_CONFIG_VIRTUAL_STORE_DIR: "/var/tmp/openclaw-pnpm/virtual-store"
+
+jobs:
+  hydrate:
+    name: hydrate
+    if: ${{ inputs.crabbox_job != 'hydrate-github' && inputs.crabbox_job != 'hydrate-windows-daemon' }}
+    runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup pnpm and dependencies
+        shell: bash
+        env:
+          CI: "true"
+        run: |
+          set -euo pipefail
+
+          export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$RUNNER_TEMP/cache}"
+          export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/corepack}"
+          export PNPM_HOME="${PNPM_HOME:-$RUNNER_TEMP/pnpm-home}"
+          mkdir -p "$XDG_CACHE_HOME" "$COREPACK_HOME" "$PNPM_HOME"
+          preferred_pnpm_store="/var/cache/crabbox/pnpm/store"
+          pnpm_install_root="/var/tmp/openclaw-pnpm"
+          if mkdir -p "$preferred_pnpm_store" 2>/dev/null &&
+            [ ! -L "$preferred_pnpm_store" ] &&
+            [ -d "$preferred_pnpm_store" ] &&
+            [ -w "$preferred_pnpm_store" ]; then
+            export PNPM_CONFIG_STORE_DIR="$preferred_pnpm_store"
+          else
+            pnpm_cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/openclaw/pnpm"
+            pnpm_install_root="$pnpm_cache_root/install"
+            export PNPM_CONFIG_STORE_DIR="$pnpm_cache_root/store"
+            export PNPM_CONFIG_MODULES_DIR="$pnpm_install_root/node_modules"
+            export PNPM_CONFIG_PACKAGE_IMPORT_METHOD="hardlink"
+            export PNPM_CONFIG_VIRTUAL_STORE_DIR="$pnpm_install_root/virtual-store"
+          fi
+          export PATH="$PNPM_HOME:$PATH"
+          {
+            echo "XDG_CACHE_HOME=$XDG_CACHE_HOME"
+            echo "COREPACK_HOME=$COREPACK_HOME"
+            echo "PNPM_HOME=$PNPM_HOME"
+            echo "PNPM_CONFIG_STORE_DIR=$PNPM_CONFIG_STORE_DIR"
+            echo "PNPM_CONFIG_MODULES_DIR=$PNPM_CONFIG_MODULES_DIR"
+            echo "PNPM_CONFIG_PACKAGE_IMPORT_METHOD=${PNPM_CONFIG_PACKAGE_IMPORT_METHOD:-}"
+            echo "PNPM_CONFIG_VIRTUAL_STORE_DIR=$PNPM_CONFIG_VIRTUAL_STORE_DIR"
+          } >> "$GITHUB_ENV"
+
+          package_manager="$(node -e "const fs = require('node:fs'); const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')); process.stdout.write(pkg.packageManager || '')")"
+          case "$package_manager" in
+            pnpm@*) ;;
+            *)
+              echo "::error::Expected packageManager to pin pnpm, got '${package_manager:-<empty>}'"
+              exit 1
+              ;;
+          esac
+          corepack enable --install-directory "$PNPM_HOME"
+          for attempt in 1 2 3; do
+            if corepack prepare "$package_manager" --activate; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              corepack prepare "$package_manager" --activate
+            fi
+            sleep $((attempt * 5))
+          done
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
+          echo "$node_bin" >> "$GITHUB_PATH"
+          export PATH="$node_bin:$PATH"
+
+          node -v
+          npm -v
+          pnpm -v
+
+          install_args=(
+            install
+            --prefer-offline
+            --ignore-scripts=false
+            --config.engine-strict=false
+            --config.enable-pre-post-scripts=true
+            --config.side-effects-cache=true
+            --frozen-lockfile
+          )
+          append_pnpm_option_arg() {
+            local env_name="$1"
+            local option_name="$2"
+            local value="${!env_name-}"
+            if [ -n "$value" ]; then
+              install_args+=("--${option_name}=${value}")
+            fi
+          }
+          append_pnpm_option_arg PNPM_CONFIG_CHILD_CONCURRENCY child-concurrency
+          append_pnpm_option_arg PNPM_CONFIG_MODULES_DIR modules-dir
+          append_pnpm_option_arg PNPM_CONFIG_NETWORK_CONCURRENCY network-concurrency
+          append_pnpm_option_arg PNPM_CONFIG_PACKAGE_IMPORT_METHOD package-import-method
+          append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
+          require_safe_writable_dir() {
+            local dir="$1"
+            if [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -w "$dir" ]; then
+              echo "::error::Refusing unsafe pnpm directory: $dir"
+              exit 1
+            fi
+          }
+          prepare_crabbox_pnpm_dirs() {
+            case "${PNPM_CONFIG_MODULES_DIR:?}" in "$pnpm_install_root"/*) ;; *) echo "::error::PNPM_CONFIG_MODULES_DIR must stay under $pnpm_install_root"; exit 1 ;; esac
+            case "${PNPM_CONFIG_VIRTUAL_STORE_DIR:?}" in "$pnpm_install_root"/*) ;; *) echo "::error::PNPM_CONFIG_VIRTUAL_STORE_DIR must stay under $pnpm_install_root"; exit 1 ;; esac
+            rm -rf -- "$pnpm_install_root"
+            mkdir -p "$pnpm_install_root" "$PNPM_CONFIG_STORE_DIR"
+            require_safe_writable_dir "$pnpm_install_root"
+            require_safe_writable_dir "$PNPM_CONFIG_STORE_DIR"
+            mkdir -p "$PNPM_CONFIG_MODULES_DIR" "$PNPM_CONFIG_VIRTUAL_STORE_DIR"
+            if [ "$PNPM_CONFIG_STORE_DIR" != "$preferred_pnpm_store" ] &&
+              [ "$(stat -c %d "$PNPM_CONFIG_STORE_DIR")" != "$(stat -c %d "$PNPM_CONFIG_MODULES_DIR")" ]; then
+              echo "::error::Fallback pnpm store and modules directories must share a filesystem"
+              exit 1
+            fi
+          }
+          prepare_crabbox_pnpm_dirs
+          if [ -L node_modules ] && [ "$(readlink node_modules)" = "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
+            rm -f node_modules
+          fi
+          if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
+            mkdir -p "$PNPM_CONFIG_MODULES_DIR"
+            ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
+            export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
+          fi
+          pnpm_install_artifacts_ready() {
+            test -s "$PNPM_CONFIG_MODULES_DIR/.modules.yaml" &&
+              test -x "$PNPM_CONFIG_MODULES_DIR/.bin/oxfmt" &&
+              test -f "$PNPM_CONFIG_MODULES_DIR/typescript/package.json"
+          }
+          run_pnpm_install() {
+            local log_file="$RUNNER_TEMP/openclaw-pnpm-install.log"
+            local pnpm_pid
+            local done_seen=0
+            rm -f "$log_file"
+            setsid pnpm "${install_args[@]}" > >(tee "$log_file") 2>&1 &
+            pnpm_pid=$!
+            while kill -0 "$pnpm_pid" 2>/dev/null; do
+              if grep -qE '^Done in .+ using pnpm v' "$log_file"; then
+                done_seen=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$done_seen" = 1 ]; then
+              for _ in {1..10}; do
+                if ! kill -0 "$pnpm_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
+              if kill -0 "$pnpm_pid" 2>/dev/null; then
+                # pnpm 11 may finish successfully but retain its event loop on Linux CI.
+                # https://github.com/pnpm/pnpm/issues/12297
+                echo "::warning::pnpm printed its completion marker but did not exit; terminating it after the grace period"
+                kill -TERM -- "-$pnpm_pid" 2>/dev/null || true
+                for _ in {1..10}; do
+                  if ! kill -0 "$pnpm_pid" 2>/dev/null; then
+                    break
+                  fi
+                  sleep 1
+                done
+                kill -KILL -- "-$pnpm_pid" 2>/dev/null || true
+                wait "$pnpm_pid" 2>/dev/null || true
+                if pnpm_install_artifacts_ready; then
+                  echo "pnpm install artifacts verified after exit-hang termination"
+                  return 0
+                fi
+                echo "::error::pnpm exit-hang termination left incomplete install artifacts"
+                return 1
+              fi
+            fi
+            wait "$pnpm_pid"
+          }
+          run_pnpm_install || run_pnpm_install
+          if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
+            rm -rf node_modules
+            ln -sfn "$PNPM_CONFIG_MODULES_DIR" node_modules
+            ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
+          fi
+
+      - name: Fetch main ref
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            timeout --signal=TERM --kill-after=10s 30s git \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=50 origin \
+              "+refs/heads/main:refs/remotes/origin/main"
+          fi
+
+      - name: Prepare Crabbox shell
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          link_node_tool() {
+            local tool="$1"
+            local source="$node_bin/$tool"
+            local target="/usr/local/bin/$tool"
+            if [ -e "$target" ] && [ "$(readlink -f "$source")" = "$(readlink -f "$target")" ]; then
+              return
+            fi
+            sudo ln -sf "$source" "$target"
+          }
+          link_node_tool node
+          link_node_tool npm
+          link_node_tool npx
+          link_node_tool corepack
+          sudo tee /usr/local/bin/pnpm >/dev/null <<'PNPM'
+          #!/usr/bin/env bash
+          exec /usr/local/bin/corepack pnpm "$@"
+          PNPM
+          sudo chmod 0755 /usr/local/bin/pnpm
+
+      - &crabbox_ensure_docker_step
+        name: Ensure Docker is running
+        shell: bash
+        env:
+          CRABBOX_JOB: ${{ inputs.crabbox_job }}
+        run: |
+          set -euo pipefail
+
+          docker_required=false
+          # crabbox_job is also the readiness marker. Only the routed Docker
+          # workload contract requires an engine; other marker names do not.
+          if [ "${CRABBOX_JOB:-hydrate}" = "hydrate-docker" ]; then
+            docker_required=true
+          fi
+
+          if ! command -v docker >/dev/null 2>&1; then
+            if [ "$docker_required" = true ]; then
+              echo "docker not found; installing fallback engine"
+              curl --fail --show-error --location \
+                --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
+                --max-time "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300}" \
+                --retry "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3}" \
+                --retry-delay "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRY_DELAY_SECONDS:-5}" \
+                --retry-all-errors \
+                https://get.docker.com | sudo sh
+            fi
+          fi
+
+          if command -v docker >/dev/null 2>&1; then
+            if command -v systemctl >/dev/null 2>&1; then
+              sudo systemctl start docker || true
+            elif command -v service >/dev/null 2>&1; then
+              sudo service docker start || true
+            fi
+          fi
+
+          if [ -S /var/run/docker.sock ]; then
+            sudo usermod -aG docker "$USER" || true
+            # The runner process keeps its original groups; grant this
+            # ephemeral runner session access without requiring a relogin.
+            sudo chmod 666 /var/run/docker.sock
+          fi
+
+          if ! docker version >/dev/null 2>&1; then
+            if [ "$docker_required" = true ]; then
+              echo "::error::Docker is unavailable for ${CRABBOX_JOB:-hydrate}; route this workload to a Docker-capable provider"
+              exit 1
+            fi
+            echo "::notice::Docker is unavailable; standard hydration will continue without Docker"
+            echo "OPENCLAW_CRABBOX_DOCKER_AVAILABLE=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "OPENCLAW_CRABBOX_DOCKER_AVAILABLE=1" >> "$GITHUB_ENV"
+          if ! docker buildx version >/dev/null 2>&1; then
+            arch="$(uname -m)"
+            case "$arch" in
+              aarch64|arm64)
+                buildx_arch=arm64
+                buildx_sha256=c4248d6cbc4a619a7e0b4609c11e509ad4ac0b475e1c64817c0ac20c5d90c766
+                ;;
+              x86_64|amd64)
+                buildx_arch=amd64
+                buildx_sha256=d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda
+                ;;
+              *) echo "unsupported buildx arch: $arch" >&2; exit 2 ;;
+            esac
+            buildx_version="v0.35.0"
+            mkdir -p "$HOME/.docker/cli-plugins"
+            curl --fail --show-error --location \
+              --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
+              --max-time "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300}" \
+              --retry "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3}" \
+              --retry-delay "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRY_DELAY_SECONDS:-5}" \
+              --retry-all-errors \
+              "https://github.com/docker/buildx/releases/download/${buildx_version}/buildx-${buildx_version}.linux-${buildx_arch}" \
+              -o "$HOME/.docker/cli-plugins/docker-buildx"
+            echo "${buildx_sha256}  $HOME/.docker/cli-plugins/docker-buildx" | sha256sum -c -
+            chmod 0755 "$HOME/.docker/cli-plugins/docker-buildx"
+          fi
+
+          docker version
+          docker buildx version
+          docker compose version || true
+
+      - name: Ensure SSH is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl start ssh || sudo systemctl start sshd || true
+          elif command -v service >/dev/null 2>&1; then
+            sudo service ssh start || sudo service sshd start || true
+          fi
+
+      - name: Hydrate provider env helper
+        shell: bash
+        run: bash scripts/ci-hydrate-testbox-env.sh
+
+      - name: Mark Crabbox ready
+        shell: bash
+        env:
+          CRABBOX_ID: ${{ inputs.crabbox_id }}
+          CRABBOX_JOB: ${{ inputs.crabbox_job }}
+        run: |
+          set -euo pipefail
+          job="${CRABBOX_JOB}"
+          if [ -z "$job" ]; then job=hydrate; fi
+          case "$CRABBOX_ID" in
+            ''|*[!A-Za-z0-9._-]*)
+              echo "Invalid crabbox_id" >&2
+              exit 2
+              ;;
+          esac
+          mkdir -p "$HOME/.crabbox/actions"
+          state="$HOME/.crabbox/actions/${CRABBOX_ID}.env"
+          env_file="$HOME/.crabbox/actions/${CRABBOX_ID}.env.sh"
+          services_file="$HOME/.crabbox/actions/${CRABBOX_ID}.services"
+          write_export() {
+            key="$1"
+            value="${!key-}"
+            if [ -n "$value" ]; then
+              printf 'export %s=%q\n' "$key" "$value"
+            fi
+          }
+          {
+            for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE XDG_CACHE_HOME COREPACK_HOME NODE_BIN OPENCLAW_CRABBOX_DOCKER_AVAILABLE PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_MODULES_DIR PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_PACKAGE_IMPORT_METHOD PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PNPM_CONFIG_VIRTUAL_STORE_DIR PATH; do
+              write_export "$key"
+            done
+          } > "${env_file}.tmp"
+          mv "${env_file}.tmp" "$env_file"
+          {
+            echo "# Docker containers visible from the hydrated runner"
+            docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}' 2>/dev/null || true
+          } > "${services_file}.tmp"
+          mv "${services_file}.tmp" "$services_file"
+          tmp="${state}.tmp"
+          {
+            echo "WORKSPACE=${GITHUB_WORKSPACE}"
+            echo "RUN_ID=${GITHUB_RUN_ID}"
+            echo "JOB=${job}"
+            echo "ENV_FILE=${env_file}"
+            echo "SERVICES_FILE=${services_file}"
+            echo "READY_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > "$tmp"
+          mv "$tmp" "$state"
+
+      - name: Keep Crabbox job alive
+        shell: bash
+        env:
+          CRABBOX_ID: ${{ inputs.crabbox_id }}
+          CRABBOX_KEEP_ALIVE_MINUTES: ${{ inputs.crabbox_keep_alive_minutes }}
+        run: |
+          set -euo pipefail
+          case "$CRABBOX_ID" in
+            ''|*[!A-Za-z0-9._-]*)
+              echo "Invalid crabbox_id" >&2
+              exit 2
+              ;;
+          esac
+          minutes="${CRABBOX_KEEP_ALIVE_MINUTES}"
+          case "$minutes" in
+            ''|*[!0-9]*) minutes=90 ;;
+          esac
+          stop="$HOME/.crabbox/actions/${CRABBOX_ID}.stop"
+          deadline=$(( $(date +%s) + minutes * 60 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if [ -f "$stop" ]; then
+              exit 0
+            fi
+            sleep 15
+          done
+
+  hydrate-windows-daemon:
+    name: hydrate-windows-daemon
+    if: ${{ inputs.crabbox_job == 'hydrate-windows-daemon' }}
+    runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      - name: Fetch main ref
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (git rev-parse --is-inside-work-tree 2>$null) {
+            $repo = (Get-Location).Path
+            $fetchInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $fetchInfo.FileName = "git"
+            $fetchInfo.WorkingDirectory = $repo
+            $fetchInfo.UseShellExecute = $false
+            $fetchInfo.Arguments = '-c protocol.version=2 fetch --no-tags --no-progress --prune --no-recurse-submodules --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"'
+
+            $fetch = New-Object System.Diagnostics.Process
+            $fetch.StartInfo = $fetchInfo
+            if (-not $fetch.Start()) {
+              throw "git fetch failed to start"
+            }
+            if (-not $fetch.WaitForExit(30000)) {
+              $fetch.Kill()
+              $fetch.WaitForExit()
+              throw "git fetch timed out after 30 seconds"
+            }
+            if ($fetch.ExitCode -ne 0) {
+              throw "git fetch failed with exit code $($fetch.ExitCode)"
+            }
+          }
+
+      - name: Setup pnpm and dependencies
+        shell: powershell
+        env:
+          CI: "true"
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $workspace = (Get-Location).Path
+          $cacheRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+          $env:XDG_CACHE_HOME = Join-Path $cacheRoot "cache"
+          $env:COREPACK_HOME = Join-Path $env:XDG_CACHE_HOME "corepack"
+          $env:PNPM_HOME = Join-Path $cacheRoot "pnpm-home"
+          $pnpmCacheRoot = Join-Path $cacheRoot "openclaw-pnpm"
+          $env:PNPM_CONFIG_STORE_DIR = Join-Path $pnpmCacheRoot "store"
+          $env:PNPM_CONFIG_MODULES_DIR = Join-Path $pnpmCacheRoot "node_modules"
+          $env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $pnpmCacheRoot "virtual-store"
+          $env:PNPM_CONFIG_CHILD_CONCURRENCY = "4"
+          $env:PNPM_CONFIG_NETWORK_CONCURRENCY = "8"
+          $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
+          $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"
+          function Add-GitHubCommandLine([string]$Path, [string]$Value) {
+            $Value | Out-File -FilePath $Path -Encoding utf8 -Append
+          }
+          New-Item -ItemType Directory -Force `
+            $env:XDG_CACHE_HOME, `
+            $env:COREPACK_HOME, `
+            $env:PNPM_HOME, `
+            $env:PNPM_CONFIG_STORE_DIR | Out-Null
+          $env:PATH = "$env:PNPM_HOME;$env:PATH"
+          @(
+            "XDG_CACHE_HOME=$env:XDG_CACHE_HOME"
+            "COREPACK_HOME=$env:COREPACK_HOME"
+            "PNPM_HOME=$env:PNPM_HOME"
+            "PNPM_CONFIG_STORE_DIR=$env:PNPM_CONFIG_STORE_DIR"
+            "PNPM_CONFIG_MODULES_DIR=$env:PNPM_CONFIG_MODULES_DIR"
+            "PNPM_CONFIG_VIRTUAL_STORE_DIR=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
+            "PNPM_CONFIG_CHILD_CONCURRENCY=$env:PNPM_CONFIG_CHILD_CONCURRENCY"
+            "PNPM_CONFIG_NETWORK_CONCURRENCY=$env:PNPM_CONFIG_NETWORK_CONCURRENCY"
+            "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=$env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN"
+            "PNPM_CONFIG_SIDE_EFFECTS_CACHE=$env:PNPM_CONFIG_SIDE_EFFECTS_CACHE"
+          ) | ForEach-Object { Add-GitHubCommandLine $env:GITHUB_ENV $_ }
+          Add-GitHubCommandLine $env:GITHUB_PATH $env:PNPM_HOME
+
+          $packageManager = (Get-Content package.json -Raw | ConvertFrom-Json).packageManager
+          if (-not $packageManager -or -not $packageManager.StartsWith("pnpm@")) {
+            Write-Error "Expected packageManager to pin pnpm, got '$packageManager'"
+          }
+          corepack enable --install-directory $env:PNPM_HOME
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            corepack prepare $packageManager --activate
+            if ($LASTEXITCODE -eq 0) {
+              break
+            }
+            if ($attempt -eq 3) {
+              exit $LASTEXITCODE
+            }
+            Start-Sleep -Seconds ($attempt * 5)
+          }
+          $nodeBin = Split-Path -Parent (node -p "process.execPath")
+          Add-GitHubCommandLine $env:GITHUB_ENV "NODE_BIN=$nodeBin"
+          Add-GitHubCommandLine $env:GITHUB_PATH $nodeBin
+          $env:PATH = "$nodeBin;$env:PATH"
+
+          node -v
+          npm -v
+          pnpm -v
+
+          $installArgs = @(
+            "install",
+            "--filter",
+            "openclaw",
+            "--prefer-offline",
+            "--ignore-scripts=true",
+            "--config.engine-strict=false",
+            "--config.enable-pre-post-scripts=false",
+            "--config.side-effects-cache=false",
+            "--frozen-lockfile",
+            "--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
+            "--modules-dir=$env:PNPM_CONFIG_MODULES_DIR",
+            "--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
+            "--store-dir=$env:PNPM_CONFIG_STORE_DIR",
+            "--virtual-store-dir=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
+          )
+          pnpm @installArgs
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $workspaceNodeModules = Join-Path $workspace "node_modules"
+          if (Test-Path $workspaceNodeModules) {
+            $workspaceNodeModulesItem = Get-Item $workspaceNodeModules -Force
+            if (($workspaceNodeModulesItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+              $nodeModulesChildren = @(Get-ChildItem -LiteralPath $workspaceNodeModules -Force)
+              $hasOnlyPnpmWorkspaceState = $nodeModulesChildren.Count -eq 1 -and $nodeModulesChildren[0].Name -eq ".pnpm-workspace-state-v1.json"
+              if ($nodeModulesChildren.Count -ne 0 -and -not $hasOnlyPnpmWorkspaceState) {
+                throw "workspace node_modules exists and is not a link: $workspaceNodeModules"
+              }
+              foreach ($nodeModulesChild in $nodeModulesChildren) {
+                Remove-Item -LiteralPath $nodeModulesChild.FullName -Force
+              }
+              Remove-Item -LiteralPath $workspaceNodeModules -Force
+              New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR | Out-Null
+            }
+          } else {
+            New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR | Out-Null
+          }
+
+          $corepackShimDir = Join-Path $nodeBin "node_modules\corepack\shims"
+          if (Test-Path $corepackShimDir) {
+            $env:PNPM_HOME = $corepackShimDir
+            Add-GitHubCommandLine $env:GITHUB_ENV "PNPM_HOME=$env:PNPM_HOME"
+            Add-GitHubCommandLine $env:GITHUB_PATH $env:PNPM_HOME
+          }
+
+      - name: Mark Crabbox ready
+        shell: powershell
+        env:
+          CRABBOX_ID: ${{ inputs.crabbox_id }}
+          CRABBOX_JOB: ${{ inputs.crabbox_job }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $job = if ($env:CRABBOX_JOB) { $env:CRABBOX_JOB } else { "hydrate-windows-daemon" }
+          if (-not $env:CRABBOX_ID -or $env:CRABBOX_ID -notmatch '^[A-Za-z0-9._-]+$') {
+            Write-Error "Invalid crabbox_id"
+          }
+          $actionsRoot = "C:\ProgramData\crabbox\actions"
+          New-Item -ItemType Directory -Force $actionsRoot | Out-Null
+          $state = Join-Path $actionsRoot "$env:CRABBOX_ID.env"
+          $envFile = Join-Path $actionsRoot "$env:CRABBOX_ID.env.ps1"
+          $servicesFile = Join-Path $actionsRoot "$env:CRABBOX_ID.services"
+          $keys = @(
+            "CI", "GITHUB_ACTIONS", "GITHUB_WORKSPACE", "GITHUB_REPOSITORY",
+            "GITHUB_RUN_ID", "GITHUB_RUN_NUMBER", "GITHUB_RUN_ATTEMPT",
+            "GITHUB_REF", "GITHUB_REF_NAME", "GITHUB_SHA", "GITHUB_EVENT_NAME",
+            "GITHUB_ACTOR", "RUNNER_OS", "RUNNER_ARCH", "RUNNER_TEMP",
+            "RUNNER_TOOL_CACHE", "XDG_CACHE_HOME", "COREPACK_HOME", "NODE_BIN",
+            "PNPM_HOME", "PNPM_CONFIG_CHILD_CONCURRENCY", "PNPM_CONFIG_MODULES_DIR",
+            "PNPM_CONFIG_NETWORK_CONCURRENCY", "PNPM_CONFIG_STORE_DIR",
+            "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN", "PNPM_CONFIG_VIRTUAL_STORE_DIR",
+            "PNPM_CONFIG_SIDE_EFFECTS_CACHE", "PATH"
+          )
+          $envLines = foreach ($key in $keys) {
+            $value = [Environment]::GetEnvironmentVariable($key)
+            if ($value) {
+              "$key=$value"
+            }
+          }
+          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+          [System.IO.File]::WriteAllLines("$envFile.tmp", $envLines, $utf8NoBom)
+          Move-Item -Force "$envFile.tmp" $envFile
+          [System.IO.File]::WriteAllLines(
+            "$servicesFile.tmp",
+            @("# Docker containers visible from the hydrated runner", "docker not available on native Windows hydration"),
+            $utf8NoBom
+          )
+          Move-Item -Force "$servicesFile.tmp" $servicesFile
+          $stateLines = @(
+            "WORKSPACE=$env:GITHUB_WORKSPACE",
+            "RUN_ID=$env:GITHUB_RUN_ID",
+            "JOB=$job",
+            "ENV_FILE=$envFile",
+            "SERVICES_FILE=$servicesFile",
+            "READY_AT=$((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))"
+          )
+          [System.IO.File]::WriteAllLines("$state.tmp", $stateLines, $utf8NoBom)
+          Move-Item -Force "$state.tmp" $state
+
+      - name: Keep Crabbox job alive
+        shell: powershell
+        env:
+          CRABBOX_ID: ${{ inputs.crabbox_id }}
+          CRABBOX_KEEP_ALIVE_MINUTES: ${{ inputs.crabbox_keep_alive_minutes }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not $env:CRABBOX_ID -or $env:CRABBOX_ID -notmatch '^[A-Za-z0-9._-]+$') {
+            Write-Error "Invalid crabbox_id"
+          }
+          $minutes = 90
+          if ($env:CRABBOX_KEEP_ALIVE_MINUTES -match '^[0-9]+$') {
+            $minutes = [int]$env:CRABBOX_KEEP_ALIVE_MINUTES
+          }
+          $stop = Join-Path "C:\ProgramData\crabbox\actions" "$env:CRABBOX_ID.stop"
+          $deadline = (Get-Date).AddMinutes($minutes)
+          while ((Get-Date) -lt $deadline) {
+            if (Test-Path $stop) {
+              exit 0
+            }
+            Start-Sleep -Seconds 15
+          }
+
+  hydrate-github:
+    name: hydrate-github
+    if: ${{ inputs.crabbox_job == 'hydrate-github' }}
+    runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        env:
+          PNPM_HOME: ${{ runner.temp }}/pnpm-home
+        with:
+          install-bun: "false"
+          use-actions-cache: "false"
+
+      - name: Prepare Crabbox shell
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            timeout --signal=TERM --kill-after=10s 30s git \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=50 origin \
+              "+refs/heads/main:refs/remotes/origin/main"
+          fi
+
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          link_node_tool() {
+            local tool="$1"
+            local source="$node_bin/$tool"
+            local target="/usr/local/bin/$tool"
+            if [ -e "$target" ] && [ "$(readlink -f "$source")" = "$(readlink -f "$target")" ]; then
+              return
+            fi
+            sudo ln -sf "$source" "$target"
+          }
+          link_node_tool node
+          link_node_tool npm
+          link_node_tool npx
+          link_node_tool corepack
+          sudo tee /usr/local/bin/pnpm >/dev/null <<'PNPM'
+          #!/usr/bin/env bash
+          exec /usr/local/bin/corepack pnpm "$@"
+          PNPM
+          sudo chmod 0755 /usr/local/bin/pnpm
+
+      - *crabbox_ensure_docker_step
+      - name: Ensure SSH is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl start ssh || sudo systemctl start sshd || true
+          elif command -v service >/dev/null 2>&1; then
+            sudo service ssh start || sudo service sshd start || true
+          fi
+
+      - name: Hydrate provider env helper
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+          ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+          BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+          OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+          OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+          OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+          OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+          OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+          BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
+          BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+          OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+          OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+          OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+          OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+          OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+          OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+        run: bash scripts/ci-hydrate-testbox-env.sh
+
+      - name: Mark Crabbox ready
+        shell: bash
+        env:
+          CRABBOX_ID: ${{ inputs.crabbox_id }}
+          CRABBOX_JOB: ${{ inputs.crabbox_job }}
+        run: |
+          set -euo pipefail
+          job="${CRABBOX_JOB}"
+          if [ -z "$job" ]; then job=hydrate-github; fi
+          case "$CRABBOX_ID" in
+            ''|*[!A-Za-z0-9._-]*)
+              echo "Invalid crabbox_id" >&2
+              exit 2
+              ;;
+          esac
+          mkdir -p "$HOME/.crabbox/actions"
+          state="$HOME/.crabbox/actions/${CRABBOX_ID}.env"
+          env_file="$HOME/.crabbox/actions/${CRABBOX_ID}.env.sh"
+          services_file="$HOME/.crabbox/actions/${CRABBOX_ID}.services"
+          write_export() {
+            key="$1"
+            value="${!key-}"
+            if [ -n "$value" ]; then
+              printf 'export %s=%q\n' "$key" "$value"
+            fi
+          }
+          {
+            for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE NODE_BIN OPENCLAW_CRABBOX_DOCKER_AVAILABLE PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_MODULES_DIR PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_PACKAGE_IMPORT_METHOD PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PNPM_CONFIG_VIRTUAL_STORE_DIR PATH; do
+              write_export "$key"
+            done
+          } > "${env_file}.tmp"
+          mv "${env_file}.tmp" "$env_file"
+          {
+            echo "# Docker containers visible from the hydrated runner"
+            docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}' 2>/dev/null || true
+          } > "${services_file}.tmp"
+          mv "${services_file}.tmp" "$services_file"
+          tmp="${state}.tmp"
+          {
+            echo "WORKSPACE=${GITHUB_WORKSPACE}"
+            echo "RUN_ID=${GITHUB_RUN_ID}"
+            echo "JOB=${job}"
+            echo "ENV_FILE=${env_file}"
+            echo "SERVICES_FILE=${services_file}"
+            echo "READY_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > "$tmp"
+          mv "$tmp" "$state"
+
+      - name: Keep Crabbox job alive
+        shell: bash
+        env:
+          CRABBOX_ID: ${{ inputs.crabbox_id }}
+          CRABBOX_KEEP_ALIVE_MINUTES: ${{ inputs.crabbox_keep_alive_minutes }}
+        run: |
+          set -euo pipefail
+          case "$CRABBOX_ID" in
+            ''|*[!A-Za-z0-9._-]*)
+              echo "Invalid crabbox_id" >&2
+              exit 2
+              ;;
+          esac
+          minutes="${CRABBOX_KEEP_ALIVE_MINUTES}"
+          case "$minutes" in
+            ''|*[!0-9]*) minutes=90 ;;
+          esac
+          stop="$HOME/.crabbox/actions/${CRABBOX_ID}.stop"
+          deadline=$(( $(date +%s) + minutes * 60 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if [ -f "$stop" ]; then
+              exit 0
+            fi
+            sleep 15
+          done

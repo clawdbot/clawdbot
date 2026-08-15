@@ -1,0 +1,4 @@
+interface:
+  display_name: "QA Test OpenClaw"
+  short_description: "Run and debug qa-lab and qa-channel scenarios"
+  default_prompt: "Use $openclaw-qa-testing to run or extend the OpenClaw QA suite with qa-lab and qa-channel. Start with QA Lab source- and auth-aware defaults. For a selected scenario, its complete execution.summary overrides generic guidance and may require other flags; pin provider/model only when execution.config.requiredProvider or execution.config.requiredModel requires it."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test Heap Leaks"
+  short_description: "Investigate test OOMs with heap snapshots"
+  default_prompt: "Use $openclaw-test-heap-leaks to investigate test memory growth with heap snapshots and reduce its impact."

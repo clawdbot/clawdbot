@@ -1,0 +1,114 @@
+title: Group visible reply via message tool
+
+scenario:
+  id: group-visible-reply-tool
+  surface: channel
+  coverage:
+    primary:
+      - channels.outbound-group-reply
+    secondary:
+      - channels.qa-channel-outbound
+      - channels.outbound-message
+  objective: Verify a group-sourced QA channel turn replies visibly through message(action=send) in the same room.
+  gatewayConfigPatch:
+    messages:
+      groupChat:
+        visibleReplies: message_tool
+  successCriteria:
+    - Agent receives a synthetic shared-room turn.
+    - Mock provider calls the shared message tool instead of relying on final-answer delivery.
+    - The visible reply lands once in the same group transcript.
+    - The source turn settles with a durably recorded successful message-tool result.
+  docsRefs:
+    - docs/channels/groups.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/qa-channel/src/inbound.ts
+    - extensions/qa-channel/src/outbound.ts
+    - src/auto-reply/reply/dispatch-from-config.ts
+  execution:
+    kind: flow
+    summary: Send a mentioned group message and verify visible output uses the message tool in the source group.
+    config:
+      conversationId: qa-visible-tool-room
+      promptSnippet: qa group visible reply tool check
+      prompt: "@openclaw qa group visible reply tool check. Use the visible room reply path. exact marker: `QA-GROUP-TOOL-OK`"
+      expectedMarker: QA-GROUP-TOOL-OK
+
+flow:
+  steps:
+    - name: posts visible room output through message tool
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `group:${config.conversationId}` })"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: group
+              title: QA Visible Tool Room
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : true"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - set: scenarioRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
+        - assert:
+            expr: "!env.mock || scenarioRequests.some((request) => request.plannedToolName === 'message' && request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.message === config.expectedMarker)"
+            message:
+              expr: "`expected message(action=send) with marker, saw ${JSON.stringify(scenarioRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, toolOutput: request.toolOutput ?? '', tools: Array.isArray(request.body?.tools) ? request.body.tools.map((tool) => tool?.name ?? tool?.function?.name ?? tool?.type ?? null).filter(Boolean).slice(0, 25) : [] })))} `"
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'group' && !candidate.threadId && candidate.text.includes(config.expectedMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 100
+        - call: readSessionTranscriptSummary
+          saveAs: transcriptSummary
+          args:
+            - ref: env
+            - ref: sessionKey
+        - assert:
+            expr: "transcriptSummary.successfulToolCallCounts.message === 1"
+            message: visible group reply did not persist exactly one successful message-tool result
+        - set: matchingOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'group' && String(message.text ?? '').includes(config.expectedMarker))"
+        - assert:
+            expr: matchingOutbound.length === 1
+            message:
+              expr: "`expected exactly one visible group reply, saw ${matchingOutbound.length}`"
+      detailsExpr: "`${outbound.conversation.kind}:${outbound.conversation.id}:${outbound.text}`"

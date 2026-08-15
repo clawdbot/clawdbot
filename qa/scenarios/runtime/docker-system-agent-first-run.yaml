@@ -1,0 +1,33 @@
+title: Docker packaged OpenClaw inference gate
+
+scenario:
+  id: docker-system-agent-first-run
+  surface: containers
+  category: containers.container-setup
+  coverage:
+    secondary:
+      - containers.first-run-onboarding
+      - small-linux.first-run-verification
+  objective: Verify a fresh package-installed Docker state gates OpenClaw on a tested inference route, then supports planner-backed and typed setup operations without leaking secrets.
+  successCriteria:
+    - The bare-command routing policy selects onboarding, and the packaged OpenClaw CLI exits with onboarding guidance while inference is unavailable.
+    - The packaged activation module tests fake Claude before persisting its model, while workspace and Gateway setup remain untouched.
+    - The modern compatibility entrypoint becomes available after activation.
+    - A fuzzy request uses the verified planner for typed setup; subsequent one-shot commands write the default workspace/model and create the configured agent.
+    - Discord setup is written through a SecretRef without persisting the raw token.
+    - Config validation and expected OpenClaw audit entries succeed.
+  docsRefs:
+    - docs/install/docker.md
+    - docs/cli/setup.md
+    - docs/help/testing.md
+  codeRefs:
+    - scripts/e2e/system-agent-first-run-docker.sh
+    - test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts
+    - scripts/e2e/system-agent-first-run-spec.json
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs supporting packaged-CLI evidence for the inference gate, activation module, planner, and typed operations; it does not claim an interactive onboarding or OpenClaw agent/tool/approval flow.
+    args:
+      - --lane
+      - system-agent-first-run

@@ -1,0 +1,83 @@
+{
+  "id": "logbook",
+  "name": "Logbook",
+  "description": "Automatic work journal: captures periodic screen snapshots from a paired node and turns them into a reviewable timeline of your day.",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "uiHints": {
+    "captureIntervalSeconds": {
+      "label": "Capture Interval (s)",
+      "help": "Seconds between screen snapshots. Lower is more detailed but uses more disk and analysis tokens."
+    },
+    "analysisIntervalMinutes": {
+      "label": "Analysis Window (min)",
+      "help": "Snapshot window size summarized per analysis batch."
+    },
+    "nodeId": {
+      "label": "Capture Node",
+      "help": "Node id or name that provides screen.snapshot. Defaults to the first connected node that supports it."
+    },
+    "screenIndex": {
+      "label": "Screen Index",
+      "help": "Zero-based display index to capture.",
+      "advanced": true
+    },
+    "maxWidth": {
+      "label": "Snapshot Max Width (px)",
+      "help": "Snapshots are scaled down to this width before storage and analysis.",
+      "advanced": true
+    },
+    "visionModel": {
+      "label": "Vision Model",
+      "placeholder": "codex/gpt-5.6-sol",
+      "help": "provider/model used to read snapshots; the provider must support structured extraction (the bundled Codex plugin does). Defaults to the first image-capable Codex entry under tools.media."
+    },
+    "captureEnabled": {
+      "label": "Capture Enabled",
+      "help": "Master switch for the snapshot loop. The timeline UI stays available when off."
+    },
+    "retentionDays": {
+      "label": "Frame Retention (days)",
+      "help": "Snapshots older than this are deleted. Timeline cards are kept.",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "captureEnabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "captureIntervalSeconds": {
+        "type": "number",
+        "default": 30
+      },
+      "analysisIntervalMinutes": {
+        "type": "number",
+        "default": 15
+      },
+      "nodeId": {
+        "type": "string"
+      },
+      "screenIndex": {
+        "type": "number",
+        "default": 0
+      },
+      "maxWidth": {
+        "type": "number",
+        "default": 1440
+      },
+      "visionModel": {
+        "type": "string"
+      },
+      "retentionDays": {
+        "type": "number",
+        "default": 14
+      }
+    }
+  }
+}

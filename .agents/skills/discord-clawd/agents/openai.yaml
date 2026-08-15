@@ -1,0 +1,4 @@
+interface:
+  display_name: "Discord Clawd"
+  short_description: "Talk to the Discord-backed OpenClaw agent"
+  default_prompt: "Use $discord-clawd to route a private ask or explicit post through the Discord-backed OpenClaw agent/session."

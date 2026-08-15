@@ -1,0 +1,19 @@
+title: Slack disabled channel warns and does not trigger
+scenario:
+  id: slack-channel-disabled-warning
+  surface: channels
+  coverage:
+    primary:
+      - slack.channel-allowlists
+  execution:
+    kind: flow
+    channel: slack
+    timeoutMs: 8000
+    retryCount: 1
+    suiteIsolation: isolated
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaChannelDisabledWarningScenario }

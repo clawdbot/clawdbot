@@ -1,0 +1,522 @@
+name: Periphery Dead Code Comment
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] trusted PR commenter; job gates repository, source event, workflow name, live open PR, and exact current head before reading artifacts or writing comments
+    workflows: ["iOS Periphery Dead Code", "macOS Periphery Dead Code"]
+    types: [completed]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  comment:
+    name: Comment on PR
+    runs-on: ubuntu-24.04
+    if: >
+      github.repository == 'openclaw/openclaw' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      (github.event.workflow_run.name == 'iOS Periphery Dead Code' ||
+      github.event.workflow_run.name == 'macOS Periphery Dead Code')
+    steps:
+      - name: Upsert Periphery PR comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const path = require("node:path");
+            const zlib = require("node:zlib");
+
+            const run = context.payload.workflow_run;
+            const workflowConfig = {
+              "iOS Periphery Dead Code": {
+                artifactPrefix: "ios-periphery-dead-code",
+                heading: "### iOS Periphery",
+                marker: "<!-- openclaw-ios-periphery-dead-code -->",
+                repoPathPrefix: "apps/ios/",
+                scanJobName: "Scan iOS dead code",
+                scopeJobName: "Detect iOS scan scope",
+                scopeLabel: "iOS",
+              },
+              "macOS Periphery Dead Code": {
+                artifactPrefix: "macos-periphery-dead-code",
+                heading: "### macOS Periphery",
+                marker: "<!-- openclaw-macos-periphery-dead-code -->",
+                repoPathPrefix: "apps/macos/",
+                scanJobName: "Scan macOS dead code",
+                scopeJobName: "Detect macOS scan scope",
+                scopeLabel: "macOS",
+              },
+            }[run.name];
+            if (!workflowConfig) {
+              core.info(`Skipping unexpected workflow ${run.name ?? "unknown"}.`);
+              return;
+            }
+            const {
+              artifactPrefix,
+              heading,
+              marker,
+              repoPathPrefix,
+              scanJobName,
+              scopeJobName,
+              scopeLabel,
+            } = workflowConfig;
+            const pr = run.pull_requests?.[0];
+            if (!pr) {
+              core.info("No pull request attached to workflow_run.");
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const repository = `${owner}/${repo}`;
+            if (run.repository?.full_name !== repository) {
+              core.info(`Skipping workflow_run from ${run.repository?.full_name ?? "unknown repository"}.`);
+              return;
+            }
+            if (run.event !== "pull_request") {
+              core.info(`Skipping workflow_run for ${run.event ?? "unknown"} event.`);
+              return;
+            }
+            const livePull = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pr.number,
+            });
+            if (livePull.data.state !== "open") {
+              core.info(`Skipping closed PR #${pr.number}.`);
+              return;
+            }
+            if (livePull.data.base?.repo?.full_name !== repository) {
+              core.info(`Skipping PR #${pr.number} targeting ${livePull.data.base?.repo?.full_name ?? "unknown repository"}.`);
+              return;
+            }
+            if (livePull.data.head?.sha !== run.head_sha) {
+              core.info(`Skipping stale run ${run.id}; PR #${pr.number} is now at ${livePull.data.head?.sha}.`);
+              return;
+            }
+
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner,
+              repo,
+              run_id: run.id,
+              filter: "latest",
+              per_page: 100,
+            });
+            const scopeJob = jobs.find((job) => job.name === scopeJobName);
+            const scanJob = jobs.find((job) => job.name === scanJobName);
+            const scanSkipped =
+              scopeJob?.conclusion === "success" && scanJob?.conclusion === "skipped";
+            if (scanSkipped) {
+              core.info(`Skipping intentionally omitted Periphery scan for PR #${pr.number}.`);
+            }
+
+            const artifacts = scanSkipped
+              ? []
+              : await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                  owner,
+                  repo,
+                  run_id: run.id,
+                  per_page: 100,
+                });
+
+            const readReport = async () => {
+              if (scanSkipped) {
+                return;
+              }
+              const artifactName = `${artifactPrefix}-${run.id}-${run.run_attempt}`;
+              const artifact = artifacts.find((item) => item.name === artifactName);
+              if (!artifact) {
+                core.warning(`No ${artifactName} artifact found.`);
+                return;
+              }
+              if (artifact.expired) {
+                core.warning(`${artifactName} artifact expired.`);
+                return;
+              }
+
+              const maxArchiveBytes = 1024 * 1024;
+              const archiveSize = Number(artifact.size_in_bytes);
+              if (!Number.isSafeInteger(archiveSize) || archiveSize < 0 || archiveSize > maxArchiveBytes) {
+                core.warning(`Skipping ${artifactName}; compressed artifact size ${artifact.size_in_bytes ?? "unknown"} exceeds the ${maxArchiveBytes} byte limit.`);
+                return;
+              }
+
+              const archive = await github.rest.actions.downloadArtifact({
+                owner,
+                repo,
+                artifact_id: artifact.id,
+                archive_format: "zip",
+              });
+
+              const archiveBuffer = Buffer.from(archive.data);
+
+              const allowedArtifactFiles = new Set([
+                "periphery.json",
+                "periphery.status",
+                "periphery.stderr.log",
+                "periphery.stdout.json",
+                "should-fail.txt",
+              ]);
+              const maxEntries = allowedArtifactFiles.size;
+              const maxEntryBytes = 2 * 1024 * 1024;
+              const maxTotalBytes = 4 * 1024 * 1024;
+
+              const readUInt16 = (offset) => archiveBuffer.readUInt16LE(offset);
+              const readUInt32 = (offset) => archiveBuffer.readUInt32LE(offset);
+              const findEndOfCentralDirectoryOffset = () => {
+                const minimumOffset = Math.max(0, archiveBuffer.length - 0xffff - 22);
+                for (let offset = archiveBuffer.length - 22; offset >= minimumOffset; offset -= 1) {
+                  if (readUInt32(offset) === 0x06054b50) {
+                    return offset;
+                  }
+                }
+                return -1;
+              };
+
+              const endOfCentralDirectoryOffset = findEndOfCentralDirectoryOffset();
+              if (endOfCentralDirectoryOffset < 0) {
+                core.warning(`Skipping ${artifactName}; ZIP end-of-central-directory record was not found.`);
+                return;
+              }
+              const entryCount = readUInt16(endOfCentralDirectoryOffset + 10);
+              const centralDirectorySize = readUInt32(endOfCentralDirectoryOffset + 12);
+              const centralDirectoryOffset = readUInt32(endOfCentralDirectoryOffset + 16);
+              if (entryCount < 1 || entryCount > maxEntries) {
+                core.warning(`Skipping ${artifactName}; artifact has ${entryCount} entries.`);
+                return;
+              }
+              if (
+                centralDirectoryOffset + centralDirectorySize > archiveBuffer.length ||
+                readUInt32(centralDirectoryOffset) !== 0x02014b50
+              ) {
+                core.warning(`Skipping ${artifactName}; invalid ZIP central directory.`);
+                return;
+              }
+
+              const entries = new Map();
+              let totalUncompressedSize = 0;
+              let offset = centralDirectoryOffset;
+              for (let index = 0; index < entryCount; index += 1) {
+                if (offset + 46 > archiveBuffer.length || readUInt32(offset) !== 0x02014b50) {
+                  core.warning(`Skipping ${artifactName}; invalid central directory entry.`);
+                  return;
+                }
+
+                const compressionMethod = readUInt16(offset + 10);
+                const generalPurposeBitFlag = readUInt16(offset + 8);
+                const compressedSize = readUInt32(offset + 20);
+                const uncompressedSize = readUInt32(offset + 24);
+                const fileNameLength = readUInt16(offset + 28);
+                const extraLength = readUInt16(offset + 30);
+                const commentLength = readUInt16(offset + 32);
+                const externalAttributes = readUInt32(offset + 38);
+                const nameStart = offset + 46;
+                const nameEnd = nameStart + fileNameLength;
+                const nextOffset = nameEnd + extraLength + commentLength;
+                if (nextOffset > archiveBuffer.length) {
+                  core.warning(`Skipping ${artifactName}; central directory entry exceeds archive bounds.`);
+                  return;
+                }
+
+                const name = archiveBuffer.toString("utf8", nameStart, nameEnd);
+                const mode = externalAttributes >>> 16;
+                const fileType = mode & 0o170000;
+                const isRegularFile = fileType === 0 || fileType === 0o100000;
+                const invalidName =
+                  !allowedArtifactFiles.has(name) ||
+                  name.includes("/") ||
+                  name.includes("\\") ||
+                  name.includes("..") ||
+                  path.isAbsolute(name);
+                if (invalidName) {
+                  core.warning(`Skipping ${artifactName}; unexpected artifact entry ${name}.`);
+                  return;
+                }
+                if (!isRegularFile || name.endsWith("/")) {
+                  core.warning(`Skipping ${artifactName}; ${name} is not a regular file.`);
+                  return;
+                }
+                if (entries.has(name)) {
+                  core.warning(`Skipping ${artifactName}; duplicate artifact entry ${name}.`);
+                  return;
+                }
+                if (![0, 8].includes(compressionMethod)) {
+                  core.warning(`Skipping ${artifactName}; ${name} uses unsupported ZIP compression method ${compressionMethod}.`);
+                  return;
+                }
+                if ((generalPurposeBitFlag & 0x1) !== 0) {
+                  core.warning(`Skipping ${artifactName}; ${name} is encrypted.`);
+                  return;
+                }
+                if (compressedSize > maxEntryBytes || uncompressedSize > maxEntryBytes) {
+                  core.warning(`Skipping ${artifactName}; ${name} exceeds the per-file size limit.`);
+                  return;
+                }
+
+                totalUncompressedSize += uncompressedSize;
+                if (totalUncompressedSize > maxTotalBytes) {
+                  core.warning(`Skipping ${artifactName}; artifact exceeds the aggregate size limit.`);
+                  return;
+                }
+
+                entries.set(name, {
+                  compressedSize,
+                  compressionMethod,
+                  localHeaderOffset: readUInt32(offset + 42),
+                  uncompressedSize,
+                });
+                offset = nextOffset;
+              }
+
+              const readZipEntry = (name, entry) => {
+                const localHeaderOffset = entry.localHeaderOffset;
+                if (
+                  localHeaderOffset + 30 > archiveBuffer.length ||
+                  readUInt32(localHeaderOffset) !== 0x04034b50
+                ) {
+                  throw new Error(`${name} has an invalid local header.`);
+                }
+
+                const localNameLength = readUInt16(localHeaderOffset + 26);
+                const localExtraLength = readUInt16(localHeaderOffset + 28);
+                const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+                const dataEnd = dataStart + entry.compressedSize;
+                if (dataEnd > archiveBuffer.length) {
+                  throw new Error(`${name} exceeds archive bounds.`);
+                }
+
+                const compressed = archiveBuffer.subarray(dataStart, dataEnd);
+                let contents;
+                if (entry.compressionMethod === 0) {
+                  contents = compressed;
+                } else {
+                  try {
+                    contents = zlib.inflateRawSync(compressed, { maxOutputLength: maxEntryBytes });
+                  } catch (error) {
+                    if (error && error.code === "ERR_BUFFER_TOO_LARGE") {
+                      throw new Error(`${name} exceeded the per-file size limit while reading.`);
+                    }
+                    throw error;
+                  }
+                }
+                if (contents.length !== entry.uncompressedSize || contents.length > maxEntryBytes) {
+                  throw new Error(`${name} exceeded the per-file size limit while reading.`);
+                }
+                return contents.toString("utf8");
+              };
+
+              const files = new Map();
+              for (const [name, entry] of entries) {
+                let contents;
+                try {
+                  contents = readZipEntry(name, entry);
+                } catch (error) {
+                  core.warning(`Skipping ${artifactName}; ${error instanceof Error ? error.message : String(error)}`);
+                  return;
+                }
+                files.set(name, contents);
+              }
+
+              const read = (name) => {
+                return files.get(name) ?? "";
+              };
+
+              const status = Number(read("periphery.status").trim() || "1");
+              let findings = null;
+              for (const name of ["periphery.json", "periphery.stdout.json"]) {
+                try {
+                  const parsed = JSON.parse(read(name));
+                  const validFindings =
+                    Array.isArray(parsed) &&
+                    parsed.every(
+                      (finding) =>
+                        finding !== null &&
+                        typeof finding === "object" &&
+                        !Array.isArray(finding),
+                    );
+                  if (validFindings) {
+                    findings = parsed;
+                    break;
+                  }
+                } catch {}
+              }
+              return { findings, status };
+            };
+            const report = await readReport();
+            const status = report?.status ?? 1;
+            const findings = report?.findings ?? null;
+
+            const sanitizeCell = (value) => {
+              const normalized = String(value ?? "")
+                .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+                .replace(/[\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/gu, "")
+                .replace(/\s+/gu, " ")
+                .trim();
+              const maxEncodedLength = 180;
+              let escaped = "";
+              for (const character of normalized) {
+                const encoded =
+                  character === "`"
+                    ? "'"
+                    : character === "|"
+                      ? "\\|"
+                      : character;
+                if (escaped.length + encoded.length > maxEncodedLength) {
+                  break;
+                }
+                escaped += encoded;
+              }
+              return `\`${escaped || "-"}\``;
+            };
+
+            const rows = (findings ?? []).map((finding) => {
+              const location = String(finding.location ?? "");
+              const [file, line] = location.split(":");
+              return {
+                file: file ? `${repoPathPrefix}${file}` : "",
+                line: line || "",
+                kind: String(finding.kind ?? ""),
+                name: String(finding.name ?? ""),
+              };
+            });
+
+            let mode = "failure";
+            let body = `${marker}\n`;
+            if (scanSkipped) {
+              mode = "skipped";
+              body += [
+                heading,
+                "",
+                `Periphery scan skipped because the pull request is a draft or no longer touches ${scopeLabel} scan scope.`,
+              ].join("\n");
+            } else if (findings === null) {
+              body += [
+                heading,
+                "",
+                "Periphery did not complete or its report could not be safely read. Check the workflow run for details.",
+              ].join("\n");
+            } else if (rows.length === 0 && status === 0) {
+              mode = "success";
+              body += [
+                heading,
+                "",
+                "No dead Swift code found.",
+              ].join("\n");
+            } else if (rows.length > 0) {
+              const shown = rows.slice(0, 50);
+              body += [
+                heading,
+                "",
+                `Found ${rows.length} dead Swift code ${rows.length === 1 ? "symbol" : "symbols"}. Remove the code or add a narrow Periphery exemption with a comment explaining why it must stay.`,
+                "",
+                "| File | Line | Kind | Name |",
+                "| --- | ---: | --- | --- |",
+                ...shown.map((row) => `| ${sanitizeCell(row.file)} | ${sanitizeCell(row.line)} | ${sanitizeCell(row.kind)} | ${sanitizeCell(row.name)} |`),
+                rows.length > shown.length ? "" : null,
+                rows.length > shown.length ? `Showing first ${shown.length}; full JSON is in the workflow artifact.` : null,
+              ].filter(Boolean).join("\n");
+            } else {
+              body += [
+                heading,
+                "",
+                "Periphery exited with a non-zero status before producing findings. Check the workflow artifact for stdout/stderr.",
+              ].join("\n");
+            }
+            body += "\n";
+            const maxCommentChars = 60_000;
+            if (body.length > maxCommentChars) {
+              body = [
+                marker,
+                heading,
+                "",
+                `Found ${rows.length} dead Swift code ${rows.length === 1 ? "symbol" : "symbols"}. The rendered report exceeded the safe comment limit; use the workflow artifact for details.`,
+                "",
+              ].join("\n");
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: livePull.data.number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (comment) =>
+                comment.user?.login === "github-actions[bot]" &&
+                comment.body?.includes(marker),
+            );
+
+            if (!existing && ["skipped", "success"].includes(mode)) {
+              core.info(`No existing Periphery comment and scan ${mode}; skipping comment.`);
+              return;
+            }
+
+            const currentPull = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pr.number,
+            });
+            if (
+              currentPull.data.state !== "open" ||
+              currentPull.data.base?.repo?.full_name !== repository ||
+              currentPull.data.head?.sha !== run.head_sha
+            ) {
+              core.info(`Skipping stale run ${run.id}; PR #${pr.number} changed before comment update.`);
+              return;
+            }
+
+            const workflowRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner,
+              repo,
+              workflow_id: run.workflow_id,
+              event: "pull_request",
+              head_sha: run.head_sha,
+              per_page: 100,
+            });
+            const supersedingRun = workflowRuns.find(
+              (candidate) =>
+                (candidate.id === run.id ||
+                  candidate.pull_requests?.some(
+                    (candidatePull) => candidatePull.number === pr.number,
+                  )) &&
+                (candidate.run_number > run.run_number ||
+                  (candidate.run_number === run.run_number &&
+                    candidate.run_attempt > run.run_attempt)),
+            );
+            if (supersedingRun) {
+              core.info(`Skipping superseded run ${run.id} attempt ${run.run_attempt}; run ${supersedingRun.id} attempt ${supersedingRun.run_attempt} is newer.`);
+              return;
+            }
+
+            const writeComment = async () => {
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: existing.id,
+                  body,
+                });
+                return;
+              }
+
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: livePull.data.number,
+                body,
+              });
+            };
+
+            try {
+              await writeComment();
+            } catch (error) {
+              if (error && typeof error === "object" && error.status === 403) {
+                core.warning(`Skipping Periphery PR comment for #${pr.number}; GitHub token cannot write issue comments for this workflow_run.`);
+                return;
+              }
+              throw error;
+            }

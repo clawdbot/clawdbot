@@ -1,0 +1,66 @@
+name: Detect docs-only changes
+description: >
+  Outputs docs_only=true when all changed files are under docs/ or are
+  markdown (.md/.mdx). Fail-safe: if detection fails, outputs false (run
+  everything). Uses git diff — no API calls, no extra permissions needed.
+
+inputs:
+  base-sha:
+    description: Exact base commit to compare with the checked-out tree.
+    required: true
+
+outputs:
+  docs_only:
+    description: "'true' if all changes are docs/markdown, 'false' otherwise"
+    value: ${{ steps.check.outputs.docs_only }}
+  docs_changed:
+    description: "'true' if any changed file is under docs/ or is markdown"
+    value: ${{ steps.check.outputs.docs_changed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Detect docs-only changes
+      id: check
+      shell: bash
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
+      run: |
+        BASE="$BASE_SHA"
+
+        # Fail-safe: if we can't diff, assume non-docs (run everything)
+        CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")
+        if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then
+          echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          echo "docs_changed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        docs_changed=false
+        non_docs=false
+        while IFS= read -r changed_path; do
+          case "$changed_path" in
+            test/fixtures/*)
+              non_docs=true
+              ;;
+            docs/* | *.md | *.mdx)
+              docs_changed=true
+              ;;
+            *)
+              non_docs=true
+              ;;
+          esac
+        done <<< "$CHANGED"
+
+        if [ "$docs_changed" = "true" ]; then
+          echo "docs_changed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "docs_changed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        if [ "$non_docs" = "false" ]; then
+          echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          echo "Docs-only change detected — skipping heavy jobs"
+        else
+          echo "docs_only=false" >> "$GITHUB_OUTPUT"
+        fi

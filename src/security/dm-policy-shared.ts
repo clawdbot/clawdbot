@@ -1,0 +1,236 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// Shares direct-message policy normalization for channel audits.
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveChannelIngressEffectiveAllowFromLists } from "../channels/message-access/effective-allow-from.js";
+import { readChannelIngressStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
+import type { ChannelId } from "../channels/plugins/channel-id.types.js";
+import type { GroupPolicy } from "../config/types.base.js";
+
+/**
+ * Derive a stable main-DM owner from a single-entry allowlist.
+ * Wildcards, multi-owner lists, and non-main DM scopes stay unpinned so callers keep route-specific sessions.
+ */
+export function resolvePinnedMainDmOwnerFromAllowlist(params: {
+  dmScope?: string | null;
+  allowFrom?: Array<string | number> | null;
+  normalizeEntry: (entry: string) => string | undefined;
+}): string | null {
+  if ((params.dmScope ?? "main") !== "main") {
+    return null;
+  }
+  const rawAllowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
+  if (rawAllowFrom.some((entry) => String(entry).trim() === "*")) {
+    return null;
+  }
+  const normalizedOwners = Array.from(
+    new Set(
+      rawAllowFrom
+        .map((entry) => params.normalizeEntry(String(entry)))
+        .filter((entry): entry is string => Boolean(entry)),
+    ),
+  );
+  return normalizedOwners.length === 1
+    ? expectDefined(normalizedOwners[0], "normalized owners entry at 0")
+    : null;
+}
+
+/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+export function resolveEffectiveAllowFromLists(params: {
+  allowFrom?: Array<string | number> | null;
+  groupAllowFrom?: Array<string | number> | null;
+  storeAllowFrom?: Array<string | number> | null;
+  dmPolicy?: string | null;
+  groupAllowFromFallbackToAllowFrom?: boolean | null;
+}): {
+  effectiveAllowFrom: string[];
+  effectiveGroupAllowFrom: string[];
+} {
+  return resolveChannelIngressEffectiveAllowFromLists(params);
+}
+
+/** Admission decision returned by legacy DM/group access helpers. */
+export type DmGroupAccessDecision = "allow" | "block" | "pairing";
+
+/** Stable reason codes used by channel plugins, command auth, and diagnostics. */
+export const DM_GROUP_ACCESS_REASON = {
+  GROUP_POLICY_ALLOWED: "group_policy_allowed",
+  GROUP_POLICY_DISABLED: "group_policy_disabled",
+  GROUP_POLICY_EMPTY_ALLOWLIST: "group_policy_empty_allowlist",
+  GROUP_POLICY_NOT_ALLOWLISTED: "group_policy_not_allowlisted",
+  DM_POLICY_OPEN: "dm_policy_open",
+  DM_POLICY_DISABLED: "dm_policy_disabled",
+  DM_POLICY_ALLOWLISTED: "dm_policy_allowlisted",
+  DM_POLICY_PAIRING_REQUIRED: "dm_policy_pairing_required",
+  DM_POLICY_NOT_ALLOWLISTED: "dm_policy_not_allowlisted",
+} as const;
+/** Machine-readable reason code for a DM/group access decision. */
+export type DmGroupAccessReasonCode =
+  (typeof DM_GROUP_ACCESS_REASON)[keyof typeof DM_GROUP_ACCESS_REASON];
+type DmGroupAccessResult = {
+  decision: DmGroupAccessDecision;
+  reasonCode: DmGroupAccessReasonCode;
+  reason: string;
+};
+
+const dmGroupAccess = (
+  decision: DmGroupAccessDecision,
+  reasonCode: DmGroupAccessReasonCode,
+  reason: string,
+): DmGroupAccessResult => ({ decision, reasonCode, reason });
+
+/**
+ * Resolve sender access for `dmPolicy=open`, where `*` means fully open and a configured
+ * allowlist still restricts the accepted sender set.
+ *
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
+export function resolveOpenDmAllowlistAccess(params: {
+  effectiveAllowFrom: Array<string | number>;
+  isSenderAllowed: (allowFrom: string[]) => boolean;
+}): DmGroupAccessResult {
+  const effectiveAllowFrom = normalizeStringEntries(params.effectiveAllowFrom);
+  return effectiveAllowFrom.includes("*")
+    ? dmGroupAccess("allow", DM_GROUP_ACCESS_REASON.DM_POLICY_OPEN, "dmPolicy=open")
+    : params.isSenderAllowed(effectiveAllowFrom)
+      ? dmGroupAccess(
+          "allow",
+          DM_GROUP_ACCESS_REASON.DM_POLICY_ALLOWLISTED,
+          "dmPolicy=open (allowlisted)",
+        )
+      : dmGroupAccess(
+          "block",
+          DM_GROUP_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED,
+          "dmPolicy=open (not allowlisted)",
+        );
+}
+
+type DmGroupAccessInputParams = {
+  isGroup: boolean;
+  dmPolicy?: string | null;
+  groupPolicy?: string | null;
+  allowFrom?: Array<string | number> | null;
+  groupAllowFrom?: Array<string | number> | null;
+  storeAllowFrom?: Array<string | number> | null;
+  groupAllowFromFallbackToAllowFrom?: boolean | null;
+  isSenderAllowed: (allowFrom: string[]) => boolean;
+};
+
+/** @deprecated Use `resolveChannelMessageIngress` or `readChannelIngressStoreAllowFromForDmPolicy` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+export async function readStoreAllowFromForDmPolicy(params: {
+  provider: ChannelId;
+  accountId: string;
+  dmPolicy?: string | null;
+  shouldRead?: boolean | null;
+  readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
+}): Promise<string[]> {
+  return await readChannelIngressStoreAllowFromForDmPolicy(params);
+}
+
+function resolveLegacyDmGroupAccessDecision(params: {
+  isGroup: boolean;
+  dmPolicy?: string | null;
+  groupPolicy?: string | null;
+  effectiveAllowFrom: Array<string | number>;
+  effectiveGroupAllowFrom: Array<string | number>;
+  isSenderAllowed: (allowFrom: string[]) => boolean;
+}): DmGroupAccessResult {
+  const dmPolicy = params.dmPolicy ?? "pairing";
+  const groupPolicy: GroupPolicy =
+    params.groupPolicy === "open" || params.groupPolicy === "disabled"
+      ? params.groupPolicy
+      : "allowlist";
+  const effectiveAllowFrom = normalizeStringEntries(params.effectiveAllowFrom);
+  const effectiveGroupAllowFrom = normalizeStringEntries(params.effectiveGroupAllowFrom);
+
+  if (params.isGroup) {
+    if (groupPolicy === "disabled") {
+      return dmGroupAccess(
+        "block",
+        DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED,
+        "groupPolicy=disabled",
+      );
+    }
+    if (groupPolicy === "allowlist") {
+      if (effectiveGroupAllowFrom.length === 0) {
+        return dmGroupAccess(
+          "block",
+          DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST,
+          "groupPolicy=allowlist (empty allowlist)",
+        );
+      }
+      if (!params.isSenderAllowed(effectiveGroupAllowFrom)) {
+        return dmGroupAccess(
+          "block",
+          DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED,
+          "groupPolicy=allowlist (not allowlisted)",
+        );
+      }
+    }
+    return dmGroupAccess(
+      "allow",
+      DM_GROUP_ACCESS_REASON.GROUP_POLICY_ALLOWED,
+      `groupPolicy=${groupPolicy}`,
+    );
+  }
+
+  if (dmPolicy === "disabled") {
+    return dmGroupAccess("block", DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED, "dmPolicy=disabled");
+  }
+  if (dmPolicy === "open") {
+    return resolveOpenDmAllowlistAccess({
+      effectiveAllowFrom,
+      isSenderAllowed: params.isSenderAllowed,
+    });
+  }
+  return params.isSenderAllowed(effectiveAllowFrom)
+    ? dmGroupAccess(
+        "allow",
+        DM_GROUP_ACCESS_REASON.DM_POLICY_ALLOWLISTED,
+        `dmPolicy=${dmPolicy} (allowlisted)`,
+      )
+    : dmPolicy === "pairing"
+      ? dmGroupAccess(
+          "pairing",
+          DM_GROUP_ACCESS_REASON.DM_POLICY_PAIRING_REQUIRED,
+          "dmPolicy=pairing (not allowlisted)",
+        )
+      : dmGroupAccess(
+          "block",
+          DM_GROUP_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED,
+          `dmPolicy=${dmPolicy} (not allowlisted)`,
+        );
+}
+
+/**
+ * Resolve legacy DM/group sender admission and return the effective allowlists used.
+ *
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
+export function resolveDmGroupAccessWithLists(params: DmGroupAccessInputParams): {
+  decision: DmGroupAccessDecision;
+  reasonCode: DmGroupAccessReasonCode;
+  reason: string;
+  effectiveAllowFrom: string[];
+  effectiveGroupAllowFrom: string[];
+} {
+  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveEffectiveAllowFromLists({
+    allowFrom: params.allowFrom,
+    groupAllowFrom: params.groupAllowFrom,
+    storeAllowFrom: params.storeAllowFrom,
+    dmPolicy: params.dmPolicy,
+    groupAllowFromFallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom,
+  });
+  const access = resolveLegacyDmGroupAccessDecision({
+    isGroup: params.isGroup,
+    dmPolicy: params.dmPolicy,
+    groupPolicy: params.groupPolicy,
+    effectiveAllowFrom,
+    effectiveGroupAllowFrom,
+    isSenderAllowed: params.isSenderAllowed,
+  });
+  return {
+    ...access,
+    effectiveAllowFrom,
+    effectiveGroupAllowFrom,
+  };
+}

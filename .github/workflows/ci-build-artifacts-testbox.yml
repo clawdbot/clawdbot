@@ -1,0 +1,222 @@
+name: Blacksmith Build Artifacts Testbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      testbox_id:
+        type: string
+        description: "Testbox session ID"
+        required: true
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-v1-{1}', github.workflow, github.event.pull_request.number) || format('{0}-manual-v1-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-artifacts:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    permissions:
+      contents: read
+    name: "build-artifacts"
+    # Pull requests only validate the artifact build; real Testbox leases
+    # arrive via dispatch. Hosted PR runs keep this landing gate satisfiable
+    # during Blacksmith outages (mirrors ci-check-testbox.yml).
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
+    timeout-minutes: 35
+    steps:
+      # Testbox lifecycle actions require Blacksmith VM metadata; PRs validate the build only.
+      - name: Begin Testbox
+        if: github.event_name == 'workflow_dispatch'
+        uses: useblacksmith/begin-testbox@233448af4bfdc6fca509a7f0974411ac6d8a8043
+        with:
+          testbox_id: ${{ inputs.testbox_id }}
+
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '0' }}
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-trufflehog: "true"
+
+      - name: Resolve release dist cache seeds
+        id: dist-cache-seeds
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cache_prefix="${RUNNER_OS}-dist-build-v2-"
+          declare -A seen=()
+
+          resolve_tag_sha() {
+            local tag="$1"
+            local direct=""
+            local peeled=""
+
+            while read -r sha ref; do
+              if [[ "$ref" == "refs/tags/${tag}^{}" ]]; then
+                peeled="$sha"
+              elif [[ "$ref" == "refs/tags/${tag}" ]]; then
+                direct="$sha"
+              fi
+            done < <(git ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}")
+
+            printf '%s\n' "${peeled:-$direct}"
+          }
+
+          {
+            echo "restore-keys<<EOF"
+            for dist_tag in beta latest; do
+              version="$(npm view "openclaw@${dist_tag}" version 2>/dev/null || true)"
+              if [[ -z "$version" ]]; then
+                echo "Could not resolve npm dist-tag ${dist_tag}; skipping cache seed." >&2
+                continue
+              fi
+
+              sha="$(resolve_tag_sha "v${version}")"
+              if [[ -z "$sha" ]]; then
+                echo "Could not resolve git tag v${version}; skipping cache seed." >&2
+                continue
+              fi
+
+              key="${cache_prefix}${sha}"
+              if [[ -z "${seen[$key]+x}" ]]; then
+                echo "$key"
+                seen[$key]=1
+              fi
+            done
+            echo "${cache_prefix}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore dist build cache
+        id: dist-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            .artifacts/build-all-cache/
+            dist/
+            dist-runtime/
+            packages/*/dist/
+          key: ${{ runner.os }}-dist-build-v2-${{ github.sha }}
+          restore-keys: ${{ steps.dist-cache-seeds.outputs.restore-keys }}
+
+      - name: Build dist on cache miss
+        if: steps.dist-cache.outputs.cache-hit != 'true'
+        env:
+          # Hosted PR runners have 16GB total; the 16GB heap fits only the
+          # dispatch-time 16vcpu Blacksmith box.
+          NODE_OPTIONS: ${{ github.event_name == 'pull_request' && '--max-old-space-size=8192' || '--max-old-space-size=16384' }}
+        run: pnpm build:ci-artifacts
+
+      - name: Build Control UI on cache miss
+        if: steps.dist-cache.outputs.cache-hit != 'true'
+        run: pnpm ui:build
+
+      - name: Verify build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d dist
+          test -d dist-runtime
+          test -f packages/ai/dist/internal/runtime.mjs
+          if [[ ! -f dist/index.js && ! -f dist/index.mjs ]]; then
+            echo "Missing dist/index.js or dist/index.mjs" >&2
+            exit 1
+          fi
+          test -f dist/build-info.json
+          test -f dist/control-ui/index.html
+
+      - name: Save dist build cache
+        if: steps.dist-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            .artifacts/build-all-cache/
+            dist/
+            dist-runtime/
+            packages/*/dist/
+          key: ${{ runner.os }}-dist-build-v2-${{ github.sha }}
+
+      - name: Ensure Testbox base commit
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+      - name: Prepare Testbox shell
+        uses: ./.github/actions/prepare-testbox-shell
+        with:
+          base-ref: ${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}
+
+      - name: Hydrate Testbox provider env helper
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+          ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+          BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+          OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+          OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+          OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+          OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+          OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+          BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
+          BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+          OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+          OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+          OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+          OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+          OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+          OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+        run: bash scripts/ci-hydrate-testbox-env.sh
+
+      - name: Run Testbox
+        uses: useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d
+        if: github.event_name == 'workflow_dispatch' && always()
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

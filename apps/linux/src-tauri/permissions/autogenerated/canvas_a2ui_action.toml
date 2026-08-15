@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-canvas-a2ui-action"
+description = "Enables the canvas_a2ui_action command without any pre-configured scope."
+commands.allow = ["canvas_a2ui_action"]
+
+[[permission]]
+identifier = "deny-canvas-a2ui-action"
+description = "Denies the canvas_a2ui_action command without any pre-configured scope."
+commands.deny = ["canvas_a2ui_action"]

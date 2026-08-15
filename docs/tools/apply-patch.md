@@ -1,0 +1,65 @@
+---
+summary: "Apply multi-file patches with the apply_patch tool"
+read_when:
+  - You need structured file edits across multiple files
+  - You want to document or debug patch-based edits
+title: "apply_patch tool"
+---
+
+Apply file changes using a structured patch format. This is ideal for multi-file
+or multi-hunk edits where a single `edit` call would be brittle.
+
+The tool accepts a single `input` string that wraps one or more file operations:
+
+```text
+*** Begin Patch
+*** Add File: path/to/file.txt
++line 1
++line 2
+*** Update File: src/app.ts
+@@ optional change context
+-old line
++new line
+*** Delete File: obsolete.txt
+*** End Patch
+```
+
+## Parameters
+
+- `input` (required): Full patch contents including `*** Begin Patch` and `*** End Patch`.
+
+## Notes
+
+- Patch paths support relative paths (from the workspace directory) and absolute paths.
+- `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
+- `*** Add File:` and a non-self `*** Move to:` require the destination path to be absent. To intentionally replace a path, delete it earlier in the same patch before adding or moving the replacement.
+- Use `*** Move to:` within an `*** Update File:` hunk to rename files.
+- `*** End of File` marks an EOF-only insert when needed.
+- Enabled by default for every model. Set `tools.exec.applyPatch.enabled: false`
+  to disable it, or restrict it to specific models with
+  `tools.exec.applyPatch.allowModels` (accepts raw ids like `gpt-5.4` or full
+  ids like `openai/gpt-5.4`).
+- Config lives under `tools.exec.applyPatch.*`.
+
+## Example
+
+```json
+{
+  "tool": "apply_patch",
+  "input": "*** Begin Patch\n*** Update File: src/index.ts\n@@\n-const foo = 1\n+const foo = 2\n*** End Patch"
+}
+```
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Diffs" href="/tools/diffs" icon="code-compare">
+    Read-only diff viewer for change presentation.
+  </Card>
+  <Card title="Exec tool" href="/tools/exec" icon="terminal">
+    Shell command execution from the agent.
+  </Card>
+  <Card title="Code execution" href="/tools/code-execution" icon="square-code">
+    Sandboxed remote Python analysis with xAI.
+  </Card>
+</CardGroup>

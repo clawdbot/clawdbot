@@ -1,0 +1,39 @@
+{
+  "cases": [
+    {
+      "id": "direct-absolute-executable",
+      "argv": ["/usr/bin/printf", "ok"],
+      "expectedRawExecutable": "/usr/bin/printf"
+    },
+    {
+      "id": "env-assignment-prefix",
+      "argv": ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"],
+      "expectedRawExecutable": "/usr/bin/env"
+    },
+    {
+      "id": "env-option-with-separate-value",
+      "argv": ["/usr/bin/env", "-u", "HOME", "/usr/bin/printf", "ok"],
+      "expectedRawExecutable": "/usr/bin/env"
+    },
+    {
+      "id": "env-option-with-inline-value",
+      "argv": ["/usr/bin/env", "-uHOME", "/usr/bin/printf", "ok"],
+      "expectedRawExecutable": "/usr/bin/env"
+    },
+    {
+      "id": "nested-env-wrappers",
+      "argv": ["/usr/bin/env", "/usr/bin/env", "FOO=bar", "printf", "ok"],
+      "expectedRawExecutable": "/usr/bin/env"
+    },
+    {
+      "id": "env-shell-wrapper-stops-at-shell",
+      "argv": ["/usr/bin/env", "bash", "-lc", "echo ok"],
+      "expectedRawExecutable": "bash"
+    },
+    {
+      "id": "env-missing-effective-command",
+      "argv": ["/usr/bin/env", "FOO=bar"],
+      "expectedRawExecutable": "/usr/bin/env"
+    }
+  ]
+}

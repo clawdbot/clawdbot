@@ -1,0 +1,16 @@
+{
+  "id": "crabbox",
+  "name": "Crabbox Worker Provider",
+  "description": "Cloud worker provider backed by the Crabbox CLI.",
+  "activation": {
+    "onStartup": false
+  },
+  "contracts": {
+    "workerProviders": ["crabbox"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

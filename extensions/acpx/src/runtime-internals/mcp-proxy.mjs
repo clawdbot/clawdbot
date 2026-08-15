@@ -1,0 +1,159 @@
+#!/usr/bin/env node
+
+/**
+ * Stdio MCP proxy used by ACPX wrappers. It injects OpenClaw-provided MCP
+ * servers into session creation/load/fork requests before forwarding to target.
+ */
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
+import { splitCommandLine } from "./mcp-command-line.mjs";
+
+function formatErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message || error.name || "Error";
+  }
+  return String(error);
+}
+
+function decodePayload(argv) {
+  const payloadIndex = argv.indexOf("--payload");
+  if (payloadIndex < 0) {
+    throw new Error("Missing --payload");
+  }
+  const encoded = argv[payloadIndex + 1];
+  if (!encoded) {
+    throw new Error("Missing MCP proxy payload value");
+  }
+  const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid MCP proxy payload");
+  }
+  if (typeof parsed.targetCommand !== "string" || parsed.targetCommand.trim() === "") {
+    throw new Error("MCP proxy payload missing targetCommand");
+  }
+  const mcpServers = Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [];
+  return {
+    targetCommand: parsed.targetCommand,
+    mcpServers,
+  };
+}
+
+function shouldInject(method) {
+  return method === "session/new" || method === "session/load" || method === "session/fork";
+}
+
+function rewriteLine(line, mcpServers) {
+  if (!line.trim()) {
+    return line;
+  }
+  try {
+    const parsed = JSON.parse(line);
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      !shouldInject(parsed.method) ||
+      !parsed.params ||
+      typeof parsed.params !== "object" ||
+      Array.isArray(parsed.params)
+    ) {
+      return line;
+    }
+    const next = {
+      ...parsed,
+      params: {
+        ...parsed.params,
+        mcpServers,
+      },
+    };
+    return JSON.stringify(next);
+  } catch {
+    return line;
+  }
+}
+
+/** Build spawn options for the proxied MCP target process. */
+export function createTargetSpawnOptions(platform = process.platform) {
+  const options = {
+    stdio: ["pipe", "pipe", "inherit"],
+    env: process.env,
+  };
+  if (platform === "win32") {
+    options.windowsHide = true;
+  }
+  return options;
+}
+
+function isMainModule() {
+  const mainPath = process.argv[1];
+  if (!mainPath) {
+    return false;
+  }
+  return import.meta.url === pathToFileURL(path.resolve(mainPath)).href;
+}
+
+function main() {
+  const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
+  const target = splitCommandLine(targetCommand);
+  const child = spawn(target.command, target.args, createTargetSpawnOptions());
+
+  if (!child.stdin || !child.stdout) {
+    throw new Error("Failed to create MCP proxy stdio pipes");
+  }
+
+  const input = createInterface({ input: process.stdin });
+  let exiting = false;
+
+  const exitWithError = (error) => {
+    if (exiting) {
+      return;
+    }
+    exiting = true;
+    input.close();
+    child.kill();
+    process.stderr.write(`${formatErrorMessage(error)}\n`);
+    process.exit(1);
+  };
+
+  child.stdin.on("error", exitWithError);
+  process.stdout.on("error", exitWithError);
+
+  input.on("line", (line) => {
+    if (exiting) {
+      return;
+    }
+    child.stdin.write(`${rewriteLine(line, mcpServers)}\n`, (error) => {
+      if (error) {
+        exitWithError(error);
+      }
+    });
+  });
+  input.on("close", () => {
+    if (exiting || child.stdin.destroyed || child.stdin.writableEnded) {
+      return;
+    }
+    child.stdin.end();
+  });
+
+  child.stdout.pipe(process.stdout);
+
+  child.on("error", exitWithError);
+
+  child.on("close", (code, signal) => {
+    if (exiting) {
+      return;
+    }
+    exiting = true;
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 0);
+  });
+}
+
+if (isMainModule()) {
+  main();
+}

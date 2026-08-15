@@ -1,0 +1,47 @@
+{
+  "id": "vault",
+  "name": "Vault",
+  "description": "HashiCorp Vault SecretRef provider integration.",
+  "activation": {
+    "onStartup": false,
+    "onCommands": ["vault"]
+  },
+  "commandAliases": [
+    {
+      "name": "vault",
+      "kind": "cli"
+    }
+  ],
+  "secretProviderIntegrations": {
+    "vault": {
+      "providerAlias": "vault",
+      "displayName": "HashiCorp Vault",
+      "description": "Resolve OpenClaw exec SecretRefs from HashiCorp Vault KV secrets.",
+      "source": "exec",
+      "command": "${node}",
+      "args": ["./vault-secret-ref-resolver.js"],
+      "timeoutMs": 15000,
+      "noOutputTimeoutMs": 15000,
+      "maxOutputBytes": 1048576,
+      "passEnv": [
+        "VAULT_ADDR",
+        "VAULT_TOKEN",
+        "VAULT_TOKEN_FILE",
+        "VAULT_NAMESPACE",
+        "OPENCLAW_VAULT_AUTH_METHOD",
+        "OPENCLAW_VAULT_AUTH_MOUNT",
+        "OPENCLAW_VAULT_AUTH_ROLE",
+        "OPENCLAW_VAULT_JWT_FILE",
+        "OPENCLAW_VAULT_KV_MOUNT",
+        "OPENCLAW_VAULT_KV_VERSION",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_USE_SYSTEM_CA"
+      ]
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

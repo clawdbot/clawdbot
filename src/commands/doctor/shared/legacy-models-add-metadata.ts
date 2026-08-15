@@ -1,0 +1,41 @@
+// Detection helper for legacy `/models add` OpenAI Codex entries missing metadata markers.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ModelDefinitionConfig } from "../../../config/types.models.js";
+
+const LEGACY_MODELS_ADD_CODEX_MODEL_IDS = new Set(["gpt-5.5", "gpt-5.5-pro"]);
+const LEGACY_MODELS_ADD_CODEX_APIS = new Set([
+  "openai-codex-responses",
+  "openai-chatgpt-responses",
+]);
+
+/** Return true when a model entry matches the legacy Codex `/models add` default shape. */
+export function isLegacyModelsAddCodexMetadataModel(params: {
+  provider: string;
+  model: Partial<ModelDefinitionConfig> | undefined;
+}): boolean {
+  const model = params.model;
+  const provider = normalizeProviderId(params.provider);
+  if ((provider !== "codex" && provider !== "openai-codex") || !model) {
+    return false;
+  }
+  const id = model.id?.trim().toLowerCase();
+  if (!id || !LEGACY_MODELS_ADD_CODEX_MODEL_IDS.has(id)) {
+    return false;
+  }
+  return (
+    typeof model.api === "string" &&
+    LEGACY_MODELS_ADD_CODEX_APIS.has(model.api) &&
+    model.reasoning === true &&
+    Array.isArray(model.input) &&
+    model.input.length === 2 &&
+    model.input[0] === "text" &&
+    model.input[1] === "image" &&
+    model.cost?.input === 5 &&
+    model.cost.output === 30 &&
+    model.cost.cacheRead === 0.5 &&
+    model.cost.cacheWrite === 0 &&
+    model.contextWindow === 400_000 &&
+    model.contextTokens === 272_000 &&
+    model.maxTokens === 128_000
+  );
+}

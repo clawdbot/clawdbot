@@ -1,0 +1,31 @@
+title: Docker npm onboard channel agent
+
+scenario:
+  id: docker-npm-onboard-channel-agent
+  surface: containers
+  category: containers.agent-sandbox-and-tooling
+  coverage:
+    primary:
+      - containers.docker-backed-agent-sandbox-support
+    secondary:
+      - containers.first-run-onboarding
+  objective: Verify a package-installed Docker runner can complete non-interactive onboarding, configure a channel, start Gateway-backed agent behavior, and complete a mocked model turn.
+  successCriteria:
+    - The candidate OpenClaw tarball installs in a clean Docker home.
+    - Non-interactive onboarding configures local Gateway auth and model state.
+    - Channel setup writes the expected account config and status surfaces.
+    - A local agent turn reaches the mocked OpenAI provider and returns the success marker.
+  docsRefs:
+    - docs/install/docker.md
+    - docs/help/testing.md
+    - docs/cli/onboard.md
+  codeRefs:
+    - scripts/e2e/npm-onboard-channel-agent-docker.sh
+    - scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the existing npm-onboard-channel-agent Docker E2E lane for package-installed Docker agent setup and turn coverage.
+    args:
+      - --lane
+      - npm-onboard-channel-agent

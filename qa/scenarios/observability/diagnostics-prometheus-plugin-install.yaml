@@ -1,0 +1,27 @@
+title: Diagnostics Prometheus managed install and runtime
+
+scenario:
+  id: diagnostics-prometheus-plugin-install
+  surface: telemetry
+  coverage:
+    primary:
+      - observability.diagnostics-prometheus-plugin-install
+  objective: Verify the exact checkout plugin installs through the official npm path, loads as a trusted managed plugin, and exports runtime metrics after Gateway startup.
+  successCriteria:
+    - The exact checkout plugin package installs through the canonical npm plugin command.
+    - The managed npm install record identifies the official package and installed version.
+    - Runtime inspection reports the enabled plugin loaded from the trusted official install.
+    - An isolated Gateway exposes the protected Prometheus endpoint from the installed plugin.
+    - The authenticated scrape contains the diagnostics-prometheus exporter-start sample.
+  docsRefs:
+    - docs/plugins/reference/diagnostics-prometheus.md
+    - docs/gateway/prometheus.md
+  codeRefs:
+    - extensions/diagnostics-prometheus/src/install-runtime.e2e.test.ts
+    - src/plugins/official-external-install-trust.ts
+    - src/plugins/manifest-registry.ts
+    - src/plugins/services.ts
+  execution:
+    kind: vitest
+    path: extensions/diagnostics-prometheus/src/install-runtime.e2e.test.ts
+    summary: Install the exact checkout plugin from a local npm registry, start an isolated Gateway, and scrape its trusted runtime exporter.

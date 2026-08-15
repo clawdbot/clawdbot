@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenClaw</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font:
+          13px/1.4 system-ui,
+          sans-serif;
+      }
+      body {
+        width: 280px;
+        margin: 0;
+        padding: 16px;
+        background: #17191d;
+        color: #f5f7fa;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 14px;
+      }
+      img {
+        width: 24px;
+        height: 24px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 15px;
+      }
+      .card {
+        border: 1px solid #343941;
+        border-radius: 10px;
+        padding: 12px;
+        background: #202329;
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 8px;
+      }
+      .muted {
+        color: #aeb5c0;
+      }
+      #status {
+        margin: 0;
+        font-weight: 600;
+      }
+      button {
+        width: 100%;
+        margin-top: 12px;
+        padding: 8px 10px;
+        border: 0;
+        border-radius: 8px;
+        font: inherit;
+        cursor: pointer;
+      }
+      #tabAction {
+        background: #ff5a36;
+        color: white;
+        font-weight: 600;
+      }
+      #settings {
+        background: transparent;
+        color: #cbd2dc;
+        border: 1px solid #40464f;
+      }
+      .hidden {
+        display: none;
+      }
+      #error {
+        margin: 9px 0 0;
+        color: #ff9f8b;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <img src="icons/icon32.png" alt="" />
+      <h1>OpenClaw Browser</h1>
+    </header>
+    <main class="card">
+      <p id="status">Checking connection…</p>
+      <div id="pairedDetails" class="hidden">
+        <div class="row"><span class="muted">Access</span><span id="accessMode">—</span></div>
+        <button id="tabAction" type="button" class="hidden"></button>
+      </div>
+      <p id="error" class="hidden"></p>
+      <button id="settings" type="button">Settings</button>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

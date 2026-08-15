@@ -1,0 +1,26 @@
+{
+  "name": "@openclaw/memory-host-sdk",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@openclaw/normalization-core": "workspace:*",
+    "@openclaw/retry": "workspace:*",
+    "p-map": "7.0.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "exports": {
+    "./runtime-core": "./src/runtime-core.ts",
+    "./runtime-files": "./src/runtime-files.ts",
+    "./engine-foundation": "./src/engine-foundation.ts",
+    "./engine-storage": "./src/engine-storage.ts",
+    "./engine-embeddings": "./src/engine-embeddings.ts",
+    "./engine-sessions": "./src/engine-sessions.ts",
+    "./multimodal": "./src/multimodal.ts",
+    "./query": "./src/query.ts",
+    "./secret": "./src/secret.ts",
+    "./status": "./src/status.ts"
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slacrawl"
+  short_description: "Search local Slack archives and freshness"
+  default_prompt: "Use $slacrawl to search local Slack archives, check freshness, inspect channel or DM slices, and report exact date spans and token/source limits."

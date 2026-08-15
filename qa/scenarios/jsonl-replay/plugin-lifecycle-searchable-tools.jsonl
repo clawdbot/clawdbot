@@ -1,0 +1,6 @@
+{"message":{"role":"system","content":"Curated replay fixture: plugin lifecycle with searchable tools."}}
+{"message":{"role":"user","content":"Install the demo plugin and discover its OpenClaw integration tool before calling it."}}
+{"message":{"role":"assistant","content":"The plugin is installed; I will discover the integration tool before use."}}
+{"message":{"role":"tool","content":"searchable tool discovery returned openclaw.demo.status"}}
+{"message":{"role":"user","content":"Call the discovered status tool and summarize the result."}}
+{"message":{"role":"assistant","content":"The discovered plugin status tool returned healthy."}}

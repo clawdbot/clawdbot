@@ -1,0 +1,257 @@
+// Whatsapp plugin module implements shared behavior.
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
+import {
+  adaptScopedAccountAccessor,
+  createScopedChannelConfigAdapter,
+  createScopedDmSecurityResolver,
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  collectOpenGroupPolicyRouteAllowlistWarnings,
+  createAllowlistProviderGroupPolicyWarningCollector,
+} from "openclaw/plugin-sdk/channel-policy";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import {
+  createDelegatedSetupWizardProxy,
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup-runtime";
+import {
+  hasAnyWhatsAppAuth,
+  listWhatsAppAccountIds,
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAccount,
+  type ResolvedWhatsAppAccount,
+} from "./accounts.js";
+import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
+import { WhatsAppChannelConfigSchema } from "./config-schema.js";
+import { whatsappDoctor } from "./doctor.js";
+import { resolveWhatsAppConfigPath } from "./group-config-path.js";
+import { resolveLegacyGroupSessionKey } from "./group-session-contract.js";
+import {
+  collectUnsupportedSecretRefConfigCandidates,
+  unsupportedSecretRefSurfacePatterns,
+} from "./security-contract.js";
+import { applyWhatsAppSecurityConfigFixes } from "./security-fix.js";
+import {
+  canonicalizeLegacySessionKey,
+  deriveLegacySessionChatType,
+  isLegacyGroupSessionKey,
+} from "./session-contract.js";
+
+const WHATSAPP_CHANNEL = "whatsapp" as const;
+
+async function loadWhatsAppSetupSurface() {
+  return await import("./setup-surface.js");
+}
+
+export const whatsappSetupWizardProxy = createWhatsAppSetupWizardProxy(
+  async () => (await loadWhatsAppSetupSurface()).whatsappSetupWizard,
+);
+
+const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppAccount>({
+  sectionKey: WHATSAPP_CHANNEL,
+  listAccountIds: listWhatsAppAccountIds,
+  resolveAccount: adaptScopedAccountAccessor(resolveWhatsAppAccount),
+  defaultAccountId: resolveDefaultWhatsAppAccountId,
+  clearBaseFields: [],
+  allowTopLevel: false,
+  resolveAllowFrom: (account) => account.allowFrom,
+  formatAllowFrom: (allowFrom) => formatWhatsAppConfigAllowFromEntries(allowFrom),
+  resolveDefaultTo: (account) => account.defaultTo,
+});
+
+const whatsappResolveDmPolicy = createScopedDmSecurityResolver<ResolvedWhatsAppAccount>({
+  channelKey: WHATSAPP_CHANNEL,
+  resolvePolicy: (account) => account.dmPolicy,
+  resolveAllowFrom: (account) => account.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  normalizeEntry: (raw) => normalizeE164(raw),
+  inheritSharedDefaultsFromDefaultAccount: true,
+});
+
+function createWhatsAppSetupWizardProxy(
+  loadWizard: () => Promise<ChannelSetupWizard>,
+): ChannelSetupWizard {
+  return createDelegatedSetupWizardProxy({
+    channel: WHATSAPP_CHANNEL,
+    loadWizard,
+    status: {
+      configuredLabel: "linked",
+      unconfiguredLabel: "not linked",
+      configuredHint: "linked",
+      unconfiguredHint: "not linked",
+      configuredScore: 5,
+      unconfiguredScore: 4,
+    },
+    resolveShouldPromptAccountIds: (params) => params.shouldPromptAccountIds,
+    credentials: [],
+    delegateFinalize: true,
+    disable: (cfg) => ({
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        whatsapp: {
+          ...cfg.channels?.whatsapp,
+          enabled: false,
+        },
+      },
+    }),
+    onAccountRecorded: (accountId, options) => {
+      options?.onAccountId?.(WHATSAPP_CHANNEL, accountId);
+    },
+  });
+}
+
+export function createWhatsAppPluginBase(params: {
+  groups: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["groups"]>;
+  setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
+  setupContract: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupContract"]>;
+  isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
+  isLinked: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isLinked"];
+}) {
+  const collectWhatsAppSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
+    account: ResolvedWhatsAppAccount;
+    cfg: Parameters<typeof resolveWhatsAppAccount>[0]["cfg"];
+    accountId?: string | null;
+  }>({
+    providerConfigPresent: (cfg) => cfg.channels?.whatsapp !== undefined,
+    resolveGroupPolicy: ({ account }) => account.groupPolicy,
+    collect: ({ account, accountId, cfg, groupPolicy }) =>
+      collectOpenGroupPolicyRouteAllowlistWarnings({
+        groupPolicy,
+        routeAllowlistConfigured:
+          Boolean(account.groups) && Object.keys(account.groups ?? {}).length > 0,
+        restrictSenders: {
+          surface: "WhatsApp groups",
+          openScope: "any member in allowed groups",
+          groupPolicyPath: resolveWhatsAppConfigPath({ cfg, accountId, field: "groupPolicy" }),
+          groupAllowFromPath: resolveWhatsAppConfigPath({
+            cfg,
+            accountId,
+            field: "groupAllowFrom",
+          }),
+        },
+        noRouteAllowlist: {
+          surface: "WhatsApp groups",
+          routeAllowlistPath: resolveWhatsAppConfigPath({ cfg, accountId, field: "groups" }),
+          routeScope: "group",
+          groupPolicyPath: resolveWhatsAppConfigPath({ cfg, accountId, field: "groupPolicy" }),
+          groupAllowFromPath: resolveWhatsAppConfigPath({
+            cfg,
+            accountId,
+            field: "groupAllowFrom",
+          }),
+        },
+      }),
+  });
+  const base = createChannelPluginBase({
+    id: WHATSAPP_CHANNEL,
+    meta: {
+      label: "WhatsApp",
+      selectionLabel: "WhatsApp (QR link)",
+      detailLabel: "WhatsApp Web",
+      docsPath: "/channels/whatsapp",
+      docsLabel: "whatsapp",
+      blurb: "works with your own number; recommend a separate phone + eSIM.",
+      systemImage: "message",
+      exposure: { configured: false },
+      quickstartAllowFrom: true,
+      forceAccountBinding: true,
+      preferSessionLookupForAnnounceTarget: true,
+    },
+    setupWizard: params.setupWizard,
+    capabilities: {
+      chatTypes: ["direct", "group", "channel"],
+      polls: true,
+      reactions: true,
+      media: true,
+      tts: {
+        voice: {
+          synthesisTarget: "voice-note",
+          transcodesAudio: true,
+        },
+      },
+    },
+    // Root/account `enabled` flips must restart the channel so a disabled
+    // provider is torn down;
+    // the broad `channels.whatsapp` noop prefix below otherwise swallows it as a
+    // hot no-op and leaves the account connected until a full restart.
+    reload: {
+      configPrefixes: [
+        "channels.whatsapp.enabled",
+        "channels.whatsapp.accounts",
+        "channels.whatsapp.selfChatMode",
+      ],
+      noopPrefixes: ["channels.whatsapp"],
+    },
+    gatewayMethodDescriptors: [{ name: "web.login.start" }, { name: "web.login.wait" }],
+    configSchema: WhatsAppChannelConfigSchema,
+    config: {
+      ...whatsappConfigAdapter,
+      isEnabled: (account) => account.enabled,
+      disabledReason: () => "disabled",
+      isConfigured: params.isConfigured,
+      isLinked: params.isLinked,
+      hasPersistedAuthState: ({ cfg }) => hasAnyWhatsAppAuth(cfg),
+      unconfiguredReason: () => "not configured",
+      unlinkedReason: () => "not linked",
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: Boolean(account.authDir),
+          extra: {
+            dmPolicy: account.dmPolicy,
+            allowFrom: account.allowFrom,
+          },
+        }),
+    },
+    security: {
+      applyConfigFixes: applyWhatsAppSecurityConfigFixes,
+      resolveDmPolicy: whatsappResolveDmPolicy,
+      collectWarnings: collectWhatsAppSecurityWarnings,
+    },
+    doctor: whatsappDoctor,
+    setupContract: params.setupContract,
+    groups: params.groups,
+  });
+  return {
+    ...base,
+    setupWizard: base.setupWizard!,
+    capabilities: base.capabilities!,
+    reload: base.reload!,
+    gatewayMethodDescriptors: base.gatewayMethodDescriptors!,
+    configSchema: base.configSchema!,
+    config: base.config!,
+    messaging: {
+      defaultMarkdownTableMode: "bullets",
+      deriveLegacySessionChatType,
+      resolveLegacyGroupSessionKey,
+      isLegacyGroupSessionKey,
+      canonicalizeLegacySessionKey: (paramsLocal) =>
+        canonicalizeLegacySessionKey({ key: paramsLocal.key, agentId: paramsLocal.agentId }),
+    },
+    secrets: {
+      unsupportedSecretRefSurfacePatterns,
+      collectUnsupportedSecretRefConfigCandidates,
+    },
+    security: base.security!,
+    groups: base.groups!,
+  } satisfies Pick<
+    ChannelPlugin<ResolvedWhatsAppAccount>,
+    | "id"
+    | "meta"
+    | "setupWizard"
+    | "capabilities"
+    | "reload"
+    | "gatewayMethodDescriptors"
+    | "configSchema"
+    | "config"
+    | "messaging"
+    | "secrets"
+    | "security"
+    | "doctor"
+    | "setupContract"
+    | "groups"
+  >;
+}

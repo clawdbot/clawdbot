@@ -1,0 +1,40 @@
+title: Plugin lifecycle probe evidence
+
+scenario:
+  id: plugin-lifecycle-probe
+  surface: plugins
+  coverage:
+    primary:
+      - plugins.activation-runtime
+      - plugins.docker-lifecycle-suites
+      - plugins.enable-and-disable-lifecycle
+      - plugins.lifecycle-package-update
+      - plugins.lifecycle-update-run
+      - plugins.smoke-tests-lifecycle
+    secondary:
+      - cli.plugin-validation-and-repair
+      - plugins.plugin-setup
+  objective: Exercise packaged plugin install, inspect, disable, enable, update, downgrade, and uninstall behavior in a clean Docker runtime.
+  successCriteria:
+    - A clean container installs the candidate OpenClaw package and fixture plugin package.
+    - Runtime inspect reports the installed plugin as enabled and loaded after install.
+    - Disable persists the disabled state and runtime inspect reports disabled; re-enable persists the enabled state and runtime inspect reports loaded.
+    - Upgrade and downgrade update commands both complete successfully.
+    - After each update, the SQLite install record and installed package.json match the requested version, the npm project root is canonical, and runtime inspect reports loaded.
+    - Forced uninstall succeeds after installed plugin code is removed and emits a bounded resource summary.
+  docsRefs:
+    - docs/plugins/manifest.md
+    - docs/cli/plugins.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - scripts/e2e/plugin-lifecycle-matrix-docker.sh
+    - test/e2e/qa-lab/plugins/plugin-lifecycle-probe-runtime.ts
+    - test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    - test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the packaged plugin lifecycle matrix in a clean Docker runtime and asserts each emitted lifecycle phase.
+    args:
+      - --lane
+      - plugin-lifecycle-matrix

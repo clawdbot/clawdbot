@@ -1,0 +1,15 @@
+{
+  "id": "admin-http-rpc",
+  "activation": {
+    "onStartup": false,
+    "onConfigPaths": ["plugins.entries.admin-http-rpc"]
+  },
+  "contracts": {
+    "gatewayMethodDispatch": ["authenticated-request"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,33 @@
+title: Agent tool safety approvals
+
+scenario:
+  id: agent-tool-safety-approvals
+  surface: agent-runtime
+  coverage:
+    primary:
+      - agent-runtime.tool-safety
+      - agent-runtime.tool-approvals
+      - agent-runtime.approval-flow-approval-denial
+      - agent-runtime.approval-flow-approvals
+      - agent-runtime.approval-flow-followthrough
+      - agent-runtime.tool-safety-controls
+      - agent-runtime.tool-safety-controls-safety
+  objective: Prove approval-gated agent tools cannot execute before a matching decision and that allow-once grants do not persist.
+  successCriteria:
+    - Pending approval records identify the exact agent, session, tool call, and allowed decisions before execution.
+    - Denial clears the request, reports a visible blocked outcome and diagnostic, and produces no tool side effect.
+    - Allow-once executes rewritten arguments exactly once and returns the sentinel marker.
+    - Resolution callbacks and broker events match each decision.
+    - A later tool call creates a fresh approval request instead of inheriting the prior grant.
+  docsRefs:
+    - docs/plugins/plugin-permission-requests.md
+    - docs/tools/exec-approvals.md
+  codeRefs:
+    - src/agents/agent-tools.before-tool-call.wrapper.ts
+    - src/agents/agent-tools.before-tool-call.approval.ts
+    - src/infra/embedded-plugin-approval-broker.ts
+    - test/e2e/qa-lab/runtime/agent-tool-safety-approvals.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/agent-tool-safety-approvals.e2e.test.ts
+    summary: Run a sentinel tool through the production wrapper and embedded approval broker for deny, allow-once, and fresh-request decisions.

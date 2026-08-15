@@ -1,0 +1,3 @@
+Adds settings detail panels, refreshes the Android overview controls, and routes exec approvals into the in-app inbox.
+
+Improves chat acknowledgement handling, gateway pairing readiness, microphone foreground-service behavior, and release screenshot reliability.

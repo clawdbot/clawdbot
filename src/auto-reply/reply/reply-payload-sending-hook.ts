@@ -1,0 +1,43 @@
+// Runs plugin hooks before outbound reply payloads are sent.
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type {
+  PluginHookReplyPayloadSendingContext,
+  PluginHookReplyUsageState,
+} from "../../plugins/hook-types.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import type { ReplyPayload } from "../reply-payload.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
+
+/** Runs plugin hooks that may rewrite or cancel an outbound reply payload. */
+export async function runReplyPayloadSendingHook(params: {
+  payload: ReplyPayload;
+  kind: ReplyDispatchKind;
+  channel?: string;
+  sessionKey?: string;
+  runId?: string;
+  usageState?: PluginHookReplyUsageState;
+  context: PluginHookReplyPayloadSendingContext;
+}): Promise<ReplyPayload | null> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("reply_payload_sending")) {
+    return params.payload;
+  }
+
+  const result = await hookRunner.runReplyPayloadSending(
+    {
+      payload: params.payload,
+      kind: params.kind,
+      channel: params.channel,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      usageState: params.usageState,
+    },
+    params.context,
+  );
+
+  if (result?.cancel) {
+    return null;
+  }
+  const payload = (result?.payload as ReplyPayload | undefined) ?? params.payload;
+  return copyReplyPayloadMetadata(params.payload, payload);
+}

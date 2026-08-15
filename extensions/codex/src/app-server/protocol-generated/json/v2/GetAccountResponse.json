@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "account": {
+      "anyOf": [
+        {
+          "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/Account"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "requiresOpenaiAuth": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "requiresOpenaiAuth"
+  ],
+  "title": "GetAccountResponse",
+  "type": "object"
+}

@@ -1,0 +1,24 @@
+{
+  "name": "fenced singleton retries after malformed raw output",
+  "mode": "doc_body_chunked",
+  "rel_path": "gateway/configuration-reference.md",
+  "source_file": "source.txt",
+  "expected_output_contains": [
+    "Translated line 01",
+    "Translated line 02",
+    "Translated line 03",
+    "Translated line 04"
+  ],
+  "expected_output_not_contains": ["Line 01", "Line 02", "Line 03", "Line 04"],
+  "rules": [
+    {
+      "method": "raw",
+      "match_all": ["Line 01", "Line 04"],
+      "response_file": "raw-malformed.txt"
+    },
+    {
+      "method": "raw",
+      "replace_pairs": [{ "from": "Line ", "to": "Translated line " }]
+    }
+  ]
+}

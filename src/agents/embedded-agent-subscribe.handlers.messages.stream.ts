@@ -1,0 +1,441 @@
+/**
+ * Projects provider assistant messages into ordered visible stream state.
+ */
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  parseReplyDirectives,
+  type ReplyDirectiveParseResult,
+} from "../auto-reply/reply/reply-directives.js";
+import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
+import type { AssistantMessage } from "../llm/types.js";
+import {
+  parseAssistantTextSignature,
+  resolveAssistantMessagePhase,
+  type AssistantPhase,
+} from "../shared/chat-message-content.js";
+import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
+import { hasReplyDirectiveMetadata } from "./embedded-agent-subscribe.handlers.messages.replies.js";
+import type {
+  EmbeddedAgentSubscribeContext,
+  EmbeddedAgentSubscribeState,
+} from "./embedded-agent-subscribe.handlers.types.js";
+import type { AgentMessage } from "./runtime/index.js";
+
+export function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
+  return resolveAssistantMessagePhase(message) === "commentary";
+}
+
+export function isSubscribeTranscriptOnlyOpenClawAssistantMessage(
+  message: AgentMessage | undefined,
+): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const provider = normalizeOptionalString(message.provider) ?? "";
+  const model = normalizeOptionalString(message.model) ?? "";
+  return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
+}
+
+const RESPONSES_API_IDS = new Set([
+  "openai-responses",
+  "openai-chatgpt-responses",
+  "azure-openai-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
+  "openclaw-azure-openai-responses-transport",
+]);
+
+export function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  return RESPONSES_API_IDS.has(api);
+}
+
+export function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  return api === "anthropic-messages";
+}
+
+export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
+export function extractStandaloneMessageToolText(
+  text: string,
+  params: { allowCurrentSourceReply?: boolean; allowRoutedReply?: boolean } = {},
+): string | undefined {
+  try {
+    const record = asRecord(JSON.parse(text.trim()) as unknown);
+    const args = asRecord(record?.arguments);
+    const hasRoute = Boolean(
+      normalizeOptionalString(args?.target) ||
+      normalizeOptionalString(args?.to) ||
+      normalizeOptionalString(args?.channel) ||
+      normalizeOptionalString(args?.accountId) ||
+      Array.isArray(args?.targets),
+    );
+    if (
+      normalizeOptionalString(record?.name) !== "message" ||
+      normalizeOptionalString(args?.action) !== "send" ||
+      (hasRoute ? !params.allowRoutedReply : !params.allowCurrentSourceReply)
+    ) {
+      return undefined;
+    }
+    return normalizeOptionalString(args?.message);
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveAssistantStreamItemId(params: {
+  contentIndex?: unknown;
+  message: AgentMessage | undefined;
+}): string | undefined {
+  const content = (params.message as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const contentIndex =
+    typeof params.contentIndex === "number" &&
+    Number.isInteger(params.contentIndex) &&
+    params.contentIndex >= 0
+      ? params.contentIndex
+      : undefined;
+  const indexedBlock = contentIndex !== undefined ? content[contentIndex] : undefined;
+  const indexedRecord =
+    indexedBlock && typeof indexedBlock === "object"
+      ? (indexedBlock as { type?: unknown })
+      : undefined;
+  const hasIndexedTextBlock = indexedRecord?.type === "text";
+  const candidateStart =
+    hasIndexedTextBlock && contentIndex !== undefined ? contentIndex : content.length - 1;
+  const candidateEnd = hasIndexedTextBlock ? candidateStart : 0;
+  for (let index = candidateStart; index >= candidateEnd; index -= 1) {
+    const block = content[index];
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as { type?: unknown; textSignature?: unknown };
+    if (record.type !== "text") {
+      continue;
+    }
+    const signature = parseAssistantTextSignature(record);
+    if (signature?.id) {
+      return signature.id;
+    }
+  }
+  return undefined;
+}
+
+export function resolveAssistantStreamContentIndex(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+export function scopeAssistantMessageToStreamBlock(
+  message: AssistantMessage,
+  contentIndex: number | undefined,
+  itemId: string | undefined,
+): AssistantMessage {
+  if (!Array.isArray(message.content)) {
+    return message;
+  }
+  const indexedBlock = contentIndex === undefined ? undefined : message.content[contentIndex];
+  let block =
+    indexedBlock && typeof indexedBlock === "object" && indexedBlock.type === "text"
+      ? indexedBlock
+      : undefined;
+  if (!block && itemId) {
+    for (let index = message.content.length - 1; index >= 0; index -= 1) {
+      const candidate = message.content[index];
+      if (
+        candidate &&
+        typeof candidate === "object" &&
+        candidate.type === "text" &&
+        parseAssistantTextSignature(candidate)?.id === itemId
+      ) {
+        block = candidate;
+        break;
+      }
+    }
+  }
+  if (!block) {
+    return message;
+  }
+  // Provider partials are cumulative across content blocks. Once a content
+  // index becomes a logical reply boundary, downstream snapshots must be
+  // cumulative only within that block or earlier text is replayed.
+  return { ...message, content: [block] };
+}
+
+export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
+  if (!ctx.state.reasoningStreamOpen) {
+    return;
+  }
+  ctx.state.reasoningStreamOpen = false;
+  runBestEffortCallback({
+    label: "reasoning end",
+    log: ctx.log,
+    callback: () => ctx.params.onReasoningEnd?.(),
+  });
+}
+
+export function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
+  runBestEffortCallback({
+    label: "assistant message start",
+    log: ctx.log,
+    callback: () => ctx.params.onAssistantMessageStart?.(),
+  });
+}
+
+export function openReasoningStream(ctx: EmbeddedAgentSubscribeContext) {
+  ctx.state.reasoningStreamOpen = true;
+}
+
+export function shouldSuppressDeterministicApprovalOutput(
+  state: Pick<
+    EmbeddedAgentSubscribeState,
+    "deterministicApprovalPromptPending" | "deterministicApprovalPromptSent"
+  >,
+): boolean {
+  return state.deterministicApprovalPromptPending || state.deterministicApprovalPromptSent;
+}
+
+export function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): boolean {
+  return (
+    ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
+    (ctx.state.messageToolOnlySourceReplyDelivered ||
+      ctx.params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
+      (ctx.state.messagingToolSourceReplyPayloads?.length ?? 0) > 0)
+  );
+}
+
+export function resolveCurrentSourceMessagingToolPartial(
+  state: Pick<
+    EmbeddedAgentSubscribeState,
+    "currentSourceMessagingToolHeldPartial" | "currentSourceMessagingToolSentTextsNormalized"
+  >,
+  params: {
+    evtType: "text_delta" | "text_start" | "text_end";
+    text: string;
+    visibleDelta: string;
+  },
+): { hold: boolean; text: string } {
+  const held = state.currentSourceMessagingToolHeldPartial;
+  const text =
+    held && params.evtType === "text_delta" && !params.text.startsWith(held)
+      ? `${held}${params.visibleDelta || params.text}`
+      : params.text;
+  const normalized = normalizeTextForComparison(text);
+  if (!normalized) {
+    state.currentSourceMessagingToolHeldPartial = undefined;
+    return { hold: false, text };
+  }
+  // A confirmed current-source tool send already made this prefix visible.
+  // Hold it until the assistant either repeats the sent text or diverges with new content.
+  const hold = state.currentSourceMessagingToolSentTextsNormalized.some(
+    (sentText) => sentText === normalized || sentText.startsWith(normalized),
+  );
+  state.currentSourceMessagingToolHeldPartial = hold ? text : undefined;
+  return { hold, text };
+}
+
+export function appendBlockReplyChunk(ctx: EmbeddedAgentSubscribeContext, chunk: string) {
+  if (ctx.blockChunker) {
+    ctx.blockChunker.append(chunk);
+    return;
+  }
+  ctx.state.blockBuffer += chunk;
+}
+
+export function replaceBlockReplyBuffer(ctx: EmbeddedAgentSubscribeContext, text: string) {
+  if (ctx.blockChunker) {
+    ctx.blockChunker.reset();
+    ctx.blockChunker.append(text);
+    return;
+  }
+  ctx.state.blockBuffer = text;
+}
+
+export function resolveAssistantTextChunk(params: {
+  evtType: "text_delta" | "text_start" | "text_end";
+  delta: string;
+  content: string;
+  accumulatedText: string;
+}): string {
+  const { evtType, delta, content, accumulatedText } = params;
+  if (evtType === "text_delta") {
+    return delta;
+  }
+  if (delta) {
+    return delta;
+  }
+  if (!content) {
+    return "";
+  }
+  // KNOWN: Some providers resend full content on `text_end`.
+  // We only append a suffix (or nothing) to keep output monotonic.
+  if (content.startsWith(accumulatedText)) {
+    return content.slice(accumulatedText.length);
+  }
+  if (accumulatedText.startsWith(content)) {
+    return "";
+  }
+  if (!accumulatedText.includes(content)) {
+    return content;
+  }
+  return "";
+}
+
+export function resolveStreamVisibleText(params: {
+  previousRawText: string;
+  visibleDelta: string;
+  finalText?: string;
+}): { rawText: string; visibleText: string } {
+  if (params.finalText !== undefined) {
+    const rawText = params.finalText;
+    return { rawText, visibleText: rawText.trim() };
+  }
+  const rawText = `${params.previousRawText}${params.visibleDelta}`;
+  return { rawText, visibleText: rawText.trim() };
+}
+
+export function resolveTextAppendDelta(previousText: string, nextText: string): string {
+  if (!nextText) {
+    return "";
+  }
+  if (!previousText) {
+    return nextText;
+  }
+  if (nextText.startsWith(previousText)) {
+    return nextText.slice(previousText.length);
+  }
+  if (previousText.startsWith(nextText)) {
+    return "";
+  }
+  return nextText;
+}
+
+export function copyPartialBlockState(
+  target: EmbeddedAgentSubscribeState["partialBlockState"],
+  source: EmbeddedAgentSubscribeState["partialBlockState"],
+) {
+  const copyFenceState = (fence?: typeof source.fence) =>
+    fence
+      ? {
+          atLineStart: fence.atLineStart,
+          ...(fence.open ? { open: { ...fence.open } } : {}),
+        }
+      : undefined;
+  target.thinking = source.thinking;
+  target.final = source.final;
+  target.inlineCode = { ...source.inlineCode };
+  target.fence = copyFenceState(source.fence);
+  target.reasoningInlineCode = source.reasoningInlineCode
+    ? { ...source.reasoningInlineCode }
+    : undefined;
+  target.reasoningFence = copyFenceState(source.reasoningFence);
+  target.reasoningPendingFenceFragment = source.reasoningPendingFenceFragment;
+  target.finalInlineCode = source.finalInlineCode ? { ...source.finalInlineCode } : undefined;
+  target.finalFence = copyFenceState(source.finalFence);
+  target.pendingFenceFragment = source.pendingFenceFragment;
+  target.pendingTagFragment = source.pendingTagFragment;
+}
+
+function containsCompleteMediaDirectiveLine(text: string): boolean {
+  return /(?:^|\n)\s*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(text);
+}
+
+function resolveIncrementalStreamingReplyText(params: {
+  evtType: "text_delta" | "text_start" | "text_end";
+  next: string;
+  previousRawText: string;
+  previousCleaned: string;
+  visibleDelta: string;
+  parsedStreamDirectives: ReplyDirectiveParseResult | null;
+  shouldUsePhaseAwareBlockReply: boolean;
+}): string | undefined {
+  if (
+    params.evtType === "text_end" ||
+    !params.parsedStreamDirectives ||
+    params.parsedStreamDirectives.isSilent ||
+    hasReplyDirectiveMetadata(params.parsedStreamDirectives) ||
+    containsCompleteMediaDirectiveLine(params.visibleDelta) ||
+    params.parsedStreamDirectives.text !== params.visibleDelta
+  ) {
+    return undefined;
+  }
+
+  if (
+    !params.shouldUsePhaseAwareBlockReply &&
+    params.previousCleaned === params.previousRawText.trim()
+  ) {
+    return params.next;
+  }
+
+  const cleanedCandidate = `${params.previousCleaned}${params.parsedStreamDirectives.text}`.trim();
+  return cleanedCandidate === params.next ? cleanedCandidate : undefined;
+}
+
+export function resolveStreamingReplyText(params: {
+  evtType: "text_delta" | "text_start" | "text_end";
+  next: string;
+  previousRawText: string;
+  previousCleaned: string;
+  visibleDelta: string;
+  parsedStreamDirectives: ReplyDirectiveParseResult | null;
+  shouldUsePhaseAwareBlockReply: boolean;
+}): string {
+  if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
+    return params.previousCleaned;
+  }
+
+  return (
+    resolveIncrementalStreamingReplyText(params) ??
+    parseReplyDirectives(
+      params.evtType === "text_end" ? params.next : splitTrailingDirective(params.next).text,
+    ).text
+  );
+}
+
+/** Records parsed reply directives until a sendable reply payload is built. */
+
+export function buildAssistantStreamData(params: {
+  text?: string;
+  delta?: string;
+  replace?: boolean;
+  mediaUrls?: string[];
+  mediaUrl?: string;
+  phase?: AssistantPhase;
+  itemId?: string;
+}): {
+  text: string;
+  delta: string;
+  replace?: true;
+  mediaUrls?: string[];
+  phase?: AssistantPhase;
+  itemId?: string;
+} {
+  const mediaUrls = resolveSendableOutboundReplyParts(params).mediaUrls;
+  return {
+    text: params.text ?? "",
+    delta: params.delta ?? "",
+    replace: params.replace ? true : undefined,
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+    phase: params.phase,
+    itemId: params.itemId,
+  };
+}
+
+/** Handles assistant message-start boundaries for streaming state. */

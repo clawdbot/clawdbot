@@ -1,0 +1,1489 @@
+name: Plugin NPM Release
+run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.preflight_only && inputs.trusted_publisher_preflight && format('Plugin NPM Trusted Publisher Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || inputs.preflight_only && format('Plugin NPM Artifact Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref)) || format('Plugin NPM Release [default] {0}', github.sha) }}
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/plugin-npm-release.yml"
+      - "extensions/**"
+      - "package.json"
+      - "packages/normalization-core/**"
+      - "scripts/generate-npm-package-lock.mjs"
+      - "scripts/generate-npm-package-lock.mts"
+      - "scripts/lib/npm-publish-plan.mjs"
+      - "scripts/lib/npm-json-output.mts"
+      - "scripts/lib/release-version.mjs"
+      - "scripts/lib/plugin-npm-package-manifest.mjs"
+      - "scripts/lib/plugin-npm-package-manifest.mts"
+      - "scripts/lib/tsx-cli-shim.mjs"
+      - "scripts/lib/plugin-npm-release.ts"
+      - "scripts/lib/actions-artifact-archive.mjs"
+      - "scripts/plugin-npm-publish.sh"
+      - "scripts/plugin-publication-artifact.mjs"
+      - "scripts/plugin-npm-release-check.ts"
+      - "scripts/plugin-npm-release-plan.ts"
+      - "scripts/verify-plugin-npm-published-runtime.mts"
+  workflow_dispatch:
+    inputs:
+      publish_scope:
+        description: Publish the selected plugins or all publishable plugins from the ref
+        required: true
+        default: selected
+        type: choice
+        options:
+          - selected
+          - all-publishable
+      ref:
+        description: Exact commit SHA; preflight accepts main/release ancestry, while publish mode also supports canonical extended-stable or matching Tideclaw alpha branches
+        required: true
+        type: string
+      plugins:
+        description: Comma-separated plugin package names to publish when publish_scope=selected
+        required: false
+        type: string
+      release_publish_run_id:
+        description: Approved OpenClaw Release Publish workflow run id
+        required: false
+        type: string
+      preflight_only:
+        description: Prepare and verify immutable plugin npm artifacts without publishing
+        required: true
+        default: false
+        type: boolean
+      trusted_publisher_preflight:
+        description: During preflight_only, verify npm trusted-publisher OIDC exchange instead of packing artifacts
+        required: true
+        default: false
+        type: boolean
+      npm_dist_tag:
+        description: Optional npm dist-tag override
+        required: true
+        default: default
+        type: choice
+        options:
+          - default
+          - extended-stable
+
+concurrency:
+  group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.16.0"
+
+jobs:
+  preview_plugins_npm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      ref_revision: ${{ steps.ref.outputs.sha }}
+      has_candidates: ${{ steps.plan.outputs.has_candidates }}
+      candidate_count: ${{ steps.plan.outputs.candidate_count }}
+      has_selection: ${{ steps.plan.outputs.has_selection }}
+      selection_count: ${{ steps.plan.outputs.selection_count }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      all_matrix: ${{ steps.plan.outputs.all_matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Resolve checked-out ref
+        id: ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate ref is on a trusted publish branch
+        env:
+          NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag || 'default' }}
+          PREFLIGHT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only || false }}
+          TRUSTED_PUBLISHER_PREFLIGHT: ${{ github.event_name == 'workflow_dispatch' && inputs.trusted_publisher_preflight || false }}
+          PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
+          RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
+          RELEASE_PUBLISH_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id || '' }}
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${TRUSTED_PUBLISHER_PREFLIGHT}" == "true" && "${PREFLIGHT_ONLY}" != "true" ]]; then
+            echo "trusted_publisher_preflight requires preflight_only=true." >&2
+            exit 1
+          fi
+          if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
+            if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] || [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "Plugin npm preflight must run from a trusted main workflow revision." >&2
+              exit 1
+            fi
+            if [[ ! "${SOURCE_REF}" =~ ^[0-9a-fA-F]{40}$ ]] || [[ "$(git rev-parse HEAD)" != "$(git rev-parse "${SOURCE_REF}^{commit}")" ]]; then
+              echo "Plugin npm preflight requires ref to be the exact 40-character source SHA." >&2
+              exit 1
+            fi
+            if [[ -n "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
+              echo "Plugin npm preflight must not include release_publish_run_id." >&2
+              exit 1
+            fi
+          fi
+          if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
+            if [[ "${PUBLISH_SCOPE}" != "all-publishable" || -n "${RELEASE_PLUGINS// }" ]]; then
+              echo "Extended-stable plugin publication requires publish_scope=all-publishable without an explicit plugin list." >&2
+              exit 1
+            fi
+            if [[ ! "${SOURCE_REF}" =~ ^[0-9a-f]{40}$ ]] || [[ "$(git rev-parse HEAD)" != "$(git rev-parse "${SOURCE_REF}^{commit}")" ]]; then
+              echo "Extended-stable plugin publication requires ref to be the exact 40-character source SHA." >&2
+              exit 1
+            fi
+            package_version="$(jq -er '.version | strings' package.json)"
+            if [[ ! "${package_version}" =~ ^([0-9]{4})\.([1-9]|1[0-2])\.([1-9][0-9]*)$ ]] || (( 10#${BASH_REMATCH[3]:-0} < 33 )); then
+              echo "Extended-stable plugin publication requires a final YYYY.M.PATCH version with PATCH >= 33." >&2
+              exit 1
+            fi
+            release_year="${BASH_REMATCH[1]}"
+            release_month="${BASH_REMATCH[2]}"
+            extended_stable_branch="extended-stable/${release_year}.${release_month}.33"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${extended_stable_branch}:refs/remotes/origin/${extended_stable_branch}"
+            if [[ "${WORKFLOW_REF}" == "refs/heads/${extended_stable_branch}" ]] && [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/remotes/origin/${extended_stable_branch}")" ]]; then
+              exit 0
+            fi
+            echo "Extended-stable plugin npm publishes must run from ${extended_stable_branch} at its exact branch tip." >&2
+            exit 1
+          fi
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          if [[ "${PREFLIGHT_ONLY}" == "true" ]] && ! git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main; then
+            echo "Plugin npm preflight workflow revision is not reachable from main." >&2
+            exit 1
+          fi
+          if git merge-base --is-ancestor HEAD origin/main; then
+            exit 0
+          fi
+          while IFS= read -r release_ref; do
+            if git merge-base --is-ancestor HEAD "${release_ref}"; then
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+          if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
+            echo "Plugin npm preflight target must be reachable from main or release/*." >&2
+            exit 1
+          fi
+          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            alpha_branch="${WORKFLOW_REF#refs/heads/}"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
+              exit 0
+            fi
+          fi
+          echo "Plugin npm publishes must target a commit reachable from main, release/*, or the matching Tideclaw alpha branch." >&2
+          exit 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Validate publishable plugin metadata
+        env:
+          PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
+          RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
+          BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
+          HEAD_REF: ${{ steps.ref.outputs.sha }}
+          NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag || 'default' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${PUBLISH_SCOPE}" ]]; then
+            release_args=(--selection-mode "${PUBLISH_SCOPE}")
+            if [[ -n "${RELEASE_PLUGINS}" ]]; then
+              release_args+=(--plugins "${RELEASE_PLUGINS}")
+            fi
+            if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
+              release_args+=(--npm-dist-tag "${NPM_DIST_TAG}")
+            fi
+            pnpm release:plugins:npm:check -- "${release_args[@]}"
+          elif [[ -n "${BASE_REF}" ]]; then
+            pnpm release:plugins:npm:check -- --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}"
+          else
+            pnpm release:plugins:npm:check
+          fi
+
+      - name: Resolve plugin release plan
+        id: plan
+        env:
+          PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
+          RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
+          BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
+          HEAD_REF: ${{ steps.ref.outputs.sha }}
+          NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag || 'default' }}
+          PREFLIGHT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only || false }}
+        run: |
+          set -euo pipefail
+          mkdir -p .local
+          if [[ -n "${PUBLISH_SCOPE}" ]]; then
+            plan_args=(--selection-mode "${PUBLISH_SCOPE}")
+            if [[ -n "${RELEASE_PLUGINS}" ]]; then
+              plan_args+=(--plugins "${RELEASE_PLUGINS}")
+            fi
+            if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
+              plan_args+=(--npm-dist-tag "${NPM_DIST_TAG}")
+            fi
+            node --import tsx scripts/plugin-npm-release-plan.ts "${plan_args[@]}" > .local/plugin-npm-release-plan.json
+          elif [[ -n "${BASE_REF}" ]]; then
+            node --import tsx scripts/plugin-npm-release-plan.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}" > .local/plugin-npm-release-plan.json
+          else
+            node --import tsx scripts/plugin-npm-release-plan.ts > .local/plugin-npm-release-plan.json
+          fi
+
+          cat .local/plugin-npm-release-plan.json
+
+          candidate_count="$(jq -r '.candidates | length' .local/plugin-npm-release-plan.json)"
+          selection_count="$(jq -r '.all | length' .local/plugin-npm-release-plan.json)"
+          has_candidates="false"
+          has_selection="false"
+          if [[ "${candidate_count}" != "0" ]]; then
+            has_candidates="true"
+          fi
+          if [[ "${selection_count}" != "0" ]]; then
+            has_selection="true"
+          fi
+          matrix_json="$(jq -c '.candidates' .local/plugin-npm-release-plan.json)"
+          all_matrix_json="$(jq -c '.all' .local/plugin-npm-release-plan.json)"
+
+          {
+            echo "candidate_count=${candidate_count}"
+            echo "has_candidates=${has_candidates}"
+            echo "selection_count=${selection_count}"
+            echo "has_selection=${has_selection}"
+            echo "matrix=${matrix_json}"
+            echo "all_matrix=${all_matrix_json}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "${PREFLIGHT_ONLY}" == "true" && "${has_selection}" != "true" ]]; then
+            echo "Plugin npm preflight resolved no selected publishable packages." >&2
+            exit 1
+          fi
+
+          echo "Plugin release candidates:"
+          jq -r '.candidates[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir)"' .local/plugin-npm-release-plan.json
+
+          echo "Already published / skipped:"
+          jq -r '.skippedPublished[]? | "- \(.packageName)@\(.version)"' .local/plugin-npm-release-plan.json
+
+      - name: Validate Tideclaw alpha plugin channels
+        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        run: |
+          set -euo pipefail
+          invalid="$(
+            jq -r '.candidates[]? | select(.publishTag != "alpha" or .channel != "alpha") | "- \(.packageName)@\(.version) [\(.publishTag)]"' .local/plugin-npm-release-plan.json
+          )"
+          if [[ -n "${invalid}" ]]; then
+            echo "Tideclaw alpha plugin npm publishes may only publish alpha plugin versions." >&2
+            printf '%s\n' "${invalid}" >&2
+            exit 1
+          fi
+
+  validate_release_publish_approval:
+    name: Validate release publish approval
+    needs: preview_plugins_npm
+    if: github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Validate release publish approval run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
+            if [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
+              echo "Plugin npm publish dispatched by another workflow must include release_publish_run_id." >&2
+              exit 1
+            fi
+            echo "Direct Plugin NPM Release dispatch; relying on this workflow's npm-release environment approval."
+            exit 0
+          fi
+          direct_recovery=false
+          if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
+            direct_recovery=true
+            echo "Direct Plugin NPM Release recovery with release_publish_run_id; relying on this workflow's npm-release environment approval."
+          fi
+          RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
+
+  preview_plugin_pack:
+    needs: preview_plugins_npm
+    if: (needs.preview_plugins_npm.outputs.has_candidates == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)) || (github.event_name == 'workflow_dispatch' && inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(github.event_name == 'workflow_dispatch' && inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          fetch-depth: 1
+
+      - name: Checkout trusted packaging tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            packages/normalization-core
+            scripts
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Preview publish command
+        env:
+          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
+        run: bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$GITHUB_WORKSPACE" --dry-run "${{ matrix.plugin.packageDir }}"
+
+      - name: Preview npm pack contents
+        env:
+          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
+        run: bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$GITHUB_WORKSPACE" --pack-dry-run "${{ matrix.plugin.packageDir }}"
+
+      - name: Prepare immutable npm preflight artifact
+        id: preflight_artifact
+        env:
+          ARTIFACT_NAME: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
+          EXTENSION_ID: ${{ matrix.plugin.extensionId }}
+          INSTALL_NPM_SPEC: ${{ matrix.plugin.installNpmSpec }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          SOURCE_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          WORKFLOW_PATH: .github/workflows/plugin-npm-release.yml
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/${ARTIFACT_NAME}"
+          rm -rf "${artifact_dir}"
+          mkdir -p "${artifact_dir}"
+          pack_output="${RUNNER_TEMP}/${EXTENSION_ID}-npm-pack-output.txt"
+          pack_json="${artifact_dir}/npm-pack.json"
+
+          OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0 \
+            OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="${artifact_dir}" \
+            bash .release-tooling/scripts/plugin-npm-publish.sh \
+              --repo-root "$GITHUB_WORKSPACE" \
+              --pack "${PACKAGE_DIR}" > "${pack_output}"
+
+          node --import tsx --input-type=module - "${pack_output}" "${pack_json}" <<'NODE'
+          import fs from "node:fs";
+          import { resolveNpmJsonEntries } from "./.release-tooling/scripts/lib/npm-json-output.mts";
+
+          const raw = fs.readFileSync(process.argv[2], "utf8").trim();
+          let pack;
+          for (let index = raw.length - 1; index >= 0; index -= 1) {
+            if (raw[index] !== "[" && raw[index] !== "{") continue;
+            try {
+              const candidate = JSON.parse(raw.slice(index));
+              const entries = resolveNpmJsonEntries(candidate);
+              if (entries.length > 0) {
+                pack = entries;
+                break;
+              }
+            } catch {
+              // npm can print bundled-dependency summaries before its JSON result.
+            }
+          }
+          if (!pack) {
+            throw new Error("npm pack did not emit package JSON.");
+          }
+          fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\n`);
+          NODE
+
+          tarball_name="$(
+            node - "${pack_json}" <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const pack = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (!Array.isArray(pack) || pack.length !== 1) {
+            throw new Error(`Expected one npm pack result, found ${Array.isArray(pack) ? pack.length : "non-array"}.`);
+          }
+          const filename = pack[0]?.filename;
+          if (
+            typeof filename !== "string" ||
+            filename.length === 0 ||
+            filename.includes("\0") ||
+            filename !== path.basename(filename) ||
+            filename !== path.win32.basename(filename) ||
+            !filename.endsWith(".tgz")
+          ) {
+            throw new Error(`Unsafe npm pack filename: ${JSON.stringify(filename)}.`);
+          }
+          process.stdout.write(filename);
+          NODE
+          )"
+          tarball_path="${artifact_dir}/${tarball_name}"
+          if [[ ! -f "${tarball_path}" ]]; then
+            echo "npm pack did not produce ${tarball_name}." >&2
+            exit 1
+          fi
+
+          packed_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-packed-package.json"
+          packed_plugin_json="${RUNNER_TEMP}/${EXTENSION_ID}-packed-plugin.json"
+          tar -xOf "${tarball_path}" package/package.json > "${packed_package_json}"
+          tar -xOf "${tarball_path}" package/openclaw.plugin.json > "${packed_plugin_json}"
+          source_package_json="${PACKAGE_DIR}/package.json"
+          [[ -f "${source_package_json}" ]] || {
+            echo "Source package.json is missing: ${source_package_json}." >&2
+            exit 1
+          }
+          source_package_json_sha256="$(sha256sum "${source_package_json}" | awk '{print $1}')"
+          packed_package_json_sha256="$(sha256sum "${packed_package_json}" | awk '{print $1}')"
+          tarball_sha256="$(sha256sum "${tarball_path}" | awk '{print $1}')"
+
+          ARTIFACT_DIR="${artifact_dir}" \
+            PACK_JSON="${pack_json}" \
+            PACKED_PACKAGE_JSON="${packed_package_json}" \
+            PACKED_PLUGIN_JSON="${packed_plugin_json}" \
+            PACKED_PACKAGE_JSON_SHA256="${packed_package_json_sha256}" \
+            SOURCE_PACKAGE_JSON_SHA256="${source_package_json_sha256}" \
+            TARBALL_NAME="${tarball_name}" \
+            TARBALL_SHA256="${tarball_sha256}" \
+            node <<'NODE'
+          const crypto = require("node:crypto");
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          function fail(message) {
+            throw new Error(message);
+          }
+
+          const pack = JSON.parse(fs.readFileSync(process.env.PACK_JSON, "utf8"));
+          const packEntry = pack[0];
+          const packageJson = JSON.parse(fs.readFileSync(process.env.PACKED_PACKAGE_JSON, "utf8"));
+          const pluginManifest = JSON.parse(fs.readFileSync(process.env.PACKED_PLUGIN_JSON, "utf8"));
+          const tarballPath = path.join(process.env.ARTIFACT_DIR, process.env.TARBALL_NAME);
+          const tarball = fs.readFileSync(tarballPath);
+          const repositoryUrl =
+            typeof packageJson.repository === "string"
+              ? packageJson.repository
+              : packageJson.repository?.url;
+          const actualIntegrity = `sha512-${crypto.createHash("sha512").update(tarball).digest("base64")}`;
+          const actualShasum = crypto.createHash("sha1").update(tarball).digest("hex");
+
+          if (packEntry.name !== process.env.PACKAGE_NAME || packageJson.name !== process.env.PACKAGE_NAME) {
+            fail(`Packed package name mismatch: expected ${process.env.PACKAGE_NAME}.`);
+          }
+          if (
+            packEntry.version !== process.env.PACKAGE_VERSION ||
+            packageJson.version !== process.env.PACKAGE_VERSION
+          ) {
+            fail(`Packed package version mismatch: expected ${process.env.PACKAGE_VERSION}.`);
+          }
+          if (packageJson.openclaw?.install?.npmSpec !== process.env.INSTALL_NPM_SPEC) {
+            fail(`Packed npm install route mismatch: expected ${process.env.INSTALL_NPM_SPEC}.`);
+          }
+          if (repositoryUrl !== "https://github.com/openclaw/openclaw") {
+            fail(`Packed repository route mismatch: ${JSON.stringify(repositoryUrl)}.`);
+          }
+          if (typeof pluginManifest.id !== "string" || pluginManifest.id.length === 0) {
+            fail("Packed plugin id is missing.");
+          }
+          if (packEntry.integrity !== actualIntegrity || packEntry.shasum !== actualShasum) {
+            fail("npm pack integrity metadata does not match the prepared tarball.");
+          }
+
+          const manifest = {
+            schemaVersion: 1,
+            kind: "openclaw-plugin-npm-preflight",
+            mode: "preflight-only",
+            repository: process.env.REPOSITORY,
+            workflow: {
+              path: process.env.WORKFLOW_PATH,
+              ref: process.env.WORKFLOW_REF,
+              sha: process.env.WORKFLOW_SHA,
+              runId: process.env.RUN_ID,
+              runAttempt: Number(process.env.RUN_ATTEMPT),
+            },
+            source: {
+              inputRef: process.env.SOURCE_REF,
+              sha: process.env.SOURCE_SHA,
+              trustPolicy: "workflow-main-and-target-main-or-release-ancestor",
+            },
+            package: {
+              extensionId: process.env.EXTENSION_ID,
+              packageDir: process.env.PACKAGE_DIR,
+              name: process.env.PACKAGE_NAME,
+              version: process.env.PACKAGE_VERSION,
+              installNpmSpec: process.env.INSTALL_NPM_SPEC,
+              packageJsonSha256: process.env.PACKED_PACKAGE_JSON_SHA256,
+              publishTag: process.env.PUBLISH_TAG,
+              pluginId: pluginManifest.id,
+              repositoryUrl,
+              sourcePackageJsonSha256: process.env.SOURCE_PACKAGE_JSON_SHA256,
+            },
+            artifact: {
+              name: process.env.ARTIFACT_NAME,
+              tarballName: process.env.TARBALL_NAME,
+              sha256: process.env.TARBALL_SHA256,
+              npmIntegrity: actualIntegrity,
+              npmShasum: actualShasum,
+            },
+            mutationCapabilities: {
+              npmPublish: false,
+              npmDistTag: false,
+              clawHub: false,
+              environmentApproval: false,
+              oidcWrite: false,
+              secretRead: false,
+            },
+          };
+          fs.writeFileSync(
+            path.join(process.env.ARTIFACT_DIR, "preflight-manifest.json"),
+            `${JSON.stringify(manifest, null, 2)}\n`,
+          );
+          NODE
+
+          echo "dir=${artifact_dir}" >> "$GITHUB_OUTPUT"
+          echo "name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
+          echo "package_json_sha256=${packed_package_json_sha256}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${tarball_sha256}" >> "$GITHUB_OUTPUT"
+          echo "source_package_json_sha256=${source_package_json_sha256}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable npm preflight artifact
+        id: upload_preflight_artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.preflight_artifact.outputs.name }}
+          path: ${{ steps.preflight_artifact.outputs.dir }}
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+
+      - name: Record npm preflight artifact attestation
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload_preflight_artifact.outputs.artifact-digest }}
+          ARTIFACT_NAME: ${{ steps.preflight_artifact.outputs.name }}
+          TARBALL_SHA256: ${{ steps.preflight_artifact.outputs.sha256 }}
+        run: |
+          {
+            echo "- Plugin npm preflight artifact: \`${ARTIFACT_NAME}\`"
+            echo "- Actions artifact digest: \`${ARTIFACT_DIGEST}\`"
+            echo "- Packed tarball SHA-256: \`${TARBALL_SHA256}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify_plugin_npm_preflight:
+    name: Preflight plugin npm package (${{ matrix.plugin.packageName }})
+    needs: [preview_plugins_npm, preview_plugin_pack]
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true') || (!inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
+    steps:
+      - name: Checkout trusted npm preflight tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Download immutable npm preflight artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
+          path: ${{ runner.temp }}/plugin-npm-preflight-readback
+
+      - name: Validate npm preflight artifact readback
+        id: publication_artifact
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/plugin-npm-preflight-readback
+          ARTIFACT_NAME: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
+          EXTENSION_ID: ${{ matrix.plugin.extensionId }}
+          GH_TOKEN: ${{ github.token }}
+          INSTALL_NPM_SPEC: ${{ matrix.plugin.installNpmSpec }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_REF: ${{ inputs.ref }}
+          SOURCE_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          WORKFLOW_PATH: .github/workflows/plugin-npm-release.yml
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "${SOURCE_SHA}"
+          source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
+          git show "${SOURCE_SHA}:${PACKAGE_DIR}/package.json" > "${source_package_json}"
+
+          artifacts_json="${RUNNER_TEMP}/${EXTENSION_ID}-artifacts.json"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" |
+            jq -s '{artifacts: [.[].artifacts[]]}' > "${artifacts_json}"
+          artifact_count="$(
+            jq --arg name "${ARTIFACT_NAME}" \
+              '[.artifacts[] | select(.name == $name and .expired == false)] | length' \
+              "${artifacts_json}"
+          )"
+          [[ "${artifact_count}" == "1" ]] || {
+            echo "Expected exactly one live package artifact named ${ARTIFACT_NAME}; found ${artifact_count}." >&2
+            exit 1
+          }
+          artifact_id="$(
+            jq -r --arg name "${ARTIFACT_NAME}" \
+              '.artifacts[] | select(.name == $name and .expired == false) | .id' \
+              "${artifacts_json}"
+          )"
+          artifact_digest="$(
+            jq -r --arg name "${ARTIFACT_NAME}" \
+              '.artifacts[] | select(.name == $name and .expired == false) | .digest' \
+              "${artifacts_json}"
+          )"
+          [[ "${artifact_id}" =~ ^[1-9][0-9]*$ && "${artifact_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Package artifact identity is invalid." >&2
+            exit 1
+          }
+
+          SOURCE_PACKAGE_JSON="${source_package_json}" \
+          node <<'NODE'
+          const crypto = require("node:crypto");
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const { execFileSync } = require("node:child_process");
+
+          function fail(message) {
+            throw new Error(message);
+          }
+
+          const artifactDir = process.env.ARTIFACT_DIR;
+          const manifestPath = path.join(artifactDir, "preflight-manifest.json");
+          const packPath = path.join(artifactDir, "npm-pack.json");
+          if (!fs.existsSync(manifestPath) || !fs.existsSync(packPath)) {
+            fail("Plugin npm preflight artifact is missing its manifest or npm pack metadata.");
+          }
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const pack = JSON.parse(fs.readFileSync(packPath, "utf8"));
+          if (!Array.isArray(pack) || pack.length !== 1) {
+            fail("Plugin npm preflight artifact must contain exactly one npm pack result.");
+          }
+          const packEntry = pack[0];
+          const tarballName = manifest.artifact?.tarballName;
+          if (
+            typeof tarballName !== "string" ||
+            tarballName.length === 0 ||
+            tarballName.includes("\0") ||
+            tarballName !== path.basename(tarballName) ||
+            tarballName !== path.win32.basename(tarballName) ||
+            !tarballName.endsWith(".tgz")
+          ) {
+            fail(`Unsafe preflight tarball name: ${JSON.stringify(tarballName)}.`);
+          }
+          const artifactFiles = fs.readdirSync(artifactDir).toSorted();
+          const expectedFiles = ["npm-pack.json", "preflight-manifest.json", tarballName].toSorted();
+          if (JSON.stringify(artifactFiles) !== JSON.stringify(expectedFiles)) {
+            fail(`Unexpected preflight artifact files: ${artifactFiles.join(", ")}.`);
+          }
+
+          const expectedManifest = {
+            schemaVersion: 1,
+            kind: "openclaw-plugin-npm-preflight",
+            mode: "preflight-only",
+            repository: process.env.REPOSITORY,
+            workflow: {
+              path: process.env.WORKFLOW_PATH,
+              ref: process.env.WORKFLOW_REF,
+              sha: process.env.WORKFLOW_SHA,
+              runId: process.env.RUN_ID,
+              runAttempt: Number(process.env.RUN_ATTEMPT),
+            },
+            source: {
+              inputRef: process.env.SOURCE_REF,
+              sha: process.env.SOURCE_SHA,
+              trustPolicy: "workflow-main-and-target-main-or-release-ancestor",
+            },
+            mutationCapabilities: {
+              npmPublish: false,
+              npmDistTag: false,
+              clawHub: false,
+              environmentApproval: false,
+              oidcWrite: false,
+              secretRead: false,
+            },
+          };
+          for (const [key, value] of Object.entries(expectedManifest)) {
+            if (JSON.stringify(manifest[key]) !== JSON.stringify(value)) {
+              fail(`Preflight manifest ${key} mismatch.`);
+            }
+          }
+          if (manifest.artifact?.name !== process.env.ARTIFACT_NAME) {
+            fail("Preflight artifact name mismatch.");
+          }
+
+          const tarballPath = path.join(artifactDir, tarballName);
+          if (!fs.existsSync(tarballPath)) {
+            fail(`Preflight tarball is missing: ${tarballName}.`);
+          }
+          const tarball = fs.readFileSync(tarballPath);
+          const sha256 = crypto.createHash("sha256").update(tarball).digest("hex");
+          const npmIntegrity = `sha512-${crypto.createHash("sha512").update(tarball).digest("base64")}`;
+          const npmShasum = crypto.createHash("sha1").update(tarball).digest("hex");
+          if (
+            manifest.artifact.sha256 !== sha256 ||
+            manifest.artifact.npmIntegrity !== npmIntegrity ||
+            manifest.artifact.npmShasum !== npmShasum ||
+            packEntry.integrity !== npmIntegrity ||
+            packEntry.shasum !== npmShasum ||
+            packEntry.filename !== tarballName ||
+            packEntry.name !== process.env.PACKAGE_NAME ||
+            packEntry.version !== process.env.PACKAGE_VERSION
+          ) {
+            fail("Preflight tarball digest or npm integrity readback mismatch.");
+          }
+
+          const packedPackageJson = execFileSync("tar", [
+            "-xOf",
+            tarballPath,
+            "package/package.json",
+          ]);
+          const sourcePackageJson = fs.readFileSync(process.env.SOURCE_PACKAGE_JSON);
+          const packedPackageJsonSha256 = crypto
+            .createHash("sha256")
+            .update(packedPackageJson)
+            .digest("hex");
+          const sourcePackageJsonSha256 = crypto
+            .createHash("sha256")
+            .update(sourcePackageJson)
+            .digest("hex");
+          const packageJson = JSON.parse(packedPackageJson.toString("utf8"));
+          const pluginManifest = JSON.parse(
+            execFileSync("tar", ["-xOf", tarballPath, "package/openclaw.plugin.json"], {
+              encoding: "utf8",
+            }),
+          );
+          const repositoryUrl =
+            typeof packageJson.repository === "string"
+              ? packageJson.repository
+              : packageJson.repository?.url;
+          if (
+            manifest.package.extensionId !== process.env.EXTENSION_ID ||
+            manifest.package.packageDir !== process.env.PACKAGE_DIR ||
+            packageJson.name !== process.env.PACKAGE_NAME ||
+            packageJson.version !== process.env.PACKAGE_VERSION ||
+            manifest.package.name !== process.env.PACKAGE_NAME ||
+            manifest.package.version !== process.env.PACKAGE_VERSION ||
+            packageJson.openclaw?.install?.npmSpec !== process.env.INSTALL_NPM_SPEC ||
+            manifest.package.installNpmSpec !== process.env.INSTALL_NPM_SPEC ||
+            manifest.package.publishTag !== process.env.PUBLISH_TAG ||
+            repositoryUrl !== "https://github.com/openclaw/openclaw" ||
+            typeof pluginManifest.id !== "string" ||
+            pluginManifest.id.length === 0 ||
+            manifest.package.pluginId !== pluginManifest.id ||
+            manifest.package.repositoryUrl !== repositoryUrl ||
+            manifest.package.packageJsonSha256 !== packedPackageJsonSha256 ||
+            manifest.package.sourcePackageJsonSha256 !== sourcePackageJsonSha256
+          ) {
+            fail("Packed plugin identity, package hashes, or install route changed during artifact readback.");
+          }
+          console.log(
+            `Verified immutable plugin npm preflight artifact ${process.env.ARTIFACT_NAME} (${sha256}).`,
+          );
+          NODE
+
+          tarball_name="$(jq -er '.artifact.tarballName' "${ARTIFACT_DIR}/preflight-manifest.json")"
+          npm_integrity="$(jq -er '.artifact.npmIntegrity | strings' "${ARTIFACT_DIR}/preflight-manifest.json")"
+          npm_shasum="$(jq -er '.artifact.npmShasum | strings' "${ARTIFACT_DIR}/preflight-manifest.json")"
+          packed_package_json_sha256="$(jq -er '.package.packageJsonSha256' "${ARTIFACT_DIR}/preflight-manifest.json")"
+          source_package_json_sha256="$(jq -er '.package.sourcePackageJsonSha256' "${ARTIFACT_DIR}/preflight-manifest.json")"
+          tarball_sha256="$(jq -er '.artifact.sha256' "${ARTIFACT_DIR}/preflight-manifest.json")"
+          {
+            echo "artifact_digest=${artifact_digest}"
+            echo "artifact_id=${artifact_id}"
+            echo "artifact_name=${ARTIFACT_NAME}"
+            echo "npm_integrity=${npm_integrity}"
+            echo "npm_shasum=${npm_shasum}"
+            echo "package_json_sha256=${packed_package_json_sha256}"
+            echo "source_package_json_sha256=${source_package_json_sha256}"
+            echo "tarball_name=${tarball_name}"
+            echo "tarball_path=${ARTIFACT_DIR}/${tarball_name}"
+            echo "tarball_sha256=${tarball_sha256}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify npm publication route readiness
+        id: publication_route
+        env:
+          EXPECTED_NPM_INTEGRITY: ${{ steps.publication_artifact.outputs.npm_integrity }}
+          EXPECTED_NPM_SHASUM: ${{ steps.publication_artifact.outputs.npm_shasum }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import {
+            fetchNpmRegistryPackumentWithRetry,
+            resolveNpmPublishPlan,
+            resolvePublishedNpmVersionRoute,
+          } from "./scripts/lib/npm-publish-plan.mjs";
+
+          const packageName = process.env.PACKAGE_NAME;
+          const packageVersion = process.env.PACKAGE_VERSION;
+          const publishTag = process.env.PUBLISH_TAG;
+          const expectedIntegrity = process.env.EXPECTED_NPM_INTEGRITY;
+          const expectedShasum = process.env.EXPECTED_NPM_SHASUM;
+          if (
+            !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(expectedIntegrity ?? "") ||
+            !/^[0-9a-f]{40}$/u.test(expectedShasum ?? "")
+          ) {
+            throw new Error(`${packageName}: verified preflight npm identity is invalid.`);
+          }
+          const packageUrl = `https://registry.npmjs.org/${encodeURIComponent(packageName)}`;
+          const requestAttempts = 3;
+          const requestTimeoutMs = 20_000;
+
+          const observations = [];
+          for (let attempt = 1; attempt <= 3; attempt += 1) {
+            const registryFetch = await fetchNpmRegistryPackumentWithRetry({
+              packageName,
+              packageUrl,
+              attempts: requestAttempts,
+              timeoutMs: requestTimeoutMs,
+            });
+            if (registryFetch.status === 404) {
+              observations.push("npm-token-bootstrap");
+            } else if (registryFetch.ok) {
+              const packument = registryFetch.packument;
+              if (!packument || typeof packument !== "object" || Array.isArray(packument)) {
+                throw new Error(`${packageName}: npm registry packument is not an object.`);
+              }
+              const versions = Object.keys(packument.versions ?? {});
+              const targetPublished = versions.includes(packageVersion);
+              const priorVersions = versions.filter((version) => version !== packageVersion);
+              if (!targetPublished && priorVersions.length > 0) {
+                observations.push("npm-oidc");
+              } else if (targetPublished) {
+                const targetDist = packument.versions?.[packageVersion]?.dist;
+                if (
+                  targetDist?.integrity !== expectedIntegrity ||
+                  targetDist?.shasum !== expectedShasum
+                ) {
+                  throw new Error(
+                    `${packageName}@${packageVersion}: npm registry tarball identity does not match the verified preflight artifact; refusing published-version route.`,
+                  );
+                }
+                const publishTagOverride =
+                  publishTag === "extended-stable" ? "extended-stable" : undefined;
+                const publishPlan = resolveNpmPublishPlan(
+                  packageVersion,
+                  packument["dist-tags"]?.beta,
+                  publishTagOverride,
+                );
+                if (publishPlan.publishTag !== publishTag) {
+                  throw new Error(
+                    `${packageName}: package release plan resolved ${publishPlan.publishTag}, expected ${publishTag}.`,
+                  );
+                }
+                observations.push(
+                  resolvePublishedNpmVersionRoute({
+                    packageVersion,
+                    publishPlan,
+                    distTags: packument["dist-tags"] ?? {},
+                  }),
+                );
+              } else {
+                throw new Error(
+                  `${packageName}: npm registry publication history is inconsistent.`,
+                );
+              }
+            } else {
+              throw new Error(
+                `${packageName}: npm publication-route probe returned HTTP ${registryFetch.status}.`,
+              );
+            }
+            if (attempt !== 3) {
+              await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+            }
+          }
+          if (new Set(observations).size !== 1) {
+            throw new Error(
+              `${packageName}: npm publication route changed during preflight: ${observations.join(", ")}.`,
+            );
+          }
+          console.log(`route=${observations[0]}`);
+          NODE
+
+      - name: Create immutable plugin npm publication evidence
+        id: preflight_evidence
+        env:
+          ARTIFACT_NAME_PREFIX: plugin-npm-package-${{ matrix.plugin.extensionId }}-${{ matrix.plugin.version }}
+          EXTENSION_ID: ${{ matrix.plugin.extensionId }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
+          PUBLISH_ROUTE: ${{ steps.publication_route.outputs.route }}
+          SOURCE_PACKAGE_JSON_SHA256: ${{ steps.publication_artifact.outputs.source_package_json_sha256 }}
+          TARBALL_NAME: ${{ steps.publication_artifact.outputs.tarball_name }}
+          TARBALL_PATH: ${{ steps.publication_artifact.outputs.tarball_path }}
+          TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+        run: |
+          set -euo pipefail
+          output_dir="${RUNNER_TEMP}/plugin-npm-preflight/evidence"
+          rm -rf "$output_dir"
+          install -d -m 0700 "$output_dir"
+          install -m 0600 "$TARBALL_PATH" "$output_dir/$TARBALL_NAME"
+          artifact_name="${ARTIFACT_NAME_PREFIX}-${PUBLISH_ROUTE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          policy_sha256="$(sha256sum .github/workflows/plugin-npm-release.yml | awk '{print $1}')"
+          node scripts/plugin-publication-artifact.mjs create \
+            --artifact-dir "$output_dir" \
+            --artifact-name "$artifact_name" \
+            --package-dir "$PACKAGE_DIR" \
+            --package-name "$PACKAGE_NAME" \
+            --package-version "$PACKAGE_VERSION" \
+            --publication-reason "Stable npm registry preflight selected ${PUBLISH_ROUTE}." \
+            --publish-tag "$PUBLISH_TAG" \
+            --publisher-policy-id plugin-npm-release-workflow \
+            --publisher-policy-schema openclaw.plugin-npm-publisher-policy/v1 \
+            --publisher-policy-sha256 "$policy_sha256" \
+            --route "$PUBLISH_ROUTE" \
+            --source-package-json-sha256 "$SOURCE_PACKAGE_JSON_SHA256" \
+            --target-sha "$TARGET_SHA"
+          evidence_count="$(find "$output_dir" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          [[ "$evidence_count" == "2" ]] || {
+            echo "Plugin npm preflight evidence must contain exactly two files." >&2
+            exit 1
+          }
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "artifact_path=$output_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable plugin npm preflight evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.preflight_evidence.outputs.artifact_name }}
+          path: ${{ steps.preflight_evidence.outputs.artifact_path }}/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record npm preflight summary
+        env:
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PUBLISH_ROUTE: ${{ steps.publication_route.outputs.route }}
+          TARBALL_SHA256: ${{ steps.publication_artifact.outputs.tarball_sha256 }}
+        run: |
+          {
+            echo "## Plugin npm validation-only proof"
+            echo
+            echo "- Package: \`${PACKAGE_NAME}@${PACKAGE_VERSION}\`"
+            echo "- Route: \`${PUBLISH_ROUTE}\`"
+            echo "- Tarball SHA-256: \`${TARBALL_SHA256}\`"
+            echo "- Publication: **not attempted**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  trusted_publisher_preflight:
+    name: Trusted publisher OIDC exchange
+    needs: preview_plugins_npm
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true' }}
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted OIDC preflight tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Setup trusted Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify npm trusted-publisher exchange
+        env:
+          PLUGIN_MATRIX: ${{ needs.preview_plugins_npm.outputs.all_matrix }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { preflightNpmTrustedPublisher } from "./scripts/npm-trusted-publisher-preflight.mjs";
+
+          let selection;
+          try {
+            selection = JSON.parse(process.env.PLUGIN_MATRIX);
+          } catch {
+            throw new Error("Plugin npm selection is not valid JSON.");
+          }
+          if (!Array.isArray(selection) || selection.length === 0) {
+            throw new Error("Plugin npm selection must be a non-empty array.");
+          }
+          for (const entry of selection) {
+            await preflightNpmTrustedPublisher(entry?.packageName);
+          }
+          NODE
+
+  publish_plugins_npm:
+    needs:
+      [
+        preview_plugins_npm,
+        preview_plugin_pack,
+        verify_plugin_npm_preflight,
+        validate_release_publish_approval,
+      ]
+    if: github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true'
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
+    steps:
+      - name: Checkout trusted publication tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Setup trusted Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Consume immutable npm publication evidence
+        id: publication_evidence
+        env:
+          ARTIFACT_NAME_PREFIX: plugin-npm-package-${{ matrix.plugin.extensionId }}-${{ matrix.plugin.version }}
+          EXTENSION_ID: ${{ matrix.plugin.extensionId }}
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
+          TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.ref_name }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          artifacts_json="${RUNNER_TEMP}/${EXTENSION_ID}-publication-artifacts.json"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" |
+            jq -s '{artifacts: [.[].artifacts[]]}' > "$artifacts_json"
+          jq \
+            --arg prefix "${ARTIFACT_NAME_PREFIX}-" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --argjson consumer_attempt "$GITHUB_RUN_ATTEMPT" \
+            '[
+              .artifacts[]
+              | select(.expired == false and (.name | startswith($prefix)))
+              | (
+                  try (
+                    .name
+                    | ltrimstr($prefix)
+                    | capture("^(?<route>npm-(?:oidc|token-bootstrap|mirror|tag-repair|readback))-(?<run_id>[1-9][0-9]*)-(?<attempt>[1-9][0-9]*)$")
+                  ) catch null
+                ) as $binding
+              | select(
+                  $binding != null and
+                  $binding.run_id == $run_id and
+                  ($binding.attempt | tonumber) <= $consumer_attempt
+                )
+              | . + {
+                  producer_attempt: ($binding.attempt | tonumber),
+                  publish_route: $binding.route
+                }
+            ]
+            | sort_by(.producer_attempt)
+            | if length == 0 then
+                []
+              else
+                (last.producer_attempt) as $latest_attempt
+                | map(select(.producer_attempt == $latest_attempt))
+              end' \
+            "$artifacts_json" > "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json"
+          artifact_count="$(jq 'length' "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json")"
+          [[ "$artifact_count" == "1" ]] || {
+            echo "Expected one current or prior immutable publication artifact for ${PACKAGE_NAME}@${PACKAGE_VERSION}; found ${artifact_count}." >&2
+            exit 1
+          }
+          artifact_metadata="${RUNNER_TEMP}/${EXTENSION_ID}-publication-artifact.json"
+          jq '.[0] | del(.producer_attempt, .publish_route)' \
+            "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json" > "$artifact_metadata"
+          artifact_name="$(jq -er '.name' "$artifact_metadata")"
+          publish_route="$(jq -er '.[0].publish_route' "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json")"
+          producer_attempt="$(jq -er '.[0].producer_attempt' "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json")"
+          [[ "$publish_route" =~ ^npm-(oidc|token-bootstrap|mirror|tag-repair|readback)$ ]] || {
+            echo "Unsupported immutable npm publication route: ${publish_route}." >&2
+            exit 1
+          }
+          if [[ "$publish_route" == "npm-token-bootstrap" ]]; then
+            sha_pinned_release_publish=false
+            if [[ "$WORKFLOW_REF" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
+              workflow_sha_prefix="${BASH_REMATCH[1]}"
+              [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ && "${WORKFLOW_SHA:0:12}" == "$workflow_sha_prefix" ]] || {
+                echo "npm token bootstrap release-publish tag does not match the workflow SHA." >&2
+                exit 1
+              }
+              sha_pinned_release_publish=true
+            fi
+            [[ "$WORKFLOW_REF" == "refs/heads/main" || "$sha_pinned_release_publish" == "true" ]] || {
+              echo "npm token bootstrap requires trusted main tooling or a protected SHA-pinned release-publish tag." >&2
+              exit 1
+            }
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
+              echo "npm token bootstrap workflow revision is not reachable from current main." >&2
+              exit 1
+            }
+          fi
+          artifact_id="$(jq -er '.id' "$artifact_metadata")"
+          artifact_digest="$(jq -er '.digest' "$artifact_metadata")"
+          artifact_size="$(jq -er '.size_in_bytes' "$artifact_metadata")"
+          [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$artifact_digest" =~ ^sha256:[0-9a-f]{64}$ && "$artifact_size" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Immutable npm publication artifact metadata is invalid." >&2
+            exit 1
+          }
+          (( artifact_size <= 268435456 )) || {
+            echo "Immutable npm publication artifact exceeds 256 MiB." >&2
+            exit 1
+          }
+
+          workflow_run="${RUNNER_TEMP}/${EXTENSION_ID}-publication-run.json"
+          workflow_jobs="${RUNNER_TEMP}/${EXTENSION_ID}-publication-jobs.json"
+          artifact_zip="${RUNNER_TEMP}/${EXTENSION_ID}-publication.zip"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${producer_attempt}" \
+            > "$workflow_run"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${producer_attempt}/jobs?per_page=100" |
+            jq -s '{total_count: ([.[].jobs[]] | length), jobs: [.[].jobs[]]}' > "$workflow_jobs"
+          curl --fail --location --silent --show-error \
+            --retry 2 \
+            --retry-all-errors \
+            --connect-timeout 10 \
+            --max-time 120 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
+            -o "$artifact_zip"
+
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "$TARGET_SHA"
+          source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
+          git show "${TARGET_SHA}:${PACKAGE_DIR}/package.json" > "$source_package_json"
+          source_package_json_sha256="$(sha256sum "$source_package_json" | awk '{print $1}')"
+          policy_sha256="$(sha256sum .github/workflows/plugin-npm-release.yml | awk '{print $1}')"
+          output_dir="${RUNNER_TEMP}/${EXTENSION_ID}-verified-publication"
+          node scripts/plugin-publication-artifact.mjs verify \
+            --artifact-digest "$artifact_digest" \
+            --artifact-id "$artifact_id" \
+            --artifact-metadata "$artifact_metadata" \
+            --artifact-name "$artifact_name" \
+            --artifact-size-bytes "$artifact_size" \
+            --artifact-zip "$artifact_zip" \
+            --consumer-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --github-output "$GITHUB_OUTPUT" \
+            --output-dir "$output_dir" \
+            --package-dir "$PACKAGE_DIR" \
+            --package-name "$PACKAGE_NAME" \
+            --package-version "$PACKAGE_VERSION" \
+            --producer-job-name "Preflight plugin npm package (${PACKAGE_NAME})" \
+            --producer-run-attempt "$producer_attempt" \
+            --producer-run-id "$GITHUB_RUN_ID" \
+            --publication-reason "Stable npm registry preflight selected ${publish_route}." \
+            --publish-tag "$PUBLISH_TAG" \
+            --publisher-policy-id plugin-npm-release-workflow \
+            --publisher-policy-schema openclaw.plugin-npm-publisher-policy/v1 \
+            --publisher-policy-sha256 "$policy_sha256" \
+            --repository "$GITHUB_REPOSITORY" \
+            --route "$publish_route" \
+            --run-state-policy same-run-producer-success \
+            --source-package-json-sha256 "$source_package_json_sha256" \
+            --target-sha "$TARGET_SHA" \
+            --workflow-event workflow_dispatch \
+            --workflow-head-branch "$WORKFLOW_HEAD_BRANCH" \
+            --workflow-jobs-metadata "$workflow_jobs" \
+            --workflow-path .github/workflows/plugin-npm-release.yml \
+            --workflow-run-metadata "$workflow_run" \
+            --workflow-sha "$WORKFLOW_SHA"
+
+      - name: Authorize immutable publication route
+        env:
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PUBLISH_ROUTE: ${{ steps.publication_evidence.outputs.publish_route }}
+        run: |
+          set -euo pipefail
+          case "$PUBLISH_ROUTE" in
+            npm-oidc | npm-token-bootstrap | npm-readback)
+              ;;
+            *)
+              echo "${PACKAGE_NAME}: route ${PUBLISH_ROUTE} requires credential-isolated repair tooling, not this publish path." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Setup trusted publication dependencies
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' || steps.publication_evidence.outputs.publish_route == 'npm-readback'
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Checkout OIDC publication target
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          path: .publication-target
+          fetch-depth: 1
+
+      - name: Setup trusted OIDC packaging dependencies
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Check OIDC npm package version
+        id: npm_package_version
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
+        env:
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+        run: |
+          set -euo pipefail
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published on npm."
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish with trusted publisher
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
+        env:
+          OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
+          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
+        run: bash scripts/plugin-npm-publish.sh --repo-root .publication-target --publish "${{ matrix.plugin.packageDir }}"
+
+      - name: Verify OIDC published runtime
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
+        env:
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+
+      - name: Check bootstrap npm package version
+        id: bootstrap_npm_package_version
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+          TARBALL_PATH: ${{ steps.publication_evidence.outputs.tarball_path }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import crypto from "node:crypto";
+          import fs from "node:fs";
+          import { fetchNpmRegistryPackumentWithRetry } from "./scripts/lib/npm-publish-plan.mjs";
+
+          const packageName = process.env.PACKAGE_NAME;
+          const packageVersion = process.env.PACKAGE_VERSION;
+          const tarball = fs.readFileSync(process.env.TARBALL_PATH);
+          const expectedIntegrity = `sha512-${crypto.createHash("sha512").update(tarball).digest("base64")}`;
+          const expectedShasum = crypto.createHash("sha1").update(tarball).digest("hex");
+          const registryFetch = await fetchNpmRegistryPackumentWithRetry({
+            packageName,
+            packageUrl: `https://registry.npmjs.org/${encodeURIComponent(packageName)}`,
+          });
+          if (registryFetch.status === 404) {
+            console.log("already_published=false");
+            process.exit(0);
+          }
+          if (!registryFetch.ok) {
+            throw new Error(`${packageName}: npm registry returned HTTP ${registryFetch.status}.`);
+          }
+          const publishedDist = registryFetch.packument?.versions?.[packageVersion]?.dist;
+          if (!publishedDist) {
+            console.log("already_published=false");
+            process.exit(0);
+          }
+          if (
+            publishedDist.integrity !== expectedIntegrity ||
+            publishedDist.shasum !== expectedShasum
+          ) {
+            throw new Error(
+              `${packageName}@${packageVersion}: npm registry tarball identity does not match the approved bootstrap artifact.`,
+            );
+          }
+          console.error(`${packageName}@${packageVersion} already matches the approved bootstrap artifact.`);
+          console.log("already_published=true");
+          NODE
+
+      - name: Publish approved bootstrap tarball
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.bootstrap_npm_package_version.outputs.already_published != 'true'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+          PUBLISH_TAG: ${{ steps.publication_evidence.outputs.publish_tag }}
+          TARBALL_PATH: ${{ steps.publication_evidence.outputs.tarball_path }}
+        run: |
+          set -euo pipefail
+          [[ "$PACKAGE_VERSION" == *"-beta."* && "$PUBLISH_TAG" == "beta" ]] || {
+            echo "npm token bootstrap requires an approved beta package and beta tag." >&2
+            exit 1
+          }
+          [[ -n "${NPM_TOKEN// }" ]] || {
+            echo "npm token bootstrap requires the protected npm release token." >&2
+            exit 1
+          }
+          publish_home="$(mktemp -d "${RUNNER_TEMP}/plugin-npm-bootstrap.XXXXXX")"
+          cleanup() {
+            rm -rf "$publish_home"
+          }
+          trap cleanup EXIT
+          umask 077
+          npmrc="$publish_home/npmrc"
+          {
+            echo "registry=https://registry.npmjs.org/"
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN"
+          } > "$npmrc"
+          chmod 0600 "$npmrc"
+          unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
+          # A timeout can race a committed publish. On rerun, the preceding check
+          # accepts only this tarball's exact integrity and shasum before skipping.
+          HOME="$publish_home" \
+            NPM_CONFIG_GLOBALCONFIG=/dev/null \
+            NPM_CONFIG_IGNORE_SCRIPTS=true \
+            NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
+            NPM_CONFIG_USERCONFIG="$npmrc" \
+            timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \
+              --access public \
+              --ignore-scripts \
+              --provenance \
+              --tag "$PUBLISH_TAG"
+
+      - name: Verify bootstrap published runtime
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+
+      - name: Verify immutable npm readback runtime
+        if: steps.publication_evidence.outputs.publish_route == 'npm-readback'
+        env:
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+
+      - name: Record Meta trusted publisher checkpoint
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          ALREADY_PUBLISHED: ${{ steps.bootstrap_npm_package_version.outputs.already_published }}
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+        run: |
+          {
+            echo "## Meta npm bootstrap follow-up"
+            echo
+            if [[ "$ALREADY_PUBLISHED" == "true" ]]; then
+              echo "- Verified existing \`${PACKAGE_NAME}\` against the approved immutable tarball."
+            else
+              echo "- Published \`${PACKAGE_NAME}\` from the verified immutable tarball."
+            fi
+            echo "- Configure the GitHub trusted publisher for \`plugin-npm-release.yml\` and environment \`npm-release\` before the next OIDC publish."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify_plugins_npm:
+    needs: [preview_plugins_npm, publish_plugins_npm]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && inputs.npm_dist_tag == 'extended-stable' && needs.preview_plugins_npm.result == 'success' && (needs.publish_plugins_npm.result == 'success' || (needs.preview_plugins_npm.outputs.has_candidates == 'false' && needs.publish_plugins_npm.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Verify complete plugin registry readback
+        env:
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+        run: |
+          set -euo pipefail
+          exact_version=missing
+          tagged_version=missing
+          for attempt in {1..12}; do
+            exact_version="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version 2>/dev/null || true)"
+            tagged_version="$(npm view "${PACKAGE_NAME}@extended-stable" version 2>/dev/null || true)"
+            if [[ "${exact_version}" == "${PACKAGE_VERSION}" && "${tagged_version}" == "${PACKAGE_VERSION}" ]]; then
+              echo "Verified ${PACKAGE_NAME}@${PACKAGE_VERSION} and @extended-stable."
+              exit 0
+            fi
+            if [[ "${attempt}" != "12" ]]; then
+              sleep 10
+            fi
+          done
+          echo "npm registry did not converge for ${PACKAGE_NAME}@${PACKAGE_VERSION} (exact=${exact_version:-missing}, extended-stable=${tagged_version:-missing})." >&2
+          echo "This OIDC-only source workflow does not mutate tags on an already-published package; use credential-isolated release tooling for manual tag repair." >&2
+          exit 1

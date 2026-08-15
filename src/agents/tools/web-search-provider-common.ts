@@ -1,0 +1,490 @@
+/**
+ * Shared web-search provider helpers.
+ *
+ * Handles provider config, credential normalization, guarded endpoint calls, caching, and filters.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import {
+  DEFAULT_CACHE_TTL_MINUTES,
+  DEFAULT_TIMEOUT_SECONDS,
+  normalizeCacheKey,
+  readCache,
+  readResponseText,
+  resolveCacheTtlMs,
+  resolveTimeoutSeconds,
+  writeCache,
+} from "./web-shared.js";
+import type { CacheEntry } from "./web-shared.js";
+
+type WebGuardedFetchModule = Pick<
+  typeof import("./web-guarded-fetch.js"),
+  "withSelfHostedWebToolsEndpoint" | "withTrustedWebToolsEndpoint"
+>;
+
+const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
+  () => import("./web-guarded-fetch.js"),
+);
+
+async function loadTrustedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
+> {
+  return (await webGuardedFetchLoader.load()).withTrustedWebToolsEndpoint;
+}
+
+async function loadSelfHostedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
+> {
+  return (await webGuardedFetchLoader.load()).withSelfHostedWebToolsEndpoint;
+}
+
+export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
+  ? Web extends { search?: infer Search }
+    ? Search
+    : never
+  : never) &
+  Record<string, unknown>;
+
+type UnsupportedWebSearchFilterName =
+  | "country"
+  | "language"
+  | "freshness"
+  | "date_after"
+  | "date_before";
+
+export const DEFAULT_SEARCH_COUNT = 5;
+export const MAX_SEARCH_COUNT = 10;
+const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+
+export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
+  return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
+}
+
+export function resolveSearchCacheTtlMs(searchConfig?: SearchConfigRecord): number {
+  return resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES);
+}
+
+export function resolveSearchCount(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  const clamped = Math.max(1, Math.min(MAX_SEARCH_COUNT, Math.floor(parsed)));
+  return clamped;
+}
+
+export function readConfiguredSecretString(value: unknown, path: string): string | undefined {
+  return normalizeSecretInput(normalizeResolvedSecretInputString({ value, path })) || undefined;
+}
+
+export function readProviderEnvValue(envVars: string[]): string | undefined {
+  for (const envVar of envVars) {
+    const value = normalizeSecretInput(process.env[envVar]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+export async function withTrustedWebSearchEndpoint<T>(
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    init: RequestInit;
+    signal?: AbortSignal;
+  },
+  run: (response: Response) => Promise<T>,
+): Promise<T> {
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
+  return withTrustedWebToolsEndpoint(
+    {
+      url: params.url,
+      init: params.init,
+      timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
+    },
+    async ({ response }) => run(response),
+  );
+}
+
+export async function withSelfHostedWebSearchEndpoint<T>(
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    init: RequestInit;
+    signal?: AbortSignal;
+  },
+  run: (response: Response) => Promise<T>,
+): Promise<T> {
+  const withSelfHostedWebToolsEndpoint = await loadSelfHostedWebToolsEndpoint();
+  return withSelfHostedWebToolsEndpoint(
+    {
+      url: params.url,
+      init: params.init,
+      timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
+    },
+    async ({ response }) => run(response),
+  );
+}
+
+export async function postTrustedWebToolsJson<T>(
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    apiKey: string;
+    body: Record<string, unknown>;
+    errorLabel: string;
+    maxErrorBytes?: number;
+    extraHeaders?: Record<string, string>;
+    signal?: AbortSignal;
+  },
+  parseResponse: (response: Response) => Promise<T>,
+): Promise<T> {
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
+  return withTrustedWebToolsEndpoint(
+    {
+      url: params.url,
+      timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
+      init: {
+        method: "POST",
+        headers: {
+          ...params.extraHeaders,
+          Accept: "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(params.body),
+      },
+    },
+    async ({ response }) => {
+      if (!response.ok) {
+        const detail = await readResponseText(response, {
+          maxBytes: params.maxErrorBytes ?? 64_000,
+        });
+        throw new Error(
+          `${params.errorLabel} API error (${response.status}): ${detail.text || response.statusText}`,
+        );
+      }
+      return await parseResponse(response);
+    },
+  );
+}
+
+export async function throwWebSearchApiError(res: Response, providerLabel: string): Promise<never> {
+  const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+  const detail = detailResult.text;
+  throw new Error(`${providerLabel} API error (${res.status}): ${detail || res.statusText}`);
+}
+
+export function resolveSiteName(url: string | undefined): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
+const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
+const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
+
+type WebSearchFreshnessProvider = "brave" | "perplexity";
+type WebSearchRecencyFreshness = "day" | "week" | "month" | "year";
+type ParsedWebSearchFreshness<Provider extends WebSearchFreshnessProvider> =
+  Provider extends "perplexity" ? WebSearchRecencyFreshness : string;
+
+export const FRESHNESS_TO_RECENCY: Record<string, string> = {
+  pd: "day",
+  pw: "week",
+  pm: "month",
+  py: "year",
+};
+const RECENCY_TO_FRESHNESS: Record<string, string> = {
+  day: "pd",
+  week: "pw",
+  month: "pm",
+  year: "py",
+};
+
+const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const PERPLEXITY_DATE_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+
+function isValidIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+  if (year === undefined || month === undefined || day === undefined) {
+    return false;
+  }
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
+}
+
+export function isoToPerplexityDate(iso: string): string | undefined {
+  const match = iso.match(ISO_DATE_PATTERN);
+  if (!match) {
+    return undefined;
+  }
+  const [, year, month, day] = match;
+  if (year === undefined || month === undefined || day === undefined) {
+    return undefined;
+  }
+  return `${Number.parseInt(month, 10)}/${Number.parseInt(day, 10)}/${year}`;
+}
+
+/** Accepts ISO dates plus Perplexity `M/D/YYYY` dates and returns canonical ISO dates. */
+export function normalizeToIsoDate(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (ISO_DATE_PATTERN.test(trimmed)) {
+    return isValidIsoDate(trimmed) ? trimmed : undefined;
+  }
+  const match = trimmed.match(PERPLEXITY_DATE_PATTERN);
+  if (match) {
+    const [, month, day, year] = match;
+    if (year === undefined || month === undefined || day === undefined) {
+      return undefined;
+    }
+    const iso = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    return isValidIsoDate(iso) ? iso : undefined;
+  }
+  return undefined;
+}
+
+/** Parses optional date range filters and returns provider-facing validation errors. */
+export function parseIsoDateRange(params: {
+  rawDateAfter?: string;
+  rawDateBefore?: string;
+  invalidDateAfterMessage: string;
+  invalidDateBeforeMessage: string;
+  invalidDateRangeMessage: string;
+  docs?: string;
+}):
+  | { dateAfter?: string; dateBefore?: string }
+  | {
+      error: "invalid_date" | "invalid_date_range";
+      message: string;
+      docs: string;
+    } {
+  const docs = params.docs ?? "https://docs.openclaw.ai/tools/web";
+  const dateAfter = params.rawDateAfter ? normalizeToIsoDate(params.rawDateAfter) : undefined;
+  if (params.rawDateAfter && !dateAfter) {
+    return {
+      error: "invalid_date",
+      message: params.invalidDateAfterMessage,
+      docs,
+    };
+  }
+
+  const dateBefore = params.rawDateBefore ? normalizeToIsoDate(params.rawDateBefore) : undefined;
+  if (params.rawDateBefore && !dateBefore) {
+    return {
+      error: "invalid_date",
+      message: params.invalidDateBeforeMessage,
+      docs,
+    };
+  }
+
+  if (dateAfter && dateBefore && dateAfter > dateBefore) {
+    return {
+      error: "invalid_date_range",
+      message: params.invalidDateRangeMessage,
+      docs,
+    };
+  }
+
+  return { dateAfter, dateBefore };
+}
+
+/** Converts shared freshness names into provider-specific Brave or Perplexity values. */
+export function normalizeFreshness(
+  value: string | undefined,
+  provider: WebSearchFreshnessProvider,
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) {
+    const recency = FRESHNESS_TO_RECENCY[lower];
+    return provider === "brave" ? lower : recency;
+  }
+  if (PERPLEXITY_RECENCY_VALUES.has(lower)) {
+    const freshness = RECENCY_TO_FRESHNESS[lower];
+    return provider === "perplexity" ? lower : freshness;
+  }
+  if (provider === "brave") {
+    const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
+    if (match) {
+      const [, start, end] = match;
+      // Brave accepts explicit ISO ranges; Perplexity only supports recency buckets here.
+      if (start && end && isValidIsoDate(start) && isValidIsoDate(end) && start <= end) {
+        return `${start}to${end}`;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/** Parses freshness/date filters while rejecting combinations providers cannot express safely. */
+export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessProvider>(params: {
+  rawFreshness?: string;
+  rawDateAfter?: string;
+  rawDateBefore?: string;
+  freshnessProvider: Provider;
+  invalidFreshnessMessage: string;
+  invalidDateAfterMessage: string;
+  invalidDateBeforeMessage: string;
+  invalidDateRangeMessage: string;
+  conflictingTimeFiltersMessage?: string;
+  docs?: string;
+}):
+  | {
+      freshness?: ParsedWebSearchFreshness<Provider>;
+      dateAfter?: string;
+      dateBefore?: string;
+    }
+  | {
+      error:
+        | "invalid_freshness"
+        | "invalid_date"
+        | "invalid_date_range"
+        | "conflicting_time_filters";
+      message: string;
+      docs: string;
+    } {
+  const docs = params.docs ?? "https://docs.openclaw.ai/tools/web";
+  const freshness = params.rawFreshness
+    ? normalizeFreshness(params.rawFreshness, params.freshnessProvider)
+    : undefined;
+  if (params.rawFreshness && !freshness) {
+    return {
+      error: "invalid_freshness",
+      message: params.invalidFreshnessMessage,
+      docs,
+    };
+  }
+
+  if (params.rawFreshness && (params.rawDateAfter || params.rawDateBefore)) {
+    return {
+      error: "conflicting_time_filters",
+      message:
+        params.conflictingTimeFiltersMessage ??
+        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
+      docs,
+    };
+  }
+
+  const parsedDateRange = parseIsoDateRange({
+    rawDateAfter: params.rawDateAfter,
+    rawDateBefore: params.rawDateBefore,
+    invalidDateAfterMessage: params.invalidDateAfterMessage,
+    invalidDateBeforeMessage: params.invalidDateBeforeMessage,
+    invalidDateRangeMessage: params.invalidDateRangeMessage,
+    docs,
+  });
+  if ("error" in parsedDateRange) {
+    return parsedDateRange;
+  }
+
+  return freshness
+    ? {
+        freshness: freshness as ParsedWebSearchFreshness<Provider>,
+        ...parsedDateRange,
+      }
+    : parsedDateRange;
+}
+
+/** Reads a search cache payload and marks it so provider responses can disclose cache hits. */
+export function readCachedSearchPayload(cacheKey: string): Record<string, unknown> | undefined {
+  const cached = readCache(SEARCH_CACHE, cacheKey);
+  return cached ? { ...cached.value, cached: true } : undefined;
+}
+
+/** Builds a normalized cache key from provider-specific search dimensions. */
+export function buildSearchCacheKey(parts: Array<string | number | boolean | undefined>): string {
+  return normalizeCacheKey(
+    parts.map((part) => (part === undefined ? "default" : String(part))).join(":"),
+  );
+}
+
+/** Stores one provider search payload with its provider-selected TTL. */
+export function writeCachedSearchPayload(
+  cacheKey: string,
+  payload: Record<string, unknown>,
+  ttlMs: number,
+): void {
+  writeCache(SEARCH_CACHE, cacheKey, payload, ttlMs);
+}
+
+function readUnsupportedSearchFilter(
+  params: Record<string, unknown>,
+): UnsupportedWebSearchFilterName | undefined {
+  for (const name of ["country", "language", "freshness", "date_after", "date_before"] as const) {
+    const value = params[name];
+    if (typeof value === "string" && value.trim()) {
+      return name;
+    }
+  }
+
+  return undefined;
+}
+
+function describeUnsupportedSearchFilter(name: UnsupportedWebSearchFilterName): string {
+  switch (name) {
+    case "country":
+      return "country filtering";
+    case "language":
+      return "language filtering";
+    case "freshness":
+      return "freshness filtering";
+    case "date_after":
+    case "date_before":
+      return "date_after/date_before filtering";
+  }
+  throw new Error("Unsupported web search filter");
+}
+
+export function buildUnsupportedSearchFilterResponse(
+  params: Record<string, unknown>,
+  provider: string,
+  docs = "https://docs.openclaw.ai/tools/web",
+):
+  | {
+      error: string;
+      message: string;
+      docs: string;
+    }
+  | undefined {
+  const unsupported = readUnsupportedSearchFilter(params);
+  if (!unsupported) {
+    return undefined;
+  }
+
+  const label = describeUnsupportedSearchFilter(unsupported);
+  const supportedLabel =
+    unsupported === "date_after" || unsupported === "date_before" ? "date filtering" : label;
+
+  return {
+    error: unsupported.startsWith("date_")
+      ? "unsupported_date_filter"
+      : `unsupported_${unsupported}`,
+    message: `${label} is not supported by the ${provider} provider. Only Brave and Perplexity support ${supportedLabel}.`,
+    docs,
+  };
+}

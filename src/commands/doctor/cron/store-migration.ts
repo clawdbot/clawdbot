@@ -1,0 +1,602 @@
+// Cron store row normalization for doctor repair and quarantine decisions.
+import { randomUUID } from "node:crypto";
+import { timestampMsToIsoString } from "../../../../packages/normalization-core/src/number-coercion.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "../../../../packages/normalization-core/src/string-coerce.js";
+import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
+import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
+import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
+import { inferCronJobName } from "../../../cron/service/normalize.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
+import {
+  isBlockedLegacyCodexModelRef,
+  type LegacyCodexModelIdentity,
+} from "../shared/codex-route-model-ref.js";
+import { hasLegacyTaskSuggestionToolList } from "../shared/legacy-tool-name-migration.js";
+import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
+import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
+import {
+  classifyUnresolvedAgentTurnShellToolPrompt,
+  collectLegacyOpenAICodexCronModelRoutes,
+  copyTopLevelAgentTurnFields,
+  hasLegacyOpenAICodexCronModelRef,
+  inferPayloadIfMissing,
+  migrateLegacyAgentTurnCommandPayload,
+  migrateLegacyCronPayload,
+  normalizePayloadKind,
+  stripLegacyTopLevelFields,
+} from "./payload-migration.js";
+import { createScheduledToolPolicyMigrationCollector } from "./scheduled-tool-policy-migration.js";
+
+type CronStoreIssueKey =
+  | "jobId"
+  | "missingId"
+  | "nonStringId"
+  | "legacyScheduleString"
+  | "legacyScheduleCron"
+  | "legacyPayloadKind"
+  | "legacyPayloadCodexModel"
+  | "legacyTaskSuggestionToolName"
+  | "legacyAgentTurnCommandPayload"
+  | "unresolvedAgentTurnShellToolPrompt"
+  | "legacyPayloadProvider"
+  | "legacyTopLevelPayloadFields"
+  | "legacyTopLevelDeliveryFields"
+  | "legacyDeliveryMode"
+  | "migratedScheduledToolPolicy"
+  | "invalidSchedule"
+  | "invalidPayload";
+
+type CronStoreIssues = Partial<Record<CronStoreIssueKey, number>>;
+
+export type CronCodexRuntimePolicyTarget = {
+  agentId?: string;
+  modelRef: string;
+  legacyModelRef?: string;
+};
+
+export function cronCodexRuntimePolicyTargetKey(target: CronCodexRuntimePolicyTarget): string {
+  return `${target.agentId ?? ""}\u0000${target.modelRef}\u0000${target.legacyModelRef ?? ""}`;
+}
+
+export function collectStoredCronCodexRuntimePolicyTargets(
+  jobs: ReadonlyArray<Record<string, unknown>>,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+): CronCodexRuntimePolicyTarget[] {
+  const targets = new Map<string, CronCodexRuntimePolicyTarget>();
+  for (const job of jobs) {
+    const agentId = normalizeOptionalString(job.agentId);
+    const payload =
+      job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
+        ? (job.payload as Record<string, unknown>)
+        : {};
+    const routes = [
+      ...collectLegacyOpenAICodexCronModelRoutes(payload),
+      ...collectLegacyOpenAICodexCronModelRoutes({ model: job.model }),
+    ];
+    for (const route of routes) {
+      if (
+        isBlockedLegacyCodexModelRef({
+          modelRef: route.legacyModelRef,
+          blockedModelIdentities,
+        })
+      ) {
+        continue;
+      }
+      const target = {
+        ...(agentId ? { agentId } : {}),
+        modelRef: route.canonicalModelRef,
+        legacyModelRef: route.legacyModelRef,
+      };
+      targets.set(cronCodexRuntimePolicyTargetKey(target), target);
+    }
+  }
+  return [...targets.values()];
+}
+
+type NormalizeCronStoreJobsResult = {
+  codexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[];
+  issues: CronStoreIssues;
+  unresolvedAgentTurnCommandPromptJobs: string[];
+  unresolvedAgentTurnShellToolPromptJobs: string[];
+  legacyScheduledToolPolicyJobs: string[];
+  invalidScheduledToolPolicyJobs: string[];
+  jobs: Array<Record<string, unknown>>;
+  mutated: boolean;
+  removedJobs: Array<{ job: Record<string, unknown>; reason: string; sourceIndex: number }>;
+};
+
+function incrementIssue(issues: CronStoreIssues, key: CronStoreIssueKey) {
+  issues[key] = (issues[key] ?? 0) + 1;
+}
+
+function normalizeStoredCronJobIdentity(raw: Record<string, unknown>): {
+  mutated: boolean;
+  legacyJobIdIssue: boolean;
+  missingIdIssue: boolean;
+  nonStringIdIssue: boolean;
+} {
+  const hadIdKey = "id" in raw;
+  const hadJobIdKey = "jobId" in raw;
+  const id = normalizeOptionalStringifiedId(raw.id);
+  const legacyJobId = normalizeOptionalStringifiedId(raw.jobId);
+  const canonicalId =
+    id ?? legacyJobId ?? resolveLegacyCronMigrationId(raw) ?? `cron-${randomUUID()}`;
+  const nonStringIdIssue = hadIdKey && raw.id != null && typeof raw.id !== "string";
+  const missingIdIssue = !id && !legacyJobId;
+  let mutated = false;
+
+  if (raw.id !== canonicalId) {
+    raw.id = canonicalId;
+    mutated = true;
+  }
+  if (hadJobIdKey) {
+    delete raw.jobId;
+    mutated = true;
+  }
+
+  return {
+    mutated,
+    legacyJobIdIssue: hadJobIdKey,
+    missingIdIssue,
+    nonStringIdIssue,
+  };
+}
+
+/** Normalize persisted cron jobs in place and report issues plus rows to quarantine. */
+export function normalizeStoredCronJobs(
+  jobs: Array<Record<string, unknown>>,
+  options: {
+    migrateCodexModelRefs?: boolean;
+    shouldMigrateCodexRuntimePolicyTarget?: (target: CronCodexRuntimePolicyTarget) => boolean;
+  } = {},
+): NormalizeCronStoreJobsResult {
+  const issues: CronStoreIssues = {};
+  const unresolvedAgentTurnCommandPromptJobs: string[] = [];
+  const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
+  const scheduledToolPolicyMigrations = createScheduledToolPolicyMigrationCollector();
+  const unresolvedAgentTurnPromptJobsByKind = {
+    commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
+    shellToolPrompt: unresolvedAgentTurnShellToolPromptJobs,
+  };
+  let mutated = false;
+  const keptJobs: Array<Record<string, unknown>> = [];
+  const removedJobs: NormalizeCronStoreJobsResult["removedJobs"] = [];
+  const codexRuntimePolicyTargets = new Map<string, CronCodexRuntimePolicyTarget>();
+
+  for (const [sourceIndex, raw] of jobs.entries()) {
+    const jobIssues = new Set<CronStoreIssueKey>();
+    const trackIssue = (key: CronStoreIssueKey) => {
+      if (jobIssues.has(key)) {
+        return;
+      }
+      jobIssues.add(key);
+      incrementIssue(issues, key);
+    };
+
+    const idNorm = normalizeStoredCronJobIdentity(raw);
+    if (idNorm.mutated) {
+      mutated = true;
+    }
+    if (idNorm.legacyJobIdIssue) {
+      trackIssue("jobId");
+    }
+    if (idNorm.missingIdIssue) {
+      trackIssue("missingId");
+    }
+    if (idNorm.nonStringIdIssue) {
+      trackIssue("nonStringId");
+    }
+
+    const state = raw.state;
+    if (!state || typeof state !== "object" || Array.isArray(state)) {
+      raw.state = {};
+      mutated = true;
+    }
+
+    if (typeof raw.schedule === "string") {
+      const expr = raw.schedule.trim();
+      raw.schedule = { kind: "cron", expr };
+      mutated = true;
+      trackIssue("legacyScheduleString");
+    }
+
+    const nameRaw = raw.name;
+    if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
+      raw.name = inferCronJobName({
+        schedule: raw.schedule as never,
+        payload: raw.payload as never,
+      });
+      mutated = true;
+    } else {
+      raw.name = nameRaw.trim();
+    }
+
+    const desc = normalizeOptionalString(raw.description);
+    if (raw.description !== desc) {
+      raw.description = desc;
+      mutated = true;
+    }
+
+    if ("sessionKey" in raw) {
+      const sessionKey =
+        typeof raw.sessionKey === "string" ? normalizeOptionalString(raw.sessionKey) : undefined;
+      if (raw.sessionKey !== sessionKey) {
+        raw.sessionKey = sessionKey;
+        mutated = true;
+      }
+    }
+
+    if (typeof raw.enabled !== "boolean") {
+      raw.enabled = true;
+      mutated = true;
+    }
+
+    const wakeModeRaw = normalizeOptionalLowercaseString(raw.wakeMode) ?? "";
+    if (wakeModeRaw === "next-heartbeat") {
+      if (raw.wakeMode !== "next-heartbeat") {
+        raw.wakeMode = "next-heartbeat";
+        mutated = true;
+      }
+    } else if (wakeModeRaw === "now") {
+      if (raw.wakeMode !== "now") {
+        raw.wakeMode = "now";
+        mutated = true;
+      }
+    } else {
+      raw.wakeMode = "now";
+      mutated = true;
+    }
+
+    const payload = raw.payload;
+    if (
+      (!payload || typeof payload !== "object" || Array.isArray(payload)) &&
+      inferPayloadIfMissing(raw)
+    ) {
+      mutated = true;
+      trackIssue("legacyTopLevelPayloadFields");
+    }
+
+    const payloadRecord =
+      raw.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
+        ? (raw.payload as Record<string, unknown>)
+        : null;
+
+    if (payloadRecord) {
+      if (normalizePayloadKind(payloadRecord)) {
+        mutated = true;
+        trackIssue("legacyPayloadKind");
+      }
+      if (!payloadRecord.kind) {
+        if (normalizeOptionalString(payloadRecord.message)) {
+          payloadRecord.kind = "agentTurn";
+          mutated = true;
+          trackIssue("legacyPayloadKind");
+        } else if (normalizeOptionalString(payloadRecord.text)) {
+          payloadRecord.kind = "systemEvent";
+          mutated = true;
+          trackIssue("legacyPayloadKind");
+        }
+      }
+      if (payloadRecord.kind === "agentTurn" && copyTopLevelAgentTurnFields(raw, payloadRecord)) {
+        mutated = true;
+      }
+      if (payloadRecord.kind === "systemEvent" && !normalizeOptionalString(payloadRecord.text)) {
+        const message = normalizeOptionalString(payloadRecord.message);
+        if (message) {
+          payloadRecord.text = message;
+          delete payloadRecord.message;
+          mutated = true;
+          trackIssue("legacyPayloadKind");
+        }
+      }
+    }
+
+    const hadLegacyTopLevelPayloadFields =
+      "model" in raw ||
+      "thinking" in raw ||
+      "timeoutSeconds" in raw ||
+      "allowUnsafeExternalContent" in raw ||
+      "message" in raw ||
+      "text" in raw ||
+      "command" in raw ||
+      "timeout" in raw;
+    const hadLegacyTopLevelDeliveryFields =
+      "deliver" in raw ||
+      "channel" in raw ||
+      "to" in raw ||
+      "threadId" in raw ||
+      "bestEffortDeliver" in raw ||
+      "provider" in raw;
+    if (hadLegacyTopLevelPayloadFields || hadLegacyTopLevelDeliveryFields) {
+      stripLegacyTopLevelFields(raw);
+      mutated = true;
+      if (hadLegacyTopLevelPayloadFields) {
+        trackIssue("legacyTopLevelPayloadFields");
+      }
+      if (hadLegacyTopLevelDeliveryFields) {
+        trackIssue("legacyTopLevelDeliveryFields");
+      }
+    }
+
+    if (payloadRecord) {
+      const hadLegacyPayloadProvider = Boolean(normalizeOptionalString(payloadRecord.provider));
+      const hadLegacyPayloadCodexModel = hasLegacyOpenAICodexCronModelRef(payloadRecord);
+      const hadLegacyTaskSuggestionToolName = hasLegacyTaskSuggestionToolList(
+        payloadRecord.toolsAllow,
+      );
+      const legacyCodexModelRoutes = collectLegacyOpenAICodexCronModelRoutes(payloadRecord);
+      const agentId = normalizeOptionalString(raw.agentId);
+      const shouldMigrateCodexModelRef = (modelRef: string, legacyModelRef: string) =>
+        options.shouldMigrateCodexRuntimePolicyTarget?.({
+          ...(agentId ? { agentId } : {}),
+          modelRef,
+          legacyModelRef,
+        }) !== false;
+      if (hadLegacyPayloadCodexModel) {
+        trackIssue("legacyPayloadCodexModel");
+      }
+      if (hadLegacyTaskSuggestionToolName) {
+        trackIssue("legacyTaskSuggestionToolName");
+      }
+      if (
+        migrateLegacyCronPayload(payloadRecord, {
+          migrateCodexModelRefs: options.migrateCodexModelRefs,
+          shouldMigrateCodexModelRef,
+        })
+      ) {
+        mutated = true;
+        if (hadLegacyPayloadProvider) {
+          trackIssue("legacyPayloadProvider");
+        }
+      }
+      if (hadLegacyPayloadCodexModel && options.migrateCodexModelRefs === true) {
+        for (const route of legacyCodexModelRoutes) {
+          const target = {
+            ...(agentId ? { agentId } : {}),
+            modelRef: route.canonicalModelRef,
+            legacyModelRef: route.legacyModelRef,
+          };
+          if (shouldMigrateCodexModelRef(route.canonicalModelRef, route.legacyModelRef)) {
+            codexRuntimePolicyTargets.set(cronCodexRuntimePolicyTargetKey(target), target);
+          }
+        }
+      }
+      if (migrateLegacyAgentTurnCommandPayload(payloadRecord)) {
+        mutated = true;
+        trackIssue("legacyAgentTurnCommandPayload");
+      } else {
+        const unresolvedPromptKind = classifyUnresolvedAgentTurnShellToolPrompt(payloadRecord);
+        if (unresolvedPromptKind) {
+          trackIssue("unresolvedAgentTurnShellToolPrompt");
+          const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
+          if (name) {
+            unresolvedAgentTurnPromptJobsByKind[unresolvedPromptKind].push(name);
+          }
+        }
+      }
+    }
+
+    const schedule = raw.schedule;
+    if (schedule && typeof schedule === "object" && !Array.isArray(schedule)) {
+      const sched = schedule as Record<string, unknown>;
+      const kind = normalizeOptionalLowercaseString(sched.kind) ?? "";
+      if (!kind && ("at" in sched || "atMs" in sched)) {
+        sched.kind = "at";
+        mutated = true;
+      }
+      const atRaw = normalizeOptionalString(sched.at) ?? "";
+      const atMsRaw = sched.atMs;
+      const parsedAtMs =
+        typeof atMsRaw === "number"
+          ? atMsRaw
+          : typeof atMsRaw === "string"
+            ? parseAbsoluteTimeMs(atMsRaw)
+            : atRaw
+              ? parseAbsoluteTimeMs(atRaw)
+              : null;
+      const parsedAt = parsedAtMs !== null ? timestampMsToIsoString(parsedAtMs) : undefined;
+      const fallbackAtMs = !parsedAt && atRaw ? parseAbsoluteTimeMs(atRaw) : null;
+      const fallbackAt = fallbackAtMs !== null ? timestampMsToIsoString(fallbackAtMs) : undefined;
+      const normalizedAt = parsedAt ?? fallbackAt;
+      if (normalizedAt) {
+        sched.at = normalizedAt;
+        if ("atMs" in sched) {
+          delete sched.atMs;
+        }
+        mutated = true;
+      }
+
+      const everyMsRaw = sched.everyMs;
+      const everyMsCoerced = coerceFiniteScheduleNumber(everyMsRaw);
+      const everyMs = everyMsCoerced !== undefined ? Math.floor(everyMsCoerced) : null;
+      if (everyMs !== null && everyMsRaw !== everyMs) {
+        sched.everyMs = everyMs;
+        mutated = true;
+      }
+      if ((kind === "every" || sched.kind === "every") && everyMs !== null) {
+        const anchorRaw = sched.anchorMs;
+        const anchorCoerced = coerceFiniteScheduleNumber(anchorRaw);
+        const normalizedAnchor =
+          anchorCoerced !== undefined
+            ? Math.max(0, Math.floor(anchorCoerced))
+            : typeof raw.createdAtMs === "number" && Number.isFinite(raw.createdAtMs)
+              ? Math.max(0, Math.floor(raw.createdAtMs))
+              : typeof raw.updatedAtMs === "number" && Number.isFinite(raw.updatedAtMs)
+                ? Math.max(0, Math.floor(raw.updatedAtMs))
+                : null;
+        if (normalizedAnchor !== null && anchorRaw !== normalizedAnchor) {
+          sched.anchorMs = normalizedAnchor;
+          mutated = true;
+        }
+      }
+
+      const exprRaw = normalizeOptionalString(sched.expr) ?? "";
+      const legacyCronRaw = normalizeOptionalString(sched.cron) ?? "";
+      let normalizedExpr = exprRaw;
+      if (!normalizedExpr && legacyCronRaw) {
+        normalizedExpr = legacyCronRaw;
+        sched.expr = normalizedExpr;
+        mutated = true;
+        trackIssue("legacyScheduleCron");
+      }
+      if (typeof sched.expr === "string" && sched.expr !== normalizedExpr) {
+        sched.expr = normalizedExpr;
+        mutated = true;
+      }
+      if ("cron" in sched) {
+        delete sched.cron;
+        mutated = true;
+        trackIssue("legacyScheduleCron");
+      }
+      if ((kind === "cron" || sched.kind === "cron") && normalizedExpr) {
+        const explicitStaggerMs = normalizeCronStaggerMs(sched.staggerMs);
+        const defaultStaggerMs = resolveDefaultCronStaggerMs(normalizedExpr);
+        const targetStaggerMs = explicitStaggerMs ?? defaultStaggerMs;
+        if (targetStaggerMs === undefined) {
+          if ("staggerMs" in sched) {
+            delete sched.staggerMs;
+            mutated = true;
+          }
+        } else if (sched.staggerMs !== targetStaggerMs) {
+          sched.staggerMs = targetStaggerMs;
+          mutated = true;
+        }
+      }
+    }
+
+    const delivery = raw.delivery;
+    if (delivery && typeof delivery === "object" && !Array.isArray(delivery)) {
+      const modeRaw = (delivery as { mode?: unknown }).mode;
+      if (typeof modeRaw === "string") {
+        const lowered = normalizeOptionalLowercaseString(modeRaw) ?? "";
+        if (lowered === "deliver") {
+          (delivery as { mode?: unknown }).mode = "announce";
+          mutated = true;
+          trackIssue("legacyDeliveryMode");
+        }
+      } else if (modeRaw === undefined || modeRaw === null) {
+        (delivery as { mode?: unknown }).mode = "announce";
+        mutated = true;
+      }
+    }
+
+    const isolation = raw.isolation;
+    if (isolation && typeof isolation === "object" && !Array.isArray(isolation)) {
+      delete raw.isolation;
+      mutated = true;
+    }
+
+    const payloadKind =
+      payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
+    const rawSessionTarget = normalizeOptionalString(raw.sessionTarget) ?? "";
+    const loweredSessionTarget = normalizeLowercaseStringOrEmpty(rawSessionTarget);
+    if (loweredSessionTarget === "main" || loweredSessionTarget === "isolated") {
+      if (raw.sessionTarget !== loweredSessionTarget) {
+        raw.sessionTarget = loweredSessionTarget;
+        mutated = true;
+      }
+    } else if (loweredSessionTarget.startsWith("session:")) {
+      const customSessionId = rawSessionTarget.slice(8).trim();
+      if (customSessionId) {
+        const normalizedSessionTarget = `session:${customSessionId}`;
+        if (raw.sessionTarget !== normalizedSessionTarget) {
+          raw.sessionTarget = normalizedSessionTarget;
+          mutated = true;
+        }
+      }
+    } else if (loweredSessionTarget === "current") {
+      if (raw.sessionTarget !== "isolated") {
+        raw.sessionTarget = "isolated";
+        mutated = true;
+      }
+    } else {
+      const inferredSessionTarget =
+        payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script"
+          ? "isolated"
+          : "main";
+      if (raw.sessionTarget !== inferredSessionTarget) {
+        raw.sessionTarget = inferredSessionTarget;
+        mutated = true;
+      }
+    }
+
+    const sessionTarget = normalizeOptionalLowercaseString(raw.sessionTarget) ?? "";
+    const isIsolatedRunnablePayload =
+      sessionTarget === "isolated" ||
+      sessionTarget === "current" ||
+      sessionTarget.startsWith("session:") ||
+      (sessionTarget === "" &&
+        (payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script"));
+    const hasDelivery = delivery && typeof delivery === "object" && !Array.isArray(delivery);
+    const normalizedLegacy = normalizeLegacyDeliveryInput({
+      delivery: hasDelivery ? (delivery as Record<string, unknown>) : null,
+      payload: payloadRecord,
+    });
+
+    if (
+      isIsolatedRunnablePayload &&
+      (payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script")
+    ) {
+      if (!hasDelivery && normalizedLegacy.delivery) {
+        raw.delivery = normalizedLegacy.delivery;
+        mutated = true;
+      } else if (!hasDelivery) {
+        raw.delivery = { mode: "announce" };
+        mutated = true;
+      } else if (normalizedLegacy.mutated && normalizedLegacy.delivery) {
+        raw.delivery = normalizedLegacy.delivery;
+        mutated = true;
+      }
+    } else if (normalizedLegacy.mutated && normalizedLegacy.delivery) {
+      raw.delivery = normalizedLegacy.delivery;
+      mutated = true;
+    }
+
+    const scheduledPolicyMutated = scheduledToolPolicyMigrations.migrate(raw, () =>
+      trackIssue("migratedScheduledToolPolicy"),
+    );
+    mutated ||= scheduledPolicyMutated;
+
+    const invalidPersistedReason = getInvalidPersistedCronJobReason(raw);
+    if (
+      invalidPersistedReason === "missing-schedule" ||
+      invalidPersistedReason === "invalid-schedule"
+    ) {
+      trackIssue("invalidSchedule");
+      removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
+      mutated = true;
+      continue;
+    }
+    if (
+      invalidPersistedReason === "missing-payload" ||
+      invalidPersistedReason === "invalid-payload"
+    ) {
+      trackIssue("invalidPayload");
+      removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
+      mutated = true;
+      continue;
+    }
+    keptJobs.push(raw);
+  }
+
+  if (keptJobs.length !== jobs.length) {
+    jobs.splice(0, jobs.length, ...keptJobs);
+  }
+
+  return {
+    codexRuntimePolicyTargets: [...codexRuntimePolicyTargets.values()],
+    issues,
+    unresolvedAgentTurnCommandPromptJobs,
+    unresolvedAgentTurnShellToolPromptJobs,
+    legacyScheduledToolPolicyJobs: scheduledToolPolicyMigrations.legacyJobs,
+    invalidScheduledToolPolicyJobs: scheduledToolPolicyMigrations.invalidJobs,
+    jobs,
+    mutated,
+    removedJobs,
+  };
+}

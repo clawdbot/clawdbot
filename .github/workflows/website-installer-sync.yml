@@ -1,0 +1,361 @@
+name: Website Installer Sync
+
+on:
+  pull_request:
+    paths:
+      - scripts/install.sh
+      - scripts/install-cli.sh
+      - scripts/install.ps1
+      - .github/workflows/website-installer-sync.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/install.sh
+      - scripts/install-cli.sh
+      - scripts/install.ps1
+      - .github/workflows/website-installer-sync.yml
+  workflow_dispatch:
+    inputs:
+      sync_website:
+        description: Sync openclaw.ai after verification
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-installer-sync-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install ShellCheck
+        run: sudo apt-get update -y && sudo apt-get install -y shellcheck
+
+      - name: Shell syntax
+        run: bash -n scripts/install.sh scripts/install-cli.sh
+
+      - name: ShellCheck
+        run: shellcheck -e SC1091 scripts/install.sh scripts/install-cli.sh
+
+      - name: Installer help and dry-runs
+        run: |
+          bash scripts/install.sh --help >/tmp/install-help.txt
+          bash scripts/install.sh --dry-run --no-onboard --no-prompt
+          bash scripts/install-cli.sh --help >/tmp/install-cli-help.txt
+
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          $errors = $null
+          $null = [System.Management.Automation.PSParser]::Tokenize(
+            (Get-Content -Raw scripts/install.ps1),
+            [ref]$errors
+          )
+          if ($errors -and $errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+  linux-docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: install.sh in Docker
+        run: |
+          timeout --kill-after=30s 20m docker run --rm \
+            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            node:24-bookworm-slim \
+            bash -lc 'bash /tmp/install.sh --version latest && openclaw --version'
+
+      - name: install-cli.sh in Docker
+        run: |
+          timeout --kill-after=30s 20m docker run --rm \
+            -e OPENCLAW_NO_ONBOARD=1 \
+            -e OPENCLAW_NO_PROMPT=1 \
+            -v "$PWD/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
+            node:24-bookworm-slim \
+            bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
+
+  linux-build-tools-failure:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: install.sh reports build-tool failures honestly
+        run: |
+          timeout --kill-after=10s 5m docker run --rm -i \
+            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            debian:bookworm \
+            bash -s <<'CONTAINER'
+          set -euo pipefail
+          export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+          cat > /usr/local/sbin/apt-get <<'STUB'
+          #!/bin/bash
+          for arg in "$@"; do
+            if [[ "$arg" == "build-essential" ]]; then
+              : > /tmp/build-tools-stub-triggered
+              echo "E: simulated package manager failure" >&2
+              exit 100
+            fi
+          done
+          for arg in "$@"; do
+            if [[ "$arg" == "update" ]]; then
+              exit 0
+            fi
+          done
+          echo "unexpected apt-get call: $*" >&2
+          exit 99
+          STUB
+
+          cat > /usr/local/bin/curl <<'STUB'
+          #!/bin/sh
+          echo "network blocked by failure-propagation lane" >&2
+          exit 97
+          STUB
+          chmod +x /usr/local/sbin/apt-get /usr/local/bin/curl
+
+          installer_status=0
+          bash /tmp/install.sh --no-onboard --no-prompt </dev/null > /tmp/out.log 2>&1 || installer_status=$?
+          cat /tmp/out.log
+
+          if [[ ! -f /tmp/build-tools-stub-triggered ]]; then
+            echo "stub did not trigger" >&2
+            exit 2
+          fi
+          if ! grep -aFq "Installing build tools failed" /tmp/out.log; then
+            echo "installer did not report the simulated build-tools failure" >&2
+            exit 2
+          fi
+          if grep -aFq "Build tools installed" /tmp/out.log; then
+            echo "REGRESSION: installer claimed success after failure" >&2
+            exit 1
+          fi
+          if (( installer_status == 0 )); then
+            echo "installer unexpectedly completed despite blocked package and network access" >&2
+            exit 3
+          fi
+          echo "ok: failure reported honestly"
+          CONTAINER
+
+  linux-non-root:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: install.sh as a non-root user
+        run: |
+          timeout --kill-after=30s 20m docker run --rm -i \
+            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            node:24-bookworm-slim \
+            bash -s <<'CONTAINER'
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq sudo
+          useradd --create-home --shell /bin/bash installer
+          printf '%s\n' 'installer ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/installer
+          chmod 0440 /etc/sudoers.d/installer
+
+          sudo -u installer -H bash <<'USER'
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          sudo -n true
+          initial_prefix="$(npm config get prefix)"
+          if [[ -w "$initial_prefix" || -w "$initial_prefix/lib" ]]; then
+            echo "initial npm prefix is writable; relocation path would not run" >&2
+            exit 1
+          fi
+          bash /tmp/install.sh --install-method npm --no-onboard --no-prompt --version latest
+          test "$(npm config get prefix)" = "$HOME/.npm-global"
+          "$HOME/.npm-global/bin/openclaw" --version
+          grep -Fxq 'export PATH="$HOME/.npm-global/bin:$PATH"' "$HOME/.bashrc"
+          echo "ok: non-root prefix relocation and bash PATH persistence verified"
+          USER
+          CONTAINER
+
+  fedora-installer:
+    name: Fedora installer (${{ matrix.user }})
+    strategy:
+      fail-fast: false
+      matrix:
+        user: [root, non-root]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: install.sh on Fedora
+        env:
+          INSTALL_USER: ${{ matrix.user }}
+        run: |
+          if [[ "$INSTALL_USER" == "root" ]]; then
+            timeout --kill-after=30s 20m docker run --rm -i \
+              -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+              fedora:44 \
+              bash -s <<'CONTAINER'
+          set -euo pipefail
+          bash /tmp/install.sh --install-method npm --no-onboard --no-prompt --version latest
+          openclaw --version
+          CONTAINER
+          else
+            timeout --kill-after=30s 20m docker run --rm -i \
+              -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+              fedora:44 \
+              bash -s <<'CONTAINER'
+          set -euo pipefail
+          dnf install -y -q sudo shadow-utils
+          useradd --create-home --shell /bin/bash installer
+          printf '%s\n' 'installer ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/installer
+          chmod 0440 /etc/sudoers.d/installer
+
+          sudo -u installer -H bash <<'USER'
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          sudo -n true
+          bash /tmp/install.sh --install-method npm --no-onboard --no-prompt --version latest
+          test "$(npm config get prefix)" = "$HOME/.npm-global"
+          "$HOME/.npm-global/bin/openclaw" --version
+          grep -Fxq 'export PATH="$HOME/.npm-global/bin:$PATH"' "$HOME/.bashrc"
+          echo "ok: Fedora non-root install and PATH persistence verified"
+          USER
+          CONTAINER
+          fi
+
+  macos-installer:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      - name: install.sh dry run
+        run: bash scripts/install.sh --dry-run --no-onboard --no-prompt
+
+      - name: install.sh on macOS
+        env:
+          OPENCLAW_NO_ONBOARD: "1"
+          OPENCLAW_NO_PROMPT: "1"
+        run: |
+          bash scripts/install.sh --no-onboard --no-prompt --version latest
+          openclaw --version
+
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      - name: install.ps1 dry run
+        shell: pwsh
+        run: .\scripts\install.ps1 -DryRun -NoOnboard -InstallMethod npm
+
+  sync-website:
+    needs:
+      - static
+      - linux-docker
+      - linux-build-tools-failure
+      - linux-non-root
+      - fedora-installer
+      - macos-installer
+      - windows-installer
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.sync_website)
+    runs-on: ubuntu-24.04
+    env:
+      OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}
+    steps:
+      - name: Skip website sync without token
+        if: env.OPENCLAW_GH_TOKEN == ''
+        run: echo "OPENCLAW_GH_TOKEN is not configured; installer verification passed, skipping website sync."
+
+      - name: Checkout OpenClaw
+        if: env.OPENCLAW_GH_TOKEN != ''
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          path: openclaw
+
+      - name: Checkout openclaw.ai
+        if: env.OPENCLAW_GH_TOKEN != ''
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: openclaw/openclaw.ai
+          ref: main
+          token: ${{ env.OPENCLAW_GH_TOKEN }}
+          path: openclaw.ai
+
+      - name: Sync installer scripts
+        if: env.OPENCLAW_GH_TOKEN != ''
+        run: |
+          cp openclaw/scripts/install.sh openclaw.ai/public/install.sh
+          cp openclaw/scripts/install-cli.sh openclaw.ai/public/install-cli.sh
+          cp openclaw/scripts/install.ps1 openclaw.ai/public/install.ps1
+          rm -f openclaw.ai/public/install.cmd
+          chmod +x openclaw.ai/public/install.sh openclaw.ai/public/install-cli.sh
+
+      - name: Check for changes
+        if: env.OPENCLAW_GH_TOKEN != ''
+        id: changes
+        working-directory: openclaw.ai
+        run: |
+          if git diff --quiet -- public/install.sh public/install-cli.sh public/install.ps1 public/install.cmd; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Bun
+        if: steps.changes.outputs.changed == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      - name: Install ShellCheck
+        if: steps.changes.outputs.changed == 'true'
+        run: sudo apt-get update -y && sudo apt-get install -y shellcheck
+
+      - name: Verify website with synced installers
+        if: steps.changes.outputs.changed == 'true'
+        working-directory: openclaw.ai
+        run: |
+          bash -n public/install.sh public/install-cli.sh
+          shellcheck -e SC1091 public/install.sh public/install-cli.sh
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Commit and push website sync
+        if: steps.changes.outputs.changed == 'true'
+        working-directory: openclaw.ai
+        run: |
+          git config user.name "openclaw-installer-sync[bot]"
+          git config user.email "openclaw-installer-sync[bot]@users.noreply.github.com"
+          git add public/install.sh public/install-cli.sh public/install.ps1
+          if git ls-files --error-unmatch public/install.cmd >/dev/null 2>&1; then
+            git add -u -- public/install.cmd
+          fi
+          git commit -m "chore: sync installers from openclaw ${GITHUB_SHA::12}"
+          git pull --rebase origin main
+          git push origin HEAD:main

@@ -1,0 +1,85 @@
+{
+  "name": "@openclaw/msteams",
+  "version": "2026.8.1",
+  "description": "OpenClaw Microsoft Teams channel plugin for bot conversations.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "@azure/identity": "4.13.1",
+    "@microsoft/teams.api": "2.0.14",
+    "@microsoft/teams.apps": "2.0.14",
+    "express": "5.2.1",
+    "typebox": "1.3.6",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@microsoft/teams.common": "2.0.14",
+    "@openclaw/plugin-sdk": "workspace:*",
+    "jose": "6.2.4",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.8.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "msteams",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "MSTEAMS_APP_ID",
+            "MSTEAMS_APP_PASSWORD",
+            "MSTEAMS_TENANT_ID"
+          ]
+        }
+      },
+      "label": "Microsoft Teams",
+      "selectionLabel": "Microsoft Teams (Teams SDK)",
+      "docsPath": "/channels/msteams",
+      "docsLabel": "msteams",
+      "blurb": "Teams SDK; enterprise support.",
+      "aliases": [
+        "teams"
+      ],
+      "order": 60,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "hybrid",
+        "groupAllowFromFallbackToAllowFrom": true,
+        "warnOnEmptyGroupSenderAllowlist": true
+      },
+      "setup": {
+        "fields": []
+      }
+    },
+    "install": {
+      "npmSpec": "@openclaw/msteams",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.8.1"
+    },
+    "build": {
+      "openclawVersion": "2026.8.1",
+      "runtimeFormat": "cjs"
+    },
+    "release": {
+      "bundleRuntimeDependencies": false,
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

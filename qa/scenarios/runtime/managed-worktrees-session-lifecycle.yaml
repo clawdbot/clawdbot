@@ -1,0 +1,27 @@
+title: Managed worktrees session-owner lifecycle
+
+scenario:
+  id: managed-worktrees-session-lifecycle
+  surface: runtime
+  category: agent-runtime.agent-turn-execution
+  coverage:
+    primary:
+      - agent-runtime.managed-worktrees-session-lifecycle
+  objective: Prove the real child gateway creates and persists a session-owned managed worktree, runs a turn from it, protects it during live-session garbage collection, snapshots and removes clean and dirty checkouts on session deletion, restores dirty state without synthetic branch history, and reports locked checkouts as preserved.
+  successCriteria:
+    - sessions.create returns the managed checkout and sessions.list persists its id, branch, and repository root while a real mock-provider turn remains usable.
+    - Garbage collection returns its structured result while preserving the live session-owned worktree.
+    - Clean and dirty session deletion remove the checkout with a pinned restorable snapshot, and restore rebuilds dirty untracked state without adding the synthetic snapshot commit to branch history.
+    - A foreign git worktree lock makes session deletion report worktreePreserved with the checkout still present.
+  docsRefs:
+    - docs/concepts/managed-worktrees.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/gateway/server-methods/sessions-create.ts
+    - src/gateway/server-methods/sessions-delete.ts
+    - src/agents/worktrees/service.ts
+    - test/e2e/qa-lab/runtime/managed-worktrees-session-lifecycle-product-proof.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/managed-worktrees-session-lifecycle-product-proof.e2e.test.ts
+    summary: Run the real child gateway through session worktree creation, turn execution, live-owner garbage collection, snapshot deletion and restoration, and locked-checkout preservation.

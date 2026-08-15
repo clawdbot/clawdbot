@@ -1,0 +1,906 @@
+---
+summary: "Secrets management: SecretRef contract, shared secret store, runtime snapshots, and safe one-way scrubbing"
+read_when:
+  - Configuring SecretRefs for provider credentials and `auth-profiles.json` refs
+  - Storing team-wide secrets and environment values in the shared SQLite store
+  - Operating secrets reload, audit, configure, and apply safely in production
+  - Understanding startup fail-fast, inactive-surface filtering, and last-known-good behavior
+title: "Secrets management"
+sidebarTitle: "Secrets management"
+---
+
+OpenClaw supports additive SecretRefs so supported credentials do not need to live as plaintext in configuration.
+
+<Note>
+Plaintext still works. SecretRefs are opt-in per credential.
+</Note>
+
+<Warning>
+Plaintext credentials remain agent-readable when they sit in files the agent can inspect, including `openclaw.json`, `.env`, retired auth-profile JSON archives, or generated `agents/*/agent/models.json` files. SecretRefs reduce that local blast radius once every supported credential is migrated and `openclaw secrets audit --check` reports no plaintext residue.
+</Warning>
+
+## Runtime model
+
+- Secrets resolve into an in-memory runtime snapshot, eagerly during activation, not lazily on request paths.
+- Cold Gateway startup isolates a retryable SecretRef failure to a known non-Gateway owner when that owner supports isolation. Mapped owner classes include model providers and skills, media/TTS/cron providers, eligible auth profiles, per-agent memory, sandbox SSH, channel accounts, and manifest-declared plugin routes. The Gateway starts, records the owner as configured-unavailable, and emits a redacted degradation warning. Gateway ingress auth, structurally invalid refs or resolved values, fail-closed owners, and refs whose runtime owner is not mapped still fail startup.
+- Reload validates each mapped owner independently, then publishes one atomic snapshot. Healthy owners refresh. An eligible failed owner keeps its last-known-good value and becomes stale only when its ref identities, provider definitions, and complete non-secret owner contract are unchanged; a changed or new failed owner becomes cold. A strict failure rejects the reload and preserves the active snapshot.
+- Policy violations (for example an OAuth-mode auth profile combined with SecretRef input) fail activation before the runtime swap.
+- Runtime requests read only the active in-memory snapshot. Model-provider SecretRef credentials pass through auth storage and stream options as process-local sentinels until egress. Outbound delivery paths (Discord reply/thread delivery, Telegram action sends) also read that snapshot and do not re-resolve refs per send.
+- Read-only channel capability discovery evaluates accounts independently. A configured-but-unavailable account does not hide healthy sibling accounts' message actions, while direct sends through the unavailable account still fail closed.
+
+This keeps secret-provider outages off hot request paths.
+
+Gateway ingress protection, structurally invalid config or resolved values, policy violations, and unknown ownership still fail closed. Isolated owners never fall through to a lower-precedence credential source.
+
+## Egress-time injection (sentinels)
+
+For model-provider credentials backed by SecretRefs, OpenClaw mints an opaque, process-local sentinel during model-auth resolution. Auth storage, stream options, SDK configuration, logs, error objects, and most runtime introspection therefore see a value such as `oc-sent-v2.<authenticated-ciphertext>.end`, not the provider credential. The guarded model fetch and managed local-provider health probes replace known sentinels in URL and header values immediately before each request leaves the process.
+
+Unknown sentinel-shaped values fail closed before network activity. OpenClaw refuses to send the request rather than forwarding an unresolved sentinel to a provider. Resolved secret values are also registered for exact-value log redaction as a defense in depth measure.
+
+Provider adapters use the latest injection point their SDK supports:
+
+- SDKs with a custom fetch option receive OpenClaw's guarded fetch, so the SDK retains the sentinel.
+- SDKs without a custom fetch option unwrap the sentinel immediately before client construction. Plugin-owned provider streams and agent harnesses unwrap at the final core-owned handoff because those transports do not share OpenClaw's guarded fetch.
+
+Sentinels reduce plaintext exposure across the model-call chain, but they are not process isolation. The real value still exists in same-process memory and appears at the final adapter boundary. Plain environment credentials that are not configured through SecretRefs remain plaintext and are outside this mechanism.
+
+Set `OPENCLAW_SECRET_SENTINELS=off` (also accepts `0` or `false`, case-insensitive) to disable sentinel minting during incident response or compatibility troubleshooting. The kill switch does not disable exact-value redaction registration.
+
+## Agent-access boundary
+
+SecretRefs stop credentials from being persisted in config and generated model files, but they are not a process-isolation boundary. A plaintext credential left on disk in a path the agent can read is still readable via file or shell tools, bypassing API-level redaction.
+
+For production deployments where agent-accessible files are in scope, treat migration as complete only when all of these hold:
+
+- Supported credentials use SecretRefs instead of plaintext values.
+- Legacy plaintext residue is scrubbed from `openclaw.json`, the SQLite auth-profile store, `.env`, and generated `models.json` files. Retired auth JSON is doctor-owned migration input and is never rewritten by `secrets apply`.
+- `openclaw secrets audit --check` is clean after migration.
+- Any remaining unsupported or rotating credentials are protected by OS isolation, container isolation, or an external credential proxy.
+
+This is why the audit/configure/apply workflow is a security migration gate, not just a convenience helper.
+
+<Warning>
+SecretRefs do not make arbitrary readable files safe. Backups, copied configs, old generated model catalogs, and unsupported credential classes stay production secrets until deleted, moved outside the agent trust boundary, or isolated separately.
+</Warning>
+
+## Active-surface filtering
+
+SecretRefs are validated only on effectively active surfaces:
+
+- **Enabled surfaces**: retryable failures for mapped, isolatable owners enter cold or stale degradation. Strict, fail-closed, Gateway-required, or unmapped failures block startup/reload.
+- **Inactive surfaces**: unresolved refs do not block startup/reload; they emit a non-fatal `SECRETS_REF_IGNORED_INACTIVE_SURFACE` diagnostic.
+
+<Accordion title="Examples of inactive surfaces">
+- Disabled channel/account entries.
+- Top-level channel credentials that no enabled account inherits.
+- Disabled tool/feature surfaces.
+- Web search provider-specific keys not selected by `tools.web.search.provider`. In auto mode (provider unset), keys are consulted by precedence for auto-detection until one resolves; after selection, non-selected provider keys are inactive.
+- Sandbox SSH auth material (`agents.defaults.sandbox.ssh.identityData`, `certificateData`, `knownHostsData`, plus per-agent overrides) is active only when the effective sandbox backend is `ssh` and sandbox mode is not `off`, for the default agent or an enabled agent.
+- `gateway.remote.token` / `gateway.remote.password` SecretRefs are active if any of these hold:
+  - `gateway.mode=remote`
+  - `gateway.remote.url` is configured
+  - `gateway.tailscale.mode` is `serve` or `funnel`
+  - In local mode without those remote surfaces: `gateway.remote.token` is active when token auth can win and no env/auth token is configured; `gateway.remote.password` is active only when password auth can win and no env/auth password is configured.
+- Active `gateway.auth.token` / `gateway.auth.password` SecretRefs stay authoritative over `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`; environment credentials are fallbacks when the corresponding local config input is absent.
+
+</Accordion>
+
+## Gateway auth surface diagnostics
+
+When a SecretRef is set on `gateway.auth.token`, `gateway.auth.password`, `gateway.remote.token`, or `gateway.remote.password`, gateway startup/reload logs the surface state under code `SECRETS_GATEWAY_AUTH_SURFACE`:
+
+- `active`: the SecretRef is part of the effective auth surface and must resolve.
+- `inactive`: another auth surface wins, or remote auth is disabled/not active.
+
+The log entry includes the reason the active-surface policy used.
+
+## Onboarding reference preflight
+
+In interactive onboarding, choosing SecretRef storage runs preflight validation before saving:
+
+- Env refs: validates the env var name and confirms a non-empty value is visible during setup.
+- Provider refs (`file`, `exec`, or `store`): validates provider selection, resolves `id`, and checks the resolved value type.
+- Quickstart flow: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before probe/dashboard bootstrap (for `env`, `file`, `exec`, and `store` refs) using the same fail-fast gate.
+
+Validation failure shows the error and lets you retry.
+
+## SecretRef contract
+
+One object shape everywhere:
+
+```json5
+{ source: "env" | "file" | "exec" | "store", provider: "default", id: "..." }
+```
+
+<Tabs>
+  <Tab title="env">
+    ```json5
+    { source: "env", provider: "default", id: "OPENAI_API_KEY" }
+    ```
+
+    Shorthand strings are also accepted on SecretInput fields:
+
+    ```json5
+    "${OPENAI_API_KEY}"
+    "$OPENAI_API_KEY"
+    ```
+
+    Validation:
+
+    - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
+    - `id` must match `^[A-Z][A-Z0-9_]{0,127}$`
+
+  </Tab>
+  <Tab title="file">
+    ```json5
+    { source: "file", provider: "filemain", id: "/providers/openai/apiKey" }
+    ```
+
+    Validation:
+
+    - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
+    - `id` must be an absolute JSON pointer (`/...`), or the literal `value` for `singleValue` providers
+    - RFC 6901 escaping in segments: `~` becomes `~0`, `/` becomes `~1`
+
+  </Tab>
+  <Tab title="exec">
+    ```json5
+    { source: "exec", provider: "vault", id: "providers/openai/apiKey#value" }
+    ```
+
+    Validation:
+
+    - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
+    - `id` must match `^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$` (supports selectors such as `secret#json_key`)
+    - `id` must not contain `.` or `..` as slash-delimited path segments (for example `a/../b` is rejected)
+
+  </Tab>
+  <Tab title="store">
+    ```json5
+    { source: "store", provider: "default", id: "OPENAI_API_KEY" }
+    ```
+
+    Validation:
+
+    - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
+    - `id` uses the environment-name grammar `^[A-Z][A-Z0-9_]{0,127}$`
+    - This release resolves only the Gateway-wide team scope
+
+  </Tab>
+</Tabs>
+
+## Provider config
+
+Define providers under `secrets.providers`:
+
+```json5
+{
+  secrets: {
+    providers: {
+      default: { source: "env" },
+      teamstore: { source: "store" },
+      filemain: {
+        source: "file",
+        path: "~/.openclaw/secrets.json",
+        mode: "json", // or "singleValue"
+      },
+      vault: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-vault-resolver",
+        args: ["--profile", "prod"],
+        passEnv: ["PATH", "VAULT_ADDR"],
+        jsonOnly: true,
+      },
+      "team-secrets": {
+        source: "exec",
+        pluginIntegration: {
+          pluginId: "acme-secrets",
+          integrationId: "secret-store",
+        },
+      },
+    },
+    defaults: {
+      env: "default",
+      file: "filemain",
+      exec: "vault",
+      store: "teamstore",
+    },
+  },
+}
+```
+
+Provider aliases are source-specific. A matching explicit provider entry wins; if an `env` or `store` default alias is also used by an entry for another source, that source's built-in provider wins. Non-default aliases and `file` or `exec` providers must resolve to an explicit entry with the matching source.
+
+<Accordion title="Env provider">
+- Optional exact-name allowlist via `allowlist`.
+- Missing or empty env values fail resolution.
+
+</Accordion>
+
+<Accordion title="File provider">
+- Reads the local file at `path`.
+- `mode: "json"` (default) expects a JSON object payload and resolves `id` as a JSON pointer.
+- `mode: "singleValue"` expects ref id `"value"` and returns the raw file contents (trailing newline stripped).
+- Path must pass ownership/permission checks; `timeoutMs` (default 5000) and `maxBytes` (default 1 MiB) bound the read.
+- Windows fail-closed: if ACL verification is unavailable for the path, resolution fails. Move the secret to a path whose ACLs OpenClaw can verify; there is no provider-level bypass.
+
+</Accordion>
+
+<Accordion title="Exec provider">
+- Runs the configured absolute binary path directly, no shell.
+- `command` must be a regular file, not a symlink. For package-manager shims, resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute path. Use `trustedDirs` to restrict executables to approved directories.
+- Supports `timeoutMs` (default 5000), `noOutputTimeoutMs` (default equals `timeoutMs`), `maxOutputBytes` (default 1 MiB), `env`/`passEnv` allowlist, and `trustedDirs`.
+- `jsonOnly` defaults to `true`. With `jsonOnly: false` and a single requested id, plain non-JSON stdout is accepted as that id's value.
+- Windows fail-closed: if ACL verification is unavailable for the command path, resolution fails. Use a command path whose ACLs OpenClaw can verify; there is no provider-level bypass.
+- Plugin-managed exec providers can use `pluginIntegration` instead of a copied `command`/`args`. OpenClaw resolves the current command details from the installed plugin manifest during startup/reload; if the plugin is disabled, removed, untrusted, or no longer declares the integration, active SecretRefs on that provider fail closed.
+
+Request payload (stdin):
+
+```json
+{ "protocolVersion": 1, "provider": "vault", "ids": ["providers/openai/apiKey"] }
+```
+
+Response payload (stdout):
+
+```jsonc
+{ "protocolVersion": 1, "values": { "providers/openai/apiKey": "<openai-api-key>" } } // pragma: allowlist secret
+```
+
+Optional per-id errors:
+
+```json
+{
+  "protocolVersion": 1,
+  "values": {},
+  "errors": { "providers/openai/apiKey": { "code": "NOT_FOUND" } }
+}
+```
+
+`code` is an optional machine-readable diagnostic. OpenClaw displays the recognized
+codes `NOT_FOUND` and `AMBIGUOUS_DUPLICATE_KEY` with the provider and ref id. Other
+codes and free-form fields such as `message` are accepted for protocol-v1 compatibility
+but are not displayed because resolver output can contain credential material.
+
+</Accordion>
+
+<Accordion title="Store provider">
+- Reads values from OpenClaw's shared state SQLite database.
+- The provider has no connection settings. `secrets.defaults.store` selects its default alias.
+- Only team scope is resolved in this release. Identity scope is reserved for a later release.
+
+</Accordion>
+
+## Shared secret store
+
+The shared secret store is a Gateway-wide, team-scoped place for secrets and environment values that should be available to every Gateway process using the same state database. Manage it from **Settings → Secrets** in the Control UI or locally with `openclaw secrets store`. The CLI commands operate on the local state database and do not accept Gateway URL or token options.
+
+Entries have a `secret` or `env` kind. The kind controls CLI disclosure, not SecretRef resolution:
+
+- `secret` values are write-only after saving. Gateway list results, the Control UI, and CLI list/get output never include them; there is no reveal RPC.
+- `env` values remain visible to administrators in the Control UI and can be returned by `store list` and `store get`. Team-scoped `env` entries are also added to the environment of commands run by OpenClaw's own exec tool, after inherited process values and before explicit per-call env. Protected host keys and sandbox-blocked credential names are ignored with a visible warning. This covers direct tool calls, Code Mode (whose guest reaches shell through the same `openclaw:core:exec` tool), sandboxed exec, and `node` -hosted exec.
+
+It does not cover commands executed inside a provider-native harness — the Codex app-server and its sandbox exec-server, or ACP children such as Claude Code. Those harnesses assemble their own child environment and never pass through OpenClaw's exec preparation, so store entries are absent there. The store snapshot is also read once per agent run, so entries added mid-run apply from the next run onward.
+
+By default, `secret` entries are never injected into subprocess environments. When the default-off [secret egress proxy](#secret-egress-proxy) is enabled, Gateway-hosted exec commands receive process-local sentinels instead of plaintext values.
+
+Names use the same uppercase grammar as env SecretRefs, and each UTF-8 value is limited to 64 KiB (65,536 bytes). A `secret` entry must carry a value; empty secrets are rejected because they would surface only as a confusing downstream auth failure. `env` entries may be empty. This supports PEM keys and service-account JSON without inheriting the smaller limits of ordinary environment variables.
+
+Reference an entry from `openclaw.json` with the `store` source:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: {
+        apiKey: { source: "store", provider: "default", id: "OPENAI_API_KEY" },
+      },
+    },
+  },
+}
+```
+
+Control UI set/delete operations automatically refresh the active secrets runtime when the changed name is referenced by a `store` SecretRef in the active source config. Names that are not referenced skip that work. Direct CLI writes remain an offline/local path; after changing a config-referenced value with the CLI, run `openclaw secrets reload` so the active in-memory snapshot picks it up.
+
+<Warning>
+Store values are not encrypted at rest. They are stored unencrypted in the shared state SQLite database (`state/openclaw.sqlite`), protected by the same `0600` file and `0700` directory permissions as other credentials in that database. Operators who need stronger storage isolation should use an external exec provider such as the [1Password plugin](/plugins/onepassword) or [Vault SecretRefs](/plugins/vault).
+</Warning>
+
+## Secret egress proxy
+
+The secret egress proxy lets Gateway-hosted agent subprocesses use shared-store `secret` entries without receiving their plaintext. OpenClaw puts the existing authenticated sentinel in the subprocess environment, then a Gateway-owned loopback proxy replaces it in request URLs, headers, and streamed bodies immediately before egress.
+
+Each secret must also name the exact HTTPS hosts where substitution is allowed. Hostnames are stored lowercase in ASCII/punycode form and matched exactly; wildcards, suffix matching, and ports are not supported. A secret with no allowed hosts is never substituted. Bind a host without replacing the stored value:
+
+```bash
+openclaw secrets store set OPENAI_API_KEY --allow-host api.openai.com
+```
+
+Repeat `--allow-host` to replace the binding with multiple hosts, or use `--clear-allowed-hosts` to remove every binding. A refused request names the secret and prints the exact `store set ... --allow-host ...` command needed for that destination.
+
+Enable it explicitly, then restart the Gateway:
+
+```bash
+openclaw config set secrets.egressProxy.enabled true --strict-json
+openclaw gateway restart
+```
+
+For example, bind an OpenAI key to its API host and enable the proxy:
+
+```bash
+openclaw secrets store set OPENAI_API_KEY --allow-host api.openai.com
+openclaw config set secrets.egressProxy.enabled true --strict-json
+```
+
+After restarting the Gateway, a Gateway-hosted agent can run:
+
+```bash
+curl -sS https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY"
+```
+
+In the agent environment, `$OPENAI_API_KEY` is an `oc-sent-v2...end` sentinel. The proxy replaces it with the stored value only for `api.openai.com`. A request to an unbound host is refused with `Secret "OPENAI_API_KEY" is not allowed for host "<host>". Run: openclaw secrets store set OPENAI_API_KEY --allow-host <host>`.
+
+Equivalent config:
+
+```json5
+{
+  secrets: {
+    egressProxy: {
+      enabled: true,
+      bypassHosts: ["pinned-api.example.com"],
+    },
+  },
+}
+```
+
+When enabled, OpenClaw adds these values to Gateway-hosted exec environments:
+
+- `HTTPS_PROXY` and `HTTP_PROXY`, with per-run credentials embedded in the loopback proxy URL
+- `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `REQUESTS_CA_BUNDLE`, pointing at the ephemeral CA certificate
+- each team-store `secret` entry as an `oc-sent-v2...end` sentinel; `env` entries keep their existing behavior and precedence
+
+Proxy authentication uses standard Basic proxy auth with username `openclaw` and a random per-run password. The token expires when the exact agent run closes, including cancellation and replacement. Base64 is not treated as encryption: the listener binds only to loopback, and a process that can read the proxy token from the agent environment can already read the sentinels in that environment. Missing, wrong, or expired credentials receive `407 Proxy Authentication Required` and are never forwarded.
+
+The run snapshot registers each sentinel together with its secret name and allowed hosts. After proxy authentication, the proxy looks up the matched sentinel in that run's registration and authorizes the normalized destination hostname before decrypting the sentinel. A sentinel that is unregistered, unresolved, unbound, or bound to another host is refused before its plaintext is forwarded.
+
+<Warning>
+Destination binding does not make an allowed host trustworthy. A bound service that reflects request credentials can still return the plaintext to the agent. DNS-level compromise can redirect a permitted hostname because policy is hostname-based, not an IP pin. Non-HTTPS requests are refused rather than protected, and HTTPS interception still has the protocol limits below. Use external network policy or process isolation when those threats are in scope.
+</Warning>
+
+The CA is generated once per Gateway start under the state directory. Its directory is mode `0700`, its private keys are mode `0600`, it is removed during Gateway shutdown, and OpenClaw never installs it in a system trust store. Requests fail closed when a sentinel cannot be authenticated or resolved; the proxy never forwards or silently strips an unresolved sentinel. Request bodies are scanned as a stream with a bounded carry window, so substitution also works when a sentinel crosses chunk boundaries or appears in a large upload.
+
+`bypassHosts` contains exact hostnames that must remain end-to-end TLS for certificate-pinned clients. Those hosts use an authenticated blind CONNECT tunnel. No substitution is possible inside the tunnel; a sentinel sent there is safe by construction because it is authenticated ciphertext rather than a credential, so the vendor sees an invalid credential and rejects it.
+
+Current limits:
+
+- HTTP/2 upstream connections are not supported; the proxy uses HTTP/1.1 upstream.
+- WebSocket rewriting is not supported.
+- Non-443 HTTPS substitution is not a supported compatibility target.
+- Identity-scoped secrets are not supported; only the team store participates.
+- Allowed-host policy is exact-hostname authorization only. It does not validate the resolved IP or prevent an allowed origin from reflecting credentials.
+- Plain HTTP is refused; it is not upgraded or substituted.
+- Secret egress applies only to Gateway-hosted exec. Sandbox and remote `node` exec receive neither proxy variables nor sentinels, so shared-store `secret` entries are unavailable there. Provider-native harness subprocesses also do not use this proxy.
+- Background subprocesses lose proxy authorization when their owning agent run ends, even if the process itself is still alive.
+
+## File-backed API keys
+
+Do not put `file:...` strings in the config `env` block. That block is literal and non-overriding, so `file:...` is never resolved there.
+
+Use a file SecretRef on a supported credential field instead:
+
+```json5
+{
+  secrets: {
+    providers: {
+      xai_key_file: {
+        source: "file",
+        path: "~/.openclaw/secrets/xai-api-key.txt",
+        mode: "singleValue",
+      },
+    },
+  },
+  models: {
+    providers: {
+      xai: {
+        apiKey: { source: "file", provider: "xai_key_file", id: "value" },
+      },
+    },
+  },
+}
+```
+
+For `mode: "singleValue"`, the SecretRef `id` is `"value"`. For `mode: "json"`, use an absolute JSON pointer such as `"/providers/xai/apiKey"`.
+
+See [SecretRef Credential Surface](/reference/secretref-credential-surface) for the fields that accept SecretRefs.
+
+## Exec integration examples
+
+For a dedicated 1Password guide covering service accounts, the bundled agent skill, and troubleshooting, see [1Password](/gateway/1password).
+
+<AccordionGroup>
+  <Accordion title="1Password">
+    ```json5
+    {
+      plugins: {
+        entries: {
+          onepassword: {
+            enabled: true,
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          onepassword: {
+            source: "exec",
+            pluginIntegration: {
+              pluginId: "onepassword",
+              integrationId: "onepassword",
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            apiKey: {
+              source: "exec",
+              provider: "onepassword",
+              id: "op://Engineering/OpenAI/apiKey",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The bundled [1Password plugin](/plugins/onepassword) uses the official
+    `op` CLI and the plugin's service-account token file.
+
+  </Accordion>
+  <Accordion title="Bitwarden Secrets Manager (`bws`)">
+    Use a resolver wrapper to map SecretRef ids to Bitwarden Secrets Manager item keys. The repository includes `scripts/secrets/openclaw-bws-resolver.mjs`; install or copy it to an absolute trusted path on the host that runs the Gateway.
+
+    Requirements:
+
+    - Bitwarden Secrets Manager CLI (`bws`) installed on the Gateway host.
+    - `BWS_ACCESS_TOKEN` available to the Gateway service.
+    - `PATH` passed to the resolver, or `BWS_BIN` set to the absolute `bws` binary path.
+    - `BWS_SERVER_URL` set in the environment when using a self-hosted Bitwarden instance.
+
+    ```json5
+    {
+      secrets: {
+        providers: {
+          bws: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-bws-resolver.mjs",
+            passEnv: ["BWS_ACCESS_TOKEN", "BWS_SERVER_URL", "PATH", "BWS_BIN"],
+            jsonOnly: true,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            apiKey: {
+              source: "exec",
+              provider: "bws",
+              id: "openclaw/providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The resolver batches requested ids, runs `bws secret list`, and returns values for matching secret `key` fields. Use keys that satisfy the exec SecretRef id contract, such as `openclaw/providers/openai/apiKey`; env-var-style keys with underscores are rejected before the resolver runs. If more than one visible Bitwarden secret shares the requested key, the resolver fails that id as ambiguous instead of guessing. After updating config, verify the resolver path:
+
+    ```bash
+    openclaw secrets audit --allow-exec
+    ```
+
+  </Accordion>
+  <Accordion title="HashiCorp Vault CLI">
+    ```json5
+    {
+      secrets: {
+        providers: {
+          vault_openai: {
+            source: "exec",
+            command: "/absolute/non-symlink/path/to/vault",
+            trustedDirs: ["/absolute/non-symlink/path/to"],
+            args: ["kv", "get", "-field=OPENAI_API_KEY", "secret/openclaw"],
+            passEnv: ["VAULT_ADDR", "VAULT_TOKEN"],
+            jsonOnly: false,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            apiKey: { source: "exec", provider: "vault_openai", id: "value" },
+          },
+        },
+      },
+    }
+    ```
+  </Accordion>
+  <Accordion title="password-store (`pass`)">
+    Use a small resolver wrapper to map SecretRef ids directly to `pass` entries. Save this as an executable at an absolute path that passes your exec-provider path checks, for example `/usr/local/bin/openclaw-pass-resolver`. The `#!/usr/bin/env node` shebang resolves `node` from the resolver process `PATH`, so include `PATH` in `passEnv`. If `pass` is not on that `PATH`, set `PASS_BIN` in the parent environment and include it in `passEnv` too:
+
+    ```js
+    #!/usr/bin/env node
+    const { spawnSync } = require("node:child_process");
+
+    let stdin = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      stdin += chunk;
+    });
+    process.stdin.on("error", (err) => {
+      process.stderr.write(`${err.message}\n`);
+      process.exit(1);
+    });
+    process.stdin.on("end", () => {
+      let request;
+      try {
+        request = JSON.parse(stdin || "{}");
+      } catch (err) {
+        process.stderr.write(`Failed to parse request: ${err.message}\n`);
+        process.exit(1);
+      }
+
+      const passBin = process.env.PASS_BIN || "pass";
+      const values = {};
+      const errors = {};
+
+      for (const id of request.ids ?? []) {
+        const result = spawnSync(passBin, ["show", id], { encoding: "utf8" });
+        if (result.status === 0) {
+          values[id] = result.stdout.split(/\r?\n/, 1)[0] ?? "";
+        } else {
+          errors[id] = { message: (result.stderr || `pass exited ${result.status}`).trim() };
+        }
+      }
+
+      process.stdout.write(JSON.stringify({ protocolVersion: 1, values, errors }));
+    });
+    ```
+
+    Then configure the exec provider and point `apiKey` at the `pass` entry path:
+
+    ```json5
+    {
+      secrets: {
+        providers: {
+          pass_store: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-pass-resolver",
+            passEnv: ["PATH", "HOME", "GNUPGHOME", "GPG_TTY", "PASSWORD_STORE_DIR", "PASS_BIN"],
+            jsonOnly: true,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            apiKey: {
+              source: "exec",
+              provider: "pass_store",
+              id: "openclaw/providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Keep the secret on the first line of the `pass` entry, or customize the wrapper to return the full `pass show` output instead. After updating config, verify both the static audit and the exec resolver path:
+
+    ```bash
+    openclaw secrets audit --check
+    openclaw secrets audit --allow-exec
+    ```
+
+  </Accordion>
+  <Accordion title="sops">
+    ```json5
+    {
+      secrets: {
+        providers: {
+          sops_openai: {
+            source: "exec",
+            command: "/absolute/non-symlink/path/to/sops",
+            trustedDirs: ["/absolute/non-symlink/path/to"],
+            args: ["-d", "--extract", '["providers"]["openai"]["apiKey"]', "/path/to/secrets.enc.json"],
+            passEnv: ["SOPS_AGE_KEY_FILE"],
+            jsonOnly: false,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            apiKey: { source: "exec", provider: "sops_openai", id: "value" },
+          },
+        },
+      },
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## MCP server environment variables
+
+MCP server env vars configured via `plugins.entries.acpx.config.mcpServers` accept SecretInput, keeping API keys and tokens out of plaintext config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      acpx: {
+        enabled: true,
+        config: {
+          mcpServers: {
+            github: {
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-github"],
+              env: {
+                GITHUB_PERSONAL_ACCESS_TOKEN: {
+                  source: "env",
+                  provider: "default",
+                  id: "MCP_GITHUB_PAT",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Plaintext string values still work. Env-template refs like `${MCP_SERVER_API_KEY}` and SecretRef objects resolve during gateway activation, before the MCP server process spawns. As with other SecretRef surfaces, unresolved refs only block activation when the `acpx` plugin is effectively active.
+
+## Sandbox SSH auth material
+
+The core `ssh` sandbox backend also supports SecretRefs for SSH auth material:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "ssh",
+        ssh: {
+          target: "user@gateway-host:22",
+          identityData: { source: "env", provider: "default", id: "SSH_IDENTITY" },
+          certificateData: { source: "env", provider: "default", id: "SSH_CERTIFICATE" },
+          knownHostsData: { source: "env", provider: "default", id: "SSH_KNOWN_HOSTS" },
+        },
+      },
+    },
+  },
+}
+```
+
+Runtime behavior:
+
+- OpenClaw resolves these refs during sandbox activation, not lazily on each SSH call.
+- Resolved values are written to a temp directory with restrictive file permissions (`0o600`) and used in the generated SSH config.
+- If the effective sandbox backend is not `ssh` (or sandbox mode is `off`), these refs stay inactive and do not block startup.
+
+## Supported credential surface
+
+Canonical supported and unsupported credentials are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
+
+<Note>
+Runtime-minted or rotating credentials and OAuth refresh material are intentionally excluded from read-only SecretRef resolution.
+</Note>
+
+## Required behavior and precedence
+
+- Field without a ref: unchanged.
+- Field with a ref: required on active surfaces during activation.
+- If both plaintext and ref are present, the ref takes precedence on supported precedence paths.
+- The redaction sentinel `__OPENCLAW_REDACTED__` is reserved for internal config redaction/restore and is rejected as literal submitted config data.
+
+Warning and audit signals:
+
+- `SECRETS_REF_OVERRIDES_PLAINTEXT` (runtime warning)
+- `REF_SHADOWED` (audit finding when SQLite auth-profile credentials take precedence over `openclaw.json` refs)
+- `STORE_PLAINTEXT_RESIDUE` (audit finding when a stored name still has an equivalent plaintext config value)
+
+Google Chat `serviceAccount` accepts inline JSON or a SecretRef. Doctor moves the retired sibling `serviceAccountRef` into this canonical field when it is unset.
+
+## Activation triggers
+
+Secret activation runs on:
+
+- Startup (preflight plus final activation)
+- Config reload hot-apply path
+- Config reload restart-check path
+- Manual reload via `secrets.reload`
+- Gateway config write RPC preflight (`config.set` / `config.apply` / `config.patch`), validating active-surface SecretRefs within the submitted config payload before persisting edits
+
+Activation contract:
+
+- Success swaps the snapshot atomically.
+- A strict startup failure aborts Gateway startup.
+- During cold startup, a retryable resolution failure for a mapped, isolatable non-Gateway owner may publish the snapshot with that exact owner configured-unavailable. Requests for the owner fail with `SECRET_SURFACE_UNAVAILABLE`; model-provider owners do not fall back to environment or auth-profile credentials after an explicit ref fails.
+- Reload and restart-check isolate eligible mapped owners. Unchanged ref identities with unchanged provider definitions and an unchanged complete non-secret owner contract retain their exact last-known-good values as stale; changed or newly configured unresolved refs publish cold for only that owner. A strict reload failure preserves the previously active snapshot.
+- `config.set`, `config.apply`, and `config.patch` accept syntactically valid unresolved refs for isolatable owners and return a redacted `degradedSecretOwners` report. Gateway ingress auth, structurally invalid config or resolved values, policy violations, and unknown owners still reject before disk mutation.
+- Healthy sibling owners resolve and publish normally even when another owner is cold or stale.
+- Providing an explicit per-call channel token to an outbound helper/tool call does not trigger SecretRef activation; activation points remain startup, reload, and explicit `secrets.reload`.
+
+## Degraded and recovered signals
+
+When reload-time activation fails after a healthy state, OpenClaw enters degraded secrets state, emitting one-shot system events and log codes:
+
+- `SECRETS_RELOADER_DEGRADED`
+- `SECRETS_RELOADER_RECOVERED`
+
+Behavior:
+
+- Degraded: healthy owners refresh, stale owners keep last-known-good, and cold owners remain unavailable.
+- Recovered: emitted once after the next successful activation.
+- Repeated failures while already degraded log warnings but do not re-emit the event.
+- A strict startup failure never emits a degraded event, because runtime never became active. A successful startup with cold owners logs the owner degradation but does not emit a reloader event.
+- Ref-scoped startup and reload failures emit a structured `SECRETS_DEGRADED` warning for each affected owner. Provider-scoped outages emit one `SECRETS_PROVIDER_DEGRADED` warning with the provider and complete affected-owner list instead of repeating the provider failure per owner. Warnings include a redacted reason, `cold` or `stale` owner state, and the `openclaw secrets reload` retry hint. They never include resolved values or SecretRef ids.
+- `openclaw doctor` lists cold and stale owners with their affected config paths, redacted reason, and retry guidance.
+
+## Command-path resolution
+
+Command paths can opt into supported SecretRef resolution via a gateway snapshot RPC. Two broad behaviors apply:
+
+<Tabs>
+  <Tab title="Strict command paths">
+    For example `openclaw memory` remote-memory paths and `openclaw qr --remote` when it needs remote shared-secret refs. They read from the active snapshot and fail fast when a required SecretRef is unavailable.
+  </Tab>
+  <Tab title="Read-only command paths">
+    For example `openclaw status`, `openclaw status --all`, `openclaw channels status`, `openclaw channels resolve`, `openclaw security audit`, and read-only doctor/config repair flows. They also prefer the active snapshot, but degrade instead of aborting when a targeted SecretRef is unavailable.
+
+    Read-only behavior:
+
+    - When the gateway is running, these commands read from the active snapshot first.
+    - If gateway resolution is incomplete or the gateway is unavailable, they attempt a targeted local fallback for that command surface.
+    - If a targeted SecretRef is still unavailable, the command continues with degraded read-only output and an explicit diagnostic that the ref is configured but unavailable in this command path.
+    - This degraded behavior is command-local only; it does not weaken runtime startup, reload, or send/auth paths.
+
+  </Tab>
+</Tabs>
+
+Other notes:
+
+- Snapshot refresh after backend secret rotation is handled by `openclaw secrets reload`.
+- Gateway RPC method used by these command paths: `secrets.resolve`.
+
+## Audit and configure workflow
+
+Default operator flow:
+
+<Steps>
+  <Step title="Audit current state">
+    ```bash
+    openclaw secrets audit --check
+    ```
+  </Step>
+  <Step title="Configure and apply SecretRefs">
+    ```bash
+    openclaw secrets configure --apply
+    ```
+  </Step>
+  <Step title="Re-audit">
+    ```bash
+    openclaw secrets audit --check
+    ```
+  </Step>
+</Steps>
+
+Do not treat the migration as complete until the re-audit is clean. If the audit still reports plaintext values at rest, the agent-access risk remains even when runtime APIs return redacted values.
+
+If you save a plan instead of applying during `configure`, apply that saved plan with `openclaw secrets apply --from <plan-path>` before the re-audit.
+
+<AccordionGroup>
+  <Accordion title="secrets audit">
+    Findings include:
+
+    - Plaintext values at rest (`openclaw.json`, SQLite auth-profile rows, `.env`, and generated `agents/*/agent/models.json`).
+    - Plaintext sensitive provider header residues in generated `models.json` entries.
+    - Unresolved refs.
+    - Precedence shadowing (SQLite auth profiles taking priority over `openclaw.json` refs).
+    - Store residue (a stored name still has an equivalent plaintext value in config).
+
+    Exec note: by default, audit skips exec SecretRef resolvability checks to avoid command side effects. Use `openclaw secrets audit --allow-exec` to execute exec providers during audit.
+
+    Header residue note: sensitive provider header detection is name-heuristic based (common auth/credential header names and fragments such as `authorization`, `x-api-key`, `token`, `secret`, `password`, and `credential`).
+
+  </Accordion>
+  <Accordion title="secrets configure">
+    Interactive helper that:
+
+    - Configures `secrets.providers` first (`env`/`file`/`exec`/`store`, add/edit/remove).
+    - Lets you select supported secret-bearing fields in `openclaw.json` plus the SQLite auth-profile store for one agent scope.
+    - Can create a new auth-profile mapping directly in the target picker.
+    - Captures SecretRef details (`source`, `provider`, `id`).
+    - Runs preflight resolution and can apply immediately.
+
+    Exec note: preflight skips exec SecretRef checks unless `--allow-exec` is set. If you apply directly from `configure --apply` and the plan includes exec refs/providers, keep `--allow-exec` set for the apply step too.
+
+    Helpful modes:
+
+    - `openclaw secrets configure --providers-only`
+    - `openclaw secrets configure --skip-provider-setup`
+    - `openclaw secrets configure --agent <id>`
+
+    `configure` apply defaults:
+
+    - Scrub matching static credentials from SQLite auth-profile rows for targeted providers.
+    - Leave retired `auth.json` untouched; run `openclaw doctor --fix` to migrate and archive it.
+    - Scrub matching known secret lines from the effective state and active-config `.env` files (deduplicated when both paths match).
+
+  </Accordion>
+  <Accordion title="secrets apply">
+    Apply a saved plan:
+
+    ```bash
+    openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
+    openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --allow-exec
+    openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
+    openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run --allow-exec
+    ```
+
+    Exec note: dry-run skips exec checks unless `--allow-exec` is set; write mode rejects plans containing exec SecretRefs/providers unless `--allow-exec` is set.
+
+    For strict target/path contract details and exact rejection rules, see [Secrets Apply Plan Contract](/gateway/secrets-plan-contract).
+
+  </Accordion>
+</AccordionGroup>
+
+## One-way safety policy
+
+<Warning>
+OpenClaw intentionally does not write rollback backups containing historical plaintext secret values.
+</Warning>
+
+Safety model:
+
+- Preflight must succeed before write mode.
+- Runtime activation is validated before commit.
+- Apply updates files using atomic file replacement and best-effort restore on failure.
+
+## Legacy auth compatibility notes
+
+For static credentials, runtime no longer depends on plaintext legacy auth storage.
+
+- Runtime credential source is the resolved in-memory snapshot.
+- Legacy static `api_key` entries are scrubbed when discovered.
+- OAuth-related compatibility behavior remains separate.
+
+## Control UI
+
+Open **Settings → Secrets** to list, add, edit, bulk-import, or soft-delete team-scoped entries. Bulk Add accepts dotenv `NAME=VALUE` assignments, including quoted multiline values. Credential-like names default to `secret`; clear **Auto-detect secrets** to import all entries as visible environment values.
+
+This store page manages values only. Configure the corresponding `store` SecretRef on a supported field through its settings form or the raw editor. Identity-scoped entries are reserved for a later release and are not exposed by this page.
+
+## Related
+
+- [Authentication](/gateway/authentication) - auth setup
+- [CLI: secrets](/cli/secrets) - CLI commands
+- [Vault SecretRefs](/plugins/vault) - HashiCorp Vault provider setup
+- [Environment Variables](/help/environment) - environment precedence
+- [SecretRef Credential Surface](/reference/secretref-credential-surface) - credential surface
+- [Secrets Apply Plan Contract](/gateway/secrets-plan-contract) - plan contract details
+- [Security](/gateway/security) - security posture

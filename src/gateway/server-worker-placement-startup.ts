@@ -1,0 +1,630 @@
+import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
+import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  interruptSessionWorkAdmissions,
+  runExclusiveSessionLifecycleMutation,
+  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+} from "../sessions/session-lifecycle-admission.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
+import { resolveWorkerPlacementSessionEvidence } from "./server-worker-placement-session-evidence.js";
+import { createNodeWorkspaceRetainCoordinator } from "./worker-environments/node-workspace-retain-coordinator.js";
+import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/placement-disk-space.js";
+import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
+import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
+import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
+import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
+import type { WorkerEnvironmentService } from "./worker-environments/service.js";
+import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
+import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
+import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-workspace-conflict-transcript.js";
+
+const WORKER_PLACEMENT_RECONCILE_INTERVAL_MS = 60_000;
+const workerPlacementLog = createSubsystemLogger("gateway/worker-placement");
+
+const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async () => {
+  const [placementSessionRuntime, { managedWorktrees }, sessionUtils] = await Promise.all([
+    import("./worker-environments/placement-session-runtime.js"),
+    import("../agents/worktrees/service.js"),
+    import("./session-utils.js"),
+  ]);
+  return {
+    resolveWorkerPlacementExecutionMode:
+      placementSessionRuntime.resolveWorkerPlacementExecutionMode,
+    managedWorktrees,
+    resolveWorkerPlacementSessionRuntime:
+      placementSessionRuntime.resolveWorkerPlacementSessionRuntime,
+    resolveCanonicalSessionEntryFromStoreKeys:
+      sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
+    resolveGatewaySessionStoreTargetWithStore:
+      sessionUtils.resolveGatewaySessionStoreTargetWithStore,
+  };
+});
+
+const loadWorkerWorkspacePreflight = createLazyRuntimeModule(async () => {
+  const { preflightWorkerWorkspace } =
+    await import("./worker-environments/workspace-sync-preflight.js");
+  return preflightWorkerWorkspace;
+});
+
+class WorkerDispatchTargetChangedError extends Error {
+  readonly code = "invalid_state";
+}
+
+type WorkerPlacementSessionRuntime = Awaited<
+  ReturnType<typeof loadWorkerPlacementSessionRuntimeModule>
+>;
+type WorkerPlacementSessionTarget = ReturnType<
+  WorkerPlacementSessionRuntime["resolveGatewaySessionStoreTargetWithStore"]
+>;
+
+/** Keeps store identity, session incarnation, canonical ownership, and the live worktree
+ * in one cross-phase fence. Initial resolution throws normally; barrier revalidation
+ * supplies expectedTarget and yields an invalid_state retry when the target changed. */
+function resolveWorkerPlacementSessionTarget(params: {
+  sessionRuntime: WorkerPlacementSessionRuntime;
+  config: ReturnType<typeof getRuntimeConfig>;
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  expectedTarget?: WorkerPlacementSessionTarget;
+  errorMessage: string;
+}) {
+  const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
+    cfg: params.config,
+    key: params.sessionKey,
+    agentId: params.agentId,
+    clone: false,
+  });
+  const entry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
+    target.store,
+    target.storeKeys,
+  );
+  const worktree = params.sessionRuntime.managedWorktrees.findLiveByOwner(
+    "session",
+    target.canonicalKey,
+  );
+  const expected = params.expectedTarget;
+  if (
+    (expected &&
+      (target.storePath !== expected.storePath ||
+        target.canonicalKey !== expected.canonicalKey ||
+        target.agentId !== expected.agentId)) ||
+    entry?.sessionId !== params.sessionId ||
+    !entry.worktree?.id ||
+    !worktree ||
+    worktree.id !== entry.worktree.id ||
+    worktree.ownerId !== target.canonicalKey
+  ) {
+    throw expected
+      ? new WorkerDispatchTargetChangedError(params.errorMessage)
+      : new Error(params.errorMessage);
+  }
+  return { config: params.config, target, entry, worktree };
+}
+
+type WorkerPlacementSidecar = { stop: () => Promise<void> };
+
+export type GatewayWorkerPlacementRuntimeParams = {
+  placements: WorkerSessionPlacementStore;
+  environments: WorkerEnvironmentService;
+  gatewayNamespace: string;
+  revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
+  warn: (message: string) => void;
+};
+
+export type GatewayWorkerPlacementRuntime = ReturnType<typeof createGatewayWorkerPlacementRuntime>;
+
+export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlacementRuntimeParams) {
+  const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
+  const diskSpace = createWorkerPlacementDiskSpaceMonitor({
+    placements: params.placements,
+    environments: params.environments,
+    warn: params.warn,
+  });
+  const workspaceConflictHandlers = createWorkerWorkspaceConflictTranscriptHandlers(
+    loadWorkerPlacementSessionRuntimeModule,
+  );
+  const resolveWorkspacePath = async ({
+    sessionId,
+    sessionKey,
+    agentId,
+  }: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }): Promise<string> => {
+    const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
+    const { worktree } = resolveWorkerPlacementSessionTarget({
+      sessionRuntime,
+      config: getRuntimeConfig(),
+      sessionId,
+      sessionKey,
+      agentId,
+      errorMessage: `Session ${sessionKey} dispatch requires a session-owned managed worktree`,
+    });
+    return worktree.path;
+  };
+  const resolveNodeWorkspaceBinding = async (binding: {
+    environmentId: string;
+    ownerEpoch: number;
+    sessionId: string;
+  }) => {
+    const placement = params.placements.get(binding.sessionId);
+    if (
+      !placement ||
+      (placement.state !== "active" &&
+        placement.state !== "draining" &&
+        placement.state !== "reconciling") ||
+      placement.environmentId !== binding.environmentId ||
+      placement.activeOwnerEpoch !== binding.ownerEpoch
+    ) {
+      return undefined;
+    }
+    return {
+      localPath: await resolveWorkspacePath({
+        sessionId: placement.sessionId,
+        sessionKey: placement.sessionKey,
+        agentId: placement.agentId,
+      }),
+      manifestRef: placement.workspaceBaseManifestRef,
+      remoteWorkspaceDir: placement.remoteWorkspaceDir,
+    };
+  };
+  const dispatchService = coordinateWorkerPlacementDispatch(
+    createWorkerPlacementDispatchService({
+      placements: params.placements,
+      environments: params.environments,
+      ...workspaceConflictHandlers,
+      runLocalBarrier: async ({ sessionId, sessionKey, agentId, executionMode, startDispatch }) => {
+        const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
+        const {
+          resolveWorkerPlacementExecutionMode,
+          resolveGatewaySessionStoreTargetWithStore,
+          resolveWorkerPlacementSessionRuntime,
+        } = sessionRuntime;
+        const target = resolveGatewaySessionStoreTargetWithStore({
+          cfg: getRuntimeConfig(),
+          key: sessionKey,
+          agentId,
+          clone: false,
+        });
+        const lifecycleIdentities = [
+          sessionKey,
+          target.canonicalKey,
+          ...target.storeKeys,
+          sessionId,
+        ];
+        let placement: ReturnType<typeof startDispatch> | undefined;
+        await runExclusiveSessionLifecycleMutation({
+          scope: target.storePath,
+          identities: lifecycleIdentities,
+          prepare: async () => {
+            const {
+              config: currentConfig,
+              target: currentTarget,
+              entry: currentEntry,
+              worktree,
+            } = resolveWorkerPlacementSessionTarget({
+              sessionRuntime,
+              config: getRuntimeConfig(),
+              sessionId,
+              sessionKey,
+              agentId,
+              expectedTarget: target,
+              errorMessage: `Session ${sessionKey} changed before cloud worker dispatch. Retry.`,
+            });
+            if (currentEntry.archivedAt !== undefined) {
+              throw new WorkerDispatchTargetChangedError(
+                `Session ${sessionKey} was archived before cloud worker dispatch. Retry.`,
+              );
+            }
+            const currentRuntime = resolveWorkerPlacementSessionRuntime({
+              cfg: currentConfig,
+              entry: currentEntry,
+              agentId: currentTarget.agentId,
+              sessionKey: currentTarget.canonicalKey,
+            });
+            if (resolveWorkerPlacementExecutionMode(currentRuntime) !== executionMode) {
+              throw new WorkerDispatchTargetChangedError(
+                `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker dispatch. Retry.`,
+              );
+            }
+            const preflightWorkerWorkspace = await loadWorkerWorkspacePreflight();
+            await preflightWorkerWorkspace({ localPath: worktree.path });
+            placement = startDispatch();
+            clearSessionQueues(lifecycleIdentities);
+            params.revokeSessionAuthority({
+              sessionId,
+              sessionKeys: lifecycleIdentities,
+            });
+            const released = await interruptSessionWorkAdmissions({
+              scope: target.storePath,
+              identities: lifecycleIdentities,
+              timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+            });
+            if (!released) {
+              throw new Error(`Session ${sessionKey} is still active; dispatch stopped`);
+            }
+            await params.placements.waitForTurnClaimRelease(sessionId, {
+              timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+            });
+            await runExclusiveSessionStoreWrite(target.storePath, async () => {}, {
+              reentrant: true,
+            });
+          },
+          run: async () => {
+            if (!placement) {
+              throw new Error(`Session ${sessionKey} dispatch barrier did not start`);
+            }
+          },
+        });
+        if (!placement) {
+          throw new Error(`Session ${sessionKey} dispatch barrier did not complete`);
+        }
+        return placement;
+      },
+      runActivationBarrier: async ({ sessionId, sessionKey, agentId, executionMode, activate }) => {
+        const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
+        const {
+          resolveWorkerPlacementExecutionMode,
+          resolveGatewaySessionStoreTargetWithStore,
+          resolveWorkerPlacementSessionRuntime,
+        } = sessionRuntime;
+        const target = resolveGatewaySessionStoreTargetWithStore({
+          cfg: getRuntimeConfig(),
+          key: sessionKey,
+          agentId,
+          clone: false,
+        });
+        const lifecycleIdentities = [
+          sessionKey,
+          target.canonicalKey,
+          ...target.storeKeys,
+          sessionId,
+        ];
+        let activePlacement: ReturnType<typeof activate> | undefined;
+        await runExclusiveSessionLifecycleMutation({
+          scope: target.storePath,
+          identities: lifecycleIdentities,
+          run: async () => {
+            const {
+              config: currentConfig,
+              target: currentTarget,
+              entry: currentEntry,
+            } = resolveWorkerPlacementSessionTarget({
+              sessionRuntime,
+              config: getRuntimeConfig(),
+              sessionId,
+              sessionKey,
+              agentId,
+              expectedTarget: target,
+              errorMessage: `Session ${sessionKey} changed before cloud worker activation. Retry.`,
+            });
+            if (currentEntry.archivedAt !== undefined) {
+              throw new WorkerDispatchTargetChangedError(
+                `Session ${sessionKey} was archived before cloud worker activation. Retry.`,
+              );
+            }
+            const currentRuntime = resolveWorkerPlacementSessionRuntime({
+              cfg: currentConfig,
+              entry: currentEntry,
+              agentId: currentTarget.agentId,
+              sessionKey: currentTarget.canonicalKey,
+            });
+            if (resolveWorkerPlacementExecutionMode(currentRuntime) !== executionMode) {
+              throw new WorkerDispatchTargetChangedError(
+                `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker activation. Retry.`,
+              );
+            }
+            activePlacement = activate();
+          },
+        });
+        if (!activePlacement) {
+          throw new Error(`Session ${sessionKey} activation barrier did not complete`);
+        }
+        return activePlacement;
+      },
+      runReclaimBarrier: async ({ sessionId, sessionKey, agentId, reclaim }) => {
+        const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
+        const { resolveGatewaySessionStoreTargetWithStore } = sessionRuntime;
+        const target = resolveGatewaySessionStoreTargetWithStore({
+          cfg: getRuntimeConfig(),
+          key: sessionKey,
+          agentId,
+          clone: false,
+        });
+        const lifecycleIdentities = [
+          sessionKey,
+          target.canonicalKey,
+          ...target.storeKeys,
+          sessionId,
+        ];
+        let worktreePath: string | undefined;
+        let reclaimedPlacement: Awaited<ReturnType<typeof reclaim>> | undefined;
+        await runExclusiveSessionLifecycleMutation({
+          scope: target.storePath,
+          identities: lifecycleIdentities,
+          prepare: async () => {
+            const { worktree } = resolveWorkerPlacementSessionTarget({
+              sessionRuntime,
+              config: getRuntimeConfig(),
+              sessionId,
+              sessionKey,
+              agentId,
+              expectedTarget: target,
+              errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
+            });
+            const placement = params.placements.get(sessionId);
+            if (placement?.state !== "active" || placement.turnClaim) {
+              throw new Error(
+                `Session ${sessionKey} has active work; wait before stopping its cloud worker`,
+              );
+            }
+            worktreePath = worktree.path;
+            const released = await interruptSessionWorkAdmissions({
+              scope: target.storePath,
+              identities: lifecycleIdentities,
+              timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+            });
+            if (!released) {
+              throw new Error(`Session ${sessionKey} is still active; cloud worker stop cancelled`);
+            }
+            await params.placements.waitForTurnClaimRelease(sessionId, {
+              timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+            });
+            await runExclusiveSessionStoreWrite(target.storePath, async () => {}, {
+              reentrant: true,
+            });
+          },
+          run: async () => {
+            if (!worktreePath) {
+              throw new Error(`Session ${sessionKey} cloud worker stop barrier did not prepare`);
+            }
+            reclaimedPlacement = await reclaim(worktreePath);
+            params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
+          },
+        });
+        if (!reclaimedPlacement) {
+          throw new Error(`Session ${sessionKey} cloud worker stop barrier did not complete`);
+        }
+        return reclaimedPlacement;
+      },
+      resolveWorkspacePath,
+      workspaceOperations,
+    }),
+  );
+  const sessionRetirement = createPlacementSessionRetirement({
+    placements: params.placements,
+    environments: params.environments,
+    forceDestroyEnvironment: dispatchService.forceDestroyEnvironment,
+    resolveSessionEvidence: resolveWorkerPlacementSessionEvidence,
+    warn: params.warn,
+  });
+  const nodeWorkspaceRetention = createNodeWorkspaceRetainCoordinator({
+    gatewayNamespace: params.gatewayNamespace,
+    placements: params.placements,
+    environments: params.environments,
+    warn: params.warn,
+  });
+  const admissionProvider = createWorkerSessionTurnPlacementProvider({
+    environments: params.environments,
+    placements: params.placements,
+    resolveWorkspacePath,
+    recoverPendingWorkspaceResult: async (environmentId) =>
+      await dispatchService.reconcileActive(environmentId),
+    redispatchReclaimed: createReclaimedPlacementRedispatch({
+      environments: params.environments,
+      dispatch: dispatchService.dispatch,
+    }),
+    workspaceOperations,
+  });
+  const recoverPendingWorkspaceReconciliations = async (): Promise<void> => {
+    const orphanedJournals = params.placements.pruneOrphanedWorkspaceReconciliations({
+      retainFailedOwner: (recoveryError) =>
+        recoveryError.startsWith(FORCED_WORKER_ABANDONMENT_ERROR),
+    });
+    for (const owner of orphanedJournals) {
+      workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
+    }
+    for (const owner of params.placements.listWorkspaceReconciliationOwners()) {
+      try {
+        const placement = params.placements.get(owner.sessionId);
+        if (
+          (placement?.state !== "active" && placement?.state !== "draining") ||
+          placement.environmentId !== owner.environmentId ||
+          placement.activeOwnerEpoch !== owner.ownerEpoch ||
+          placement.generation !== owner.placementGeneration
+        ) {
+          throw new Error(`Cloud workspace journal has no matching owner: ${owner.sessionId}`);
+        }
+        const localPath = await resolveWorkspacePath({
+          sessionId: placement.sessionId,
+          sessionKey: placement.sessionKey,
+          agentId: placement.agentId,
+        });
+        const journal = params.placements.loadWorkspaceReconciliation(owner);
+        if (!journal) {
+          continue;
+        }
+        // Recover before placement/environment reconciliation can reclaim the
+        // owner; otherwise a crashed partial apply loses its final repair path.
+        await recoverWorkerWorkspaceReconciliation({ root: localPath, journal });
+        params.placements.abortWorkspaceReconciliation(owner);
+      } catch (error) {
+        // A local edit can intentionally block rollback. Leave that journal
+        // retryable for this session without withholding every cloud worker.
+        workerPlacementLog.error(
+          `cloud workspace recovery deferred for ${owner.sessionId}: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
+  };
+  const startRuntime = async (hooks: {
+    isClosePreludeStarted: () => boolean;
+    registerSidecar: (sidecar: WorkerPlacementSidecar) => void;
+  }): Promise<WorkerPlacementSidecar | null> => {
+    const uninstallPlacementAdmission = installSessionPlacementAdmissionProvider(admissionProvider);
+    let placementReconcileInterval: ReturnType<typeof setInterval> | undefined;
+    const placementReconcile = { current: undefined as Promise<void> | undefined };
+    const diskSpaceSweep = { current: undefined as Promise<void> | undefined };
+    let stopped = false;
+    const trackOperation = (
+      slot: { current: Promise<void> | undefined },
+      current: Promise<void>,
+      failureMessage: string,
+    ): Promise<void> => {
+      slot.current = current;
+      const clearCurrent = () => {
+        if (slot.current === current) {
+          slot.current = undefined;
+        }
+      };
+      void current.then(clearCurrent, (error: unknown) => {
+        params.warn(`${failureMessage}: ${formatErrorMessage(error)}`);
+        clearCurrent();
+      });
+      return current;
+    };
+    const reconcileActivePlacements = (): Promise<void> => {
+      if (stopped) {
+        return Promise.resolve();
+      }
+      if (placementReconcile.current) {
+        return placementReconcile.current;
+      }
+      return trackOperation(
+        placementReconcile,
+        (async () => {
+          await sessionRetirement.reconcile();
+          await dispatchService.reconcileActive();
+          void nodeWorkspaceRetention.schedule();
+        })(),
+        "Worker placement reconcile sweep failed",
+      );
+    };
+    const sweepDiskSpace = (): Promise<void> => {
+      if (stopped) {
+        return Promise.resolve();
+      }
+      if (diskSpaceSweep.current) {
+        return diskSpaceSweep.current;
+      }
+      return trackOperation(diskSpaceSweep, diskSpace.sweep(), "Worker disk-space sweep failed");
+    };
+    const sweepActivePlacements = (): void => {
+      void reconcileActivePlacements();
+      // Session-lifetime sampling covers idle placements independently of provider health.
+      void sweepDiskSpace();
+    };
+    const uninstallSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
+      const previousSessionId = mutation.previous.sessionId;
+      const currentSessionId = "current" in mutation ? mutation.current.sessionId : undefined;
+      if (previousSessionId && previousSessionId !== currentSessionId) {
+        const pending = placementReconcile.current;
+        if (!pending) {
+          void reconcileActivePlacements();
+          return;
+        }
+        void pending.then(reconcileActivePlacements, reconcileActivePlacements);
+      }
+    });
+    let stopPromise: Promise<void> | undefined;
+    const sidecar: WorkerPlacementSidecar = {
+      stop: () => {
+        if (stopPromise) {
+          return stopPromise;
+        }
+        stopped = true;
+        clearInterval(placementReconcileInterval);
+        placementReconcileInterval = undefined;
+        uninstallSessionIdentityMutation();
+        uninstallPlacementAdmission();
+        stopPromise = (async () => {
+          await Promise.allSettled(
+            [placementReconcile.current, diskSpaceSweep.current].filter(
+              (operation): operation is Promise<void> => operation !== undefined,
+            ),
+          );
+          await nodeWorkspaceRetention.stop();
+          await params.environments.stop();
+        })();
+        return stopPromise;
+      },
+    };
+    // Close must see the drain handle before reconciliation can yield.
+    hooks.registerSidecar(sidecar);
+    // Track startup reconciliation in the placement slot so a concurrent
+    // close prelude drains it before uninstalling guards and stopping environments.
+    const startupRecovery = recoverPendingWorkspaceReconciliations();
+    placementReconcile.current = startupRecovery;
+    try {
+      await startupRecovery;
+    } finally {
+      if (placementReconcile.current === startupRecovery) {
+        placementReconcile.current = undefined;
+      }
+    }
+    if (hooks.isClosePreludeStarted()) {
+      await sidecar.stop();
+      return null;
+    }
+    const startupReconcile = (async () => {
+      await dispatchService.reconcile();
+      await sessionRetirement.reconcile();
+    })();
+    placementReconcile.current = startupReconcile;
+    try {
+      try {
+        await startupReconcile;
+      } finally {
+        if (placementReconcile.current === startupReconcile) {
+          placementReconcile.current = undefined;
+        }
+      }
+      if (hooks.isClosePreludeStarted()) {
+        await sidecar.stop();
+        return null;
+      }
+      void nodeWorkspaceRetention.start();
+      if (hooks.isClosePreludeStarted()) {
+        await sidecar.stop();
+        return null;
+      }
+      params.environments.start();
+      if (hooks.isClosePreludeStarted()) {
+        await sidecar.stop();
+        return null;
+      }
+      void sweepDiskSpace();
+      placementReconcileInterval = setInterval(
+        sweepActivePlacements,
+        WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
+      );
+      placementReconcileInterval.unref?.();
+      return sidecar;
+    } catch (error) {
+      await sidecar.stop();
+      throw error;
+    }
+  };
+  return {
+    dispatchService,
+    admissionProvider,
+    diskSpace,
+    placements: params.placements,
+    resolveNodeWorkspaceBinding,
+    bindNodeWorkerSupervisorTransport: (transport: NodeWorkerSupervisorTransport) =>
+      nodeWorkspaceRetention.bindTransport(transport),
+    scheduleNodeWorkspaceRetention: (nodeId?: string) => nodeWorkspaceRetention.schedule(nodeId),
+    startRuntime,
+  };
+}

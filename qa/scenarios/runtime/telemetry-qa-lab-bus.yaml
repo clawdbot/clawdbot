@@ -1,0 +1,97 @@
+title: Telemetry QA Lab bus runtime evidence
+
+scenario:
+  id: telemetry-qa-lab-bus
+  surface: harness
+  coverage:
+    primary:
+      - observability.telemetry-qa-lab
+      - observability.telemetry-qa-bus
+  objective: Verify a real QA-channel agent turn exposes searchable, sanitized tool evidence through the QA Lab bus.
+  successCriteria:
+    - A real inbound QA-channel message reaches the mock OpenAI-backed agent runtime.
+    - The agent reads the seeded workspace file before replying.
+    - The durable outbound QA-bus message carries the observed read tool call.
+    - Tool arguments are redacted while the tool name remains searchable.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/qa-channel/src/inbound.ts
+    - extensions/qa-lab/src/bus-state.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    summary: Send a real QA-channel turn and inspect its sanitized outbound tool trace on the QA Lab bus.
+    channel: qa-channel
+    config:
+      conversationId: telemetry-qa-lab-bus
+      senderId: qa-telemetry-operator
+      probeFile: QA_TELEMETRY_PROBE.md
+      replyMarker: TELEMETRY-QA-BUS-OK
+      prompt: Read QA_TELEMETRY_PROBE.md, then reply exactly TELEMETRY-QA-BUS-OK.
+
+flow:
+  steps:
+    - name: records searchable sanitized tool evidence from a real channel turn
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, config.probeFile)"
+            - "Telemetry QA bus probe.\n"
+            - utf8
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Telemetry Operator
+            text:
+              ref: config.prompt
+          saveAs: inbound
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            sinceIndex:
+              ref: outboundStartIndex
+            textIncludes:
+              ref: config.replyMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: outbound
+        - assert:
+            expr: "outbound.replyToId === inbound.id"
+            message:
+              expr: "`outbound telemetry reply was not attached to the real inbound turn: inbound=${inbound.id} replyTo=${String(outbound.replyToId ?? '')}`"
+        - assert:
+            expr: "outbound.toolCalls?.map((toolCall) => toolCall.name).includes('read') === true"
+            message:
+              expr: "`durable QA-bus reply did not include the runtime read trace: ${JSON.stringify(outbound.toolCalls ?? null)}`"
+        - assert:
+            expr: "JSON.stringify(outbound.toolCalls ?? []).includes('[redacted]') && !JSON.stringify(outbound.toolCalls ?? []).includes(config.probeFile)"
+            message:
+              expr: "`QA-bus tool arguments were not safely redacted: ${JSON.stringify(outbound.toolCalls ?? null)}`"
+        - set: searchMatches
+          value:
+            expr: "state.searchMessages({ query: 'read' })"
+        - assert:
+            expr: "searchMatches.some((message) => message.id === outbound.id)"
+            message:
+              expr: "`QA-bus search could not find the real outbound tool trace: ${JSON.stringify(searchMatches.map((message) => message.id))}`"
+      detailsExpr: "`reply=${outbound.text}; tool=${outbound.toolCalls?.[0]?.name ?? 'missing'}; searchable=${searchMatches.some((message) => message.id === outbound.id)}`"

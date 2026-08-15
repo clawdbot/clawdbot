@@ -1,0 +1,18 @@
+{
+  "language": "pl",
+  "tabs": [
+    {
+      "tab": "Start",
+      "groups": [
+        {
+          "group": "Przeglad",
+          "pages": ["pl/index"]
+        },
+        {
+          "group": "Pierwsze kroki",
+          "pages": ["pl/start/getting-started", "pl/start/wizard"]
+        }
+      ]
+    }
+  ]
+}

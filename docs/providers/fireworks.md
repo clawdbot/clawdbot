@@ -1,0 +1,150 @@
+---
+summary: "Fireworks setup (auth + model selection)"
+title: "Fireworks"
+read_when:
+  - You want to use Fireworks with OpenClaw
+  - You need the Fireworks API key env var or default model id
+  - You are debugging Kimi thinking-off behavior on Fireworks
+---
+
+[Fireworks](https://fireworks.ai) exposes open-weight and routed models through an OpenAI-compatible API. Install the official Fireworks provider plugin to use the current Fire Pass GLM router, two pre-cataloged Kimi models, and any Fireworks model or router id at runtime.
+
+| Property        | Value                                               |
+| --------------- | --------------------------------------------------- |
+| Provider id     | `fireworks` (alias: `fireworks-ai`)                 |
+| Package         | `@openclaw/fireworks-provider`                      |
+| Auth env var    | `FIREWORKS_API_KEY`                                 |
+| Onboarding flag | `--auth-choice fireworks-api-key`                   |
+| Direct CLI flag | `--fireworks-api-key <key>`                         |
+| API             | OpenAI-compatible (`openai-completions`)            |
+| Base URL        | `https://api.fireworks.ai/inference/v1`             |
+| Default model   | `fireworks/accounts/fireworks/routers/glm-5p2-fast` |
+| Default alias   | `GLM 5.2 Fast`                                      |
+
+## Getting started
+
+<Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/fireworks-provider
+    ```
+  </Step>
+  <Step title="Set the Fireworks API key">
+    <CodeGroup>
+
+```bash Onboarding
+openclaw onboard --auth-choice fireworks-api-key
+```
+
+```bash Direct flag
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice fireworks-api-key \
+  --fireworks-api-key "$FIREWORKS_API_KEY"
+```
+
+```bash Env only
+export FIREWORKS_API_KEY=fw-...
+```
+
+    </CodeGroup>
+
+    Onboarding stores the key against the `fireworks` provider in your auth profiles and sets Fireworks' current [Fire Pass](https://docs.fireworks.ai/firepass) GLM 5.2 Fast router as the default model.
+
+  </Step>
+  <Step title="Verify the model is available">
+    ```bash
+    openclaw models list --provider fireworks
+    ```
+
+    The list should include `GLM 5.2 Fast`, `Kimi K2.6`, and `Kimi K2.6 Fast`. If `FIREWORKS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
+
+  </Step>
+</Steps>
+
+## Non-interactive setup
+
+For scripted or CI installs, pass everything on the command line:
+
+```bash
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice fireworks-api-key \
+  --fireworks-api-key "$FIREWORKS_API_KEY" \
+  --skip-health \
+  --accept-risk
+```
+
+## Built-in catalog
+
+| Model ref                                              | Name           | Input        | Context | Max output | Thinking     |
+| ------------------------------------------------------ | -------------- | ------------ | ------- | ---------- | ------------ |
+| `fireworks/accounts/fireworks/routers/glm-5p2-fast`    | GLM 5.2 Fast   | text + image | 256,000 | 256,000    | On (default) |
+| `fireworks/accounts/fireworks/models/kimi-k2p6`        | Kimi K2.6      | text + image | 262,144 | 262,144    | Forced off   |
+| `fireworks/accounts/fireworks/routers/kimi-k2p6-turbo` | Kimi K2.6 Fast | text + image | 262,144 | 256,000    | Forced off   |
+
+<Note>
+  OpenClaw pins all Fireworks Kimi models to `thinking: off` because Kimi on Fireworks can leak chain-of-thought into the visible reply unless the request explicitly disables thinking. Routing the same model through [Moonshot](/providers/moonshot) directly preserves Kimi reasoning output. See [thinking modes](/tools/thinking) for switching between providers.
+</Note>
+
+## Custom Fireworks model ids
+
+OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id shown by Fireworks and prefix it with `fireworks/`. Dynamic resolution clones the Fire Pass template (text + image input and the OpenAI-compatible API) and disables thinking automatically when the id matches the Kimi pattern. GLM dynamic ids are marked text-only unless you configure a custom model entry with image input.
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: {
+        primary: "fireworks/accounts/fireworks/models/<your-model-id>",
+      },
+    },
+  },
+}
+```
+
+<AccordionGroup>
+  <Accordion title="How model id prefixing works">
+    Every Fireworks model ref in OpenClaw starts with `fireworks/` followed by the exact id or router path from the Fireworks platform. For example:
+
+    - Router model: `fireworks/accounts/fireworks/routers/kimi-k2p6-turbo`
+    - Direct model: `fireworks/accounts/fireworks/models/<model-name>`
+
+    OpenClaw strips the `fireworks/` prefix when constructing the API request and sends the remaining path to the Fireworks endpoint as the OpenAI-compatible `model` field.
+
+  </Accordion>
+
+  <Accordion title="Why thinking is forced off for Kimi">
+    Fireworks serves Kimi without a separate reasoning channel, so chain-of-thought can surface in the visible `content` stream. On every Fireworks Kimi request OpenClaw sends `thinking: { type: "disabled" }` and strips `reasoning`, `reasoning_effort`, and `reasoningEffort` from the payload (`extensions/fireworks/stream.ts`). The provider policy (`extensions/fireworks/thinking-policy.ts`) advertises only the `off` thinking level for Kimi model ids, so manual `/think` switches and provider-policy surfaces stay aligned with the runtime contract.
+
+    To use Kimi reasoning end-to-end, configure the [Moonshot provider](/providers/moonshot) and route the same model through it.
+
+  </Accordion>
+
+  <Accordion title="Environment availability for the daemon">
+    If the Gateway runs as a managed service (launchd, systemd, Docker), the Fireworks key must be visible to that process — not just to your interactive shell.
+
+    <Warning>
+      A key exported only in an interactive shell will not help a launchd or systemd daemon unless that environment is imported there too. Set the key in `~/.openclaw/.env` or via `env.shellEnv` to make it readable from the gateway process.
+    </Warning>
+
+    OpenClaw loads `~/.openclaw/.env` when it loads config, so keys stored there reach managed gateway services on every platform. Restart the gateway (or re-run `openclaw doctor --fix`) after rotating the key.
+
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
+    Choosing providers, model refs, and failover behavior.
+  </Card>
+  <Card title="Thinking modes" href="/tools/thinking" icon="brain">
+    `/think` levels, provider policies, and routing reasoning-capable models.
+  </Card>
+  <Card title="Moonshot" href="/providers/moonshot" icon="moon">
+    Run Kimi with native thinking output through Moonshot's own API.
+  </Card>
+  <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">
+    General troubleshooting and FAQ.
+  </Card>
+</CardGroup>

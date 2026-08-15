@@ -1,0 +1,20 @@
+# Example: Fixed Loops in OpenProse
+# Demonstrates repeat, for-each, and parallel for-each patterns
+
+# Repeat block - generate multiple ideas
+repeat 3:
+  session "Generate a creative app idea"
+
+# For-each block - iterate over a collection
+let features = ["authentication", "dashboard", "notifications"]
+for feature in features:
+  session "Design the user interface for this feature"
+    context: feature
+
+# Parallel for-each - research in parallel
+let topics = ["market size", "competitors", "technology stack"]
+parallel for topic in topics:
+  session "Research this aspect of the startup idea"
+    context: topic
+
+session "Synthesize all research into a business plan"

@@ -1,0 +1,463 @@
+name: Plugin ClawHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_scope:
+        description: Publish the selected plugins or all ClawHub-publishable plugins from the workflow ref
+        required: true
+        default: selected
+        type: choice
+        options:
+          - selected
+          - all-publishable
+      plugins:
+        description: Comma-separated plugin package names to publish when publish_scope=selected
+        required: false
+        type: string
+      ref:
+        description: Dry-run target ref to validate; real OIDC publishes must dispatch the workflow with --ref set to the target release tag/ref
+        required: false
+        default: ""
+        type: string
+      release_publish_run_id:
+        description: Approved OpenClaw Release Publish workflow run id
+        required: false
+        type: string
+      release_publish_branch:
+        description: Branch name of the approving OpenClaw Release Publish workflow run
+        required: false
+        type: string
+      dry_run:
+        description: Validate the full ClawHub artifact handoff without publishing.
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: plugin-clawhub-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.16.0"
+  CLAWHUB_REGISTRY: "https://clawhub.ai"
+  CLAWHUB_CLI_PACKAGE: "clawhub@0.23.1"
+
+jobs:
+  preview_plugins_clawhub:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      ref_revision: ${{ steps.ref.outputs.sha }}
+      has_candidates: ${{ steps.plan.outputs.has_candidates }}
+      has_bootstrap_candidates: ${{ steps.plan.outputs.has_bootstrap_candidates }}
+      has_missing_trusted_publisher: ${{ steps.plan.outputs.has_missing_trusted_publisher }}
+      candidate_count: ${{ steps.plan.outputs.candidate_count }}
+      bootstrap_candidate_count: ${{ steps.plan.outputs.bootstrap_candidate_count }}
+      missing_trusted_publisher_count: ${{ steps.plan.outputs.missing_trusted_publisher_count }}
+      skipped_published_count: ${{ steps.plan.outputs.skipped_published_count }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      bootstrap_matrix: ${{ steps.plan.outputs.bootstrap_matrix }}
+      missing_trusted_publisher_matrix: ${{ steps.plan.outputs.missing_trusted_publisher_matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Resolve checked-out ref
+        id: ref
+        env:
+          TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          if [[ -n "${TARGET_REF}" ]]; then
+            if git rev-parse --verify --quiet "${TARGET_REF}^{commit}" >/dev/null; then
+              target_sha="$(git rev-parse "${TARGET_REF}^{commit}")"
+            elif git rev-parse --verify --quiet "origin/${TARGET_REF}^{commit}" >/dev/null; then
+              target_sha="$(git rev-parse "origin/${TARGET_REF}^{commit}")"
+            else
+              echo "Unable to resolve requested publish ref: ${TARGET_REF}" >&2
+              exit 1
+            fi
+            git checkout --detach "${target_sha}"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate OIDC source matches workflow ref
+        env:
+          TARGET_SHA: ${{ steps.ref.outputs.sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          if [[ "${TARGET_SHA}" != "${WORKFLOW_SHA}" ]]; then
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "Dry-run publish target differs from workflow ref; allowing validation-only dispatch."
+              exit 0
+            fi
+            echo "Plugin ClawHub OIDC publishes must run from the same ref that is being published." >&2
+            echo "The ref input is only supported for dry_run=true." >&2
+            echo "For real publishes, dispatch this workflow with --ref pointing at the target release tag/ref and omit the ref input." >&2
+            exit 1
+          fi
+
+      - name: Validate ref is on a trusted publish branch
+        env:
+          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor HEAD origin/main; then
+            exit 0
+          fi
+          while IFS= read -r release_ref; do
+            if git merge-base --is-ancestor HEAD "${release_ref}"; then
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+          if [[ "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            alpha_branch="${TRUSTED_PUBLISH_BRANCH}"
+            git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
+              exit 0
+            fi
+          fi
+          echo "Plugin ClawHub publishes must target a commit reachable from main, release/*, or the matching Tideclaw alpha branch." >&2
+          exit 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Validate publishable plugin metadata
+        env:
+          PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
+          RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
+          BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
+          HEAD_REF: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${PUBLISH_SCOPE}" ]]; then
+            release_args=(--selection-mode "${PUBLISH_SCOPE}")
+            if [[ -n "${RELEASE_PLUGINS}" ]]; then
+              release_args+=(--plugins "${RELEASE_PLUGINS}")
+            fi
+            pnpm release:plugins:clawhub:check -- "${release_args[@]}"
+          elif [[ -n "${BASE_REF}" ]]; then
+            pnpm release:plugins:clawhub:check -- --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}"
+          else
+            pnpm release:plugins:clawhub:check
+          fi
+
+      - name: Resolve plugin release plan
+        id: plan
+        env:
+          PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
+          RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
+          BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
+          HEAD_REF: ${{ steps.ref.outputs.sha }}
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+        run: |
+          set -euo pipefail
+          mkdir -p .local
+          if [[ -n "${PUBLISH_SCOPE}" ]]; then
+            plan_args=(--selection-mode "${PUBLISH_SCOPE}")
+            if [[ -n "${RELEASE_PLUGINS}" ]]; then
+              plan_args+=(--plugins "${RELEASE_PLUGINS}")
+            fi
+            node --import tsx scripts/plugin-clawhub-release-plan.ts "${plan_args[@]}" > .local/plugin-clawhub-release-plan.json
+          elif [[ -n "${BASE_REF}" ]]; then
+            node --import tsx scripts/plugin-clawhub-release-plan.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}" > .local/plugin-clawhub-release-plan.json
+          else
+            node --import tsx scripts/plugin-clawhub-release-plan.ts > .local/plugin-clawhub-release-plan.json
+          fi
+
+          cat .local/plugin-clawhub-release-plan.json
+
+          candidate_count="$(jq -r '.candidates | length' .local/plugin-clawhub-release-plan.json)"
+          bootstrap_candidate_count="$(jq -r '.bootstrapCandidates | length' .local/plugin-clawhub-release-plan.json)"
+          missing_trusted_publisher_count="$(jq -r '.missingTrustedPublisher | length' .local/plugin-clawhub-release-plan.json)"
+          skipped_published_count="$(jq -r '.skippedPublished | length' .local/plugin-clawhub-release-plan.json)"
+          has_candidates="false"
+          if [[ "${candidate_count}" != "0" ]]; then
+            has_candidates="true"
+          fi
+          has_bootstrap_candidates="false"
+          if [[ "${bootstrap_candidate_count}" != "0" ]]; then
+            has_bootstrap_candidates="true"
+          fi
+          has_missing_trusted_publisher="false"
+          if [[ "${missing_trusted_publisher_count}" != "0" ]]; then
+            has_missing_trusted_publisher="true"
+          fi
+          matrix_json="$(jq -c '.candidates' .local/plugin-clawhub-release-plan.json)"
+          bootstrap_matrix_json="$(jq -c '.bootstrapCandidates' .local/plugin-clawhub-release-plan.json)"
+          missing_trusted_publisher_matrix_json="$(jq -c '.missingTrustedPublisher' .local/plugin-clawhub-release-plan.json)"
+
+          {
+            echo "candidate_count=${candidate_count}"
+            echo "bootstrap_candidate_count=${bootstrap_candidate_count}"
+            echo "missing_trusted_publisher_count=${missing_trusted_publisher_count}"
+            echo "skipped_published_count=${skipped_published_count}"
+            echo "has_candidates=${has_candidates}"
+            echo "has_bootstrap_candidates=${has_bootstrap_candidates}"
+            echo "has_missing_trusted_publisher=${has_missing_trusted_publisher}"
+            echo "matrix=${matrix_json}"
+            echo "bootstrap_matrix=${bootstrap_matrix_json}"
+            echo "missing_trusted_publisher_matrix=${missing_trusted_publisher_matrix_json}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Plugin release candidates:"
+          jq -r '.candidates[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir)"' .local/plugin-clawhub-release-plan.json
+
+          echo "Bootstrap candidates requiring token bootstrap:"
+          jq -r '.bootstrapCandidates[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir)"' .local/plugin-clawhub-release-plan.json
+
+          echo "Missing trusted publisher candidates:"
+          jq -r '.missingTrustedPublisher[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir)"' .local/plugin-clawhub-release-plan.json
+
+          echo "Already published / skipped:"
+          jq -r '.skippedPublished[]? | "- \(.packageName)@\(.version)"' .local/plugin-clawhub-release-plan.json
+
+      - name: Fail when trusted publisher is missing
+        if: steps.plan.outputs.missing_trusted_publisher_count != '0'
+        run: |
+          echo "::error::One or more ClawHub packages exist but do not have trusted publishing configured. Configure trusted publishing before running the normal OIDC publish workflow."
+          jq -r '.missingTrustedPublisher[]? | "::error::Missing trusted publisher: \(.packageName)@\(.version). Configure trusted publishing for openclaw/openclaw, workflow plugin-clawhub-release.yml."' .local/plugin-clawhub-release-plan.json
+          exit 1
+
+      - name: Fail normal publish when bootstrap is required
+        if: steps.plan.outputs.bootstrap_candidate_count != '0'
+        run: |
+          echo "::error::One or more ClawHub packages do not exist yet and require the token-gated Plugin ClawHub New bootstrap workflow before normal OIDC publish can run."
+          jq -r '.bootstrapCandidates[]? | "::error::Bootstrap required: \(.packageName)@\(.version). Dispatch plugin-clawhub-new.yml for this package, then rerun the normal release."' .local/plugin-clawhub-release-plan.json
+          exit 1
+
+      - name: Fail manual publish when target versions already exist
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && inputs.publish_scope == 'selected' && steps.plan.outputs.skipped_published_count != '0'
+        run: |
+          echo "::error::One or more selected plugin versions already exist on ClawHub. Bump the version before running a real publish."
+          exit 1
+
+      - name: Validate Tideclaw alpha plugin channels
+        env:
+          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            exit 0
+          fi
+          invalid="$(
+            jq -r '.candidates[]? | select(.publishTag != "alpha" or .channel != "alpha") | "- \(.packageName)@\(.version) [\(.publishTag)]"' .local/plugin-clawhub-release-plan.json
+          )"
+          if [[ -n "${invalid}" ]]; then
+            echo "Tideclaw alpha ClawHub publishes may only publish alpha plugin versions." >&2
+            printf '%s\n' "${invalid}" >&2
+            exit 1
+          fi
+
+  validate_release_publish_approval:
+    name: Validate release publish approval
+    needs: preview_plugins_clawhub
+    if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Validate release publish approval run
+        env:
+          ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true"
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
+            if [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
+              echo "Plugin ClawHub publish dispatched by another workflow must include release_publish_run_id." >&2
+              exit 1
+            fi
+            echo "Direct Plugin ClawHub Release dispatch; relying on this workflow's clawhub-plugin-release environment approval."
+            exit 0
+          fi
+          direct_recovery=false
+          if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
+            direct_recovery=true
+            echo "Direct Plugin ClawHub Release recovery with release_publish_run_id; relying on this workflow's clawhub-plugin-release environment approval."
+          fi
+          RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
+
+  pack_plugins_clawhub_artifacts:
+    needs: [preview_plugins_clawhub, validate_release_publish_approval]
+    if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 32
+      matrix:
+        plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
+    steps:
+      - name: Validate target revision
+        env:
+          TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+        run: |
+          if [[ ! "${TARGET_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "ClawHub pack target must be a full lowercase commit SHA; got: ${TARGET_SHA}" >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+          install-deps: "true"
+
+      - name: Verify package-local runtime build
+        run: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package "${{ matrix.plugin.packageDir }}"
+
+      - name: Install pinned ClawHub CLI wrapper
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/clawhub" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- clawhub "$@"
+          EOF
+          chmod +x "${RUNNER_TEMP}/clawhub"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Pack ClawHub package artifact
+        env:
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          SOURCE_REF: ${{ github.ref }}
+          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: ${{ runner.temp }}/clawhub-package-artifact
+        run: bash scripts/plugin-clawhub-publish.sh --pack "${PACKAGE_DIR}"
+
+      - name: Upload ClawHub package artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.plugin.artifactName }}
+          path: ${{ runner.temp }}/clawhub-package-artifact/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  approve_plugins_clawhub_release:
+    needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success'
+    runs-on: ubuntu-latest
+    environment: clawhub-plugin-release
+    permissions:
+      contents: read
+    steps:
+      - name: Approve Plugin ClawHub release publish
+        run: |
+          echo "Approved CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows release publish gate."
+
+  publish_plugins_clawhub:
+    needs:
+      [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, approve_plugins_clawhub_release]
+    if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@d8096dfc039e86ab942ddf9ef117d04849fd84c1
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 32
+      matrix:
+        plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
+    with:
+      package_artifact_name: ${{ matrix.plugin.artifactName }}
+      dry_run: ${{ inputs.dry_run }}
+      registry: https://clawhub.ai
+      site: https://clawhub.ai
+      family: ${{ contains(fromJson('["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}
+      tags: ${{ matrix.plugin.publishTag }}
+      source_repo: ${{ github.repository }}
+      source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+      source_ref: ${{ github.ref }}
+      source_path: ${{ matrix.plugin.packageDir }}
+      inspector_artifact_name: ${{ matrix.plugin.artifactName }}-inspector
+      publish_json_artifact_name: ${{ matrix.plugin.artifactName }}-publish-json
+
+  verify_published_clawhub_package:
+    needs: [preview_plugins_clawhub, publish_plugins_clawhub]
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 32
+      matrix:
+        plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
+    steps:
+      - name: Checkout verification tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "false"
+          use-actions-cache: "false"
+
+      - name: Download published package input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ matrix.plugin.artifactName }}
+          path: ${{ runner.temp }}/clawhub-package-artifact
+
+      - name: Verify published ClawHub package
+        env:
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-clawhub-published-artifact.mjs \
+            --expected-artifact-dir "${RUNNER_TEMP}/clawhub-package-artifact" \
+            --package-name "${PACKAGE_NAME}" \
+            --package-version "${PACKAGE_VERSION}" \
+            --publish-tag "${PACKAGE_TAG}" \
+            --registry "${CLAWHUB_REGISTRY}"

@@ -1,0 +1,21 @@
+{
+  "enabled": true,
+  "allow": ["acpx", "discord", "memory", "telegram", "whatsapp"],
+  "entries": {
+    "acpx": {
+      "enabled": true,
+      "config": {
+        "openClawToolsMcpBridge": true
+      }
+    },
+    "discord": {
+      "enabled": true
+    },
+    "telegram": {
+      "enabled": true
+    },
+    "whatsapp": {
+      "enabled": true
+    }
+  }
+}

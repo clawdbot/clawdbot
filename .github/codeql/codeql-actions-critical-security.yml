@@ -1,0 +1,21 @@
+name: openclaw-codeql-actions-critical-security
+
+disable-default-queries: true
+
+queries:
+  - uses: security-extended
+
+query-filters:
+  - include:
+      precision:
+        - high
+        - very-high
+      tags contain: security
+      security-severity: /([7-9]|10)\.(\d)+/
+
+paths:
+  - .github/actions
+  - .github/workflows
+
+paths-ignore:
+  - .github/workflows/stale.yml

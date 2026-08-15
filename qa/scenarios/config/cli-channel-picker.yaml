@@ -1,0 +1,30 @@
+title: CLI channel picker
+
+scenario:
+  id: cli-channel-picker
+  surface: cli
+  category: cli.plugin-and-channel-setup
+  coverage:
+    primary:
+      - cli.channel-picker
+  objective: Drive the real interactive channel picker in an isolated OpenClaw home and verify its persisted configuration.
+  successCriteria:
+    - The producer launches the compiled OpenClaw CLI through a real PTY with an isolated OPENCLAW_HOME.
+    - The interaction selects Telegram, enters a test token, finishes the picker, and exits successfully.
+    - The written config enables the Telegram plugin and channel, preserves the default group mention gate, and records configure wizard metadata.
+    - Missing final output, a stalled picker, non-zero exit, or mismatched configuration produces failed evidence.
+  docsRefs:
+    - docs/channels/telegram.md
+    - docs/help/testing.md
+  codeRefs:
+    - test/e2e/qa-lab/config/cli-channel-picker.ts
+    - scripts/e2e/lib/run-with-pty.mjs
+    - src/flows/channel-setup.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/config/cli-channel-picker.ts
+    summary: Spawns the real channel picker under an isolated home, drives it through a PTY, asserts the config write, and emits QA evidence.
+    timeoutMs: 180000
+    args:
+      - --artifact-base
+      - ${outputDir}

@@ -1,0 +1,38 @@
+title: Gateway published protocol artifacts
+
+scenario:
+  id: gateway-protocol-artifacts
+  surface: runtime
+  category: gateway.protocol-compatibility
+  coverage:
+    primary:
+      - gateway.published-protocol-schema
+      - gateway.json-schema-export
+      - gateway.swift-client-models
+      - gateway.backward-compatible-evolution
+  objective: Verify the published Gateway protocol package and generated Swift models stay aligned with the canonical protocol registry and additive compatibility contract.
+  successCriteria:
+    - The real `@openclaw/gateway-protocol` package build is packed and unpacked before inspection.
+    - The unpacked package imports its built validators and schema registry successfully.
+    - The shipped `protocol.schema.json` exactly matches the canonical TypeBox registry and includes connect, request, response, and event definitions.
+    - The canonical protocol drift checks, including generated Swift model drift, pass.
+    - Generated Swift models compile and decode legacy-minimal frames plus additive optional and unknown fields.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/concepts/qa-e2e-automation.md
+    - docs/reference/test.md
+  codeRefs:
+    - packages/gateway-protocol/package.json
+    - packages/gateway-protocol/src/schema/protocol-schemas.ts
+    - scripts/protocol-gen.ts
+    - scripts/protocol-gen-swift.ts
+    - test/e2e/qa-lab/runtime/gateway-protocol-artifacts.ts
+    - apps/shared/OpenClawKit/Tests/OpenClawKitTests/GatewayProtocolGeneratedModelsTests.swift
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/gateway-protocol-artifacts.ts
+    summary: Packs and imports the real Gateway protocol npm artifact, checks canonical JSON Schema and generated-model drift, then runs targeted Swift compatibility decoding.
+    timeoutMs: 1800000
+    args:
+      - --artifact-base
+      - ${outputDir}

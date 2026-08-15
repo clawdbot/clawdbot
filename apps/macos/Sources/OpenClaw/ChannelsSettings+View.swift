@@ -1,0 +1,177 @@
+import SwiftUI
+
+extension ChannelsSettings {
+    var body: some View {
+        let channels = self.orderedChannels
+        return HStack(spacing: 0) {
+            self.sidebar(channels: channels)
+            self.detail
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .settingsDetailContent()
+        .onAppear {
+            self.updateActiveWork(active: self.isActive)
+            self.ensureSelection(in: channels)
+        }
+        .onChange(of: self.isActive) { _, active in
+            self.updateActiveWork(active: active)
+        }
+        .onChange(of: channels) { _, newValue in
+            self.ensureSelection(in: newValue)
+        }
+        .onDisappear { self.store.stop() }
+    }
+
+    private func updateActiveWork(active: Bool) {
+        if active {
+            self.store.start()
+        } else {
+            self.store.stop()
+        }
+    }
+
+    private func sidebar(channels: [ChannelItem]) -> some View {
+        let enabled = channels.filter { self.channelEnabled($0) }
+        let available = channels.filter { !self.channelEnabled($0) }
+
+        return SettingsSidebarScroll {
+            LazyVStack(alignment: .leading, spacing: 8) {
+                if !enabled.isEmpty {
+                    self.sidebarSectionHeader("Configured")
+                    ForEach(enabled) { channel in
+                        self.sidebarRow(channel)
+                    }
+                }
+
+                if !available.isEmpty {
+                    self.sidebarSectionHeader("Available")
+                    ForEach(available) { channel in
+                        self.sidebarRow(channel)
+                    }
+                }
+            }
+        }
+    }
+
+    private var detail: some View {
+        Group {
+            if let channel = self.selectedChannel {
+                self.channelDetail(channel)
+            } else {
+                self.emptyDetail
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .layoutPriority(1)
+    }
+
+    private var emptyDetail: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Channels")
+                .font(.title3.weight(.semibold))
+            Text("Select a channel to view status and settings.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+        .padding(.vertical, SettingsLayout.detailVerticalPadding)
+    }
+
+    private func channelDetail(_ channel: ChannelItem) -> some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 16) {
+                self.detailHeader(for: channel)
+                Divider()
+                self.channelSection(channel)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+            .padding(.vertical, SettingsLayout.detailVerticalPadding)
+        }
+    }
+
+    private func sidebarRow(_ channel: ChannelItem) -> some View {
+        let isSelected = self.selectedChannel == channel
+        return Button {
+            self.selectedChannel = channel
+        } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(self.channelTint(channel))
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(channel.title)
+                    Text(self.channelSummary(channel))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Color.clear) // ensure full-width hit test area
+            .contentShape(Rectangle())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+    }
+
+    private func sidebarSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .padding(.horizontal, 4)
+            .padding(.top, 2)
+    }
+
+    private func detailHeader(for channel: ChannelItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Label(channel.detailTitle, systemImage: channel.systemImage)
+                    .font(.title3.weight(.semibold))
+                self.statusBadge(
+                    self.channelSummary(channel),
+                    color: self.channelTint(channel))
+                Spacer(minLength: 12)
+                self.channelHeaderActions(channel)
+            }
+
+            HStack(spacing: 10) {
+                Text("Last check \(self.channelLastCheckText(channel))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if self.channelHasError(channel) {
+                    Text("Error")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.red.opacity(0.15))
+                        .foregroundStyle(.red)
+                        .clipShape(Capsule())
+                }
+            }
+
+            if let details = self.channelDetails(channel) {
+                Text(details)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func statusBadge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.16))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
+    }
+}

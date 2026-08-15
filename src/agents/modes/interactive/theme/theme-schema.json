@@ -1,0 +1,335 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"title": "OpenClaw Agent Theme",
+	"description": "Theme schema for OpenClaw agent",
+	"type": "object",
+	"required": ["name", "colors"],
+	"properties": {
+		"$schema": {
+			"type": "string",
+			"description": "JSON schema reference"
+		},
+		"name": {
+			"type": "string",
+			"description": "Theme name"
+		},
+		"vars": {
+			"type": "object",
+			"description": "Reusable color variables",
+			"additionalProperties": {
+				"oneOf": [
+					{
+						"type": "string",
+						"description": "Hex color (#RRGGBB), variable reference, or empty string for terminal default"
+					},
+					{
+						"type": "integer",
+						"minimum": 0,
+						"maximum": 255,
+						"description": "256-color palette index (0-255)"
+					}
+				]
+			}
+		},
+		"colors": {
+			"type": "object",
+			"description": "Theme color definitions (all required)",
+			"required": [
+				"accent",
+				"border",
+				"borderAccent",
+				"borderMuted",
+				"success",
+				"error",
+				"warning",
+				"muted",
+				"dim",
+				"text",
+				"thinkingText",
+				"selectedBg",
+				"userMessageBg",
+				"userMessageText",
+				"customMessageBg",
+				"customMessageText",
+				"customMessageLabel",
+				"toolPendingBg",
+				"toolSuccessBg",
+				"toolErrorBg",
+				"toolTitle",
+				"toolOutput",
+				"mdHeading",
+				"mdLink",
+				"mdLinkUrl",
+				"mdCode",
+				"mdCodeBlock",
+				"mdCodeBlockBorder",
+				"mdQuote",
+				"mdQuoteBorder",
+				"mdHr",
+				"mdListBullet",
+				"toolDiffAdded",
+				"toolDiffRemoved",
+				"toolDiffContext",
+				"syntaxComment",
+				"syntaxKeyword",
+				"syntaxFunction",
+				"syntaxVariable",
+				"syntaxString",
+				"syntaxNumber",
+				"syntaxType",
+				"syntaxOperator",
+				"syntaxPunctuation",
+				"thinkingOff",
+				"thinkingMinimal",
+				"thinkingLow",
+				"thinkingMedium",
+				"thinkingHigh",
+				"thinkingXhigh",
+				"bashMode"
+			],
+			"properties": {
+				"accent": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Primary accent color (logo, selected items, cursor)"
+				},
+				"border": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Normal borders"
+				},
+				"borderAccent": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Highlighted borders"
+				},
+				"borderMuted": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Subtle borders"
+				},
+				"success": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Success states"
+				},
+				"error": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Error states"
+				},
+				"warning": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Warning states"
+				},
+				"muted": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Secondary/dimmed text"
+				},
+				"dim": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Very dimmed text (more subtle than muted)"
+				},
+				"text": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Default text color (usually empty string)"
+				},
+				"thinkingText": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Thinking block text color"
+				},
+				"selectedBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Selected item background"
+				},
+				"userMessageBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "User message background"
+				},
+				"userMessageText": {
+					"$ref": "#/$defs/colorValue",
+					"description": "User message text color"
+				},
+				"customMessageBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Custom message background (hook-injected messages)"
+				},
+				"customMessageText": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Custom message text color"
+				},
+				"customMessageLabel": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Custom message type label color"
+				},
+				"toolPendingBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool execution box (pending state)"
+				},
+				"toolSuccessBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool execution box (success state)"
+				},
+				"toolErrorBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool execution box (error state)"
+				},
+				"toolTitle": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool execution box title color"
+				},
+				"toolOutput": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Tool execution box output text color"
+				},
+				"mdHeading": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown heading text"
+				},
+				"mdLink": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown link text"
+				},
+				"mdLinkUrl": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown link URL"
+				},
+				"mdCode": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown inline code"
+				},
+				"mdCodeBlock": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown code block content"
+				},
+				"mdCodeBlockBorder": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown code block fences"
+				},
+				"mdQuote": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown blockquote text"
+				},
+				"mdQuoteBorder": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown blockquote border"
+				},
+				"mdHr": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown horizontal rule"
+				},
+				"mdListBullet": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown list bullets/numbers"
+				},
+				"toolDiffAdded": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Added lines in tool diffs"
+				},
+				"toolDiffRemoved": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Removed lines in tool diffs"
+				},
+				"toolDiffContext": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Context lines in tool diffs"
+				},
+				"syntaxComment": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Syntax highlighting: comments"
+				},
+				"syntaxKeyword": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Syntax highlighting: keywords"
+				},
+				"syntaxFunction": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Syntax highlighting: function names"
+				},
+				"syntaxVariable": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Syntax highlighting: variable names"
+				},
+				"syntaxString": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Syntax highlighting: string literals"
+				},
+				"syntaxNumber": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Syntax highlighting: number literals"
+				},
+				"syntaxType": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Syntax highlighting: type names"
+				},
+				"syntaxOperator": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Syntax highlighting: operators"
+				},
+				"syntaxPunctuation": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Syntax highlighting: punctuation"
+				},
+				"thinkingOff": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Thinking level border: off"
+				},
+				"thinkingMinimal": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Thinking level border: minimal"
+				},
+				"thinkingLow": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Thinking level border: low"
+				},
+				"thinkingMedium": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Thinking level border: medium"
+				},
+				"thinkingHigh": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Thinking level border: high"
+				},
+				"thinkingXhigh": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Thinking level border: xhigh (OpenAI codex-max only)"
+				},
+				"bashMode": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Editor border color in bash mode"
+				}
+			},
+			"additionalProperties": false
+		},
+		"export": {
+			"type": "object",
+			"description": "Optional colors for HTML export (defaults derived from userMessageBg if not specified)",
+			"properties": {
+				"pageBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Page background color"
+				},
+				"cardBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Card/container background color"
+				},
+				"infoBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Info sections background (system prompt, notices)"
+				}
+			},
+			"additionalProperties": false
+		}
+	},
+	"additionalProperties": false,
+	"$defs": {
+		"colorValue": {
+			"oneOf": [
+				{
+					"type": "string",
+					"description": "Hex color (#RRGGBB), variable reference, or empty string for terminal default"
+				},
+				{
+					"type": "integer",
+					"minimum": 0,
+					"maximum": 255,
+					"description": "256-color palette index (0-255)"
+				}
+			]
+		}
+	}
+}

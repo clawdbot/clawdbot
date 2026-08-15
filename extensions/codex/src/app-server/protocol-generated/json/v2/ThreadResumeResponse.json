@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "activePermissionProfile": {
+      "anyOf": [
+        {
+          "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/ActivePermissionProfile"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Named or implicit built-in profile that produced the active permissions, when known."
+    },
+    "approvalPolicy": {
+      "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/AskForApproval"
+    },
+    "approvalsReviewer": {
+      "allOf": [
+        {
+          "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/ApprovalsReviewer"
+        }
+      ],
+      "description": "Reviewer currently used for approval requests on this thread."
+    },
+    "cwd": {
+      "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/AbsolutePathBuf"
+    },
+    "initialTurnsPage": {
+      "anyOf": [
+        {
+          "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/TurnsPage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "`thread/turns/list` page returned when requested by `initialTurnsPage`."
+    },
+    "instructionSources": {
+      "default": [],
+      "description": "Environment-native paths to instruction source files currently loaded for this thread.",
+      "items": {
+        "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/LegacyAppPathString"
+      },
+      "type": "array"
+    },
+    "itemsBackwardsCursor": {
+      "default": null,
+      "description": "Opaque head cursor for hydrating paginated items backwards.\n\nPass this as `cursor` to `thread/items/list` with `sortDirection: \"desc\"`. The first page includes the cursor's head item.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "model": {
+      "type": "string"
+    },
+    "modelProvider": {
+      "type": "string"
+    },
+    "multiAgentMode": {
+      "allOf": [
+        {
+          "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/MultiAgentMode"
+        }
+      ],
+      "default": "explicitRequestOnly",
+      "description": "@deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior."
+    },
+    "reasoningEffort": {
+      "anyOf": [
+        {
+          "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/ReasoningEffort"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "runtimeWorkspaceRoots": {
+      "default": [],
+      "description": "Thread-scoped runtime workspace roots used to materialize `:workspace_roots`.",
+      "items": {
+        "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/AbsolutePathBuf"
+      },
+      "type": "array"
+    },
+    "sandbox": {
+      "allOf": [
+        {
+          "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/SandboxPolicy"
+        }
+      ],
+      "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
+    },
+    "serviceTier": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "thread": {
+      "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/Thread"
+    },
+    "turnsBackwardsCursor": {
+      "default": null,
+      "description": "Opaque head cursor for hydrating paginated turns backwards.\n\nPass this as `cursor` to `thread/turns/list` with `sortDirection: \"desc\"`. The first page includes the cursor's head turn.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "approvalPolicy",
+    "approvalsReviewer",
+    "cwd",
+    "model",
+    "modelProvider",
+    "sandbox",
+    "thread"
+  ],
+  "title": "ThreadResumeResponse",
+  "type": "object"
+}

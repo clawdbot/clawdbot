@@ -1,0 +1,293 @@
+/** Tests model fallback notice formatting and transition state tracking. */
+import { afterEach, describe, expect, it } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import {
+  resolveActiveFallbackState,
+  type FallbackNoticeState,
+} from "../status/fallback-notice-state.js";
+import { buildFallbackNotice, resolveFallbackTransition } from "./fallback-state.js";
+
+const baseAttempt = {
+  provider: "demo-primary",
+  model: "demo-primary/model-a",
+  error: "Provider demo-primary is in cooldown (all profiles unavailable)",
+  reason: "rate_limit" as const,
+};
+
+const activeFallbackState: FallbackNoticeState = {
+  fallbackNotice: {
+    kind: "active",
+    selectedModel: "demo-primary/model-a",
+    activeModel: "demo-fallback/model-b",
+    reason: "rate limit",
+  },
+};
+
+function registerAnthropicCliBackendForTest(): void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+    ],
+  });
+}
+
+function resolveDemoFallbackTransition(
+  overrides: Partial<Parameters<typeof resolveFallbackTransition>[0]> = {},
+) {
+  return resolveFallbackTransition({
+    selectedProvider: "demo-primary",
+    selectedModel: "model-a",
+    activeProvider: "demo-fallback",
+    activeModel: "model-b",
+    attempts: [baseAttempt],
+    state: {},
+    ...overrides,
+  });
+}
+
+describe("fallback-state", () => {
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+  });
+
+  it.each([
+    {
+      name: "treats fallback as active only when state matches selected and active refs",
+      state: activeFallbackState,
+      expected: { active: true, reason: "rate limit" },
+    },
+    {
+      name: "does not treat runtime drift as fallback when persisted state does not match",
+      state: {
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "other-provider/other-model",
+          activeModel: "demo-fallback/model-b",
+          reason: "rate limit",
+        },
+      } satisfies FallbackNoticeState,
+      expected: { active: false, reason: undefined },
+    },
+  ])("$name", ({ state, expected }) => {
+    const resolved = resolveActiveFallbackState({
+      selectedModelRef: "demo-primary/model-a",
+      activeModelRef: "demo-fallback/model-b",
+      state,
+    });
+
+    expect(resolved).toEqual(expected);
+  });
+
+  it("marks fallback transition when selected->active pair changes", () => {
+    const resolved = resolveDemoFallbackTransition();
+
+    expect(resolved.fallbackActive).toBe(true);
+    expect(resolved.fallbackTransitioned).toBe(true);
+    expect(resolved.fallbackCleared).toBe(false);
+    expect(resolved.stateChanged).toBe(true);
+    expect(resolved.reasonSummary).toBe("rate limit");
+    expect(resolved.nextState.selectedModel).toBe("demo-primary/model-a");
+    expect(resolved.nextState.activeModel).toBe("demo-fallback/model-b");
+  });
+
+  it("prefers formatted transient error details over generic rate-limit labels", () => {
+    const resolved = resolveDemoFallbackTransition({
+      attempts: [
+        {
+          ...baseAttempt,
+          error: "429 Too Many Requests: Claude Max usage limit reached, try again in 6 minutes.",
+        },
+      ],
+    });
+
+    expect(resolved.reasonSummary).toContain("HTTP 429: Too Many Requests");
+    expect(resolved.reasonSummary).toContain("Claude Max usage limit reached");
+  });
+
+  it.each([
+    // 真实 AWS Bedrock fixture，provenance 可追溯:
+    //   src/agents/failover-error.test.ts:54（引用 AWS troubleshooting 文档）
+    //   src/agents/failover-error.test.ts:688 / provider-error-patterns.test.ts:153
+    "ThrottlingException: Your request was denied due to exceeding the account quotas for Amazon Bedrock.",
+    "ThrottlingException: Too many concurrent requests",
+  ])(
+    "preserves throttle-flavored transient details over the generic rate-limit label (%j)",
+    (error) => {
+      const resolved = resolveDemoFallbackTransition({
+        attempts: [{ ...baseAttempt, error }],
+      });
+
+      // 回归: TRANSIENT_ERROR_DETAIL_HINT_RE 必须命中 throttle 词族
+      // (throttle/throttling/throttled/ThrottlingException)。原先裸 `throttl\b`
+      // 仅匹配不存在的词干 "throttl"，真实 Bedrock 消息全部失配，详细预览被
+      // 塌缩成通用 "rate limit" 标签。修复后预览得以保留。
+      expect(resolved.reasonSummary).toContain("ThrottlingException");
+      expect(resolved.reasonSummary).not.toBe("rate limit");
+    },
+  );
+
+  it("still collapses to the reason label when a transient reason lacks any transient-detail hint", () => {
+    // 防止过度匹配: 修复不得让门控对无 transient 提示的文本也放行。
+    const resolved = resolveDemoFallbackTransition({
+      attempts: [{ ...baseAttempt, error: "Unauthorized: invalid API key" }],
+    });
+
+    expect(resolved.reasonSummary).toBe("rate limit");
+  });
+
+  it("keeps truncated transient error details UTF-16 safe", () => {
+    const detail = "x".repeat(68);
+    const resolved = resolveDemoFallbackTransition({
+      attempts: [{ ...baseAttempt, error: `429 ${detail}😀tail` }],
+    });
+
+    expect(resolved.reasonSummary).toBe(`HTTP 429: ${detail}…`);
+  });
+
+  it("refreshes reason when fallback remains active with same model pair", () => {
+    const resolved = resolveDemoFallbackTransition({
+      attempts: [{ ...baseAttempt, reason: "timeout" }],
+      state: activeFallbackState,
+    });
+
+    expect(resolved.fallbackTransitioned).toBe(false);
+    expect(resolved.stateChanged).toBe(true);
+    expect(resolved.nextState.reason).toBe("timeout");
+  });
+
+  it("marks fallback as cleared when runtime returns to selected model", () => {
+    const resolved = resolveDemoFallbackTransition({
+      activeProvider: "demo-primary",
+      selectedModel: "model-a",
+      activeModel: "model-a",
+      attempts: [],
+      state: activeFallbackState,
+    });
+
+    expect(resolved.fallbackActive).toBe(false);
+    expect(resolved.fallbackCleared).toBe(true);
+    expect(resolved.fallbackTransitioned).toBe(false);
+    expect(resolved.stateChanged).toBe(true);
+    expect(resolved.nextState.selectedModel).toBeUndefined();
+    expect(resolved.nextState.activeModel).toBeUndefined();
+    expect(resolved.nextState.reason).toBeUndefined();
+  });
+
+  it("does not treat a CLI runtime alias as a model fallback", () => {
+    registerAnthropicCliBackendForTest();
+
+    const resolved = resolveFallbackTransition({
+      selectedProvider: "anthropic",
+      selectedModel: "claude-opus-4-7",
+      activeProvider: "claude-cli",
+      activeModel: "claude-opus-4-7",
+      attempts: [],
+      state: {
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
+      },
+      cfg: {},
+    });
+
+    expect(resolved.fallbackActive).toBe(false);
+    expect(resolved.fallbackCleared).toBe(false);
+    expect(resolved.stateChanged).toBe(true);
+    expect(resolved.nextState.selectedModel).toBeUndefined();
+    expect(resolved.nextState.activeModel).toBeUndefined();
+  });
+
+  it("does not repeat runtime alias comparison when persisted fallback refs match", () => {
+    let setupBackendLookups = 0;
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: ({ backend }) => {
+        setupBackendLookups += 1;
+        return backend === "claude-cli"
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined;
+      },
+      resolvePluginSetupRegistry: () => {
+        throw new Error("full setup registry should not load for a single runtime alias");
+      },
+      resolveRuntimeCliBackends: () => [],
+    });
+
+    const resolved = resolveFallbackTransition({
+      selectedProvider: "anthropic",
+      selectedModel: "claude-opus-4-7",
+      activeProvider: "claude-cli",
+      activeModel: "claude-opus-4-7",
+      attempts: [],
+      state: {
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
+      },
+      cfg: {},
+    });
+
+    expect(resolved.fallbackActive).toBe(false);
+    expect(setupBackendLookups).toBe(2);
+  });
+
+  it("does not build a fallback notice for equivalent CLI runtime aliases", () => {
+    registerAnthropicCliBackendForTest();
+
+    expect(
+      buildFallbackNotice({
+        selectedProvider: "anthropic",
+        selectedModel: "claude-opus-4-7",
+        activeProvider: "claude-cli",
+        activeModel: "claude-opus-4-7",
+        attempts: [],
+      }),
+    ).toBeNull();
+  });
+
+  it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "o3"])(
+    "does not build a fallback notice for the OpenAI Codex runtime provider alias with %s",
+    (model) => {
+      expect(
+        buildFallbackNotice({
+          selectedProvider: "openai",
+          selectedModel: model,
+          activeProvider: "openai",
+          activeModel: model,
+          attempts: [],
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("still reports fallback when the OpenAI Codex runtime switches model ids", () => {
+    expect(
+      buildFallbackNotice({
+        selectedProvider: "openai",
+        selectedModel: "gpt-5.5",
+        activeProvider: "openai",
+        activeModel: "gpt-5.4",
+        attempts: [],
+      }),
+    ).toContain("selected openai/gpt-5.5");
+  });
+});

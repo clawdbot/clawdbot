@@ -1,0 +1,8 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"in","kind":"partial","data":{"text":"Successful assistant"}}
+{"seq":3,"at":0,"dir":"out","kind":"POST /posts","data":{"payload":{"channel_id":"channel-trace","message":"Successful assistant","root_id":"root-trace"},"result":{"id":"post-1"},"target":"channel-trace"}}
+{"seq":4,"at":1200,"dir":"in","kind":"final","data":{"text":"Successful assistant final"}}
+{"seq":5,"at":1200,"dir":"out","kind":"PUT /posts/post-1","data":{"payload":{"id":"post-1","message":"Successful assistant final"},"result":{"id":"post-1"},"target":"post-1"}}
+{"seq":6,"at":1200,"dir":"in","kind":"final","data":{"isError":true,"text":"Tool error warning"}}
+{"seq":7,"at":1200,"dir":"out","kind":"POST /posts","data":{"payload":{"channel_id":"channel-trace","message":"Tool error warning","root_id":"root-trace"},"result":{"id":"post-2"},"target":"channel-trace"}}
+{"seq":8,"at":1200,"dir":"in","kind":"idle"}

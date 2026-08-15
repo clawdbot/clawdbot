@@ -1,0 +1,205 @@
+package ai.openclaw.app.ui
+
+import ai.openclaw.app.R
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+
+internal data class MobileColors(
+  val surface: Color,
+  val surfaceStrong: Color,
+  val cardSurface: Color,
+  val border: Color,
+  val borderStrong: Color,
+  val text: Color,
+  val textSecondary: Color,
+  val textTertiary: Color,
+  val accent: Color,
+  val accentSoft: Color,
+  val accentBorderStrong: Color,
+  val success: Color,
+  val successSoft: Color,
+  val warning: Color,
+  val warningSoft: Color,
+  val danger: Color,
+  val dangerSoft: Color,
+  val codeBg: Color,
+  val codeText: Color,
+  val codeBorder: Color,
+  val codeAccent: Color,
+  // Syntax token colors; every value must keep >= 4.5:1 contrast against codeBg in its theme.
+  val codeKeyword: Color,
+  val codeString: Color,
+  val codeComment: Color,
+  val codeNumber: Color,
+  val chipBorderConnected: Color,
+  val chipBorderConnecting: Color,
+  val chipBorderWarning: Color,
+  val chipBorderError: Color,
+)
+
+internal fun lightMobileColors() =
+  MobileColors(
+    surface = Color(0xFFFAFBFC),
+    surfaceStrong = Color(0xFFEFF3F8),
+    cardSurface = Color(0xFFFFFFFF),
+    border = Color(0xFFDDE3EC),
+    borderStrong = Color(0xFFC7D0DC),
+    text = Color(0xFF16181D),
+    textSecondary = Color(0xFF505B6A),
+    textTertiary = Color(0xFF8E98A7),
+    accent = Color(0xFF1B5ACB),
+    accentSoft = Color(0xFFEAF2FF),
+    accentBorderStrong = Color(0xFF174CA9),
+    success = Color(0xFF287F52),
+    successSoft = Color(0xFFEAF7F0),
+    warning = Color(0xFFAF7418),
+    warningSoft = Color(0xFFFFF4DF),
+    danger = Color(0xFFC94343),
+    dangerSoft = Color(0xFFFFECEC),
+    codeBg = Color(0xFFEFF3F8),
+    codeText = Color(0xFF172033),
+    codeBorder = Color(0xFFD7DDE7),
+    codeAccent = Color(0xFF287F52),
+    codeKeyword = Color(0xFF1B5ACB),
+    codeString = Color(0xFF1F6B45),
+    codeComment = Color(0xFF505B6A),
+    codeNumber = Color(0xFF8F5D10),
+    chipBorderConnected = Color(0xFFCFEBD8),
+    chipBorderConnecting = Color(0xFFD5E2FA),
+    chipBorderWarning = Color(0xFFEED8B8),
+    chipBorderError = Color(0xFFF3C8C8),
+  )
+
+internal fun darkMobileColors() =
+  MobileColors(
+    surface = Color(0xFF1A1C20),
+    surfaceStrong = Color(0xFF24262B),
+    cardSurface = Color(0xFF1E2024),
+    border = Color(0xFF2E3038),
+    borderStrong = Color(0xFF3A3D46),
+    text = Color(0xFFE4E5EA),
+    textSecondary = Color(0xFFA0A6B4),
+    textTertiary = Color(0xFF6B7280),
+    accent = Color(0xFF6EA8FF),
+    accentSoft = Color(0xFF1A2A44),
+    accentBorderStrong = Color(0xFF5B93E8),
+    success = Color(0xFF5FBB85),
+    successSoft = Color(0xFF152E22),
+    warning = Color(0xFFE8A844),
+    warningSoft = Color(0xFF2E2212),
+    danger = Color(0xFFE87070),
+    dangerSoft = Color(0xFF2E1616),
+    codeBg = Color(0xFF111317),
+    codeText = Color(0xFFE8EAEE),
+    codeBorder = Color(0xFF2B2E35),
+    codeAccent = Color(0xFF3FC97A),
+    codeKeyword = Color(0xFF6EA8FF),
+    codeString = Color(0xFF3FC97A),
+    codeComment = Color(0xFFA0A6B4),
+    codeNumber = Color(0xFFE8A844),
+    chipBorderConnected = Color(0xFF1E4A30),
+    chipBorderConnecting = Color(0xFF1E3358),
+    chipBorderWarning = Color(0xFF3E3018),
+    chipBorderError = Color(0xFF3E1E1E),
+  )
+
+// Defaulting to light tokens keeps previews/tests usable when a screen forgets to
+// provide the app theme; production roots override this composition local.
+internal val LocalMobileColors = staticCompositionLocalOf { lightMobileColors() }
+
+internal object MobileColorsAccessor {
+  val current: MobileColors
+    @Composable get() = LocalMobileColors.current
+}
+
+// Keep these accessors while screens migrate to `MobileColorsAccessor.current`.
+// Each getter must stay composable so callers always read the active theme.
+internal val mobileSurface: Color @Composable get() = LocalMobileColors.current.surface
+internal val mobileCardSurface: Color @Composable get() = LocalMobileColors.current.cardSurface
+internal val mobileBorder: Color @Composable get() = LocalMobileColors.current.border
+internal val mobileBorderStrong: Color @Composable get() = LocalMobileColors.current.borderStrong
+internal val mobileText: Color @Composable get() = LocalMobileColors.current.text
+internal val mobileTextSecondary: Color @Composable get() = LocalMobileColors.current.textSecondary
+internal val mobileTextTertiary: Color @Composable get() = LocalMobileColors.current.textTertiary
+internal val mobileAccent: Color @Composable get() = LocalMobileColors.current.accent
+internal val mobileAccentSoft: Color @Composable get() = LocalMobileColors.current.accentSoft
+internal val mobileAccentBorderStrong: Color @Composable get() = LocalMobileColors.current.accentBorderStrong
+internal val mobileWarning: Color @Composable get() = LocalMobileColors.current.warning
+internal val mobileWarningSoft: Color @Composable get() = LocalMobileColors.current.warningSoft
+internal val mobileDanger: Color @Composable get() = LocalMobileColors.current.danger
+internal val mobileDangerSoft: Color @Composable get() = LocalMobileColors.current.dangerSoft
+internal val mobileCodeBg: Color @Composable get() = LocalMobileColors.current.codeBg
+internal val mobileCodeText: Color @Composable get() = LocalMobileColors.current.codeText
+internal val mobileCodeBorder: Color @Composable get() = LocalMobileColors.current.codeBorder
+
+// Build the page backdrop from semantic surfaces so light/dark palettes keep
+// their contrast relationship without duplicating raw color stops.
+internal val mobileBackgroundGradient: Brush
+  @Composable get() {
+    val colors = LocalMobileColors.current
+    return Brush.verticalGradient(
+      listOf(
+        colors.surface,
+        colors.surfaceStrong,
+        colors.surfaceStrong,
+      ),
+    )
+  }
+
+internal val mobileFontFamily =
+  FontFamily(
+    Font(resId = R.font.manrope_400_regular, weight = FontWeight.Normal),
+    Font(resId = R.font.manrope_500_medium, weight = FontWeight.Medium),
+    Font(resId = R.font.manrope_600_semibold, weight = FontWeight.SemiBold),
+    Font(resId = R.font.manrope_700_bold, weight = FontWeight.Bold),
+  )
+
+internal val mobileHeadline =
+  TextStyle(
+    fontFamily = mobileFontFamily,
+    fontWeight = FontWeight.SemiBold,
+    fontSize = 16.sp,
+    lineHeight = 22.sp,
+    letterSpacing = (-0.1).sp,
+  )
+
+internal val mobileBody =
+  TextStyle(
+    fontFamily = mobileFontFamily,
+    fontWeight = FontWeight.Medium,
+    fontSize = 15.sp,
+    lineHeight = 22.sp,
+  )
+
+internal val mobileCallout =
+  TextStyle(
+    fontFamily = mobileFontFamily,
+    fontWeight = FontWeight.Medium,
+    fontSize = 14.sp,
+    lineHeight = 20.sp,
+  )
+
+internal val mobileCaption1 =
+  TextStyle(
+    fontFamily = mobileFontFamily,
+    fontWeight = FontWeight.Medium,
+    fontSize = 12.sp,
+    lineHeight = 16.sp,
+    letterSpacing = 0.2.sp,
+  )
+
+internal val mobileCaption2 =
+  TextStyle(
+    fontFamily = mobileFontFamily,
+    fontWeight = FontWeight.Medium,
+    fontSize = 11.sp,
+    lineHeight = 14.sp,
+    letterSpacing = 0.4.sp,
+  )

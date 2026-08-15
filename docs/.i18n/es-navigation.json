@@ -1,0 +1,18 @@
+{
+  "language": "es",
+  "tabs": [
+    {
+      "tab": "Comenzar",
+      "groups": [
+        {
+          "group": "Resumen",
+          "pages": ["es/index"]
+        },
+        {
+          "group": "Primeros pasos",
+          "pages": ["es/start/getting-started", "es/start/wizard"]
+        }
+      ]
+    }
+  ]
+}

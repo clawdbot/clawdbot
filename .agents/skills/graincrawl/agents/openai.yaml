@@ -1,0 +1,4 @@
+interface:
+  display_name: "Graincrawl"
+  short_description: "Search local Granola notes and transcripts"
+  default_prompt: "Use $graincrawl to search local Granola notes, transcripts, and panels, check freshness, and report exact date spans and source gaps."

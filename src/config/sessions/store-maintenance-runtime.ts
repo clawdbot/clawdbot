@@ -1,0 +1,17 @@
+// Runtime maintenance config reads current config and falls back for narrow helpers/tests.
+import { getRuntimeConfig } from "../config.js";
+import type { SessionMaintenanceConfig } from "../types.base.js";
+import {
+  resolveMaintenanceConfigFromInput,
+  type ResolvedSessionMaintenanceConfig,
+} from "./store-maintenance.js";
+
+export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
+  let maintenance: SessionMaintenanceConfig | undefined;
+  try {
+    maintenance = getRuntimeConfig().session?.maintenance;
+  } catch {
+    // Config may not be available in narrow test/runtime helpers.
+  }
+  return resolveMaintenanceConfigFromInput(maintenance);
+}

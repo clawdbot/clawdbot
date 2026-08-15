@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-discover-gateways"
+description = "Enables the discover_gateways command without any pre-configured scope."
+commands.allow = ["discover_gateways"]
+
+[[permission]]
+identifier = "deny-discover-gateways"
+description = "Denies the discover_gateways command without any pre-configured scope."
+commands.deny = ["discover_gateways"]

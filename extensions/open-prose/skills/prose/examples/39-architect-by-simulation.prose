@@ -1,0 +1,277 @@
+# Architect By Simulation
+#
+# A documentation and specification development pattern where a persistent
+# architect agent designs a system through simulated implementation phases.
+# Each phase produces a handoff document that the next phase builds upon,
+# culminating in complete specification documents.
+#
+# Key principles:
+# - Thinking/deduction framework: "Implement" by reasoning through design
+# - Serial pipeline with handoffs: Each phase reads previous phase's output
+# - Persistent architect: Maintains master plan and synthesizes learnings
+# - User checkpoint: Get plan approval BEFORE executing the pipeline
+# - Simulation as implementation: The spec IS the deliverable
+#
+# Example use cases:
+# - Designing a new feature's architecture before coding
+# - Creating database schema specifications
+# - Planning API designs with examples
+# - Documenting system integration patterns
+
+input feature: "The feature or system to architect"
+input context_files: "Comma-separated list of files to read for context"
+input output_dir: "Directory for the BUILD_PLAN and phase handoffs"
+
+# ============================================================================
+# Agent Definitions
+# ============================================================================
+
+# The Architect: Maintains the master plan and synthesizes across phases
+agent architect:
+  model: opus
+  persist: true
+  prompt: """You are a software architect who designs systems by simulating their
+implementation. You NEVER write production code—you write specifications,
+schemas, and documentation that serve as the blueprint.
+
+Your approach:
+- Break complex designs into discrete phases
+- Each phase explores one dimension of the design space
+- Synthesize learnings from each phase into a coherent whole
+- Be honest about trade-offs and alternatives considered
+- Write specifications that are precise enough to implement from
+
+You maintain context across all phases. Reference previous handoffs explicitly."""
+
+# Phase Agent: Executes a single phase of the design
+agent phase-executor:
+  model: opus
+  prompt: """You are a design analyst executing one phase of an architecture plan.
+
+Your responsibilities:
+1. Read the BUILD_PLAN to understand your phase's goals
+2. Read previous phase handoffs to understand what's been decided
+3. Analyze your assigned dimension of the design
+4. Make concrete decisions with rationale
+5. Create a handoff document for the next phase
+
+Your handoff document must include:
+- Summary of what was analyzed
+- Decisions made with rationale
+- Open questions resolved
+- Recommendations for the next phase
+
+Be thorough but focused on YOUR phase's scope."""
+
+# Reviewer: Validates specifications before finalization
+agent reviewer:
+  model: sonnet
+  prompt: """You are a technical reviewer validating architecture specifications.
+
+Check for:
+- Internal consistency (do all parts agree?)
+- Completeness (are there gaps?)
+- Feasibility (can this actually be built?)
+- Trade-off honesty (are downsides acknowledged?)
+- Clarity (could a developer implement from this?)
+
+Be constructive. Flag issues but also acknowledge good decisions."""
+
+# ============================================================================
+# Block Definitions
+# ============================================================================
+
+# Gather context from specified files
+block gather-context(files):
+  let context = session "Read and summarize the context files"
+    prompt: """Read these files and extract the key information relevant to
+designing a new component that integrates with them:
+
+Files: {files}
+
+For each file, note:
+- What it does
+- Key interfaces/patterns
+- Integration points
+- Constraints or conventions to follow"""
+
+# Execute a single phase with handoff
+block execute-phase(phase_number, phase_name, previous_handoffs):
+  let result = session: phase-executor
+    prompt: """Execute Phase {phase_number}: {phase_name}
+
+Read the BUILD_PLAN.md in {output_dir} for your phase's tasks.
+Read previous handoff files to understand decisions made so far.
+
+Previous handoffs: {previous_handoffs}
+
+Create your handoff document with:
+- What you analyzed
+- Decisions made (with rationale)
+- Trade-offs considered
+- Recommendations for next phase
+
+Write the handoff to: {output_dir}/phase-{phase_number}-handoff.md"""
+    context: previous_handoffs
+
+# Synthesize all handoffs into cohesive spec
+block synthesize-spec(all_handoffs, spec_path):
+  let spec = resume: architect
+    prompt: """Synthesize all phase handoffs into the final specification document.
+
+Handoffs to synthesize: {all_handoffs}
+
+The specification should:
+- Follow the structure of similar docs in the codebase
+- Incorporate all decisions from the phases
+- Present a coherent, implementable design
+- Include examples and code samples where relevant
+
+Write the final spec to: {spec_path}"""
+    context: all_handoffs
+
+# ============================================================================
+# Main Workflow: Architect By Simulation
+# ============================================================================
+
+# Phase 1: Context Gathering
+# --------------------------
+# Understand the existing system before designing additions
+
+let context = do gather-context(context_files)
+
+# Phase 2: Create Master Plan
+# ---------------------------
+# Architect breaks down the design into phases
+
+let master_plan = session: architect
+  prompt: """Create a BUILD_PLAN for designing: {feature}
+
+Based on this context: {context}
+
+Structure the plan as a series of phases, where each phase explores one
+dimension of the design. For example:
+- Phase 1: Use Case Analysis (when is this needed vs alternatives)
+- Phase 2: Interface Design (how users/systems interact with it)
+- Phase 3: Data Model (what state is stored and how)
+- Phase 4: Integration Points (how it connects to existing systems)
+- Phase 5: Error Handling (failure modes and recovery)
+- etc.
+
+For each phase, specify:
+- Goal (one sentence)
+- Tasks (numbered list of what to analyze)
+- Decisions to make
+- Handoff requirements
+
+Write the plan to: {output_dir}/BUILD_PLAN.md
+
+Also create a list of phase names for the execution loop."""
+  context: context
+
+# Phase 3: User Reviews the Plan
+# ------------------------------
+# Get human approval BEFORE executing the pipeline
+
+let plan_summary = session "Summarize the plan for user review"
+  prompt: """Summarize the BUILD_PLAN in a concise format for user review:
+
+1. Number of phases
+2. What each phase will analyze
+3. Expected deliverables
+4. Open questions that need user input before proceeding
+
+Ask: "Review this plan. Should I proceed with executing all phases?"""""
+  context: master_plan
+
+input user_approval: "User reviews the plan and confirms to proceed"
+
+# Phase 4: Serial Pipeline Execution
+# ----------------------------------
+# Each phase builds on the previous, creating handoffs
+
+let phase_names = session "Extract phase names from master plan"
+  prompt: "Extract just the phase names as a numbered list from this plan"
+  context: master_plan
+
+# Execute phases serially, each building on previous handoffs
+let accumulated_handoffs = ""
+
+for phase_name, index in phase_names:
+  let handoff = do execute-phase(index, phase_name, accumulated_handoffs)
+
+  # Architect synthesizes learnings after each phase
+  resume: architect
+    prompt: """Phase {index} ({phase_name}) is complete.
+
+Review the handoff and update your understanding of the design.
+Note any adjustments needed to the remaining phases.
+Track open questions that need resolution."""
+    context: handoff
+
+  # Accumulate handoffs for next phase
+  accumulated_handoffs = "{accumulated_handoffs}\n\n---\n\n{handoff}"
+
+# Phase 5: Review and Validation
+# ------------------------------
+# Independent review before finalizing
+
+let review = session: reviewer
+  prompt: """Review the complete design across all phase handoffs.
+
+Check for:
+- Consistency across phases
+- Gaps in the design
+- Unclear specifications
+- Missing trade-off analysis
+
+Provide a review summary with:
+- Overall assessment (ready / needs revision)
+- Critical issues (must fix)
+- Minor issues (nice to fix)
+- Commendations (good decisions)"""
+  context: accumulated_handoffs
+
+# If review found critical issues, architect revises
+if **review found critical issues that need addressing**:
+  let revisions = resume: architect
+    prompt: """The review identified issues that need addressing.
+
+Review feedback: {review}
+
+Revise the relevant phase handoffs to address:
+1. Critical issues (required)
+2. Minor issues (if straightforward)
+
+Document what was changed and why."""
+    context: { accumulated_handoffs, review }
+
+  # Update accumulated handoffs with revisions
+  accumulated_handoffs = "{accumulated_handoffs}\n\n---\n\nREVISIONS:\n{revisions}"
+
+# Phase 6: Final Spec Generation
+# ------------------------------
+# Synthesize everything into the deliverable
+
+let final_spec = do synthesize-spec(accumulated_handoffs, "{output_dir}/SPEC.md")
+
+# Phase 7: Index Registration
+# ---------------------------
+# Update any index files that need to reference the new spec
+
+if **the spec should be registered in an index file**:
+  let registration = session "Register spec in index"
+    prompt: """The new specification has been created at: {output_dir}/SPEC.md
+
+Identify any index files (README.md, SKILL.md, etc.) that should reference
+this new spec and add appropriate entries.
+
+Follow the existing format in those files."""
+    context: final_spec
+
+# Final Output
+# ------------
+
+output spec = final_spec
+output handoffs = accumulated_handoffs
+output review = review

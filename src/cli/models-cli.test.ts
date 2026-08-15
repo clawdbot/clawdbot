@@ -1,0 +1,337 @@
+// Models CLI tests cover model listing command registration and provider output.
+import { Command } from "commander";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runRegisteredCli } from "../test-utils/command-runner.js";
+import { registerModelsCli } from "./models-cli.js";
+import { isCommandJsonOutputMode } from "./program/json-mode.js";
+
+const mocks = vi.hoisted(() => ({
+  modelsListCommand: vi.fn().mockResolvedValue(undefined),
+  modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
+  modelsSetCommand: vi.fn().mockResolvedValue(undefined),
+  modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
+  noopAsync: vi.fn(async () => undefined),
+  modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
+}));
+
+const {
+  modelsAuthAddCommand,
+  modelsAuthListCommand,
+  modelsAuthLoginCommand,
+  modelsAuthLogoutCommand,
+  modelsAuthPasteApiKeyCommand,
+  modelsAuthPasteTokenCommand,
+  modelsAuthSetupTokenCommand,
+  modelsSetCommand,
+  modelsSetImageCommand,
+  modelsStatusCommand,
+} = mocks;
+
+vi.mock("../commands/models/list.list-command.js", () => ({
+  modelsListCommand: mocks.modelsListCommand,
+}));
+vi.mock("../commands/models/list.status-command.js", () => ({
+  modelsStatusCommand: mocks.modelsStatusCommand,
+}));
+vi.mock("../commands/models/auth.js", () => ({
+  modelsAuthAddCommand: mocks.modelsAuthAddCommand,
+  modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
+  modelsAuthPasteApiKeyCommand: mocks.modelsAuthPasteApiKeyCommand,
+  modelsAuthPasteTokenCommand: mocks.modelsAuthPasteTokenCommand,
+  modelsAuthSetupTokenCommand: mocks.modelsAuthSetupTokenCommand,
+}));
+vi.mock("../commands/models/auth-list.js", () => ({
+  modelsAuthListCommand: mocks.modelsAuthListCommand,
+}));
+vi.mock("../commands/models/auth-logout.js", () => ({
+  modelsAuthLogoutCommand: mocks.modelsAuthLogoutCommand,
+}));
+vi.mock("../commands/models/auth-order.js", () => ({
+  modelsAuthOrderClearCommand: mocks.noopAsync,
+  modelsAuthOrderGetCommand: mocks.noopAsync,
+  modelsAuthOrderSetCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/aliases.js", () => ({
+  modelsAliasesAddCommand: mocks.noopAsync,
+  modelsAliasesListCommand: mocks.noopAsync,
+  modelsAliasesRemoveCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/fallbacks.js", () => ({
+  modelsFallbacksAddCommand: mocks.noopAsync,
+  modelsFallbacksClearCommand: mocks.noopAsync,
+  modelsFallbacksListCommand: mocks.noopAsync,
+  modelsFallbacksRemoveCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/image-fallbacks.js", () => ({
+  modelsImageFallbacksAddCommand: mocks.noopAsync,
+  modelsImageFallbacksClearCommand: mocks.noopAsync,
+  modelsImageFallbacksListCommand: mocks.noopAsync,
+  modelsImageFallbacksRemoveCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/scan.js", () => ({
+  modelsScanCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/set.js", () => ({
+  modelsSetCommand: mocks.modelsSetCommand,
+}));
+vi.mock("../commands/models/set-image.js", () => ({
+  modelsSetImageCommand: mocks.modelsSetImageCommand,
+}));
+
+describe("models cli", () => {
+  beforeEach(() => {
+    mocks.modelsListCommand.mockClear();
+    modelsAuthAddCommand.mockClear();
+    modelsAuthListCommand.mockClear();
+    modelsAuthLoginCommand.mockClear();
+    modelsAuthLogoutCommand.mockClear();
+    modelsAuthPasteApiKeyCommand.mockClear();
+    modelsAuthPasteTokenCommand.mockClear();
+    modelsAuthSetupTokenCommand.mockClear();
+    modelsSetCommand.mockClear();
+    modelsSetImageCommand.mockClear();
+    modelsStatusCommand.mockClear();
+  });
+
+  function createProgram() {
+    const program = new Command();
+    registerModelsCli(program);
+    return program;
+  }
+
+  async function runModelsCommand(args: string[]) {
+    await runRegisteredCli({
+      register: registerModelsCli as (program: Command) => void,
+      argv: args,
+    });
+  }
+
+  function requireCommand(parent: Command, name: string): Command {
+    const command = parent.commands.find((cmd) => cmd.name() === name);
+    if (!command) {
+      throw new Error(`expected ${name} command`);
+    }
+    return command;
+  }
+
+  function expectCommandOptions(
+    command: ReturnType<typeof vi.fn>,
+    expected: Record<string, unknown>,
+  ) {
+    expect(command).toHaveBeenCalledTimes(1);
+    const [options, context] = command.mock.calls[0] ?? [];
+    const optionRecord = options as Record<string, unknown> | undefined;
+    for (const [key, value] of Object.entries(expected)) {
+      expect(optionRecord?.[key]).toEqual(value);
+    }
+    if (!context || typeof context !== "object") {
+      throw new Error("expected command context");
+    }
+  }
+
+  it.each(["--json", "--status-json"])("declares %s as machine output", async (flag) => {
+    const program = createProgram();
+    let detected = false;
+    program.hook("preAction", (_command, actionCommand) => {
+      detected = isCommandJsonOutputMode(actionCommand, process.argv);
+    });
+
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "models", flag];
+    try {
+      await program.parseAsync(["models", flag], { from: "user" });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(detected).toBe(true);
+  });
+
+  it("does not apply the parent status alias to a child action", async () => {
+    const program = createProgram();
+    let detected = true;
+    program.hook("preAction", (_command, actionCommand) => {
+      detected = isCommandJsonOutputMode(actionCommand, process.argv);
+    });
+
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "models", "--status-json", "list"];
+    try {
+      await program.parseAsync(["models", "--status-json", "list"], { from: "user" });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(detected).toBe(false);
+  });
+
+  it("forwards bare --json to the default status report", async () => {
+    await runModelsCommand(["models", "--json"]);
+
+    expectCommandOptions(modelsStatusCommand, { json: true });
+  });
+
+  it("registers github-copilot login command", async () => {
+    const program = createProgram();
+    const models = requireCommand(program, "models");
+    const auth = requireCommand(models, "auth");
+    expect(requireCommand(auth, "login-github-copilot").name()).toBe("login-github-copilot");
+
+    await program.parseAsync(
+      ["models", "auth", "--agent", "poe", "login-github-copilot", "--yes"],
+      { from: "user" },
+    );
+
+    expect(modelsAuthLoginCommand).toHaveBeenCalledTimes(1);
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "github-copilot",
+      method: "device",
+      yes: true,
+      agent: "poe",
+    });
+  });
+
+  it.each([
+    { label: "status flag", args: ["models", "status", "--agent", "poe"] },
+    { label: "parent flag", args: ["models", "--agent", "poe", "status"] },
+  ])("passes --agent to models status ($label)", async ({ args }) => {
+    await runModelsCommand(args);
+    expectCommandOptions(modelsStatusCommand, { agent: "poe" });
+  });
+
+  it.each([
+    { label: "list flag", args: ["models", "list", "--agent", "poe"] },
+    { label: "parent flag", args: ["models", "--agent", "poe", "list"] },
+  ])("passes --agent to models list ($label)", async ({ args }) => {
+    await runModelsCommand(args);
+    expectCommandOptions(mocks.modelsListCommand, { agent: "poe" });
+  });
+
+  it.each([
+    {
+      label: "add",
+      args: ["models", "auth", "--agent", "poe", "add"],
+      command: modelsAuthAddCommand,
+      expected: { agent: "poe" },
+    },
+    {
+      label: "list",
+      args: ["models", "auth", "--agent", "poe", "list", "--provider", "openai"],
+      command: modelsAuthListCommand,
+      expected: { agent: "poe", provider: "openai" },
+    },
+    {
+      label: "login",
+      args: ["models", "auth", "--agent", "poe", "login", "--provider", "openai"],
+      command: modelsAuthLoginCommand,
+      expected: { agent: "poe", provider: "openai" },
+    },
+    {
+      label: "logout",
+      args: ["models", "auth", "--agent", "poe", "logout", "openai:manual", "--yes"],
+      command: modelsAuthLogoutCommand,
+      expected: { agent: "poe", profileId: "openai:manual", yes: true },
+    },
+    {
+      label: "setup-token",
+      args: ["models", "auth", "--agent", "poe", "setup-token", "--provider", "anthropic"],
+      command: modelsAuthSetupTokenCommand,
+      expected: { agent: "poe", provider: "anthropic" },
+    },
+    {
+      label: "paste-token",
+      args: ["models", "auth", "--agent", "poe", "paste-token", "--provider", "anthropic"],
+      command: modelsAuthPasteTokenCommand,
+      expected: { agent: "poe", provider: "anthropic" },
+    },
+    {
+      label: "paste-api-key",
+      args: ["models", "auth", "--agent", "poe", "paste-api-key", "--provider", "openai"],
+      command: modelsAuthPasteApiKeyCommand,
+      expected: { agent: "poe", provider: "openai" },
+    },
+    {
+      label: "login-github-copilot",
+      args: ["models", "auth", "--agent", "poe", "login-github-copilot", "--yes"],
+      command: modelsAuthLoginCommand,
+      expected: { agent: "poe", provider: "github-copilot", method: "device", yes: true },
+    },
+  ])("passes parent --agent to models auth $label", async ({ args, command, expected }) => {
+    await runModelsCommand(args);
+
+    expectCommandOptions(command, expected);
+  });
+
+  it("passes --method through models auth login", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai",
+      "--method",
+      "api-key",
+    ]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "openai",
+      method: "api-key",
+    });
+  });
+
+  it("maps --device-code to the provider device-code auth method", async () => {
+    await runModelsCommand(["models", "auth", "login", "--provider", "openai", "--device-code"]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "openai",
+      method: "device-code",
+    });
+  });
+
+  it("passes list-specific --agent and --json to models auth list", async () => {
+    await runModelsCommand(["models", "auth", "list", "--agent", "poe", "--json"]);
+
+    expectCommandOptions(modelsAuthListCommand, { agent: "poe", json: true });
+  });
+
+  it.each([
+    {
+      label: "set",
+      args: ["models", "--agent", "poe", "set", "anthropic/claude-sonnet-4-6"],
+      command: modelsSetCommand,
+    },
+    {
+      label: "set-image",
+      args: ["models", "--agent", "poe", "set-image", "openai/gpt-image-1"],
+      command: modelsSetImageCommand,
+    },
+  ])("rejects parent --agent for models $label", async ({ args, command }) => {
+    await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
+
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it("shows help for models auth without error exit", async () => {
+    const program = new Command();
+    program.exitOverride();
+    program.configureOutput({
+      writeOut: () => {},
+      writeErr: () => {},
+    });
+    registerModelsCli(program);
+
+    try {
+      await program.parseAsync(["models", "auth"], { from: "user" });
+      expect.fail("expected help to exit");
+    } catch (err) {
+      const error = err as { exitCode?: number };
+      expect(error.exitCode).toBe(0);
+    }
+  });
+});

@@ -1,0 +1,240 @@
+---
+summary: "Define permanent operating authority for autonomous agent programs"
+read_when:
+  - Setting up autonomous agent workflows that run without per-task prompting
+  - Defining what the agent can do independently vs. what needs human approval
+  - Structuring multi-program agents with clear boundaries and escalation rules
+title: "Standing orders"
+---
+
+Standing orders grant your agent **permanent operating authority** for defined programs. Instead of prompting the agent for each task, you define programs with clear scope, triggers, and escalation rules, and the agent executes autonomously within those boundaries: "You own the weekly report. Compile it every Friday, send it, and only escalate if something looks wrong."
+
+## Why standing orders
+
+**Without standing orders:** you prompt the agent for every task, routine work gets forgotten or delayed, and you become the bottleneck.
+
+**With standing orders:** the agent executes autonomously within defined boundaries, routine work happens on schedule, and you only get involved for exceptions and approvals.
+
+## How they work
+
+Standing orders are defined in your [agent workspace](/concepts/agent-workspace) files. The recommended approach is to include them directly in `AGENTS.md` (which is auto-injected every session) so the agent always has them in context. For larger configurations, you can also place them in a dedicated file like `standing-orders.md` and reference it from `AGENTS.md`.
+
+For a strict, ephemeral CI or scripting entry point, use [`openclaw agent exec`](/cli/agent#agent-exec). It skips workspace bootstrap files, so each one-shot run is self-contained rather than governed by standing orders.
+
+Each program specifies:
+
+1. **Scope** - what the agent is authorized to do
+2. **Triggers** - when to execute (schedule, event, or condition)
+3. **Approval gates** - what requires human sign-off before acting
+4. **Escalation rules** - when to stop and ask for help
+
+The agent loads these instructions every session via the workspace bootstrap files (see [Agent Workspace](/concepts/agent-workspace) for the full list of auto-injected files) and executes against them, combined with [automations](/automation/cron-jobs) for time-based enforcement.
+
+<Tip>
+Put standing orders in `AGENTS.md` to guarantee they're loaded every session. The workspace bootstrap automatically injects `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, and `MEMORY.md` - but not arbitrary files in subdirectories.
+</Tip>
+
+## Anatomy of a standing order
+
+```markdown
+## Program: Weekly Status Report
+
+**Authority:** Compile data, generate report, deliver to stakeholders
+**Trigger:** Every Friday at 4 PM (enforced via automation job)
+**Approval gate:** None for standard reports. Flag anomalies for human review.
+**Escalation:** If data source is unavailable or metrics look unusual (>2σ from norm)
+
+### Execution steps
+
+1. Pull metrics from configured sources
+2. Compare to prior week and targets
+3. Generate report in Reports/weekly/YYYY-MM-DD.md
+4. Deliver summary via configured channel
+5. Log completion to Agent/Logs/
+
+### What NOT to do
+
+- Do not send reports to external parties
+- Do not modify source data
+- Do not skip delivery if metrics look bad - report accurately
+```
+
+## Standing orders plus automations
+
+Standing orders define **what** the agent is authorized to do. [Automations](/automation/cron-jobs) define **when** it happens. They work together:
+
+```text
+Standing Order: "You own the daily inbox triage"
+    ↓
+Automation (8 AM daily): "Execute inbox triage per standing orders"
+    ↓
+Agent: Reads standing orders → executes steps → reports results
+```
+
+The automation job prompt should reference the standing order rather than duplicating it (`openclaw automations`; `openclaw cron` remains an alias):
+
+```bash
+openclaw automations add \
+  --name daily-inbox-triage \
+  --cron "0 8 * * 1-5" \
+  --tz America/New_York \
+  --timeout-seconds 300 \
+  --announce \
+  --channel imessage \
+  --to "+1XXXXXXXXXX" \
+  --message "Execute daily inbox triage per standing orders. Check mail for new alerts. Parse, categorize, and persist each item. Report summary to owner. Escalate unknowns."
+```
+
+## Examples
+
+### Example 1: content and social media (weekly cycle)
+
+```markdown
+## Program: Content & Social Media
+
+**Authority:** Draft content, schedule posts, compile engagement reports
+**Approval gate:** All posts require owner review for first 30 days, then standing approval
+**Trigger:** Weekly cycle (Monday review → mid-week drafts → Friday brief)
+
+### Weekly cycle
+
+- **Monday:** Review platform metrics and audience engagement
+- **Tuesday-Thursday:** Draft social posts, create blog content
+- **Friday:** Compile weekly marketing brief → deliver to owner
+
+### Content rules
+
+- Voice must match the brand (see SOUL.md or brand voice guide)
+- Never identify as AI in public-facing content
+- Include metrics when available
+- Focus on value to audience, not self-promotion
+```
+
+### Example 2: finance operations (event-triggered)
+
+```markdown
+## Program: Financial Processing
+
+**Authority:** Process transaction data, generate reports, send summaries
+**Approval gate:** None for analysis. Recommendations require owner approval.
+**Trigger:** New data file detected OR scheduled monthly cycle
+
+### When new data arrives
+
+1. Detect new file in designated input directory
+2. Parse and categorize all transactions
+3. Compare against budget targets
+4. Flag: unusual items, threshold breaches, new recurring charges
+5. Generate report in designated output directory
+6. Deliver summary to owner via configured channel
+
+### Escalation rules
+
+- Single item > $500: immediate alert
+- Category > budget by 20%: flag in report
+- Unrecognizable transaction: ask owner for categorization
+- Failed processing after 2 retries: report failure, do not guess
+```
+
+### Example 3: monitoring and alerts (continuous)
+
+```markdown
+## Program: System Monitoring
+
+**Authority:** Check system health, restart services, send alerts
+**Approval gate:** Restart services automatically. Escalate if restart fails twice.
+**Trigger:** Every heartbeat cycle
+
+### Checks
+
+- Service health endpoints responding
+- Disk space above threshold
+- Pending tasks not stale (>24 hours)
+- Delivery channels operational
+
+### Response matrix
+
+| Condition        | Action                   | Escalate?                |
+| ---------------- | ------------------------ | ------------------------ |
+| Service down     | Restart automatically    | Only if restart fails 2x |
+| Disk space < 10% | Alert owner              | Yes                      |
+| Stale task > 24h | Remind owner             | No                       |
+| Channel offline  | Log and retry next cycle | If offline > 2 hours     |
+```
+
+## Execute-verify-report pattern
+
+Standing orders work best when combined with strict execution discipline. Every task in a standing order should follow this loop:
+
+1. **Execute** - Do the actual work (don't just acknowledge the instruction)
+2. **Verify** - Confirm the result is correct (file exists, message delivered, data parsed)
+3. **Report** - Tell the owner what was done and what was verified
+
+```markdown
+### Execution rules
+
+- Every task follows Execute-Verify-Report. No exceptions.
+- "I'll do that" is not execution. Do it, then report.
+- "Done" without verification is not acceptable. Prove it.
+- If execution fails: retry once with adjusted approach.
+- If still fails: report failure with diagnosis. Never silently fail.
+- Never retry indefinitely - 3 attempts max, then escalate.
+```
+
+This pattern prevents the most common agent failure mode: acknowledging a task without completing it.
+
+## Multi-program architecture
+
+For agents managing multiple concerns, organize standing orders as separate programs with clear boundaries:
+
+```markdown
+## Program 1: [Domain A] (Weekly)
+
+...
+
+## Program 2: [Domain B] (Monthly + On-Demand)
+
+...
+
+## Program 3: [Domain C] (As-Needed)
+
+...
+
+## Escalation Rules (All Programs)
+
+- [Common escalation criteria]
+- [Approval gates that apply across programs]
+```
+
+Each program should have:
+
+- Its own **trigger cadence** (weekly, monthly, event-driven, continuous)
+- Its own **approval gates** (some programs need more oversight than others)
+- Clear **boundaries** (the agent should know where one program ends and another begins)
+
+## Best practices
+
+### Do
+
+- Start with narrow authority and expand as trust builds
+- Define explicit approval gates for high-risk actions
+- Include "What NOT to do" sections - boundaries matter as much as permissions
+- Combine with automations for reliable time-based execution
+- Review agent logs weekly to verify standing orders are being followed
+- Update standing orders as your needs evolve - they're living documents
+
+### Avoid
+
+- Grant broad authority on day one ("do whatever you think is best")
+- Skip escalation rules - every program needs a "when to stop and ask" clause
+- Assume the agent will remember verbal instructions - put everything in the file
+- Mix concerns in a single program - separate programs for separate domains
+- Forget to enforce with automations - standing orders without triggers become suggestions
+
+## Related
+
+- [Automation](/automation): all automation mechanisms at a glance.
+- [Automations](/automation/cron-jobs): schedule enforcement for standing orders.
+- [Hooks](/automation/hooks): event-driven scripts for agent lifecycle events.
+- [Webhooks](/automation/cron-jobs#webhooks): inbound HTTP event triggers.
+- [Agent workspace](/concepts/agent-workspace): where standing orders live, including the full list of auto-injected bootstrap files (`AGENTS.md`, `SOUL.md`, etc.).

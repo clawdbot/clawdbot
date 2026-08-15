@@ -1,0 +1,358 @@
+[
+  {
+    "id": "drake",
+    "name": "Drake Hotline Bling",
+    "imgflipId": "181913649",
+    "imageUrl": "https://i.imgflip.com/30b1gx.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/drakeposting",
+    "width": 1200,
+    "height": 1200,
+    "aliases": ["drakeposting", "drake"],
+    "tags": ["choice", "preference", "reject", "accept", "before after", "api", "local", "cache", "better option"],
+    "use": "Reject one option and endorse a better one.",
+    "fields": ["rejected option", "preferred option"],
+    "boxes": [
+      { "x": 0.52, "y": 0.05, "w": 0.43, "h": 0.38 },
+      { "x": 0.52, "y": 0.55, "w": 0.43, "h": 0.38 }
+    ]
+  },
+  {
+    "id": "two-buttons",
+    "name": "Two Buttons",
+    "imgflipId": "87743020",
+    "imageUrl": "https://i.imgflip.com/1g8my4.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/daily-struggle-two-buttons",
+    "width": 600,
+    "height": 908,
+    "aliases": ["daily struggle", "buttons"],
+    "tags": ["dilemma", "choice", "anxiety", "decision"],
+    "use": "Show a hard choice between two tempting or bad options.",
+    "fields": ["option A", "option B", "reaction"],
+    "boxes": [
+      { "x": 0.06, "y": 0.06, "w": 0.34, "h": 0.16, "rotate": -12 },
+      { "x": 0.54, "y": 0.05, "w": 0.34, "h": 0.16, "rotate": 12 },
+      { "x": 0.12, "y": 0.67, "w": 0.76, "h": 0.22 }
+    ]
+  },
+  {
+    "id": "distracted-boyfriend",
+    "name": "Distracted Boyfriend",
+    "imgflipId": "112126428",
+    "imageUrl": "https://i.imgflip.com/1ur9b0.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/distracted-boyfriend",
+    "width": 1200,
+    "height": 800,
+    "aliases": ["boyfriend", "distracted"],
+    "tags": ["temptation", "switching", "old new", "attention"],
+    "use": "Compare current commitment, temptation, and disapproval.",
+    "fields": ["temptation", "me", "current commitment"],
+    "boxes": [
+      { "x": 0.05, "y": 0.04, "w": 0.28, "h": 0.18 },
+      { "x": 0.41, "y": 0.06, "w": 0.2, "h": 0.14 },
+      { "x": 0.66, "y": 0.05, "w": 0.28, "h": 0.18 }
+    ]
+  },
+  {
+    "id": "uno-draw-25",
+    "name": "UNO Draw 25 Cards",
+    "imgflipId": "217743513",
+    "imageUrl": "https://i.imgflip.com/3lmzyx.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/uno-draw-25-cards",
+    "width": 500,
+    "height": 494,
+    "aliases": ["uno", "draw 25"],
+    "tags": ["refusal", "avoidance", "consequence", "stubborn"],
+    "use": "Refuse a simple instruction and accept absurd consequences.",
+    "fields": ["instruction", "person"],
+    "boxes": [
+      { "x": 0.08, "y": 0.08, "w": 0.46, "h": 0.24 },
+      { "x": 0.48, "y": 0.66, "w": 0.42, "h": 0.18 }
+    ]
+  },
+  {
+    "id": "left-exit-12",
+    "name": "Left Exit 12 Off Ramp",
+    "imgflipId": "124822590",
+    "imageUrl": "https://i.imgflip.com/22bdq6.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/left-exit-12-off-ramp",
+    "width": 804,
+    "height": 767,
+    "aliases": ["off ramp", "exit 12"],
+    "tags": ["sudden choice", "escape", "pivot", "bad decision"],
+    "use": "A sudden hard pivot away from the expected route.",
+    "fields": ["normal route", "exit choice", "driver"],
+    "boxes": [
+      { "x": 0.18, "y": 0.11, "w": 0.28, "h": 0.13, "rotate": -8 },
+      { "x": 0.52, "y": 0.1, "w": 0.28, "h": 0.13, "rotate": 9 },
+      { "x": 0.52, "y": 0.54, "w": 0.35, "h": 0.18 }
+    ]
+  },
+  {
+    "id": "bernie-asking",
+    "name": "Bernie I Am Once Again Asking",
+    "imgflipId": "222403160",
+    "imageUrl": "https://i.imgflip.com/3oevdk.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/i-am-once-again-asking-for-your-financial-support",
+    "width": 750,
+    "height": 750,
+    "aliases": ["bernie", "once again asking"],
+    "tags": ["request", "again", "support", "plea"],
+    "use": "Ask for the same thing again with weary sincerity.",
+    "fields": ["request", "context"],
+    "boxes": [
+      { "x": 0.08, "y": 0.06, "w": 0.84, "h": 0.2 },
+      { "x": 0.08, "y": 0.74, "w": 0.84, "h": 0.18 }
+    ]
+  },
+  {
+    "id": "always-has-been",
+    "name": "Always Has Been",
+    "imgflipId": "252600902",
+    "imageUrl": "https://i.imgflip.com/46e43q.png",
+    "kymUrl": "https://knowyourmeme.com/memes/wait-its-all-ohio-always-has-been",
+    "width": 960,
+    "height": 540,
+    "aliases": ["astronaut", "always has been"],
+    "tags": ["realization", "twist", "always", "betrayal"],
+    "use": "Reveal that a surprising truth was always true.",
+    "fields": ["realization", "answer"],
+    "boxes": [
+      { "x": 0.05, "y": 0.08, "w": 0.42, "h": 0.18 },
+      { "x": 0.55, "y": 0.06, "w": 0.38, "h": 0.18 }
+    ]
+  },
+  {
+    "id": "running-away-balloon",
+    "name": "Running Away Balloon",
+    "imgflipId": "131087935",
+    "imageUrl": "https://i.imgflip.com/261o3j.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/running-away-balloon",
+    "width": 761,
+    "height": 1024,
+    "aliases": ["balloon", "pink blob"],
+    "tags": ["avoidance", "temptation", "pull", "conflict"],
+    "use": "A person pulled toward temptation while another force stops them.",
+    "fields": ["temptation", "me", "responsibility", "force", "label"],
+    "boxes": [
+      { "x": 0.05, "y": 0.04, "w": 0.34, "h": 0.14 },
+      { "x": 0.48, "y": 0.13, "w": 0.34, "h": 0.12 },
+      { "x": 0.36, "y": 0.37, "w": 0.34, "h": 0.12 },
+      { "x": 0.08, "y": 0.67, "w": 0.34, "h": 0.12 },
+      { "x": 0.52, "y": 0.74, "w": 0.34, "h": 0.12 }
+    ]
+  },
+  {
+    "id": "epic-handshake",
+    "name": "Epic Handshake",
+    "imgflipId": "135256802",
+    "imageUrl": "https://i.imgflip.com/28j0te.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/epic-handshake",
+    "width": 900,
+    "height": 645,
+    "aliases": ["handshake", "predator handshake"],
+    "tags": ["agreement", "common ground", "shared trait"],
+    "use": "Two groups agree over a shared behavior or belief.",
+    "fields": ["group A", "shared trait", "group B"],
+    "boxes": [
+      { "x": 0.05, "y": 0.08, "w": 0.28, "h": 0.18 },
+      { "x": 0.36, "y": 0.48, "w": 0.28, "h": 0.18 },
+      { "x": 0.67, "y": 0.08, "w": 0.28, "h": 0.18 }
+    ]
+  },
+  {
+    "id": "grus-plan",
+    "name": "Gru's Plan",
+    "imgflipId": "131940431",
+    "imageUrl": "https://i.imgflip.com/26jxvz.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/grus-plan",
+    "width": 700,
+    "height": 449,
+    "aliases": ["gru", "plan"],
+    "tags": ["plan", "backfire", "sequence", "realization"],
+    "use": "A plan that looks good until the final step exposes the flaw.",
+    "fields": ["step 1", "step 2", "step 3", "bad consequence"],
+    "boxes": [
+      { "x": 0.04, "y": 0.06, "w": 0.28, "h": 0.22 },
+      { "x": 0.37, "y": 0.06, "w": 0.28, "h": 0.22 },
+      { "x": 0.04, "y": 0.56, "w": 0.28, "h": 0.22 },
+      { "x": 0.37, "y": 0.56, "w": 0.28, "h": 0.22 }
+    ]
+  },
+  {
+    "id": "anakin-padme",
+    "name": "Anakin Padme 4 Panel",
+    "imgflipId": "322841258",
+    "imageUrl": "https://i.imgflip.com/5c7lwq.png",
+    "kymUrl": "https://knowyourmeme.com/memes/for-the-better-right",
+    "width": 768,
+    "height": 768,
+    "aliases": ["for the better right", "padme", "anakin"],
+    "tags": ["assumption", "ominous", "right", "concern"],
+    "use": "Someone assumes the good interpretation, then realizes silence means trouble.",
+    "fields": ["claim", "optimistic assumption", "silence", "concern"],
+    "boxes": [
+      { "x": 0.05, "y": 0.05, "w": 0.4, "h": 0.18 },
+      { "x": 0.55, "y": 0.05, "w": 0.4, "h": 0.18 },
+      { "x": 0.05, "y": 0.55, "w": 0.4, "h": 0.18 },
+      { "x": 0.55, "y": 0.55, "w": 0.4, "h": 0.18 }
+    ]
+  },
+  {
+    "id": "waiting-skeleton",
+    "name": "Waiting Skeleton",
+    "imgflipId": "4087833",
+    "imageUrl": "https://i.imgflip.com/2fm6x.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/waiting-skeleton",
+    "width": 298,
+    "height": 403,
+    "aliases": ["skeleton waiting", "waiting"],
+    "tags": ["waiting", "delay", "forever", "stale"],
+    "use": "Waiting so long the subject becomes absurdly stale.",
+    "fields": ["waiting for", "who waits"],
+    "boxes": [
+      { "x": 0.07, "y": 0.05, "w": 0.86, "h": 0.18 },
+      { "x": 0.07, "y": 0.76, "w": 0.86, "h": 0.18 }
+    ]
+  },
+  {
+    "id": "disaster-girl",
+    "name": "Disaster Girl",
+    "imgflipId": "97984",
+    "imageUrl": "https://i.imgflip.com/23ls.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/disaster-girl",
+    "width": 500,
+    "height": 375,
+    "aliases": ["fire girl"],
+    "tags": ["chaos", "sabotage", "aftermath", "smirk"],
+    "use": "Someone quietly pleased by chaos behind them.",
+    "fields": ["chaos", "culprit"],
+    "boxes": [
+      { "x": 0.06, "y": 0.06, "w": 0.88, "h": 0.18 },
+      { "x": 0.06, "y": 0.76, "w": 0.88, "h": 0.16 }
+    ]
+  },
+  {
+    "id": "sad-pablo",
+    "name": "Sad Pablo Escobar",
+    "imgflipId": "80707627",
+    "imageUrl": "https://i.imgflip.com/1c1uej.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/sad-pablo-escobar",
+    "width": 720,
+    "height": 709,
+    "aliases": ["pablo", "waiting pablo"],
+    "tags": ["lonely", "waiting", "bored", "empty"],
+    "use": "Waiting alone for something that never arrives.",
+    "fields": ["what I am waiting for", "me", "another wait"],
+    "boxes": [
+      { "x": 0.05, "y": 0.05, "w": 0.9, "h": 0.15 },
+      { "x": 0.05, "y": 0.42, "w": 0.9, "h": 0.15 },
+      { "x": 0.05, "y": 0.78, "w": 0.9, "h": 0.15 }
+    ]
+  },
+  {
+    "id": "change-my-mind",
+    "name": "Change My Mind",
+    "imgflipId": "129242436",
+    "imageUrl": "https://i.imgflip.com/24y43o.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/steven-crowders-change-my-mind-campus-sign",
+    "width": 482,
+    "height": 361,
+    "aliases": ["crowder", "change my mind"],
+    "tags": ["opinion", "provocation", "debate", "take"],
+    "use": "State a strong opinion and invite disagreement.",
+    "fields": ["take", "speaker"],
+    "boxes": [
+      { "x": 0.25, "y": 0.42, "w": 0.44, "h": 0.2, "rotate": -6 },
+      { "x": 0.06, "y": 0.05, "w": 0.88, "h": 0.14 }
+    ]
+  },
+  {
+    "id": "woman-yelling-cat",
+    "name": "Woman Yelling At Cat",
+    "imgflipId": "188390779",
+    "imageUrl": "https://i.imgflip.com/345v97.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/woman-yelling-at-a-cat",
+    "width": 680,
+    "height": 438,
+    "aliases": ["cat yelling", "woman cat"],
+    "tags": ["argument", "misunderstanding", "accusation", "response"],
+    "use": "Two sides of an absurd argument.",
+    "fields": ["accusation", "cat response"],
+    "boxes": [
+      { "x": 0.05, "y": 0.06, "w": 0.44, "h": 0.2 },
+      { "x": 0.54, "y": 0.06, "w": 0.4, "h": 0.2 }
+    ]
+  },
+  {
+    "id": "buff-doge-cheems",
+    "name": "Buff Doge vs. Cheems",
+    "imgflipId": "247375501",
+    "imageUrl": "https://i.imgflip.com/43a45p.png",
+    "kymUrl": "https://knowyourmeme.com/memes/buff-doge-vs-cheems",
+    "width": 937,
+    "height": 720,
+    "aliases": ["doge cheems", "then now"],
+    "tags": ["then now", "decline", "contrast", "strong weak"],
+    "use": "Contrast old strong version with current weaker version.",
+    "fields": ["old era", "old label", "new era", "new label"],
+    "boxes": [
+      { "x": 0.04, "y": 0.05, "w": 0.42, "h": 0.14 },
+      { "x": 0.08, "y": 0.72, "w": 0.36, "h": 0.14 },
+      { "x": 0.54, "y": 0.05, "w": 0.42, "h": 0.14 },
+      { "x": 0.58, "y": 0.72, "w": 0.36, "h": 0.14 }
+    ]
+  },
+  {
+    "id": "mocking-spongebob",
+    "name": "Mocking Spongebob",
+    "imgflipId": "102156234",
+    "imageUrl": "https://i.imgflip.com/1otk96.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/mocking-spongebob",
+    "width": 502,
+    "height": 353,
+    "aliases": ["spongebob mocking"],
+    "tags": ["mocking", "sarcasm", "quote", "dismissive"],
+    "use": "Repeat a claim in mocking alternating-case tone.",
+    "fields": ["claim", "mocked claim"],
+    "boxes": [
+      { "x": 0.06, "y": 0.05, "w": 0.88, "h": 0.18 },
+      { "x": 0.06, "y": 0.76, "w": 0.88, "h": 0.18 }
+    ]
+  },
+  {
+    "id": "expanding-brain",
+    "name": "Expanding Brain",
+    "imgflipId": "93895088",
+    "imageUrl": "https://i.imgflip.com/1jwhww.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/galaxy-brain",
+    "width": 857,
+    "height": 1202,
+    "aliases": ["galaxy brain", "brain"],
+    "tags": ["levels", "progression", "increasing", "absurd wisdom"],
+    "use": "Escalating stages from normal to absurdly enlightened.",
+    "fields": ["level 1", "level 2", "level 3", "level 4"],
+    "boxes": [
+      { "x": 0.04, "y": 0.03, "w": 0.42, "h": 0.18 },
+      { "x": 0.04, "y": 0.28, "w": 0.42, "h": 0.18 },
+      { "x": 0.04, "y": 0.53, "w": 0.42, "h": 0.18 },
+      { "x": 0.04, "y": 0.78, "w": 0.42, "h": 0.18 }
+    ]
+  },
+  {
+    "id": "this-is-fine",
+    "name": "This Is Fine",
+    "imgflipId": "55311130",
+    "imageUrl": "https://i.imgflip.com/wxica.jpg",
+    "kymUrl": "https://knowyourmeme.com/memes/this-is-fine",
+    "width": 580,
+    "height": 282,
+    "aliases": ["fine", "fire"],
+    "tags": ["denial", "crisis", "calm", "disaster"],
+    "use": "Calm denial while everything is visibly broken.",
+    "fields": ["crisis", "denial"],
+    "boxes": [
+      { "x": 0.06, "y": 0.06, "w": 0.88, "h": 0.18 },
+      { "x": 0.06, "y": 0.74, "w": 0.88, "h": 0.18 }
+    ]
+  }
+]

@@ -1,0 +1,22 @@
+// Qa Channel plugin module implements protocol behavior.
+export type {
+  QaBusAttachment,
+  QaBusConversation,
+  QaBusConversationKind,
+  QaBusCreateThreadInput,
+  QaBusDeleteMessageInput,
+  QaBusEditMessageInput,
+  QaBusEvent,
+  QaBusInboundMessageInput,
+  QaBusMessage,
+  QaBusOutboundMessageInput,
+  QaBusPollInput,
+  QaBusPollResult,
+  QaBusReactToMessageInput,
+  QaBusReadMessageInput,
+  QaBusSearchMessagesInput,
+  QaBusStateSnapshot,
+  QaBusThread,
+  QaBusToolCall,
+  QaBusWaitForInput,
+} from "openclaw/plugin-sdk/qa-channel-protocol";

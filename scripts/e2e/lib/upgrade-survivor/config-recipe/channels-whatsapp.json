@@ -1,0 +1,23 @@
+{
+  "enabled": true,
+  "dmPolicy": "allowlist",
+  "allowFrom": ["+15555550123"],
+  "defaultTo": "+15555550123",
+  "groupPolicy": "allowlist",
+  "groupAllowFrom": ["+15555550123"],
+  "groups": {
+    "120363000000000000@g.us": {
+      "requireMention": true,
+      "tools": {
+        "allow": ["message_send"],
+        "deny": ["exec"]
+      }
+    }
+  },
+  "accounts": {
+    "default": {
+      "enabled": true,
+      "name": "Default WhatsApp"
+    }
+  }
+}

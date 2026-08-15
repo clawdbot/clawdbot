@@ -1,0 +1,114 @@
+{
+  "name": "@openclaw/signal",
+  "version": "2026.8.1",
+  "description": "OpenClaw Signal channel plugin",
+  "type": "module",
+  "dependencies": {
+    "ws": "8.21.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
+    "channel": {
+      "id": "signal",
+      "approvalFlags": [
+        "native"
+      ],
+      "label": "Signal",
+      "selectionLabel": "Signal (signal-cli)",
+      "detailLabel": "Signal REST",
+      "docsPath": "/channels/signal",
+      "docsLabel": "signal",
+      "blurb": "signal-cli linked device with additional setup for the local REST bridge.",
+      "systemImage": "antenna.radiowaves.left.and.right",
+      "markdownCapable": true,
+      "setup": {
+        "fields": [
+          {
+            "key": "signalNumber",
+            "kind": "string",
+            "cli": {
+              "flags": "--signal-number <e164>",
+              "description": "Signal account number (E.164)"
+            }
+          },
+          {
+            "key": "signalTransport",
+            "kind": "choice",
+            "choices": [
+              "external-native",
+              "container"
+            ],
+            "cli": {
+              "flags": "--signal-transport <kind>",
+              "description": "Signal HTTP transport (external-native or container)"
+            }
+          },
+          {
+            "key": "cliPath",
+            "kind": "string",
+            "cli": {
+              "flags": "--cli-path <path>",
+              "description": "signal-cli executable path"
+            }
+          },
+          {
+            "key": "httpUrl",
+            "kind": "string",
+            "cli": {
+              "flags": "--http-url <url>",
+              "description": "Signal HTTP service URL"
+            }
+          },
+          {
+            "key": "httpHost",
+            "kind": "string",
+            "cli": {
+              "flags": "--http-host <host>",
+              "description": "Signal HTTP daemon host"
+            }
+          },
+          {
+            "key": "httpPort",
+            "kind": "string",
+            "cli": {
+              "flags": "--http-port <port>",
+              "description": "Signal HTTP daemon port"
+            }
+          }
+        ]
+      }
+    },
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/signal",
+      "npmSpec": "@openclaw/signal",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.9",
+      "allowInvalidConfigRecovery": true
+    },
+    "compat": {
+      "pluginApi": ">=2026.8.1"
+    },
+    "build": {
+      "openclawVersion": "2026.8.1",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  }
+}
