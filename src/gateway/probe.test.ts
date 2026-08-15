@@ -16,6 +16,7 @@ const gatewayClientState = vi.hoisted(() => ({
   } as { role?: string; scopes?: string[] } | undefined,
   helloServer: {
     version: "2026.4.24",
+    buildId: "build-test",
     connId: "conn-test",
   },
   connectError: "scope upgrade pending approval (requestId: req-123)",
@@ -414,6 +415,7 @@ describe("probeGateway", () => {
     });
     expect(result.server).toEqual({
       version: "2026.4.24",
+      buildId: "build-test",
       connId: "conn-test",
     });
   });
