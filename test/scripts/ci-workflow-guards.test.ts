@@ -57,8 +57,8 @@ const AMBIGUOUS_MAIN_PUSH_GUARD = `if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$
 fi`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const TSX_IMPORT = import.meta.resolve("tsx");
-const WORKSPACE_NODE_MODULES = path.dirname(
-  path.dirname(fileURLToPath(import.meta.resolve("tsx/package.json"))),
+const TYPESCRIPT_NODE_MODULES = path.dirname(
+  path.dirname(fileURLToPath(import.meta.resolve("typescript/package.json"))),
 );
 const MATURITY_GENERATED_PR_PATHS = [
   "qa/maturity-scores.yaml",
@@ -1021,7 +1021,7 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   );
   const nodeModules = path.join(checkout, "node_modules");
   if (!existsSync(nodeModules)) {
-    symlinkSync(WORKSPACE_NODE_MODULES, nodeModules, "dir");
+    symlinkSync(TYPESCRIPT_NODE_MODULES, nodeModules, "dir");
   }
   return spawnSync(process.execPath, ["--import", TSX_IMPORT, "scripts/check-protocol-since.mts"], {
     cwd: checkout,
