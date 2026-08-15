@@ -345,6 +345,16 @@ export function resolveVisibleMessagePositions(
   };
 }
 
+/**
+ * Logical index of the first message the latest reset admitted, skipping the kept
+ * replay tail it retained. Readers that must not resurface any pre-reset content
+ * (even the tail a reset keeps for continuity) start from here instead of position 0.
+ */
+export function resolvePostResetVisibleStart(projection: ResetWindowProjection): number {
+  const window = resolveResetMessageWindow(projection);
+  return window ? window.keptMessagePositions.length : 0;
+}
+
 export function readVisibleMessageRange(
   projection: ResetWindowProjection,
   start: number,
