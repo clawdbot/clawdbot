@@ -1,4 +1,6 @@
 /** CLI entrypoint for non-mutating doctor lint health checks. */
+import fs from "node:fs";
+import path from "node:path";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
@@ -17,7 +19,13 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "../flows/health-checks.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+import {
+  resolvePluginInstallRoots,
+  withPluginInstallRoots,
+} from "../plugins/install-root-context.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 interface DoctorLintCliOptions {
   readonly json?: boolean;
@@ -51,6 +59,14 @@ export async function runDoctorLintCli(
   if (sevMin === null) {
     throw new Error("Invalid --severity-min value. Expected one of: info, warning, error.");
   }
+  return await withReadOnlyPluginStateSnapshot(() => executeDoctorLint(runtime, opts, sevMin));
+}
+
+async function executeDoctorLint(
+  runtime: RuntimeEnv,
+  opts: DoctorLintCliOptions,
+  sevMin: NonNullable<ReturnType<typeof parseHealthFindingSeverity>>,
+): Promise<number> {
   const snapshot = await readConfigFileSnapshot({ observe: false });
   if (snapshot.exists && !snapshot.valid) {
     const findings = configValidationIssuesToHealthFindings(snapshot.issues);
@@ -82,8 +98,17 @@ export async function runDoctorLintCli(
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
   registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });
-  const coreChecks = await resolveDoctorContributionHealthChecks();
-  const extensionChecks = listExtensionHealthChecksForDoctor(coreChecks);
+  const registeredExtensionChecks = listExtensionHealthChecksForDoctor([]);
+  const onlyRegisteredExtensionChecks =
+    opts.onlyIds !== undefined &&
+    opts.onlyIds.length > 0 &&
+    opts.onlyIds.every((id) => registeredExtensionChecks.some((check) => check.id === id));
+  const coreChecks = onlyRegisteredExtensionChecks
+    ? []
+    : await resolveDoctorContributionHealthChecks();
+  const extensionChecks = onlyRegisteredExtensionChecks
+    ? registeredExtensionChecks
+    : listExtensionHealthChecksForDoctor(coreChecks);
   const coreCtx = { ...ctx, deep: opts.deep === true };
 
   const runOpts: DoctorLintRunOptions = {
@@ -122,6 +147,34 @@ export async function runDoctorLintCli(
   }
 
   return exitCodeFromFindings(result.findings, sevMin);
+}
+
+async function withReadOnlyPluginStateSnapshot<T>(run: () => Promise<T>): Promise<T> {
+  const sourceDatabasePath = resolveOpenClawStateSqlitePath(process.env);
+  if (!fs.existsSync(sourceDatabasePath)) {
+    return await run();
+  }
+  const prepared = prepareSqliteReadOnlyLocationSync(sourceDatabasePath);
+  try {
+    const privateStateDir = path.join(path.dirname(prepared.location), "openclaw-state");
+    const privateDatabasePath = resolveOpenClawStateSqlitePath({
+      ...process.env,
+      OPENCLAW_STATE_DIR: privateStateDir,
+    });
+    fs.mkdirSync(path.dirname(privateDatabasePath), { recursive: true, mode: 0o700 });
+    for (const suffix of ["", "-journal", "-shm", "-wal"]) {
+      const sourcePath = `${prepared.location}${suffix}`;
+      if (fs.existsSync(sourcePath)) {
+        fs.renameSync(sourcePath, `${privateDatabasePath}${suffix}`);
+      }
+    }
+    const installRoots = resolvePluginInstallRoots(process.env);
+    return await withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, run);
+  } finally {
+    if (!prepared.cleanup()) {
+      throw new Error("Temporary doctor lint state snapshot cleanup did not complete.");
+    }
+  }
 }
 
 function withCoreLintContext(

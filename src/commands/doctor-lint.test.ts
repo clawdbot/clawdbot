@@ -1,17 +1,35 @@
 // Doctor lint tests cover health-check registry integration and lint warning output.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
+import { resolveActivePluginInstallRoots } from "../plugins/install-root-context.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
+  resolveDoctorContributionHealthChecks: vi.fn(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
+vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../flows/doctor-health-contributions.js")>();
+  mocks.resolveDoctorContributionHealthChecks.mockImplementation(
+    actual.resolveDoctorContributionHealthChecks,
+  );
+  return {
+    ...actual,
+    resolveDoctorContributionHealthChecks: (...args: unknown[]) =>
+      mocks.resolveDoctorContributionHealthChecks(...args),
+  };
+});
 
 const runtime = {
   log: vi.fn(),
@@ -22,6 +40,7 @@ const runtime = {
 describe("runDoctorLintCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.readConfigFileSnapshot.mockReset();
     clearHealthChecksForTest();
   });
 
@@ -307,8 +326,74 @@ describe("runDoctorLintCli", () => {
           fixHint: "Review the plugin finding.",
         },
       ]);
+      expect(mocks.resolveDoctorContributionHealthChecks).not.toHaveBeenCalled();
     } finally {
       stdout.mockRestore();
+    }
+  });
+
+  it("reads plugin state through a private snapshot without changing the source database", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-state-"));
+    const stateDir = path.join(rootDir, "operator-state");
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const databasePath = resolveOpenClawStateSqlitePath(process.env);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    database.exec(
+      "PRAGMA journal_mode = WAL; CREATE TABLE fixture (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO fixture (value) VALUES ('stable');",
+    );
+    database.close();
+    const sourceContents = fs.readFileSync(databasePath);
+    const sourceEntries = fs.readdirSync(path.dirname(databasePath)).toSorted();
+    let observedPluginStateDir: string | undefined;
+    mocks.readConfigFileSnapshot.mockImplementation(async () => {
+      observedPluginStateDir = resolveActivePluginInstallRoots(process.env).stateDir;
+      expect(observedPluginStateDir).not.toBe(stateDir);
+      expect(
+        fs.existsSync(
+          resolveOpenClawStateSqlitePath({
+            ...process.env,
+            OPENCLAW_STATE_DIR: observedPluginStateDir,
+          }),
+        ),
+      ).toBe(true);
+      return {
+        exists: true,
+        valid: true,
+        config: {},
+        path: "/tmp/openclaw.json",
+      };
+    });
+    registerHealthCheck({
+      id: "plugin/example/read-only-state",
+      kind: "plugin",
+      description: "read-only state fixture",
+      async detect() {
+        return [];
+      },
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await expect(
+        runDoctorLintCli(runtime, {
+          json: true,
+          onlyIds: ["plugin/example/read-only-state"],
+        }),
+      ).resolves.toBe(0);
+      expect(observedPluginStateDir).toBeDefined();
+      expect(resolveActivePluginInstallRoots(process.env).stateDir).toBe(stateDir);
+      expect(fs.readFileSync(databasePath)).toEqual(sourceContents);
+      expect(fs.readdirSync(path.dirname(databasePath)).toSorted()).toEqual(sourceEntries);
+    } finally {
+      stdout.mockRestore();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(rootDir, { recursive: true, force: true });
     }
   });
 
