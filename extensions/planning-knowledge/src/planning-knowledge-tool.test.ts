@@ -72,6 +72,27 @@ describe("planning-knowledge config", () => {
     expect(planningKnowledgeConfigSchema).toMatchObject({ additionalProperties: false });
     expect(planningKnowledgeCaptureParameters).toMatchObject({ additionalProperties: false });
   });
+
+  it("resolves absolute external paths without the plugin-local path resolver", () => {
+    const resolvePath = vi.fn(() => undefined);
+    const resolved = resolvePlanningKnowledgeConfig(config, resolvePath);
+
+    expect(resolved).toMatchObject({
+      scriptPath: config.scriptPath,
+      sourceRoot: config.sourceRoot,
+      indexPath: config.indexPath,
+    });
+    expect(resolvePath).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a relative path is outside the plugin resolver boundary", () => {
+    expect(() =>
+      resolvePlanningKnowledgeConfig(
+        { ...config, sourceRoot: "../../../Goal_Agent_latest/notes/knowledge" },
+        () => undefined,
+      ),
+    ).toThrow(/sourceRoot must be an absolute path/);
+  });
 });
 
 describe("planning-knowledge search", () => {

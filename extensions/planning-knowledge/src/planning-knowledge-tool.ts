@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type, type Static } from "typebox";
@@ -111,20 +112,42 @@ function requireConfiguredString(value: string | undefined, name: string): strin
   return normalized;
 }
 
+function resolveConfiguredPath(
+  value: string | undefined,
+  name: string,
+  resolvePath: (input: string) => string | undefined,
+): string {
+  const configured = requireConfiguredString(value, name);
+  if (isAbsolute(configured)) {
+    return resolve(configured);
+  }
+  if (configured === "~" || configured.startsWith("~/") || configured.startsWith("~\\")) {
+    return resolve(homedir(), configured.slice(2));
+  }
+
+  let resolvedByPlugin: string | undefined;
+  try {
+    resolvedByPlugin = resolvePath(configured);
+  } catch {
+    resolvedByPlugin = undefined;
+  }
+  if (!resolvedByPlugin) {
+    throw new Error(`Planning Knowledge ${name} must be an absolute path or a plugin-local path`);
+  }
+  return resolve(resolvedByPlugin);
+}
+
 export function resolvePlanningKnowledgeConfig(
   config: PlanningKnowledgeConfig,
-  resolvePath: (input: string) => string,
+  resolvePath: (input: string) => string | undefined,
 ): ResolvedPlanningKnowledgeConfig | null {
   if (!config.scriptPath || !config.sourceRoot || !config.indexPath) {
     return null;
   }
 
-  const scriptPath = resolvePath(requireConfiguredString(config.scriptPath, "scriptPath"));
-  const sourceRoot = resolvePath(requireConfiguredString(config.sourceRoot, "sourceRoot"));
-  const indexPath = resolvePath(requireConfiguredString(config.indexPath, "indexPath"));
-  const normalizedSourceRoot = resolve(sourceRoot);
-  const normalizedScriptPath = resolve(scriptPath);
-  const normalizedIndexPath = resolve(indexPath);
+  const normalizedSourceRoot = resolveConfiguredPath(config.sourceRoot, "sourceRoot", resolvePath);
+  const normalizedScriptPath = resolveConfiguredPath(config.scriptPath, "scriptPath", resolvePath);
+  const normalizedIndexPath = resolveConfiguredPath(config.indexPath, "indexPath", resolvePath);
 
   if (!isKnowledgeRoot(normalizedSourceRoot)) {
     throw new Error("Planning Knowledge sourceRoot must end in notes/knowledge");
