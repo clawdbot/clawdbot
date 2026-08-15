@@ -83,6 +83,7 @@ type ShellLazySurfaceState = ShellKeyboardState & {
   commandPaletteElement: TestOptionalCustomElement;
   handleDeferredBrowserToggle: (event: Event) => void;
   handleDeferredTerminalToggle: (event: Event) => void;
+  routeState: { routeId: string };
   terminalPanelElement: TestOptionalCustomElement;
 };
 

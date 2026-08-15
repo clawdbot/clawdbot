@@ -606,6 +606,15 @@ export function openSessionWorkspaceFile(
   openFile(state, getWorkspaceState(state), target.path, { line: target.line });
 }
 
+function toggleSessionWorkspace(state: SessionWorkspaceHost) {
+  const workspace = getWorkspaceState(state);
+  workspace.collapsed = !workspace.collapsed;
+  if (!workspace.collapsed && workspace.list?.sessionKey !== state.sessionKey) {
+    loadWorkspace(state, workspace);
+  }
+  requestUpdate(state);
+}
+
 function setSessionWorkspaceDock(state: SessionWorkspaceHost, dock: ChatWorkspaceDock) {
   const workspace = getWorkspaceState(state);
   if (workspace.dock !== dock) {
