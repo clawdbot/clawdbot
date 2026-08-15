@@ -223,7 +223,16 @@ class TalkModeManager internal constructor(
 ) {
   companion object {
     private const val tag = "TalkMode"
-    private const val realtimeSampleRateHz = 24_000
+
+    // Realtime playback (provider -> device) is Gateway-declared PCM16 wire
+    // audio, played back verbatim; realtime capture (device -> provider) uses
+    // a device-portable hardware rate and is resampled to the Gateway's
+    // declared wire rate before appendAudio (see startRealtimeCaptureLocked).
+    // These are deliberately separate constants: Android 14 CDD only
+    // guarantees 16k/44.1k/48k raw PCM capture, so capture cannot assume the
+    // wire rate is a usable AudioRecord rate on every device.
+    private const val realtimeOutputSampleRateHz = 24_000
+    private const val realtimeCapturePortableSampleRateHz = 48_000
     private const val realtimeAudioFrameMs = 100
     private const val chatFinalWaitMs = 45_000L
     private const val maxCachedRunCompletions = 128
@@ -342,6 +351,8 @@ class TalkModeManager internal constructor(
   private val audioInputGeneration = AtomicLong(0L)
 
   @Volatile private var realtimeSessionId: String? = null
+  private var realtimeWireAudioSampleRateHz: Int? = null
+  private var realtimeWireAudioEncoding: String? = null
   private var realtimeCaptureJob: Job? = null
   private var realtimeAppendJob: Job? = null
   private val realtimeCapturePauseLock = Any()
@@ -1137,6 +1148,12 @@ class TalkModeManager internal constructor(
       throw CancellationException("realtime talk stopped while connecting")
     }
 
+    // Capture must resample to whatever wire rate the Gateway declares here,
+    // never a rate Android assumes on its own (see realtimeCapturePortableSampleRateHz).
+    val audioContract = root?.get("audio").asObjectOrNull()
+    realtimeWireAudioEncoding = audioContract?.get("inputEncoding").asStringOrNull()
+    realtimeWireAudioSampleRateHz = audioContract?.get("inputSampleRateHz").asIntOrNull()
+
     val capturePaused =
       synchronized(realtimeCapturePauseLock) {
         // Session publication and capture installation are one transition. PTT
@@ -1231,6 +1248,22 @@ class TalkModeManager internal constructor(
   /** Caller holds [realtimeCapturePauseLock] so PTT cannot miss newly installed jobs. */
   @SuppressLint("MissingPermission")
   private fun startRealtimeCaptureLocked(sessionId: String) {
+    val wireSampleRateHz = realtimeWireAudioSampleRateHz
+    val wireEncoding = realtimeWireAudioEncoding
+    val resampler =
+      if (wireEncoding == "pcm16" && wireSampleRateHz != null) {
+        resolveRealtimeCaptureResampler(realtimeCapturePortableSampleRateHz, wireSampleRateHz)
+      } else {
+        null
+      }
+    if (resampler == null) {
+      Log.w(
+        tag,
+        "realtime capture rejected: unsupported wire audio format encoding=$wireEncoding sampleRateHz=$wireSampleRateHz",
+      )
+      failRealtimeRelay(sessionId, "unsupported realtime audio format")
+      return
+    }
     realtimeCaptureJob?.cancel()
     realtimeAppendJob?.cancel()
     val inputGeneration = audioInputGeneration.incrementAndGet()
@@ -1272,11 +1305,11 @@ class TalkModeManager internal constructor(
       gatewayWorkScope.launch(realtimeCaptureDispatcher) {
         var audioInput: AndroidAudioInputSession? = null
         try {
-          val frameBytes = realtimeSampleRateHz * 2 * realtimeAudioFrameMs / 1000
+          val frameBytes = realtimeCapturePortableSampleRateHz * 2 * realtimeAudioFrameMs / 1000
           val openedAudioInput =
             AndroidAudioInputSession.open(
               context,
-              realtimeSampleRateHz,
+              realtimeCapturePortableSampleRateHz,
               frameBytes,
               preferredAudioInputDevice(),
               { key ->
@@ -1284,14 +1317,18 @@ class TalkModeManager internal constructor(
               },
             )
           audioInput = openedAudioInput
+          check(openedAudioInput.actualSampleRateHz == realtimeCapturePortableSampleRateHz) {
+            "AudioRecord negotiated ${openedAudioInput.actualSampleRateHz}Hz, requested $realtimeCapturePortableSampleRateHz"
+          }
           val buffer = ByteArray(frameBytes)
           audioInput.startRecording()
           while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {
             val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
             _inputLevel.value = TalkAudioLevel.smoothed(_inputLevel.value, TalkAudioLevel.pcm16Level(buffer, read))
-            if (!shouldAppendRealtimeCapturedFrame(read)) continue
-            audioFrames.trySend(buffer.copyOf(read))
+            val resampled = resampler.process(buffer, read)
+            if (!shouldAppendRealtimeCapturedFrame(resampled.size)) continue
+            audioFrames.trySend(resampled)
           }
         } catch (err: Throwable) {
           if (err is CancellationException) throw err
@@ -1491,14 +1528,14 @@ class TalkModeManager internal constructor(
         realtimeAudioTrack ?: run {
           val minBuffer =
             AudioTrack.getMinBufferSize(
-              realtimeSampleRateHz,
+              realtimeOutputSampleRateHz,
               AudioFormat.CHANNEL_OUT_MONO,
               AudioFormat.ENCODING_PCM_16BIT,
             )
           val bufferSizeBytes =
             maxOf(
               minBuffer * 2,
-              realtimeSampleRateHz * 2 * realtimePlaybackBufferMs / 1000,
+              realtimeOutputSampleRateHz * 2 * realtimePlaybackBufferMs / 1000,
               bytes.size * 4,
             )
           val created =
@@ -1514,7 +1551,7 @@ class TalkModeManager internal constructor(
                 AudioFormat
                   .Builder()
                   .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                  .setSampleRate(realtimeSampleRateHz)
+                  .setSampleRate(realtimeOutputSampleRateHz)
                   .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                   .build(),
               ).setTransferMode(AudioTrack.MODE_STREAM)
@@ -1543,7 +1580,7 @@ class TalkModeManager internal constructor(
         TalkAudioLevel.smoothed(_outputLevel.value ?: 0f, TalkAudioLevel.pcm16Level(bytes, writtenBytes))
       _isSpeaking.value = true
       setStatus(nativeText("Speaking…"))
-      val durationMs = ((writtenBytes / 2.0) / realtimeSampleRateHz * 1000.0).toLong()
+      val durationMs = ((writtenBytes / 2.0) / realtimeOutputSampleRateHz * 1000.0).toLong()
       realtimeWrittenFrames += writtenBytes / 2L
       val now = SystemClock.elapsedRealtime()
       realtimePlaybackEndsAtMs = maxOf(now, realtimePlaybackEndsAtMs) + durationMs
@@ -1678,6 +1715,8 @@ class TalkModeManager internal constructor(
         val currentSessionId = realtimeSessionId
         val currentCaptureJobs = realtimeCaptureJob to realtimeAppendJob
         realtimeSessionId = null
+        realtimeWireAudioSampleRateHz = null
+        realtimeWireAudioEncoding = null
         realtimeCaptureJob = null
         realtimeAppendJob = null
         realtimeCapturePause = null
@@ -3327,6 +3366,11 @@ private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.t
 private fun JsonElement?.asDoubleOrNull(): Double? {
   val primitive = this as? JsonPrimitive ?: return null
   return primitive.content.toDoubleOrNull()
+}
+
+private fun JsonElement?.asIntOrNull(): Int? {
+  val primitive = this as? JsonPrimitive ?: return null
+  return primitive.content.toIntOrNull()
 }
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? {

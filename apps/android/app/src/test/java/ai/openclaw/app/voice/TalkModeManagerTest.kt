@@ -891,6 +891,8 @@ class TalkModeManagerTest {
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
       setPrivateField(pause, "sessionId", "relay-1")
       setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "realtimeWireAudioSampleRateHz", 24_000)
+      setPrivateField(manager, "realtimeWireAudioEncoding", "pcm16")
       setMutableStateFlow(manager, "_isListening", false)
       setMutableStateFlow(manager, "_statusText", nativeText("Thinking…"))
 
@@ -911,6 +913,28 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun resumingRealtimeCaptureFailsClosedWithoutAWireAudioContract() =
+    runTest {
+      val manager =
+        createManager(
+          scope = this,
+          realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
+        )
+      setMutableStateFlow(manager, "_isEnabled", true)
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      val pause = readPrivateField(manager, "realtimeCapturePause")!!
+      setPrivateField(pause, "sessionId", "relay-1")
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setMutableStateFlow(manager, "_isListening", false)
+
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
+
+      assertFalse(manager.isListening.value)
+      assertFalse(manager.isEnabled.value)
+      assertNull(readPrivateField(manager, "realtimeCaptureJob"))
+    }
+
+  @Test
   fun replacementRelayPublishedDuringPushToTalkResumesCapture() =
     runTest {
       val manager =
@@ -924,6 +948,8 @@ class TalkModeManagerTest {
       setPrivateField(pause, "sessionId", "relay-replacement")
       setPrivateField(pause, "restartRelay", true)
       setPrivateField(manager, "realtimeSessionId", "relay-replacement")
+      setPrivateField(manager, "realtimeWireAudioSampleRateHz", 24_000)
+      setPrivateField(manager, "realtimeWireAudioEncoding", "pcm16")
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 

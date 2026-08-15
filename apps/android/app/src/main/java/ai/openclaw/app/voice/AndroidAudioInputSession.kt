@@ -146,6 +146,11 @@ internal class AndroidAudioInputSession private constructor(
   internal val appliedPreferredDeviceKey: String?
     get() = synchronized(lock) { appliedPreferredInputKey }
 
+  /** AudioRecord's actual negotiated sample rate; callers that resample capture
+   * to a wire rate must verify this matches the requested rate before trusting it. */
+  internal val actualSampleRateHz: Int
+    get() = audioRecord.sampleRate
+
   fun startRecording() {
     synchronized(lock) {
       check(!closed) { "audio input session closed" }
