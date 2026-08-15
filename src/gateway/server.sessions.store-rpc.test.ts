@@ -10,6 +10,7 @@ import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { CronJob } from "../cron/types.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
@@ -231,7 +232,10 @@ test("lists and patches session store via sessions.* RPC", async () => {
   }>("sessions.list", { includeGlobal: false, includeUnknown: false });
 
   expect(list1.ok).toBe(true);
-  expect(list1.payload?.path).toBe(storePath);
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: "main",
+  }).path;
+  expect(list1.payload?.path).toBe(databasePath);
   expect(list1.payload?.sessions.map((session) => session.key)).not.toContain("global");
   expect(list1.payload?.defaults?.modelProvider).toBe("anthropic");
   const main = list1.payload?.sessions.find((s) => s.key === "agent:main:main");
@@ -347,11 +351,13 @@ test("lists and patches session store via sessions.* RPC", async () => {
 
   const pinned = await directSessionReq<{
     entry: { pinnedAt?: number };
+    path: string;
   }>("sessions.patch", {
     key: "agent:main:subagent:one",
     pinned: true,
   });
   expect(pinned.ok).toBe(true);
+  expect(pinned.payload?.path).toBe(databasePath);
   expect(pinned.payload?.entry.pinnedAt).toEqual(expect.any(Number));
 
   const pinnedList = await directSessionReq<{
@@ -731,22 +737,24 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
     entries: { main: { sessionId: "sess-local", updatedAt: 10 } },
   });
 
-  const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
-  );
+  const configuredOnly = await directSessionHandlerReq<{
+    path: string;
+    sessions: Array<{ key: string }>;
+  }>("sessions.list", { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true });
   expect(configuredOnly.ok).toBe(true);
+  expect(configuredOnly.payload?.path).toBe("(multiple)");
   expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
     "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
     "agent:codex:subagent:app-server-child",
     "agent:main:main",
   ]);
 
-  const broad = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false },
-  );
+  const broad = await directSessionHandlerReq<{
+    path: string;
+    sessions: Array<{ key: string }>;
+  }>("sessions.list", { includeGlobal: false, includeUnknown: false });
   expect(broad.ok).toBe(true);
+  expect(broad.payload?.path).toBe("(multiple)");
   expect(broad.payload?.sessions.map((session) => session.key)).toEqual([
     "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
     "agent:codex:subagent:app-server-child",

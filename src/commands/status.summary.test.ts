@@ -874,7 +874,7 @@ describe("getStatusSummary", () => {
     ]);
   });
 
-  it("aggregates shared file session stores only once", async () => {
+  it("aggregates fixed logical stores by their per-agent SQLite targets", async () => {
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
       mainKey: "main",
@@ -890,12 +890,23 @@ describe("getStatusSummary", () => {
 
     const summary = await getStatusSummary({ includeChannelSummary: false });
 
-    expect(summary.sessions.count).toBe(1);
-    expect(summary.sessions.byAgent.map((agent) => [agent.agentId, agent.count])).toEqual([
-      ["main", 1],
-      ["ops", 1],
+    expect(summary.sessions.count).toBe(2);
+    expect(
+      summary.sessions.byAgent.map((agent) => [agent.agentId, agent.path, agent.count]),
+    ).toEqual([
+      ["main", "/tmp/shared-sessions.sqlite", 1],
+      ["ops", "/tmp/shared-sessions.ops.sqlite", 1],
+    ]);
+    expect(summary.sessions.paths).toEqual([
+      "/tmp/shared-sessions.sqlite",
+      "/tmp/shared-sessions.ops.sqlite",
     ]);
     expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalledWith({
+      agentId: "main",
+      storePath: "/tmp/shared-sessions.json",
+    });
+    expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalledWith({
+      agentId: "ops",
       storePath: "/tmp/shared-sessions.json",
     });
   });
