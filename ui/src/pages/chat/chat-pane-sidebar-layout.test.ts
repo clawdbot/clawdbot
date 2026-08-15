@@ -18,6 +18,7 @@ function callbacks() {
     activatePanel: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
+    reorderPanel: vi.fn(),
     resizePanel: vi.fn(),
     setDock: vi.fn(),
     setExpanded: vi.fn(),

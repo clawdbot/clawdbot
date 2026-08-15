@@ -154,7 +154,9 @@ suite.define(() => {
           });
 
         const requests = await gateway.getRequests("browser.request");
-        const requestParams = requests.map((request) => request.params);
+        const requestParams = requests.map(
+          (request) => request.params as { method?: string; path?: string; body?: unknown },
+        );
         expect(requestParams).toContainEqual({ method: "GET", path: "/tabs" });
         expect(
           requestParams.filter(

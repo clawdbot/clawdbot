@@ -638,7 +638,9 @@ suite.define(() => {
             )
             .toBeLessThan(1);
           await expect
-            .poll(() => divider.evaluate((element) => element.orientation))
+            .poll(() =>
+              divider.evaluate((element) => (element as { orientation?: string }).orientation),
+            )
             .toBe("horizontal");
           await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
           const bottomHeight = await sidePanel(page).evaluate(
@@ -710,7 +712,9 @@ suite.define(() => {
             )
             .toBe(false);
           await expect
-            .poll(() => divider.evaluate((element) => element.orientation))
+            .poll(() =>
+              divider.evaluate((element) => (element as { orientation?: string }).orientation),
+            )
             .toBe("vertical");
           await expect
             .poll(() =>

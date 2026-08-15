@@ -3219,7 +3219,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it("degrades an undocked session rail to a full-height edge sheet, never a floating card", async () => {
     const page = await openFixture(900, 800, {
       sessionRailBody: LONG_SESSION_RAIL_BODY,
-      sessionRailDocked: false,
     });
     try {
       const geometry = await page.evaluate(() => {
