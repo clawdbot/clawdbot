@@ -422,7 +422,42 @@ describe("resolveTsdownBuildInvocation", () => {
     // unified record carries no controllers, so only the v1 walk can find this limit.
     const cgroupFiles = new Map([
       ["/proc/self/cgroup", `0::/\n7:memory:${slicePath}/openclaw-main-update.service\n`],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 / /sys/fs/cgroup/memory rw,nosuid - cgroup cgroup rw,memory\n",
+      ],
       [`/sys/fs/cgroup/memory${slicePath}/memory.limit_in_bytes`, `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
+  it("caps the tsdown heap when v1 controllers are co-mounted at the cgroup root", () => {
+    const slicePath = "/user.slice/user-999.slice";
+    // Co-mounted v1 puts memory.limit_in_bytes under the slice directly, with no
+    // per-controller directory, so the mount point has to come from mountinfo.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `2:memory,cpu,cpuacct:${slicePath}/openclaw-main-update.service\n`],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup cgroup rw,memory,cpu,cpuacct\n",
+      ],
+      [`/sys/fs/cgroup${slicePath}/memory.limit_in_bytes`, `${5 * 1024 * 1024 * 1024}\n`],
     ]);
 
     const result = resolveTsdownBuildInvocation({

@@ -47,8 +47,10 @@ const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
 const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
-const CGROUP_MOUNT_PATH = "/sys/fs/cgroup";
+const DEFAULT_CGROUP_V2_MOUNT_PATH = "/sys/fs/cgroup";
+const DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH = "/sys/fs/cgroup/memory";
 const PROC_SELF_CGROUP_PATH = "/proc/self/cgroup";
+const PROC_SELF_MOUNTINFO_PATH = "/proc/self/mountinfo";
 // memory.high throttles reclaim rather than failing allocation, so a heap sized
 // above it stalls the build instead of OOM-ing; both bounds cap the build heap.
 const CGROUP_V2_MEMORY_LIMIT_FILES = ["memory.max", "memory.high"];
@@ -82,6 +84,7 @@ type MemoryLimitParams = {
   procMeminfoPath?: string;
   procMemTotalBytes?: number;
   procSelfCgroupPath?: string;
+  procSelfMountinfoPath?: string;
 };
 
 type TsdownBuildParams = MemoryLimitParams & {
@@ -479,6 +482,40 @@ function parseCgroupMemoryLimitBytes(value: string) {
   return Number(parsed);
 }
 
+// Controller mount points are host layout, not constants: v1 controllers may be co-mounted at
+// the cgroup root instead of a per-controller directory. Read them where the kernel records
+// them so a slice budget is never missed because a path was assumed.
+function resolveCgroupMountPoints(params: MemoryLimitParams = {}) {
+  const fsImpl = params.fs ?? fs;
+  let rawMountinfo = "";
+  try {
+    rawMountinfo = fsImpl.readFileSync(
+      params.procSelfMountinfoPath ?? PROC_SELF_MOUNTINFO_PATH,
+      "utf8",
+    );
+  } catch {
+    // Unreadable off Linux; the documented defaults still apply.
+  }
+
+  let unified = DEFAULT_CGROUP_V2_MOUNT_PATH;
+  let v1Memory = DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH;
+  for (const line of rawMountinfo.split("\n")) {
+    // mountinfo separates its variable optional fields from the fstype with a lone "-".
+    const [fields, describe] = line.split(" - ");
+    const mountPoint = fields?.split(" ")[4];
+    const [fsType, , superOptions] = (describe ?? "").split(" ");
+    if (!mountPoint) {
+      continue;
+    }
+    if (fsType === "cgroup2") {
+      unified = mountPoint;
+    } else if (fsType === "cgroup" && (superOptions ?? "").split(",").includes("memory")) {
+      v1Memory = mountPoint;
+    }
+  }
+  return { unified, v1Memory };
+}
+
 // A systemd slice budget lives on the process's own cgroup, never on a hierarchy root, so
 // probing only the root misses every limit outside a namespaced container. Legacy and hybrid
 // hosts publish that same budget through the v1 memory controller instead of the `0::` record,
@@ -502,6 +539,7 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
     }
   };
 
+  const mounts = resolveCgroupMountPoints(params);
   for (const line of rawCgroup.split("\n")) {
     const record = /^\d+:([^:]*):(.*)$/u.exec(line);
     if (!record) {
@@ -509,18 +547,14 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
     }
     const controllers = record[1] ?? "";
     if (controllers === "") {
-      addHierarchy(CGROUP_MOUNT_PATH, CGROUP_V2_MEMORY_LIMIT_FILES, record[2] ?? "");
+      addHierarchy(mounts.unified, CGROUP_V2_MEMORY_LIMIT_FILES, record[2] ?? "");
     } else if (controllers.split(",").includes("memory")) {
-      addHierarchy(
-        path.join(CGROUP_MOUNT_PATH, "memory"),
-        CGROUP_V1_MEMORY_LIMIT_FILES,
-        record[2] ?? "",
-      );
+      addHierarchy(mounts.v1Memory, CGROUP_V1_MEMORY_LIMIT_FILES, record[2] ?? "");
     }
   }
   if (paths.length === 0) {
-    addHierarchy(CGROUP_MOUNT_PATH, CGROUP_V2_MEMORY_LIMIT_FILES, "");
-    addHierarchy(path.join(CGROUP_MOUNT_PATH, "memory"), CGROUP_V1_MEMORY_LIMIT_FILES, "");
+    addHierarchy(mounts.unified, CGROUP_V2_MEMORY_LIMIT_FILES, "");
+    addHierarchy(mounts.v1Memory, CGROUP_V1_MEMORY_LIMIT_FILES, "");
   }
   return paths;
 }
