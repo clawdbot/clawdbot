@@ -156,10 +156,10 @@ for (const name of orphanNames) {
   if (!match) continue;
   const orphanPath = path.join(leaseDirectory, name);
   const lease = parseLease(fs.readFileSync(orphanPath, "utf8"), match[1]);
+  resumeProcesses(lease.processes);
   if (lease.watchdog !== null && processIdentity(lease.watchdog.pid) === lease.watchdog.start) {
     try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
   }
-  resumeProcesses(lease.processes);
   fs.unlinkSync(orphanPath);
 }
 writeLease();
@@ -424,12 +424,14 @@ try { raw = fs.readFileSync(leasePath, "utf8"); } catch (error) {
 ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_LEASE_JS}
 const input = parseLease(raw, nonce);
-if (input.watchdog !== null && processIdentity(input.watchdog.pid) === input.watchdog.start) {
-  try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
-}
+// Thaw before retiring the watchdog: a bounded identity lookup can still fail, and
+// retiring the last resumer first would strand whatever the aborted sweep never reached.
 for (const entry of input.processes) {
   if (processIdentity(entry.pid) !== entry.start) continue;
   try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
+}
+if (input.watchdog !== null && processIdentity(input.watchdog.pid) === input.watchdog.start) {
+  try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
 }
 fs.unlinkSync(leasePath);
 `;

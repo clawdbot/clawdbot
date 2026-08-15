@@ -93,6 +93,37 @@ function leasePath(home: string, workspace: string, nonce: string) {
   return path.join(home, ".openclaw-worker", "quiescence", `${key}.${nonce}.json`);
 }
 
+// Absolute /bin/ps so the fixture's stubbed PATH entry cannot answer for the real host.
+async function processState(pid: number) {
+  const result = await runCommandWithTimeout(["/bin/ps", "-o", "stat=", "-p", String(pid)], {
+    timeoutMs: 5_000,
+  });
+  return result.stdout.trim();
+}
+
+async function waitForProcessState(pid: number, pattern: RegExp) {
+  let state = await processState(pid);
+  for (let attempt = 0; attempt < 50 && !pattern.test(state); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    state = await processState(pid);
+  }
+  return state;
+}
+
+function spawnIdleWorker() {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  expect(child.pid).toBeDefined();
+  return child;
+}
+
+async function stopIdleWorker(child: ReturnType<typeof spawnIdleWorker>) {
+  child.kill("SIGCONT");
+  child.kill("SIGTERM");
+  if (child.exitCode === null) {
+    await once(child, "exit");
+  }
+}
+
 async function resume(input: Awaited<ReturnType<typeof fixture>>, nonce: string) {
   const result = await runCommandWithTimeout(
     [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
@@ -288,6 +319,69 @@ describe("remote workspace quiescence scripts", () => {
 
     expect(result.termination).toBe("exit");
     expect(result.code).not.toBe(0);
+  });
+
+  it("thaws a real stopped worker and clears the lease", async () => {
+    const input = await fixture();
+    const child = spawnIdleWorker();
+    await fs.writeFile(input.extraProcessPath, `${child.pid}\n`);
+
+    try {
+      const nonce = await quiesce(input);
+      expect(await waitForProcessState(child.pid!, /^T/u)).toMatch(/^T/u);
+
+      await resume(input, nonce);
+
+      expect(await waitForProcessState(child.pid!, /^[^T]/u)).not.toMatch(/^T/u);
+      await expect(fs.stat(leasePath(input.home, input.workspace, nonce))).rejects.toThrow();
+    } finally {
+      await stopIdleWorker(child);
+      await fs.rm(input.extraProcessPath, { force: true });
+    }
+  });
+
+  it("keeps the watchdog resumer alive when the identity sweep aborts partway", async () => {
+    const input = await fixture();
+    const child = spawnIdleWorker();
+    await fs.writeFile(input.extraProcessPath, `${child.pid}\n`);
+    let watchdogPid: number | undefined;
+
+    try {
+      const nonce = await quiesce(input);
+      const lease = JSON.parse(
+        await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
+      ) as { processes: Array<{ pid: number }>; watchdog: { pid: number } };
+      expect(lease.processes.some((entry) => entry.pid === child.pid)).toBe(true);
+      watchdogPid = lease.watchdog.pid;
+
+      // Identity stays answerable for the watchdog but stalls for the frozen worker, so the
+      // sweep aborts exactly where the old order had already retired the last resumer.
+      await fs.writeFile(
+        path.join(input.bin, "ps"),
+        `#!/bin/sh\ncase "$*" in\n  *"lstart= -p ${watchdogPid}") exec /bin/ps "$@" ;;\n  *"lstart= -p"*) sleep 30 ;;\n  *) exit 1 ;;\nesac\n`,
+      );
+      await fs.chmod(path.join(input.bin, "ps"), 0o755);
+
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+        { timeoutMs: 15_000, baseEnv: input.env },
+      );
+
+      expect(result.termination).toBe("exit");
+      expect(result.code).not.toBe(0);
+      // The watchdog is the only owner left that can still thaw this lease.
+      expect(() => process.kill(watchdogPid!, 0)).not.toThrow();
+    } finally {
+      if (watchdogPid !== undefined) {
+        try {
+          process.kill(watchdogPid, "SIGTERM");
+        } catch {
+          // Already gone; the assertion above owns that outcome.
+        }
+      }
+      await stopIdleWorker(child);
+      await fs.rm(input.extraProcessPath, { force: true });
+    }
   });
 });
 
