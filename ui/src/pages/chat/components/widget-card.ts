@@ -54,10 +54,12 @@ async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> 
     const pinnedLabel = t("chat.toolCards.pinnedToDashboard");
     button.title = button.ariaLabel = pinnedLabel;
     button.dataset.pinned = "true";
-  } catch (error) {
+  } catch {
     button.disabled = false;
     button.ariaLabel = t("chat.toolCards.pinToDashboard");
-    button.title = error instanceof Error ? error.message : String(error);
+    const failureLabel = t("chat.toolCards.pinToDashboardFailed");
+    button.title = failureLabel;
+    showToast({ message: failureLabel });
   }
 }
 
