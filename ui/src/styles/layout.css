@@ -272,7 +272,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .settings-sidebar {
-  --scrollbar-size: 6px;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -481,7 +480,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   padding: 14px 12px 18px;
   overflow-y: auto;
   overflow-x: hidden;
-  scrollbar-width: thin;
 }
 
 .settings-sidebar__empty {
@@ -915,7 +913,6 @@ openclaw-settings-save-indicator {
   /* One rhythm for every group boundary in the sidebar (Pages and each
      session section) so the column reads as separate shelves, not one list. */
   --sidebar-group-gap: var(--space-4);
-  --scrollbar-size: 6px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1025,17 +1022,10 @@ openclaw-settings-save-indicator {
      horizontal scrollbar beside the divider. */
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: color-mix(in srgb, currentColor 8%, transparent) transparent;
-  scrollbar-width: thin;
   /* Cancel the shell's horizontal padding so the thumb hugs its right edge;
      both values share --sidebar-pad-x so they cannot drift. */
   margin-right: calc(-1 * var(--sidebar-pad-x));
   padding-right: var(--sidebar-pad-x);
-}
-
-.sidebar-shell__body::-webkit-scrollbar,
-.sidebar-shell__body::-webkit-scrollbar-track {
-  background: transparent;
 }
 
 .sidebar-shell__footer {
