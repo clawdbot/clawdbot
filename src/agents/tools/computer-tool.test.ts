@@ -584,6 +584,50 @@ describe("createComputerTool execution", () => {
     });
   });
 
+  it("routes an observation-bound element click without requiring coordinates", async () => {
+    const actions: ComputerUseV2ActionName[] = ["get_window_state", "left_click"];
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+      const request = body as ComputerActBody;
+      if (request.command !== COMPUTER_ACT_COMMAND) {
+        return screenshotPayload();
+      }
+      if (request.params?.action === "get_window_state") {
+        return {
+          payload: {
+            ok: true,
+            observation: {
+              kind: "window",
+              observationId: "observation-1",
+            },
+          },
+        };
+      }
+      return { payload: { ok: true, effect: "confirmed" } };
+    });
+    const tool = createVisionComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
+    await tool.execute("observe", { action: "get_window_state", windowRef: "window-1" });
+
+    await expect(
+      tool.execute("click", {
+        action: "left_click",
+        windowRef: "window-1",
+        elementRef: "element-1",
+        observationId: "observation-1",
+        deliveryMode: "background",
+      }),
+    ).resolves.toBeDefined();
+    expect(readLastComputerActParams()).toEqual({
+      action: "left_click",
+      screenIndex: 0,
+      refWidth: EFFECTIVE_REF_WIDTH,
+      windowRef: "window-1",
+      elementRef: "element-1",
+      observationId: "observation-1",
+      deliveryMode: "background",
+    });
+  });
+
   it("rejects recording actions that remain contract-only", async () => {
     const actions: ComputerUseV2ActionName[] = ["start_recording"];
     listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
