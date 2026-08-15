@@ -1,7 +1,7 @@
 const INTERNAL_PROTOCOL_FIELD = "x-openclaw-internal";
 
 /**
- * Local copy of `isRecord` from `@openclaw/normalization-core/record-coerce`.
+ * Schema-specific record guard matching `@openclaw/normalization-core/record-coerce`.
  *
  * Deliberately inlined rather than imported: `gateway-protocol` does not
  * otherwise depend on `normalization-core`, and adding that package edge is a
@@ -10,7 +10,7 @@ const INTERNAL_PROTOCOL_FIELD = "x-openclaw-internal";
  * no dependencies of its own, so duplicating it is far cheaper than carrying an
  * unmergeable manifest edit. Keep this in sync with the canonical definition.
  */
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isProtocolSchemaRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -51,7 +51,7 @@ function cloneSchemaNode(value: unknown): StripResult {
     }
     return { value: changed ? cloned : value, changed, removed: false };
   }
-  if (!isRecord(value)) {
+  if (!isProtocolSchemaRecord(value)) {
     return { value, changed: false, removed: false };
   }
   if (isInternalProtocolField(value)) {
@@ -62,7 +62,7 @@ function cloneSchemaNode(value: unknown): StripResult {
   const properties = value.properties;
   let clonedProperties: Record<string, unknown> | undefined;
   let propertiesChanged = false;
-  if (isRecord(properties)) {
+  if (isProtocolSchemaRecord(properties)) {
     clonedProperties = {};
     for (const [name, propertySchema] of Object.entries(properties)) {
       if (isInternalProtocolField(propertySchema)) {
@@ -83,7 +83,7 @@ function cloneSchemaNode(value: unknown): StripResult {
 
   let otherFieldsChanged = false;
   const cloned: Record<string, unknown> = {};
-  if (isRecord(properties)) {
+  if (isProtocolSchemaRecord(properties)) {
     cloned.properties = propertiesChanged ? clonedProperties : properties;
   }
   for (const [key, raw] of Object.entries(value)) {

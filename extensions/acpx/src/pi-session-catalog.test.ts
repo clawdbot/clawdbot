@@ -220,23 +220,16 @@ describe("Pi session catalog", () => {
 
   it("recognizes Pi sessions when the agent directory uses a symlinked path", async () => {
     const sessionDirectory = await createPiStore();
-    const fixtureRoot = await fs.mkdtemp(
-      path.join(path.dirname(sessionDirectory), "openclaw-pi-agent-"),
-    );
-    const agentDirectory = path.join(fixtureRoot, "real");
-    const symlinkParent = path.join(fixtureRoot, "linked");
-    const linkedAgentDirectory = path.join(symlinkParent, "agent");
+    const fixtureRoot = await fs.mkdtemp(path.join(path.dirname(sessionDirectory), "pi-agent-"));
+    const agentDir = path.join(fixtureRoot, "real");
+    const linkedDir = path.join(fixtureRoot, "linked", "agent");
     temporaryDirectories.push(fixtureRoot);
-    await fs.mkdir(path.join(agentDirectory, "sessions"), { recursive: true });
-    await fs.mkdir(symlinkParent, { recursive: true });
-    await fs.rename(sessionDirectory, path.join(agentDirectory, "sessions", "project"));
-    await fs.symlink(
-      agentDirectory,
-      linkedAgentDirectory,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    process.env.PI_CODING_AGENT_SESSION_DIR = path.join(agentDirectory, "sessions", "project");
-    process.env.PI_CODING_AGENT_DIR = linkedAgentDirectory;
+    await fs.mkdir(path.join(agentDir, "sessions"), { recursive: true });
+    await fs.mkdir(path.dirname(linkedDir), { recursive: true });
+    await fs.rename(sessionDirectory, path.join(agentDir, "sessions", "project"));
+    await fs.symlink(agentDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+    process.env.PI_CODING_AGENT_SESSION_DIR = path.join(agentDir, "sessions", "project");
+    process.env.PI_CODING_AGENT_DIR = linkedDir;
 
     await expect(listLocalPiSessionPage({ limit: 20 })).resolves.toEqual({
       sessions: [expect.objectContaining({ threadId: "pi-session", canContinue: true })],

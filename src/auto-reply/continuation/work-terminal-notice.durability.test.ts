@@ -14,12 +14,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { deliverQueuedSessionDelivery } from "../../gateway/server-restart-sentinel.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import { recoverPendingSessionDeliveries } from "../../infra/session-delivery-queue-recovery.js";
 import { scheduleSessionDelivery } from "../../infra/session-delivery-queue-runtime.js";
 import {
   enqueueSessionDeliveryWithStatus,
   loadPendingSessionDeliveries,
 } from "../../infra/session-delivery-queue-storage.js";
-import { recoverPendingSessionDeliveries } from "../../infra/session-delivery-queue-recovery.js";
 import {
   drainSystemEventEntries,
   enqueueSystemEvent,

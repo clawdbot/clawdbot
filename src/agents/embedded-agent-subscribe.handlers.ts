@@ -10,10 +10,12 @@ import {
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import {
   capturePendingAssistantUsage,
-  handleMessageStart,
   preservePendingAssistantUsage,
   resetPendingAssistantUsage,
+} from "./embedded-agent-subscribe.handlers.messages.lifecycle-state.js";
+import {
   handleMessageEnd,
+  handleMessageStart,
 } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
 import { isSubscribeTranscriptOnlyOpenClawAssistantMessage } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";

@@ -18,7 +18,7 @@ import {
 import {
   capturePendingAssistantUsage,
   shouldSuppressValidationLoopAssistantOutput,
-} from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
+} from "./embedded-agent-subscribe.handlers.messages.lifecycle-state.js";
 import {
   hasAssistantVisibleReply,
   mergeReplyDirectiveResults,

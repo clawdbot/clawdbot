@@ -1,6 +1,6 @@
-import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
+import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
@@ -25,15 +25,10 @@ import {
   type PreparedHeartbeatRun,
   type ReadyHeartbeatWake,
 } from "./heartbeat-runner-execution.js";
-import {
-  invokeHeartbeatAgentRun as invokeHeartbeatAgentRunInternal,
-} from "./heartbeat-runner-invoke.js";
+import { invokeHeartbeatAgentRun as invokeHeartbeatAgentRunInternal } from "./heartbeat-runner-invoke.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import type { HeartbeatRunResult } from "./heartbeat-wake-contracts.js";
-import {
-  HEARTBEAT_SKIP_PREEMPTED,
-  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-} from "./heartbeat-wake.js";
+import { HEARTBEAT_SKIP_PREEMPTED, HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } from "./heartbeat-wake.js";
 import { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 

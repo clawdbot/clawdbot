@@ -828,8 +828,7 @@ export function createAgentEventHandler({
       opts?.validationAbortErrorMessage ??
       readToolValidationErrorSummary(evt.data?.toolErrorSummary);
     const terminalClassification = classifyAgentRunTerminalOutcome(terminalOutcome);
-    const classifiedTerminalState =
-      CHAT_STATE_BY_TERMINAL_CLASSIFICATION[terminalClassification];
+    const classifiedTerminalState = CHAT_STATE_BY_TERMINAL_CLASSIFICATION[terminalClassification];
     const terminalState = validationAbortErrorMessage ? "aborted" : classifiedTerminalState;
     const yieldedWaiting = isAgentLifecycleYieldedWaiting({
       phase: lifecyclePhase,

@@ -132,12 +132,12 @@ import {
   parseDiagnosticTraceparent,
   runWithDiagnosticTraceparent,
 } from "../../infra/diagnostic-trace-context.js";
+import { recoverPendingSessionDeliveries } from "../../infra/session-delivery-queue-recovery.js";
 import {
   enqueueSessionDelivery,
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
 } from "../../infra/session-delivery-queue-storage.js";
-import { recoverPendingSessionDeliveries } from "../../infra/session-delivery-queue-recovery.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { consumePendingDelegates, resetDelegateStoreForTests } from "./delegate-store.js";
 import { enqueueContinuationReturnDeliveries } from "./targeting.js";

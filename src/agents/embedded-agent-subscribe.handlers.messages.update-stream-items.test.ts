@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
-import { handleMessageUpdate as handleMessageUpdateImpl } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import {
   createMessageUpdateContext,
   endMessage,
   firstMockArg,
   updateMessage,
 } from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
+import { handleMessageUpdate as handleMessageUpdateImpl } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextEvent as createTextUpdateEvent,

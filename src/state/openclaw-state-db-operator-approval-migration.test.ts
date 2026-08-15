@@ -106,6 +106,7 @@ describe("repairOperatorApprovalKinds", () => {
       { name: "idx_operator_approvals_resolution_ref" },
       { name: "idx_operator_approvals_resolved" },
       { name: "idx_operator_approvals_runtime_pending" },
+      { name: "idx_operator_approvals_source_run_resolved" },
       { name: "idx_operator_approvals_source_session_created" },
       { name: "idx_operator_approvals_status_expiry" },
       { name: "sqlite_autoindex_operator_approvals_1" },

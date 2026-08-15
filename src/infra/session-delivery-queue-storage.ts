@@ -147,9 +147,7 @@ function splitSessionDeliveryStorageEnvelope(entry: DeliveryQueueEntryState): {
 
 function normalizeSessionDeliveryForStorage(entry: QueuedSessionDelivery): QueuedSessionDelivery {
   const { coreEntry, envelope } = splitSessionDeliveryStorageEnvelope(entry);
-  const normalized = normalizeSessionDeliveryForPersistence(
-    coreEntry as CoreQueuedSessionDelivery,
-  );
+  const normalized = normalizeSessionDeliveryForPersistence(coreEntry as CoreQueuedSessionDelivery);
   return { ...normalized, ...envelope } as QueuedSessionDelivery;
 }
 

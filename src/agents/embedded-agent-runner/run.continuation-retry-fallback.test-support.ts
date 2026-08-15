@@ -50,7 +50,7 @@ describe("runEmbeddedAgent retry and fallback continuation", () => {
     expect(result.payloads?.[0]?.isError).toBe(true);
   });
 
-  it("preserves replay invalidation when retries exhaust after side effects", async () => {
+  it("terminates without replay after side effects invalidate the attempt", async () => {
     mockedRunEmbeddedAttempt.mockClear();
     mockedCompactDirect.mockClear();
     mockedPickFallbackThinkingLevel.mockReset();
@@ -67,9 +67,12 @@ describe("runEmbeddedAgent retry and fallback continuation", () => {
 
     const result = await runEmbeddedAgent(overflowBaseRunParams);
 
-    expect(result.meta.error?.kind).toBe("retry_limit");
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.meta.error).toBeUndefined();
     expect(result.meta.replayInvalid).toBe(true);
-    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.livenessState).toBe("working");
+    expect(result.payloads).toEqual([{ text: "ok" }]);
   });
 
   it("normalizes abort-wrapped prompt errors before handing off to model fallback", async () => {

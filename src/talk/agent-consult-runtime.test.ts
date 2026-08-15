@@ -121,7 +121,7 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       return next;
     },
   );
-  const upsertSessionEntryCore = vi.fn(
+  const upsertSessionEntry = vi.fn(
     async (params: { sessionKey: string; entry: Record<string, unknown> }) => {
       sessionStore[params.sessionKey] = { ...params.entry };
     },
@@ -133,13 +133,13 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       ensureAgentWorkspace: vi.fn(async () => {}),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       session: {
-        resolveSessionStorePathCore: vi.fn(() => testTempPath("sessions.json")),
+        resolveStorePath: vi.fn(() => testTempPath("sessions.json")),
         loadSessionStore: vi.fn(() => sessionStore),
         saveSessionStore: vi.fn(async () => {}),
         updateSessionStore,
         getSessionEntry,
         patchSessionEntry,
-        upsertSessionEntryCore,
+        upsertSessionEntry,
         resolveSessionFilePath: vi.fn(
           (_sessionId: string, entry?: { sessionFile?: string }) =>
             entry?.sessionFile ?? testTempPath("session.json"),

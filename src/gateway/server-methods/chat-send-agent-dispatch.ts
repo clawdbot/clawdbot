@@ -15,8 +15,8 @@ import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { broadcastChatFinal } from "./chat-broadcast.js";
-import { finalizeChatSendAgentOutcome } from "./chat-send-agent-outcome.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
+import { finalizeChatSendAgentOutcome } from "./chat-send-agent-outcome.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import {
   resolveWebchatPromptCacheKey,

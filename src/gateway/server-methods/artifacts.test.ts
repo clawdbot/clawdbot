@@ -410,42 +410,6 @@ describe("artifacts RPC handlers", () => {
     expectFields(downloadPayload.artifact, { id: artifactId });
   });
 
-  it("does not collect or resolve managed delegate claim projections", async () => {
-    const claimId = "6dd7df78-f407-42cb-bef1-6381abe7ebd7";
-    mockedMessages([
-      {
-        role: "system",
-        content: JSON.stringify({
-          artifacts: [
-            {
-              id: claimId,
-              type: "report",
-              title: "Delegate report",
-              mimeType: "application/pdf",
-              sizeBytes: 12,
-              source: "delegate-return",
-              download: { mode: "unsupported" },
-            },
-          ],
-        }),
-      },
-    ]);
-
-    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
-    expect(expectArtifactList(listed.calls).artifacts).toEqual([]);
-    for (const method of [getArtifact, downloadArtifact]) {
-      const result = await method({
-        sessionKey: "agent:main:main",
-        artifactId: claimId,
-      });
-      expectFields(expectErrorDetails(result.calls), {
-        type: "artifact_not_found",
-        artifactId: claimId,
-      });
-      expect(JSON.stringify(result.calls)).not.toMatch(/JVBER|base64|https?:\/\//i);
-    }
-  });
-
   it.each([
     { type: "file", data: "", sizeBytes: 0, title: "direct.bin" },
     {

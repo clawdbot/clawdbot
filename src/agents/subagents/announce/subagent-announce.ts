@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
-import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import {
   type DeliveryContext,
   normalizeDeliveryContext,
@@ -46,6 +45,7 @@ import {
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
 } from "./subagent-announce-delivery.js";
+import { loadSubagentContinuationRuntime, subagentAnnounceDeps } from "./subagent-announce-deps.js";
 import {
   hasUsableSessionEntry,
   isWakeContinuationRun,
@@ -69,46 +69,15 @@ import {
   waitForSubagentRunOutcome,
 } from "./subagent-announce-output.js";
 import {
-  callGateway,
-  dispatchGatewayMethodInProcess,
   isEmbeddedAgentRunActive,
-  getRuntimeConfig,
-  resolveContinuationRuntimeConfig,
   waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
 import type { SubagentRunOutcome } from "./subagent-run-outcome.js";
-type SubagentAnnounceDeps = {
-  callGateway: typeof callGateway;
-  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
-  getRuntimeConfig: typeof getRuntimeConfig;
-  loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
-  resolveContinuationRuntimeConfig: typeof resolveContinuationRuntimeConfig;
-};
-
-const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
-  callGateway,
-  dispatchGatewayMethodInProcess,
-  getRuntimeConfig,
-  loadSubagentRegistryRuntime,
-  resolveContinuationRuntimeConfig,
-};
-
-let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
-
-const subagentRegistryRuntimeLoader = createLazyImportLoader(
-  () => import("../registry/subagent-registry-runtime.js"),
-);
-const subagentContinuationRuntimeLoader = createLazyImportLoader(
-  () => import("../../subagent-announce.continuation.runtime.js"),
-);
-
-function loadSubagentRegistryRuntime() {
-  return subagentRegistryRuntimeLoader.load();
-}
 
 export { buildSubagentSystemPrompt } from "../spawn/subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export { hasUsableSessionEntry } from "./subagent-announce-descendant-wake.js";
+export { testing } from "./subagent-announce-deps.js";
 export type { SubagentAnnounceType } from "../../subagent-announce-message.js";
 export type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 export type SubagentAnnounceFlowOutcome = NonNullable<
@@ -274,7 +243,7 @@ export async function runSubagentAnnounceFlow(params: {
 
     let childCompletionFindings: string | undefined;
     let subagentRegistryRuntime:
-      | Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>
+      | Awaited<ReturnType<typeof subagentAnnounceDeps.loadSubagentRegistryRuntime>>
       | undefined;
     try {
       subagentRegistryRuntime = await subagentAnnounceDeps.loadSubagentRegistryRuntime();
@@ -544,7 +513,7 @@ export async function runSubagentAnnounceFlow(params: {
     ) {
       findings = `${findings}\n\n[Descendant completions]\n${childCompletionFindings}`;
     }
-    const continuationRuntime = await subagentContinuationRuntimeLoader.load();
+    const continuationRuntime = await loadSubagentContinuationRuntime();
     const continuation = await continuationRuntime.coordinateSubagentContinuation({
       cfg,
       childSessionKey: params.childSessionKey,
@@ -742,33 +711,3 @@ export async function runSubagentAnnounceFlow(params: {
   }
   return announceOutcome;
 }
-
-export const testing = {
-  setDepsForTest(
-    overrides?: Partial<SubagentAnnounceDeps> & {
-      callGateway?: typeof callGateway;
-    },
-  ) {
-    const callGatewayOverride = overrides?.callGateway;
-    const dispatchGatewayMethodInProcessOverride =
-      overrides?.dispatchGatewayMethodInProcess ??
-      (callGatewayOverride
-        ? ((async (method, agentParams, options) =>
-            await callGatewayOverride({
-              method,
-              params: agentParams,
-              expectFinal: options?.expectFinal,
-              timeoutMs: options?.timeoutMs,
-            })) satisfies typeof dispatchGatewayMethodInProcess)
-        : undefined);
-    subagentAnnounceDeps = overrides
-      ? {
-          ...defaultSubagentAnnounceDeps,
-          ...overrides,
-          ...(dispatchGatewayMethodInProcessOverride
-            ? { dispatchGatewayMethodInProcess: dispatchGatewayMethodInProcessOverride }
-            : {}),
-        }
-      : defaultSubagentAnnounceDeps;
-  },
-};

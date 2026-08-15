@@ -251,11 +251,12 @@ describe("runHeartbeatOnce", () => {
         session: { store: storePath },
       };
 
+      const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: "main" });
       const opsMainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
       await fs.writeFile(
         storePath,
         JSON.stringify({
-          [resolveMainSessionKey(cfg)]: {
+          [mainSessionKey]: {
             sessionId: "sid-main",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",

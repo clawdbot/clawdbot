@@ -10,6 +10,7 @@ import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
 } from "../../plugins/hook-types.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import type {
@@ -78,7 +79,28 @@ type MockResolvedModel = {
   reasoning?: boolean;
 };
 
-const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
+const anthropicAuthMetadataPlugin: PluginManifestRecord = {
+  id: "anthropic",
+  channels: [],
+  providers: ["anthropic"],
+  cliBackends: ["claude-cli"],
+  skills: [],
+  hooks: [],
+  origin: "bundled",
+  rootDir: "/tmp/openclaw-test-anthropic-plugin",
+  source: "test",
+  manifestPath: "/tmp/openclaw-test-anthropic-plugin/openclaw.plugin.json",
+  providerAuthChoices: [
+    {
+      provider: "anthropic",
+      method: "cli",
+      choiceId: "anthropic-cli",
+      deprecatedChoiceIds: ["claude-cli"],
+    },
+  ],
+};
+
+const testPluginMetadataSnapshot: PluginMetadataSnapshot = {
   policyHash: "",
   index: {
     version: 1,
@@ -92,10 +114,10 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
     diagnostics: [],
   },
   registryDiagnostics: [],
-  manifestRegistry: { plugins: [], diagnostics: [] },
-  plugins: [],
+  manifestRegistry: { plugins: [anthropicAuthMetadataPlugin], diagnostics: [] },
+  plugins: [anthropicAuthMetadataPlugin],
   diagnostics: [],
-  byPluginId: new Map(),
+  byPluginId: new Map([[anthropicAuthMetadataPlugin.id, anthropicAuthMetadataPlugin]]),
   normalizePluginId: (pluginId: string) => pluginId,
   owners: {
     channels: new Map(),
@@ -113,7 +135,7 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
     ownerMapsMs: 0,
     totalMs: 0,
     indexPluginCount: 0,
-    manifestPluginCount: 0,
+    manifestPluginCount: 1,
   },
 };
 
@@ -205,7 +227,7 @@ export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
               agentHarnesses: [...pluginRegistry.agentHarnesses],
             }
           : undefined,
-        metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
+        metadataSnapshot: { ...testPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
         createStores: () => ({ authStorage: {}, modelRegistry: {} }),
       },
       release: vi.fn(),

@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { handleMessageEnd } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
 import { consumePendingAssistantReplyDirectivesIntoReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import { handleMessageUpdate as handleMessageUpdateImpl } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import {
   createMessageUpdateContext,
   firstMockArg,
   updateMessage,
 } from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
+import { handleMessageUpdate as handleMessageUpdateImpl } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextBlock,

@@ -14,6 +14,7 @@ import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-stat
 import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
+import { createCompactionRetryTracker } from "./embedded-agent-subscribe.compaction-retry.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
@@ -142,38 +143,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
   };
 
-  let pendingCompactionRetryGeneration: number | undefined;
-  let compactionReplacementActivityGeneration: number | undefined;
-  const noteCompactionRetry = (deliveryGeneration?: number) => {
-    if (deliveryGeneration === undefined) {
-      state.pendingCompactionRetry += 1;
-    } else {
-      const replacementAttemptStarted =
-        pendingCompactionRetryGeneration !== undefined &&
-        compactionReplacementActivityGeneration === pendingCompactionRetryGeneration;
-      if (
-        pendingCompactionRetryGeneration === undefined ||
-        pendingCompactionRetryGeneration === deliveryGeneration ||
-        !replacementAttemptStarted
-      ) {
-        state.pendingCompactionRetry += 1;
-      }
-      pendingCompactionRetryGeneration = deliveryGeneration;
-      if (compactionReplacementActivityGeneration !== deliveryGeneration) {
-        compactionReplacementActivityGeneration = undefined;
-      }
-    }
-    ensureCompactionPromise();
-  };
-  const noteCompactionReplacementActivity = (deliveryGeneration: number) => {
-    if (
-      state.pendingCompactionRetry > 0 &&
-      deliveryGeneration === pendingCompactionRetryGeneration
-    ) {
-      compactionReplacementActivityGeneration = deliveryGeneration;
-    }
-  };
-
   const resolveCompactionPromiseIfIdle = () => {
     if (state.pendingCompactionRetry !== 0 || state.compactionInFlight) {
       return;
@@ -184,24 +153,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.compactionRetryPromise = null;
   };
 
-  const resolveCompactionRetry = (deliveryGeneration?: number) => {
-    if (state.pendingCompactionRetry <= 0) {
-      return;
-    }
-    if (
-      deliveryGeneration !== undefined &&
-      pendingCompactionRetryGeneration !== undefined &&
-      deliveryGeneration !== pendingCompactionRetryGeneration
-    ) {
-      return;
-    }
-    state.pendingCompactionRetry -= 1;
-    compactionReplacementActivityGeneration = undefined;
-    if (state.pendingCompactionRetry === 0) {
-      pendingCompactionRetryGeneration = undefined;
-    }
-    resolveCompactionPromiseIfIdle();
-  };
+  const { noteCompactionReplacementActivity, noteCompactionRetry, resolveCompactionRetry } =
+    createCompactionRetryTracker({
+      state,
+      ensureCompactionPromise,
+      resolveCompactionPromiseIfIdle,
+    });
 
   const maybeResolveCompactionWait = () => {
     resolveCompactionPromiseIfIdle();
