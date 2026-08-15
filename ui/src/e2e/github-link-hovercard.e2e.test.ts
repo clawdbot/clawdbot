@@ -1,7 +1,7 @@
 // Control UI tests cover GitHub link hover card behavior.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Locator } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -37,6 +37,66 @@ async function closeBrowsers(): Promise<void> {
 
 async function expectText(locator: Locator, text: string): Promise<void> {
   await expect.poll(() => locator.textContent()).toContain(text);
+}
+
+const pullPreviewResponse = {
+  additions: 101,
+  avatarDataUrl:
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=",
+  changedFiles: 3,
+  closedAt: "2026-07-04T09:53:52Z",
+  createdAt: "2026-07-04T05:03:47Z",
+  deletions: 12,
+  draft: false,
+  kind: "pull",
+  login: "steipete",
+  mergedAt: "2026-07-04T09:53:52Z",
+  number: 99816,
+  owner: "openclaw",
+  repo: "openclaw",
+  state: "closed",
+  title: "fix(agents): derive conversation scope from trusted group facts",
+  updatedAt: "2026-07-04T09:53:55Z",
+};
+
+// Shared page setup for the two pointer-lifecycle cases below: both only need
+// a single previewable pull-request link, unlike the full walkthrough above.
+async function openPullPreviewPage(): Promise<{
+  card: Locator;
+  page: Page;
+  pullLink: Locator;
+}> {
+  const context = await newBrowserContext();
+  await context.route("https://github.com/**", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><title>GitHub item</title>",
+    }),
+  );
+
+  const page = await context.newPage();
+  await installMockGateway(page, {
+    methodResponses: {
+      "controlUi.githubPreview": {
+        cases: [{ match: { kind: "pull", number: 99816 }, response: pullPreviewResponse }],
+      },
+    },
+    historyMessages: [
+      {
+        content: [
+          { type: "text", text: "Review https://github.com/openclaw/openclaw/pull/99816." },
+        ],
+        role: "assistant",
+        timestamp: Date.now(),
+      },
+    ],
+  });
+  await page.goto(`${server.baseUrl}chat`);
+
+  const pullLink = page.getByRole("link", { name: "openclaw/openclaw#99816" });
+  const card = page.locator(".github-link-hovercard");
+  await pullLink.waitFor({ state: "visible" });
+  return { card, page, pullLink };
 }
 
 describeControlUiE2e("GitHub link hover cards", () => {
@@ -251,5 +311,62 @@ describeControlUiE2e("GitHub link hover cards", () => {
     const popup = await popupPromise;
     await popup.waitForLoadState("domcontentloaded");
     expect(popup.url()).toBe("https://github.com/openclaw/openclaw/pull/99816");
+  });
+
+  it("keeps the card open while the pointer crosses the gap onto it, then closes once it leaves both", async () => {
+    const { card, page, pullLink } = await openPullPreviewPage();
+
+    await pullLink.hover();
+    await expectText(card, "openclaw/openclaw #99816");
+    const linkBox = await pullLink.boundingBox();
+    expect(linkBox).not.toBeNull();
+
+    // Cross the physical gap with real intermediate pointer positions: off the
+    // link, through the unowned strip below it, then onto the card body. Each
+    // move is a fast CDP round trip, so the whole crossing lands comfortably
+    // inside CLOSE_DELAY_MS (github-link-hovercard.runtime.ts); the card must
+    // survive every step.
+    await page.mouse.move(linkBox!.x + linkBox!.width / 2, linkBox!.y + linkBox!.height / 2);
+    await page.mouse.move(linkBox!.x + linkBox!.width / 2, linkBox!.y + linkBox!.height + 5);
+    const cardBox = await card.boundingBox();
+    expect(cardBox).not.toBeNull();
+    await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + 4);
+    await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
+    expect(await card.count()).toBe(1);
+
+    // Staying on the card holds it open regardless of elapsed time, mirroring
+    // the unit test's ten-grace-window persistence check.
+    await page.waitForTimeout(300);
+    expect(await card.count()).toBe(1);
+    await expectText(card, "openclaw/openclaw #99816");
+
+    // Leaving both surfaces, with no click, still dismisses the card after the
+    // traversal grace period.
+    await page.mouse.move(1, 1);
+    await expect.poll(() => card.count()).toBe(0);
+  });
+
+  it("opens the linked pull request when the card's title link is clicked", async () => {
+    const { card, page, pullLink } = await openPullPreviewPage();
+
+    await pullLink.hover();
+    await expectText(card, "openclaw/openclaw #99816");
+    const titleLink = card.locator(".github-link-hovercard__title");
+    await expectText(titleLink, pullPreviewResponse.title);
+
+    // Mirrors the source-link popup assertion above: the title anchor reuses
+    // the same validated href, target="_blank", and safe rel.
+    const popupPromise = page.waitForEvent("popup");
+    await titleLink.click();
+    const popup = await popupPromise;
+    await popup.waitForLoadState("domcontentloaded");
+    expect(popup.url()).toBe("https://github.com/openclaw/openclaw/pull/99816");
+
+    // The click focused the title link inside the card; leaving the card still
+    // dismisses it with no click-outside required (github-link-hovercard.runtime.ts
+    // clears cardFocusInside for a pointer-opened card once the pointer leaves).
+    await popup.close();
+    await page.mouse.move(1, 1);
+    await expect.poll(() => card.count()).toBe(0);
   });
 });
