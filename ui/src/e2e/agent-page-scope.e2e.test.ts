@@ -90,7 +90,10 @@ suite.define(() => {
               defaultId: "research",
               mainKey: "main",
               scope: "agent",
-              agents: [{ id: "research", name: "Research" }],
+              agents: [
+                { id: "research", name: "Research" },
+                { id: "writer", name: "Writer" },
+              ],
             },
           },
         });
@@ -118,6 +121,35 @@ suite.define(() => {
         });
 
         await expect.poll(async () => (await agentName.textContent())?.trim()).toBe("Research");
+        await expect
+          .poll(() =>
+            page.locator("openclaw-chat-pane").evaluate((pane) => {
+              const state = (
+                pane as HTMLElement & {
+                  state?: {
+                    agentsList?: { agents?: Array<{ id?: string }>; defaultId?: string };
+                    agentsSelectedId?: string;
+                  };
+                }
+              ).state;
+              return {
+                defaultId: state?.agentsList?.defaultId,
+                ids: state?.agentsList?.agents?.map((agent) => agent.id),
+                selectedId: state?.agentsSelectedId,
+              };
+            }),
+          )
+          .toEqual({
+            defaultId: "research",
+            ids: ["research", "writer"],
+            selectedId: "research",
+          });
+
+        await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+        const agentMenu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
+        await agentMenu.getByText("Research", { exact: true }).waitFor();
+        await agentMenu.getByText("Writer", { exact: true }).waitFor();
+        expect(await agentMenu.getByText("Stale Main", { exact: true }).count()).toBe(0);
         await screenshot(page, "00-refreshed-roster-wins.png");
       },
     );

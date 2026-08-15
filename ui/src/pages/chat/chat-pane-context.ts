@@ -365,9 +365,14 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // chat.startup and agents.list share roster ownership. A startup response may
       // adopt only while no newer direct roster publication has replaced its baseline.
       state.onAgentsList = (agentsList, client) => {
-        if (clientIsCurrent() && this.context.agents.state.agentsList === agentsListBeforeStartup) {
-          this.context.agents.adoptList(agentsList, client);
+        if (
+          !clientIsCurrent() ||
+          this.context.agents.state.agentsList !== agentsListBeforeStartup
+        ) {
+          return false;
         }
+        this.context.agents.adoptList(agentsList, client);
+        return true;
       };
       const finishStartup = async () => {
         if (!clientIsCurrent()) {
