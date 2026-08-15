@@ -227,20 +227,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 49359,
-    "roughTokens": 12340
+    "chars": 49583,
+    "roughTokens": 12396
   },
   "openClawDeveloperInstructions": {
-    "chars": 4479,
-    "roughTokens": 1120
+    "chars": 4910,
+    "roughTokens": 1228
   },
   "totalTextOnly": {
-    "chars": 28862,
-    "roughTokens": 7216
+    "chars": 29293,
+    "roughTokens": 7324
   },
   "totalWithDynamicToolsJson": {
-    "chars": 78223,
-    "roughTokens": 19556
+    "chars": 78878,
+    "roughTokens": 19720
   },
   "userInputText": {
     "chars": 1300,
@@ -435,7 +435,7 @@ Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other 
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
-Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
+Follow the current turn's source-delivery directive. When replies are delivered automatically, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. When visible replies require the message tool, use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer. Use `message` for supported non-text actions in the current conversation, such as reacting to its current message. Reserve other `message` actions for explicit out-of-band sends or media/file delivery. Reactions are not delivered automatically.
 
 Credentials and secrets include authentication and pairing codes; never ask or request users to report, share, or provide them in chat, conversation messages, replies, or transcripts.
 Never echo or repeat credentials or secrets in chat, conversation messages, replies, or any other transcript.
@@ -626,6 +626,10 @@ Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dyna
         },
         "filename": {
           "type": "string"
+        },
+        "final": {
+          "description": "For admitted message-tool-only source turns, set false for progress; set true, or omit, for the completed reply. Ignored for other sends.",
+          "type": "boolean"
         },
         "forceDocument": {
           "description": "Send media as document; no compression.",
