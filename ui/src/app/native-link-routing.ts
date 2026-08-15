@@ -206,13 +206,14 @@ export function startNativeLinkRouting(): NativeLinkRouting {
     showMenu(link.anchor, link.url, event.clientX, event.clientY, menuContainer(event));
   };
 
-  document.addEventListener("click", handleClick, true);
+  // Let link and Control UI browser handlers cancel navigation before the native fallback.
+  window.addEventListener("click", handleClick);
   // Capture keeps message-level context menus from replacing native link actions.
   document.addEventListener("contextmenu", handleContextMenu, true);
 
   return {
     dispose() {
-      document.removeEventListener("click", handleClick, true);
+      window.removeEventListener("click", handleClick);
       document.removeEventListener("contextmenu", handleContextMenu, true);
       closeMenu();
     },

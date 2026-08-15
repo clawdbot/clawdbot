@@ -107,6 +107,9 @@ export const en: TranslationMap = {
     openExternal: "Open in Default Browser",
     copy: "Copy Link",
   },
+  browserLinkPreferences: {
+    openInControlUi: "Open links in Control UI browser",
+  },
   filePreview: {
     label: "Support files",
     listLabel: "Files",

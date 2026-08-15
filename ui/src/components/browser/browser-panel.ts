@@ -18,6 +18,7 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
+import { readBrowserLinkPreference } from "./browser-link-preference.ts";
 import {
   BrowserPanelController,
   type BrowserPanelControllerHost,
@@ -35,6 +36,23 @@ const panelLayout = createDockPanelLayout({
   defaultHeight: 420,
   defaultWidth: 560,
 });
+
+function externalHttpUrl(event: Event): URL | null {
+  const anchor = event
+    .composedPath()
+    .find((target): target is HTMLAnchorElement => target instanceof HTMLAnchorElement);
+  if (!anchor || anchor.hasAttribute("download") || anchor.hasAttribute("data-file-path")) {
+    return null;
+  }
+  try {
+    const url = new URL(anchor.href, window.location.href);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin
+      ? url
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 /** `<openclaw-browser-panel>` — the dockable gateway browser surface. */
 class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelControllerHost {
@@ -56,6 +74,30 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     isAvailable: () => this.available,
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
+  private readonly onLinkActivation = (event: MouseEvent) => {
+    if (
+      !this.available ||
+      !readBrowserLinkPreference() ||
+      event.defaultPrevented ||
+      event.altKey ||
+      !(
+        (event.type === "click" && event.button === 0) ||
+        (event.type === "auxclick" && event.button === 1)
+      )
+    ) {
+      return;
+    }
+    const url = externalHttpUrl(event);
+    if (!url) {
+      return;
+    }
+    event.preventDefault();
+    window.dispatchEvent(
+      new CustomEvent<BrowserPanelToggleDetail>(BROWSER_PANEL_TOGGLE_EVENT, {
+        detail: { open: true, url: url.href },
+      }),
+    );
+  };
   private readonly viewportResizeObserver = new ResizeObserver((entries) => {
     const entry = entries[0];
     if (entry) {
@@ -72,6 +114,9 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   override connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    // Run after target handlers, but before the native host's window fallback.
+    document.addEventListener("click", this.onLinkActivation);
+    document.addEventListener("auxclick", this.onLinkActivation);
     // A settings takeover can already own the viewport when the panel mounts.
     // Suppress before the restored open state refreshes a dock nobody can see.
     this.dockLayout.setSuppressed(this.suppressed);
@@ -83,6 +128,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    document.removeEventListener("click", this.onLinkActivation);
+    document.removeEventListener("auxclick", this.onLinkActivation);
     this.viewportResizeObserver.disconnect();
     this.observedViewportElement = null;
   }
