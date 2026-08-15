@@ -171,20 +171,9 @@ export function renderPanelTabStrip(params: {
       ? activeElement.id
       : null;
   const tabOrder = params.tabs.map((tab) => tab.id).join("\u0000");
-  const activeIndex = params.tabs.findIndex((tab) => tab.id === params.activeId);
-  const separatorCount = params.separateTabs
-    ? Math.max(
-        0,
-        params.tabs.length -
-          1 -
-          (activeIndex > 0 ? 1 : 0) -
-          (activeIndex >= 0 && activeIndex < params.tabs.length - 1 ? 1 : 0),
-      )
-    : 0;
   return html`
     <wa-tab-group
       class="tabstrip"
-      style=${`--tabstrip-tab-count: ${params.tabs.length}; --tabstrip-separator-count: ${separatorCount}`}
       .active=${params.activeId ?? ""}
       activation="auto"
       without-scroll-controls

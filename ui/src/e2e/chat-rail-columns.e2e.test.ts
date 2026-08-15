@@ -466,6 +466,30 @@ suite.define(() => {
           expect(await labelTooltip.locator("wa-tooltip .tooltip-content").textContent()).toContain(
             fullLabel,
           );
+          await expect
+            .poll(() =>
+              sidePanel(page)
+                .locator(":scope > .side-panel__header > wa-tab-group.tabstrip")
+                .evaluate((group) => {
+                  const tabsPart = group.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
+                  if (!tabsPart) {
+                    return null;
+                  }
+                  const tabsRect = tabsPart.getBoundingClientRect();
+                  const rightmostItem = Math.max(
+                    ...[
+                      ...group.querySelectorAll<HTMLElement>(
+                        "wa-tab, .tabstrip-tab__close, .tabstrip-separator",
+                      ),
+                    ].map((item) => Math.min(item.getBoundingClientRect().right, tabsRect.right)),
+                  );
+                  const clipped = [
+                    ...group.querySelectorAll<HTMLElement>(".tabstrip-tab__label"),
+                  ].some((label) => label.hasAttribute("data-tooltip-overflow"));
+                  return { clipped, unused: Math.max(0, tabsRect.right - rightmostItem) };
+                }),
+            )
+            .toEqual({ clipped: true, unused: 0 });
 
           await selectTab(page, "Files");
           await captureRichPanel(page, `rails-tabs-rich-${themeMode}`);
