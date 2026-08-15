@@ -243,6 +243,7 @@ try {
   throw error;
 }
 function watchdogMain(watchedLeasePath, watchedNonce) {
+  let retriesLeft = 150;
   const check = () => {
     try {
       const watchdogFs = require("node:fs");
@@ -284,7 +285,11 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
       }
       watchdogFs.unlinkSync(watchedLeasePath);
     } catch (error) {
-      if (!error || error.code !== "ENOENT") process.exitCode = 1;
+      if (error && error.code === "ENOENT") return;
+      // A stalled ps must not retire the lease's last resumer: keep re-probing identity on a
+      // bounded schedule (~5min) so frozen processes still get a verified SIGCONT once ps answers.
+      if (retriesLeft > 0) { retriesLeft -= 1; setTimeout(check, 2000); return; }
+      process.exitCode = 1;
     }
   };
   check();

@@ -67,14 +67,18 @@ async function fixture() {
   };
 }
 
-async function quiesce(input: Awaited<ReturnType<typeof fixture>>, sharedHost = false) {
+async function quiesce(
+  input: Awaited<ReturnType<typeof fixture>>,
+  sharedHost = false,
+  watchdogTimeoutMs = "10000",
+) {
   const result = await runCommandWithTimeout(
     [
       process.execPath,
       "-e",
       REMOTE_WORKSPACE_QUIESCE_JS,
       input.workspace,
-      "10000",
+      watchdogTimeoutMs,
       sharedHost ? "shared-host" : "dedicated",
     ],
     { timeoutMs: 10_000, baseEnv: input.env },
@@ -383,6 +387,44 @@ describe("remote workspace quiescence scripts", () => {
       await fs.rm(input.extraProcessPath, { force: true });
     }
   });
+
+  it("recovers a frozen worker once a stalled ps answers again after lease expiry", async () => {
+    const input = await fixture();
+    const healthyPs = await fs.readFile(path.join(input.bin, "ps"), "utf8");
+    const child = spawnIdleWorker();
+    await fs.writeFile(input.extraProcessPath, `${child.pid}\n`);
+
+    try {
+      const nonce = await quiesce(input, false, "6000");
+      expect(await waitForProcessState(child.pid!, /^T/u)).toMatch(/^T/u);
+
+      // ps stays stalled across the failed resume and past lease expiry, so only a
+      // watchdog that keeps re-probing identity can still thaw this worker.
+      await fs.writeFile(
+        path.join(input.bin, "ps"),
+        '#!/bin/sh\ncase "$*" in\n  *"lstart= -p"*) sleep 30 ;;\n  *) exit 1 ;;\nesac\n',
+      );
+      await fs.chmod(path.join(input.bin, "ps"), 0o755);
+
+      const failed = await runCommandWithTimeout(
+        [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+        { timeoutMs: 15_000, baseEnv: input.env },
+      );
+      expect(failed.code).not.toBe(0);
+
+      await new Promise((resolve) => setTimeout(resolve, 9_000));
+      expect(await processState(child.pid!)).toMatch(/^T/u);
+
+      await fs.writeFile(path.join(input.bin, "ps"), healthyPs);
+      await fs.chmod(path.join(input.bin, "ps"), 0o755);
+
+      expect(await waitForProcessState(child.pid!, /^[^T]/u)).not.toMatch(/^T/u);
+      await expect(fs.stat(leasePath(input.home, input.workspace, nonce))).rejects.toThrow();
+    } finally {
+      await stopIdleWorker(child);
+      await fs.rm(input.extraProcessPath, { force: true });
+    }
+  }, 45_000);
 });
 
 describe("remote workspace manifest script", () => {
