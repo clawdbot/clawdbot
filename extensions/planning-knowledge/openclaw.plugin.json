@@ -1,12 +1,63 @@
 {
   "id": "planning-knowledge",
   "name": "Planning Knowledge",
-  "description": "Read-only retrieval from the Planning-owned personal Knowledge corpus.",
+  "description": "Read-only access to Oliver's Planning-owned personal Knowledge Notes. Canonical refs remain note:notes/knowledge/<slug>.",
   "activation": {
     "onStartup": true
   },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "scriptPath": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Explicit OneLibrary planning_knowledge_index.py path."
+      },
+      "sourceRoot": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Explicit notes/knowledge source root."
+      },
+      "indexPath": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Explicit derived planning_personal index path."
+      },
+      "pythonExecutable": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Python executable for the OneLibrary CLI."
+      },
+      "mode": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "text"
+          },
+          {
+            "type": "string",
+            "const": "semantic"
+          },
+          {
+            "type": "string",
+            "const": "hybrid"
+          }
+        ]
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 120000
+      }
+    },
+    "additionalProperties": false
+  },
+  "version": "2026.8.1",
   "contracts": {
-    "tools": ["planning_knowledge_search", "planning_knowledge_capture"]
+    "tools": [
+      "planning_knowledge_search",
+      "planning_knowledge_capture"
+    ]
   },
   "toolMetadata": {
     "planning_knowledge_search": {
@@ -15,40 +66,5 @@
     "planning_knowledge_capture": {
       "optional": true
     }
-  },
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "scriptPath": {
-        "type": "string",
-        "description": "Explicit path to OneLibrary's planning_knowledge_index.py CLI."
-      },
-      "sourceRoot": {
-        "type": "string",
-        "description": "Explicit notes/knowledge/ source root; no repository crawl is performed."
-      },
-      "indexPath": {
-        "type": "string",
-        "description": "OneLibrary derived planning_personal SQLite index path."
-      },
-      "pythonExecutable": {
-        "type": "string",
-        "description": "Python executable used for the OneLibrary CLI.",
-        "default": "python3"
-      },
-      "mode": {
-        "type": "string",
-        "enum": ["text", "semantic", "hybrid"],
-        "default": "text"
-      },
-      "timeoutMs": {
-        "type": "integer",
-        "minimum": 100,
-        "maximum": 120000,
-        "default": 10000
-      }
-    }
-  },
-  "version": "2026.8.1"
+  }
 }
