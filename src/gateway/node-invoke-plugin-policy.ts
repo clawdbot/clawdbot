@@ -3,6 +3,10 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalWarningText,
+} from "../infra/exec-approval-command-display.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -24,6 +28,11 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-m
 
 // Plugin node.invoke policies are the last gateway-side guard before a
 // plugin-declared dangerous node command reaches the node transport.
+function sanitizeOptionalMeta(value?: string | null): string | null {
+  const normalized = normalizeOptionalString(value);
+  return normalized ? sanitizeExecApprovalDisplayText(normalized) : null;
+}
+
 function parseScopes(client: GatewayClient | null): string[] {
   return Array.isArray(client?.connect?.scopes)
     ? client.connect.scopes.filter((scope): scope is string => typeof scope === "string")
@@ -107,12 +116,24 @@ function createApprovalRuntime(params: {
       }
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
-        title: truncateUtf16Safe(input.title, 80),
-        description: truncateUtf16Safe(input.description, 256),
+        // Same creation-boundary sanitize as the RPC ingress: this record
+        // feeds the identical broadcast/forwarder/push paths. Normalize first
+        // so a whitespace-only title still fails closed at register (escaping
+        // the whitespace would make an unrenderable prompt look renderable).
+        title: truncateUtf16Safe(
+          sanitizeExecApprovalDisplayText(normalizeOptionalString(input.title) ?? ""),
+          80,
+        ),
+        description: truncateUtf16Safe(
+          sanitizeExecApprovalWarningText(normalizeOptionalString(input.description) ?? ""),
+          256,
+        ),
         severity: input.severity ?? "warning",
-        toolName: normalizeOptionalString(input.toolName) ?? null,
+        // toolName/agentId are interpolated into channel approval text; only
+        // host-minted runtime identity values skip the display escape.
+        toolName: sanitizeOptionalMeta(input.toolName),
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
-        agentId: callerIdentity?.agentId ?? normalizeOptionalString(input.agentId) ?? null,
+        agentId: callerIdentity?.agentId ?? sanitizeOptionalMeta(input.agentId),
         sessionKey: callerIdentity?.sessionKey ?? normalizeOptionalString(input.sessionKey) ?? null,
         runId: callerIdentity?.operationalRunInstance.runId ?? null,
         turnSourceChannel: turnSource.turnSourceChannel,

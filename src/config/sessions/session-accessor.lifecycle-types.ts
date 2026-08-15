@@ -82,6 +82,8 @@ export type DeleteSessionEntryLifecycleParams = {
   deleteTranscriptWithoutArchive?: boolean;
   /** Optional exact row guard checked under the storage writer lock. */
   expectedEntry?: SessionEntry;
+  /** Optional exact ordered transcript guard checked in the deleting SQLite transaction. */
+  expectedTranscript?: { sessionId: string; eventJson: readonly string[] };
   /** Optional provider-run identity guard checked under the storage writer lock. */
   expectedSessionId?: string | null;
   /** Optional owner revision guard checked under the storage writer lock. */

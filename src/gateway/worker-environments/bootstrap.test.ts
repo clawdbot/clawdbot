@@ -41,6 +41,7 @@ const BUNDLE: WorkerInstallationArtifact = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: VERSION,
   protocolFeatures: ["admission-v1"],
+  tarballBytes: 1,
   tarballSha256: TARBALL_SHA256,
   tarballPath: "/gateway/cache/worker.tgz",
 };
@@ -201,6 +202,61 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.argv.at(-1)).toContain(TARBALL_SHA256);
     expect(runner.calls[2]?.argv.at(-1)).toContain(VERSION);
   });
+
+  it.each([
+    { name: "keeps the floor for a small bundle", tarballBytes: 1, transferTimeoutMs: 600_000 },
+    {
+      name: "scales the transfer timeout for a large bundle",
+      tarballBytes: 243_000_000,
+      transferTimeoutMs: 1_944_000,
+    },
+    {
+      name: "caps the transfer timeout for an absurdly large bundle",
+      tarballBytes: Number.MAX_SAFE_INTEGER,
+      transferTimeoutMs: 3_600_000,
+    },
+  ])(
+    "$name while other phases keep the base timeout",
+    async ({ tarballBytes, transferTimeoutMs }) => {
+      const baseTimeoutMs = 600_000;
+      const runner = fakeRunner([
+        result({ stdout: tagged("install", REMOTE_TARBALL) }),
+        result(),
+        result({ stdout: tagged("receipt", RECEIPT_JSON) }),
+        result(),
+      ]);
+
+      await expect(
+        bootstrapWorker(
+          { ssh: SSH, artifact: { ...BUNDLE, tarballBytes } },
+          { resolveIdentity, runCommand: runner.runCommand, timeoutMs: baseTimeoutMs },
+        ),
+      ).resolves.toEqual(JSON.parse(RECEIPT_JSON));
+
+      const [preflight, transfer, install] = runner.calls;
+      expect(preflight?.options.timeoutMs).toBeLessThanOrEqual(baseTimeoutMs);
+      expect(preflight?.options.timeoutMs).toBeGreaterThanOrEqual(baseTimeoutMs - 100);
+      expect(transfer?.argv[0]).toBe("scp");
+      expect(transfer?.options.timeoutMs).toBeLessThanOrEqual(transferTimeoutMs);
+      expect(transfer?.options.timeoutMs).toBeGreaterThanOrEqual(transferTimeoutMs - 100);
+      expect(install?.options.timeoutMs).toBeLessThanOrEqual(baseTimeoutMs);
+      expect(install?.options.timeoutMs).toBeGreaterThanOrEqual(baseTimeoutMs - 100);
+    },
+  );
+
+  it.each([Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY])(
+    "rejects invalid bundle tarball size %s before any remote work",
+    async (tarballBytes) => {
+      const runner = fakeRunner([]);
+      await expect(
+        bootstrapWorker(
+          { ssh: SSH, artifact: { ...BUNDLE, tarballBytes } },
+          { resolveIdentity, runCommand: runner.runCommand },
+        ),
+      ).rejects.toThrow("Worker bundle artifact has an invalid tarball size");
+      expect(runner.calls).toHaveLength(0);
+    },
+  );
 
   it.each([
     `/home/worker/other/.incoming/${UPLOAD_FILENAME}`,

@@ -39,6 +39,51 @@ import memoryPlugin, {
 import { createLanceDbRuntimeLoader } from "./lancedb-runtime.test-support.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
+const moduleMocks = vi.hoisted(() => ({
+  createOpenAiClient: vi.fn<(...args: unknown[]) => object>(),
+  ensureGlobalUndiciEnvProxyDispatcher: vi.fn<() => void>(),
+  loadLanceDbModule: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    ensureGlobalUndiciEnvProxyDispatcher: () => {
+      if (moduleMocks.ensureGlobalUndiciEnvProxyDispatcher.getMockImplementation()) {
+        return moduleMocks.ensureGlobalUndiciEnvProxyDispatcher();
+      }
+      return actual.ensureGlobalUndiciEnvProxyDispatcher();
+    },
+  };
+});
+
+vi.mock("openai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openai")>();
+  return {
+    ...actual,
+    default: function MockableOpenAI(...args: ConstructorParameters<typeof actual.default>) {
+      if (moduleMocks.createOpenAiClient.getMockImplementation()) {
+        return moduleMocks.createOpenAiClient(...args);
+      }
+      return Reflect.construct(actual.default, args);
+    },
+  };
+});
+
+vi.mock("./lancedb-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lancedb-runtime.js")>();
+  return {
+    ...actual,
+    loadLanceDbModule: (...args: Parameters<typeof actual.loadLanceDbModule>) => {
+      if (moduleMocks.loadLanceDbModule.getMockImplementation()) {
+        return moduleMocks.loadLanceDbModule(...args);
+      }
+      return actual.loadLanceDbModule(...args);
+    },
+  };
+});
+
 // Provenance marker OpenClaw appends to every injected inbound-context header.
 // Detectors key on this marker, not label text. Keep byte-identical with
 // src/auto-reply/reply/inbound-context-marker.ts (extensions cannot import core).
@@ -195,10 +240,10 @@ function firstAddedMemory(add: ReturnType<typeof vi.fn>) {
 }
 
 async function withMockedOpenAiMemoryPlugin<T>(params: {
-  ensureGlobalUndiciEnvProxyDispatcher: ReturnType<typeof vi.fn>;
+  ensureGlobalUndiciEnvProxyDispatcher: () => void;
   embeddingsCreate?: ReturnType<typeof vi.fn>;
   openAiPost?: ReturnType<typeof vi.fn>;
-  loadLanceDbModule: ReturnType<typeof vi.fn>;
+  loadLanceDbModule: (...args: unknown[]) => Promise<unknown>;
   run: (dynamicMemoryPlugin: typeof memoryPlugin) => Promise<T>;
 }): Promise<T> {
   const post =
@@ -210,27 +255,20 @@ async function withMockedOpenAiMemoryPlugin<T>(params: {
       return invokeEmbeddingCreate(params.embeddingsCreate, opts.body);
     });
 
-  vi.resetModules();
-  vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-    ensureGlobalUndiciEnvProxyDispatcher: params.ensureGlobalUndiciEnvProxyDispatcher,
-  }));
-  vi.doMock("openai", () => ({
-    default: class MockOpenAI {
-      post = post;
-    },
-  }));
-  vi.doMock("./lancedb-runtime.js", () => ({
-    loadLanceDbModule: params.loadLanceDbModule,
-  }));
+  moduleMocks.ensureGlobalUndiciEnvProxyDispatcher.mockImplementation(() => {
+    params.ensureGlobalUndiciEnvProxyDispatcher();
+  });
+  moduleMocks.createOpenAiClient.mockImplementation(() => ({ post }));
+  moduleMocks.loadLanceDbModule.mockImplementation(async (...args) => {
+    return await params.loadLanceDbModule(...args);
+  });
 
   try {
-    const { default: dynamicMemoryPlugin } = await import("./index.js");
-    return await params.run(dynamicMemoryPlugin);
+    return await params.run(memoryPlugin);
   } finally {
-    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-    vi.doUnmock("openai");
-    vi.doUnmock("./lancedb-runtime.js");
-    vi.resetModules();
+    moduleMocks.ensureGlobalUndiciEnvProxyDispatcher.mockReset();
+    moduleMocks.createOpenAiClient.mockReset();
+    moduleMocks.loadLanceDbModule.mockReset();
   }
 }
 

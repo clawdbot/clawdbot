@@ -11,7 +11,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptActiveLeafEvents,
+  readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageAnchorPage,
@@ -113,9 +113,8 @@ describe("SQLite active transcript event projection", () => {
       "root",
       "active",
     ]);
-    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
-      expect.objectContaining({ id: "active" }),
-    ]);
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "active")).toBe("exact");
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "root")).toBe("ancestor");
     expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(page.totalMessages).toBe(2);
     expect(
@@ -343,9 +342,8 @@ describe("SQLite active transcript event projection", () => {
         maxMessages: 1,
       }).activeLeafEntryId,
     ).toBe("newer-compaction");
-    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
-      expect.objectContaining({ id: "newer-compaction" }),
-    ]);
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "newer-compaction")).toBe("exact");
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "post-reset")).toBe("ancestor");
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(5);
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
   });

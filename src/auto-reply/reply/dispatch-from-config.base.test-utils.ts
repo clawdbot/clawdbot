@@ -54,6 +54,7 @@ import {
 } from "./dispatch-from-config.test-harness.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -391,6 +392,69 @@ describe("dispatchReplyFromConfig", () => {
       }),
     );
     activeOperation.complete();
+  });
+
+  it("preempts a heartbeat before resolving a visible Telegram turn", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:telegram:direct:heartbeat-preemption";
+    const heartbeatAdmission = await admitReplyTurn({
+      sessionKey,
+      sessionId: "heartbeat-session",
+      kind: "heartbeat",
+      resetTriggered: false,
+    });
+    expect(heartbeatAdmission.status).toBe("owned");
+    if (heartbeatAdmission.status !== "owned") {
+      return;
+    }
+    const heartbeatOperation = heartbeatAdmission.operation;
+    const cancel = vi.fn(() => heartbeatOperation.complete());
+    heartbeatOperation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => true,
+    });
+    heartbeatOperation.setPhase("running");
+    sessionStoreMocks.currentEntry = {
+      sessionId: "heartbeat-session",
+      updatedAt: Date.now(),
+    };
+    let heartbeatWasAbortedBeforeReply = false;
+    const replyResolver = vi.fn(async () => {
+      heartbeatWasAbortedBeforeReply = heartbeatOperation.abortSignal.aborted;
+      return { text: "visible reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        BodyForAgent: "answer this now",
+      }),
+      cfg: automaticDirectReplyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: {
+        turnAdoptionLifecycle: {
+          onAdopted: async () => {},
+          onDeferred: vi.fn(),
+          onSettled: vi.fn(),
+        },
+      },
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(heartbeatWasAbortedBeforeReply).toBe(true);
+    expect(heartbeatOperation.result).toEqual({
+      kind: "aborted",
+      code: "aborted_for_supersession",
+    });
+    expect(cancel).toHaveBeenCalledWith("superseded");
+    expect(replyResolver).toHaveBeenCalledOnce();
   });
 
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {

@@ -258,6 +258,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
           ),
           timeoutMs: request.timeoutMs,
           signal: request.signal,
+          onDispatchReady: request.onDispatchReady,
         }),
       ...workspace,
       stop: () => stop(entry.environmentId, entry.ownerEpoch),

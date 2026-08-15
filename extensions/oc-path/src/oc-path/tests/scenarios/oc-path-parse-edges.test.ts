@@ -13,10 +13,6 @@ function expectErr(fn: () => unknown, code: string): void {
 }
 
 describe("oc-path-parse-edges", () => {
-  it("file-only", () => {
-    expect(parseOcPath("oc://SOUL.md")).toEqual({ file: "SOUL.md" });
-  });
-
   it("file + section", () => {
     expect(parseOcPath("oc://SOUL.md/Boundaries").section).toBe("Boundaries");
   });

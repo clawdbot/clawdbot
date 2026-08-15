@@ -596,12 +596,24 @@ test("createGatewaySession persists a generated title only for a new session", a
   expect(reused).toMatchObject({ ok: true, entry: { displayName: "Readable Worktree Names" } });
 });
 
-test("chat.send generates a dashboard title only after the user turn finishes", async () => {
-  await createSessionStoreDir();
+test("chat.send fences dashboard title persistence from concurrent session deletion", async () => {
+  const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
   let finishDispatch: (() => void) | undefined;
   const dispatchFinished = new Promise<void>((resolve) => {
     finishDispatch = resolve;
+  });
+  let finishTitle: (() => void) | undefined;
+  let markTitleStarted = () => {};
+  const titleStarted = new Promise<void>((resolve) => {
+    markTitleStarted = resolve;
+  });
+  dashboardTitleGenerationMocks.generate.mockImplementationOnce(async () => {
+    markTitleStarted();
+    await new Promise<void>((resolve) => {
+      finishTitle = resolve;
+    });
+    return "Generated Dashboard Title";
   });
   dispatchInboundMessageMock.mockImplementationOnce(async () => {
     await dispatchFinished;
@@ -637,8 +649,27 @@ test("chat.send generates a dashboard title only after the user turn finishes", 
         sessionKey,
       }),
     );
+    await titleStarted;
+
+    let deletionSettled = false;
+    const deletion = directSessionReq<{ deleted: boolean }>("sessions.delete", {
+      key: sessionKey,
+    }).finally(() => {
+      deletionSettled = true;
+    });
+    await waitForFast(
+      () => expect(isSessionLifecycleMutationActive(storePath, [sessionKey])).toBe(true),
+      { timeout: 5_000 },
+    );
+    expect(deletionSettled).toBe(false);
+
+    finishTitle?.();
+    const deleted = await deletion;
+    expect(deleted.ok, JSON.stringify(deleted.error)).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
   } finally {
     finishDispatch?.();
+    finishTitle?.();
     ws.close();
   }
 });
@@ -3850,6 +3881,21 @@ test("sessions.create rejects fork without parentSessionKey", async () => {
   });
 });
 
+test("sessions.create rejects forkFrom without fork", async () => {
+  await createSessionStoreDir();
+
+  const created = await directSessionReq("sessions.create", {
+    parentSessionKey: "main",
+    forkFrom: "last-completed",
+  });
+
+  expect(created.ok).toBe(false);
+  expect(created.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: "forkFrom requires fork=true",
+  });
+});
+
 test("sessions.create rejects fork when the parent exceeds the fork size cap", async () => {
   const { dir } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
@@ -3894,6 +3940,74 @@ test("sessions.create rejects fork while the parent session is active", async ()
       code: "UNAVAILABLE",
       message: "Parent session main is still active; try again in a moment.",
     });
+  } finally {
+    embeddedRunMock.activeIds.delete(parentSessionId);
+    testState.sessionConfig = undefined;
+  }
+});
+
+test("sessions.create forks an active parent from its last completed message", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+  const parentSessionId = "sess-active-completed-fork-parent";
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parentSessionId, {
+        // The in-flight tail can make the whole parent exceed the cap; only the
+        // selected completed prefix should govern this fork.
+        totalTokens: 200_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    },
+  });
+  await seedSessionTranscript({
+    sessionId: parentSessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+    messages: [
+      { role: "user", content: "completed question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "completed answer" }],
+        stopReason: "stop",
+      },
+      { role: "user", content: "active question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "active tool call" }],
+        stopReason: "toolUse",
+      },
+    ],
+  });
+  embeddedRunMock.activeIds.add(parentSessionId);
+  try {
+    const created = await directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+      parentSessionKey: "main",
+      fork: true,
+      forkFrom: "last-completed",
+    });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    const messages = await loadTranscriptEvents({
+      sessionId: created.payload?.sessionId ?? "",
+      sessionKey: created.payload?.key ?? "",
+      storePath,
+    });
+    expect(
+      messages.flatMap((entry) =>
+        entry &&
+        typeof entry === "object" &&
+        "type" in entry &&
+        entry.type === "message" &&
+        "message" in entry
+          ? [entry.message]
+          : [],
+      ),
+    ).toEqual([
+      expect.objectContaining({ role: "user", content: "completed question" }),
+      expect.objectContaining({ role: "assistant", stopReason: "stop" }),
+    ]);
   } finally {
     embeddedRunMock.activeIds.delete(parentSessionId);
     testState.sessionConfig = undefined;

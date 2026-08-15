@@ -590,6 +590,101 @@ suite.define(() => {
     }
   });
 
+  it("dismisses an ACK-lost banner after exact authoritative history proof", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.history": {
+          messages: [],
+          sessionId: "control-ui-e2e-session",
+          sessionInfo: { hasActiveRun: false, status: "done" },
+          thinkingLevel: null,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.deferNext("chat.send");
+
+      const prompt = "already accepted after the reconnect";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const firstRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(firstRequest.params).idempotencyKey,
+        "first idempotency key",
+      );
+      await gateway.closeLatest(1006, "lost ack");
+
+      const queue = page.locator(".chat-queue");
+      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/01-delivery-uncertain.png`, fullPage: true });
+      }
+
+      await gateway.setHistoryMessages([
+        {
+          content: "different delivered turn",
+          idempotencyKey: "different-run:user",
+          role: "user",
+          timestamp: Date.now(),
+        },
+      ]);
+      await gateway.emitGatewayEvent("session.message", {
+        hasActiveRun: false,
+        messageId: "different-history-turn",
+        messageSeq: 1,
+        sessionKey: "main",
+        status: "done",
+      });
+      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/02-different-key-still-uncertain.png`,
+          fullPage: true,
+        });
+      }
+
+      await gateway.setHistoryMessages([
+        {
+          content: prompt,
+          idempotencyKey: `${runId}:user`,
+          role: "user",
+          timestamp: Date.now(),
+        },
+      ]);
+      await gateway.emitGatewayEvent("session.message", {
+        clientRunId: runId,
+        hasActiveRun: true,
+        messageId: "accepted-history-turn",
+        messageSeq: 2,
+        sessionKey: "main",
+        status: "running",
+      });
+
+      await queue.waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".chat-group.user").getByText(prompt).waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/03-delivery-proven.png`, fullPage: true });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("stores new input while offline and sends it after reconnect", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({

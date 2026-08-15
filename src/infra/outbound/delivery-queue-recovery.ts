@@ -46,8 +46,8 @@ import {
 } from "./delivery-completion.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
-  cancelDeliveryQueueMediaRecoveryLease,
-  createDeliveryQueueMediaRecoveryLease,
+  cancelDeliveryQueueMediaRetention,
+  createDeliveryQueueMediaRetention,
 } from "./delivery-queue-media-staging.js";
 import {
   buildUnknownSendContext,
@@ -79,7 +79,7 @@ export type DeliverFn = (
   params: {
     cfg: OpenClawConfig;
   } & QueuedDeliveryPayload & {
-      payloads: ReturnType<typeof queuedPayloads>;
+      payloads: ReturnType<typeof queuedDeliveryPayloads>;
       deliveryQueueId?: string;
       deliveryQueueStateDir?: string;
       deliveryProducerClaimId?: string;
@@ -117,9 +117,8 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 const recoveryCoordinator = createDeliveryRecoveryCoordinator<QueuedDelivery>();
 
-function queuedPayloads(entry: QueuedDelivery) {
-  return acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload);
-}
+const queuedDeliveryPayloads = (entry: QueuedDelivery) =>
+  acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload);
 
 function queuedPayloadCount(entry: QueuedDelivery): number {
   return entry.preparedBatch.sourcePayloadCount;
@@ -311,7 +310,7 @@ function buildRecoveryDeliverParams(
     ...(entry.requireUnknownSendReconciliation === true
       ? { requireUnknownSendReconciliation: true }
       : {}),
-    payloads: queuedPayloads(entry),
+    payloads: queuedDeliveryPayloads(entry),
     preparedBatch: entry.preparedBatch,
     renderedBatchPlan: entry.renderedBatchPlan,
     threadId: entry.threadId,
@@ -338,6 +337,52 @@ function buildRecoveryDeliverParams(
   } satisfies Parameters<DeliverFn>[0];
 }
 
+async function terminalizeWithMediaRetention(
+  params: { entry: QueuedDelivery; cfg: OpenClawConfig; log: RecoveryLogger; stateDir?: string },
+  operation: (spoolPaths: string[]) => Promise<readonly string[] | false>,
+): Promise<boolean> {
+  const spoolPaths = collectEntrySpoolPaths(queuedDeliveryPayloads(params.entry), params.stateDir);
+  const leaseId =
+    spoolPaths.length > 0
+      ? createDeliveryQueueMediaRetention(
+          spoolPaths,
+          "outbound-media-recovery-lease",
+          params.stateDir,
+        )
+      : undefined;
+  try {
+    const releasedPaths = await operation(spoolPaths);
+    if (releasedPaths === false) {
+      return false;
+    }
+    if (needsUnknownSendReconciliation(params.entry)) {
+      const cleanup = resolveOutboundChannelMessageAdapter({
+        channel: params.entry.channel,
+        cfg: params.cfg,
+        agentId: params.entry.session?.agentId,
+        allowBootstrap: true,
+      })?.durableFinal?.afterUnknownSendTerminal;
+      try {
+        await cleanup?.(
+          buildUnknownSendContext({
+            entry: params.entry,
+            payloads: queuedDeliveryPayloads(params.entry),
+            cfg: params.cfg,
+          }),
+        );
+      } catch (error) {
+        params.log.warn(
+          `Delivery entry ${params.entry.id} unknown-send terminal cleanup failed: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
+    await releaseSpoolArtifacts(releasedPaths, params.stateDir);
+    return true;
+  } finally {
+    cancelDeliveryQueueMediaRetention(leaseId, params.stateDir);
+  }
+}
+
 async function applyRecoveryDeliveryAdmission(params: {
   entry: QueuedDelivery;
   cfg: OpenClawConfig;
@@ -359,65 +404,25 @@ async function applyRecoveryDeliveryAdmission(params: {
     return "allowed";
   }
   await markDurableDeliveryFailedBestEffort(params.entry, params.log, params.stateDir);
-  const result = await failPendingDelivery(
-    {
-      id: params.entry.id,
-      expectedStatus: "pending",
-      lastError: admission.reason,
-      entry: params.entry,
-    },
-    params.stateDir,
-  );
-  if (result.status === "failed") {
-    await runUnknownSendTerminalCleanup({
-      entry: params.entry,
-      cfg: params.cfg,
-      log: params.log,
-    });
-    emitRecoveredTerminalFailure(params.entry, admission.reason);
-    emitQueuedAuditTerminals(params.entry, () => queuedDeadLetterAuditTerminals(params.entry));
-    params.log.warn(
-      `${params.logLabel}: entry ${params.entry.id} permanently rejected before recovery: ${admission.reason}`,
+  const failed = await terminalizeWithMediaRetention(params, async (spoolPaths) => {
+    const result = await failPendingDelivery(
+      { id: params.entry.id, entry: params.entry, retainSpoolArtifacts: true },
+      params.stateDir,
     );
-    return "failed";
-  }
-  params.log.info(
-    `${params.logLabel}: entry ${params.entry.id} changed status before admission failure was persisted`,
-  );
-  return "not_pending";
-}
-
-async function runUnknownSendTerminalCleanup(params: {
-  entry: QueuedDelivery;
-  cfg: OpenClawConfig;
-  log: RecoveryLogger;
-}): Promise<void> {
-  if (!needsUnknownSendReconciliation(params.entry)) {
-    return;
-  }
-  const adapter = resolveOutboundChannelMessageAdapter({
-    channel: params.entry.channel,
-    cfg: params.cfg,
-    agentId: params.entry.session?.agentId,
-    allowBootstrap: true,
+    return result.status === "failed" ? spoolPaths : false;
   });
-  const cleanup = adapter?.durableFinal?.afterUnknownSendTerminal;
-  if (!cleanup) {
-    return;
-  }
-  try {
-    await cleanup(
-      buildUnknownSendContext({
-        entry: params.entry,
-        payloads: queuedPayloads(params.entry),
-        cfg: params.cfg,
-      }),
+  if (!failed) {
+    params.log.info(
+      `${params.logLabel}: entry ${params.entry.id} changed status before admission failure was persisted`,
     );
-  } catch (error) {
-    params.log.warn(
-      `Delivery entry ${params.entry.id} unknown-send terminal cleanup failed: ${formatErrorMessage(error)}`,
-    );
+    return "not_pending";
   }
+  emitRecoveredTerminalFailure(params.entry, admission.reason);
+  emitQueuedAuditTerminals(params.entry, () => queuedDeadLetterAuditTerminals(params.entry));
+  params.log.warn(
+    `${params.logLabel}: entry ${params.entry.id} permanently rejected before recovery: ${admission.reason}`,
+  );
+  return "failed";
 }
 
 async function moveEntryToFailedAndCleanup(params: {
@@ -427,12 +432,11 @@ async function moveEntryToFailedAndCleanup(params: {
   stateDir?: string;
   attemptId?: string | null;
 }): Promise<void> {
-  await (params.attemptId !== undefined
-    ? moveToFailed(params.entry.id, params.stateDir, params.attemptId)
-    : moveToFailed(params.entry.id, params.stateDir));
-  // Cleanup follows the authoritative queue transition. Deleting provider
-  // evidence first could strand a still-pending ambiguous send without proof.
-  await runUnknownSendTerminalCleanup(params);
+  await terminalizeWithMediaRetention(params, async () =>
+    params.attemptId !== undefined
+      ? moveToFailed(params.entry.id, params.stateDir, params.attemptId)
+      : moveToFailed(params.entry.id, params.stateDir),
+  );
 }
 
 function buildReconciledSentResult(
@@ -455,7 +459,7 @@ function buildReconciledCommitContext(params: {
   cfg: OpenClawConfig;
   result: OutboundDeliveryResult;
 }): ChannelMessageSendCommitContext {
-  const payload = queuedPayloads(params.entry)[0] ?? {};
+  const payload = queuedDeliveryPayloads(params.entry)[0] ?? {};
   const result = {
     messageId: params.result.messageId,
     receipt: params.result.receipt ?? {
@@ -770,7 +774,7 @@ async function drainQueuedEntry(opts: {
       entry.legacyUnknownSendReconciliation ??
       (await reconcileUnknownQueuedDelivery({
         entry,
-        payloads: queuedPayloads(entry),
+        payloads: queuedDeliveryPayloads(entry),
         cfg: opts.cfg,
         warn: (message) => opts.log.warn(message),
       }));
@@ -952,14 +956,18 @@ async function drainQueuedEntry(opts: {
     opts.onFailed?.(entry, errMsg);
     return "moved-to-failed";
   }
-  const recoverySpoolPaths = collectEntrySpoolPaths(queuedPayloads(entry), opts.stateDir);
+  const recoverySpoolPaths = collectEntrySpoolPaths(queuedDeliveryPayloads(entry), opts.stateDir);
   let mediaRecoveryLeaseId: string | undefined;
   try {
     // The pending row owns these artifacts until the lease exists. Fallback
     // acks may then remove replay intent without exposing active media to GC.
     mediaRecoveryLeaseId =
       recoverySpoolPaths.length > 0
-        ? createDeliveryQueueMediaRecoveryLease(recoverySpoolPaths, opts.stateDir)
+        ? createDeliveryQueueMediaRetention(
+            recoverySpoolPaths,
+            "outbound-media-recovery-lease",
+            opts.stateDir,
+          )
         : undefined;
     const result = await opts.deliver({
       ...buildRecoveryDeliverParams(entry, opts.cfg, opts.stateDir, producerClaimId),
@@ -1210,7 +1218,7 @@ async function drainQueuedEntry(opts: {
     // Early fallback acks make the row non-replayable before the adapter has
     // necessarily finished reading every payload. Release only after the whole
     // recovered attempt settles, and only if no pending row still owns it.
-    cancelDeliveryQueueMediaRecoveryLease(mediaRecoveryLeaseId, opts.stateDir);
+    cancelDeliveryQueueMediaRetention(mediaRecoveryLeaseId, opts.stateDir);
     const pending = await loadPendingDelivery(entry.id, opts.stateDir).catch(() => entry);
     if (!pending) {
       await releaseSpoolArtifacts(recoverySpoolPaths, opts.stateDir);

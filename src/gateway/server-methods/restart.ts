@@ -116,6 +116,31 @@ export const restartHandlers: GatewayRequestHandlers = {
       return;
     }
     if (target) {
+      if (params.safe !== undefined && typeof params.safe !== "boolean") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid safe targeted restart mode"),
+        );
+        return;
+      }
+      if (params.safe === true) {
+        if (params.restartIntent !== undefined) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "safe targeted restart does not accept intent"),
+          );
+          return;
+        }
+        const result = scheduleSafeGatewayRestart({
+          reason,
+          delayMs: 0,
+          skipDeferral: normalizeSkipDeferral(params.skipDeferral),
+        });
+        respond(true, result);
+        return;
+      }
       const intent = parseTargetedRestartIntent(params.restartIntent, reason);
       if (!intent) {
         respond(

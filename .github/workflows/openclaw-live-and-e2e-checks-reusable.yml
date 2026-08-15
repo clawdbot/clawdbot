@@ -2353,7 +2353,7 @@ jobs:
           echo "Validating Docker E2E package tarball: $target"
           validator=(node scripts/check-openclaw-package-tarball.mjs)
           if [[ -n "${EXPECTED_PACKAGE_FILE_NAME// }" ]]; then
-            validator=(pnpm --dir .release-harness exec node scripts/check-openclaw-package-tarball.mjs)
+            validator=(bash -c 'cd .release-harness && pnpm exec node scripts/check-openclaw-package-tarball.mjs "$1"' --)
           fi
           started_at="$(date +%s)"
           timeout --foreground 5m "${validator[@]}" "$GITHUB_WORKSPACE/$target"

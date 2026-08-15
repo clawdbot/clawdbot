@@ -37,6 +37,11 @@ export function resolveOnboardingAgentTarget(
   };
 }
 
+/** Resolve the configured System Agent as the owner of onboarding effects. */
+export function resolveSystemAgentOnboardingTarget(config: OpenClawConfig): OnboardingAgentTarget {
+  return resolveOnboardingAgentTarget(config, config.agents?.defaults?.systemAgent?.agentId);
+}
+
 export async function ensureOnboardingAgentWorkspace(
   target: OnboardingAgentTarget,
   runtime: RuntimeEnv,

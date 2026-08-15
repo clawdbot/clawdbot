@@ -18,6 +18,7 @@ import {
   execSystemctl,
   execSystemctlUser,
   isSystemctlMissing,
+  isSystemdUnitMissingDetail,
   isSystemdUnitNotEnabled,
   readSystemctlDetail,
 } from "./systemd-exec.js";
@@ -161,10 +162,10 @@ export async function readSystemdServiceRuntime(
       : await execSystemctlUser(env, showArgs, timeoutMs);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
-    const missing = normalizeLowercaseStringOrEmpty(detail).includes("not found");
+    const missing = !installed && isSystemdUnitMissingDetail(detail);
     return {
       status: missing ? "stopped" : "unknown",
-      detail: detail || undefined,
+      ...(!missing && detail ? { detail } : {}),
       missingUnit: missing,
     };
   }

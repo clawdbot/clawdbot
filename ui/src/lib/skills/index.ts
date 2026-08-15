@@ -198,11 +198,6 @@ function currentSkillCardCacheKey(state: SkillsState, skillKey: string): string 
   return skill ? skillCardCacheKey(skill) : undefined;
 }
 
-function skillsAgentParams(agentId: string | null | undefined): { agentId?: string } {
-  const normalized = agentId?.trim();
-  return normalized ? { agentId: normalized } : {};
-}
-
 function stateSkillsAgentParams(state: Pick<SkillsState, "skillsAgentId">): { agentId?: string } {
   const agentId = state.skillsAgentId?.trim();
   return agentId ? { agentId } : {};
@@ -210,9 +205,9 @@ function stateSkillsAgentParams(state: Pick<SkillsState, "skillsAgentId">): { ag
 
 export async function loadSkillStatusReport(
   client: GatewayBrowserClient,
-  agentId: string | null | undefined,
+  agentId: string,
 ): Promise<SkillStatusReport | undefined> {
-  return client.request<SkillStatusReport | undefined>("skills.status", skillsAgentParams(agentId));
+  return client.request<SkillStatusReport | undefined>("skills.status", { agentId });
 }
 
 type SkillsAgentScope = {
@@ -284,13 +279,15 @@ export function reconcileSkillsAgentId(
   state: SkillsState,
   agentsList: AgentsListResult | null | undefined,
 ) {
-  if (
-    agentsList &&
-    state.skillsAgentId &&
-    !agentsList.agents.some((agent) => agent.id === state.skillsAgentId)
-  ) {
-    setSkillsAgentId(state, null);
+  if (!agentsList) {
+    return;
   }
+  const selectedAgentId = agentsList.agents.some((agent) => agent.id === state.skillsAgentId)
+    ? state.skillsAgentId
+    : agentsList.agents.some((agent) => agent.id === agentsList.defaultId)
+      ? agentsList.defaultId
+      : null;
+  setSkillsAgentId(state, selectedAgentId);
 }
 
 export async function loadSkills(
@@ -301,8 +298,10 @@ export async function loadSkills(
   },
 ) {
   const client = state.client;
+  const agentId = state.skillsAgentId?.trim();
   if (
     !client ||
+    !agentId ||
     !state.connected ||
     state.skillsLoading ||
     (state.skillOperation && state.skillOperation !== options?.operation)
@@ -321,7 +320,7 @@ export async function loadSkills(
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = await loadSkillStatusReport(client, state.skillsAgentId);
+    const res = await loadSkillStatusReport(client, agentId);
     if (!isCurrent()) {
       return;
     }

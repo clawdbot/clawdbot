@@ -392,6 +392,7 @@ export const validateDevicePairApproveParams = compile(S.DevicePairApproveParams
 export const validateDevicePairRejectParams = compile(S.DevicePairRejectParamsSchema);
 export const validateDevicePairRemoveParams = compile(S.DevicePairRemoveParamsSchema);
 export const validateDevicePairSetupCodeParams = compile(S.DevicePairSetupCodeParamsSchema);
+export const validateDevicePairSetupStatusParams = compile(S.DevicePairSetupStatusParamsSchema);
 export const validateDevicePairRenameParams = compile(S.DevicePairRenameParamsSchema);
 export const validateDeviceTokenRotateParams = compile(S.DeviceTokenRotateParamsSchema);
 export const validateDeviceTokenRevokeParams = compile(S.DeviceTokenRevokeParamsSchema);

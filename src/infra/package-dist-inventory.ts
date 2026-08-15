@@ -301,6 +301,7 @@ async function collectRelativeFiles(
   baseDir: string,
   rules: PackageDistInventoryRules,
   fsLimit: LimitFunction,
+  onDirectory?: (directoryPath: string) => Promise<void>,
 ): Promise<string[]> {
   const rootRelativePath = normalizeRelativePath(path.relative(baseDir, rootDir));
   if (rootRelativePath && isOmittedDistSubtree(rootRelativePath, rules)) {
@@ -313,6 +314,7 @@ async function collectRelativeFiles(
         `Unsafe package dist path: ${normalizeRelativePath(path.relative(baseDir, rootDir))}`,
       );
     }
+    await onDirectory?.(rootDir);
     const entries = await fsLimit(() => fs.readdir(rootDir, { withFileTypes: true }));
     const files = await Promise.all(
       entries.map(async (entry) => {
@@ -322,7 +324,7 @@ async function collectRelativeFiles(
           throw new Error(`Unsafe package dist path: ${relativePath}`);
         }
         if (entry.isDirectory()) {
-          return await collectRelativeFiles(entryPath, baseDir, rules, fsLimit);
+          return await collectRelativeFiles(entryPath, baseDir, rules, fsLimit, onDirectory);
         }
         if (entry.isFile()) {
           return isPackagedDistPath(relativePath, rules) ? [relativePath] : [];
@@ -340,10 +342,19 @@ async function collectRelativeFiles(
 }
 
 /** Collects package dist files that should be present after install/update publication. */
-export async function collectPackageDistInventory(packageRoot: string): Promise<string[]> {
+export async function collectPackageDistInventory(
+  packageRoot: string,
+  options: { onDirectory?: (directoryPath: string) => Promise<void> } = {},
+): Promise<string[]> {
   const rules = await collectPackageDistInventoryRulesForRoot(packageRoot);
   const fsLimit = pLimit(PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY);
-  return await collectRelativeFiles(path.join(packageRoot, "dist"), packageRoot, rules, fsLimit);
+  return await collectRelativeFiles(
+    path.join(packageRoot, "dist"),
+    packageRoot,
+    rules,
+    fsLimit,
+    options.onDirectory,
+  );
 }
 
 async function readPackageDistInventoryOptional(packageRoot: string): Promise<string[] | null> {

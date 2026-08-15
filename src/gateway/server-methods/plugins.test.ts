@@ -9,6 +9,17 @@ const managementMocks = vi.hoisted(() => {
     readonly code?: string;
     readonly version?: string;
     readonly warning?: string;
+    readonly installPolicyWarning?: {
+      targetName: string;
+      targetType: "skill" | "plugin";
+      requestMode: "install" | "update";
+      reason: string;
+      findings?: Array<{
+        ruleId: string;
+        severity: "info" | "warn" | "critical";
+        message: string;
+      }>;
+    };
 
     constructor(
       message: string,
@@ -17,6 +28,7 @@ const managementMocks = vi.hoisted(() => {
         code?: string;
         version?: string;
         warning?: string;
+        installPolicyWarning?: ManagedPluginLifecycleError["installPolicyWarning"];
       },
     ) {
       super(message);
@@ -24,6 +36,7 @@ const managementMocks = vi.hoisted(() => {
       this.code = details?.code;
       this.version = details?.version;
       this.warning = details?.warning;
+      this.installPolicyWarning = details?.installPolicyWarning;
     }
   }
   return {
@@ -296,6 +309,70 @@ describe("plugin management Gateway handlers", () => {
         acknowledgeClawHubRisk: true,
       },
     });
+  });
+
+  it("forwards invocation-wide install policy acknowledgement", async () => {
+    managementMocks.install.mockResolvedValue({
+      plugin: { ...workboard, id: "diffs", name: "Diffs", enabled: true, state: "enabled" },
+    });
+
+    await callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+      acknowledgeInstallPolicyWarning: true,
+    });
+
+    expect(managementMocks.install).toHaveBeenCalledWith({
+      request: {
+        source: "official",
+        pluginId: "diffs",
+        acknowledgeInstallPolicyWarning: true,
+      },
+    });
+  });
+
+  it("returns tokenless structured install policy warning details", async () => {
+    managementMocks.install.mockRejectedValue(
+      new managementMocks.ManagedPluginLifecycleError("Review required", {
+        installPolicyWarning: {
+          targetName: "diffs",
+          targetType: "plugin",
+          requestMode: "install",
+          reason: "Review the staged package",
+          findings: [
+            {
+              ruleId: "suspicious-script",
+              severity: "warn",
+              message: "The package contains an install script.",
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await callHandler("plugins.install", {
+      source: "official",
+      pluginId: "diffs",
+    });
+
+    expect(result.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: {
+        installPolicyCode: "install_policy_warning_acknowledgement_required",
+        targetName: "diffs",
+        targetType: "plugin",
+        requestMode: "install",
+        reason: "Review the staged package",
+        findings: [
+          {
+            ruleId: "suspicious-script",
+            severity: "warn",
+            message: "The package contains an install script.",
+          },
+        ],
+      },
+    });
+    expect(result.error).not.toHaveProperty("details.acknowledgementToken");
   });
 
   it("returns structured ClawHub acknowledgement details", async () => {

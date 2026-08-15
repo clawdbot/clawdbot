@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
@@ -21,7 +21,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { resolveUserPath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
-  projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
@@ -124,6 +124,7 @@ async function activateSetupInferenceUnredacted(
   // The source snapshot includes raw compatibility migrations for comparison,
   // while the writer still projects changes back onto the untouched authored bytes.
   const sourceCfg: OpenClawConfig = snapshot.sourceConfig ?? snapshot.config;
+  const routeAgentId = resolveSystemAgentTargetAgentId(cfg, params.agentId);
   const workspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace)
     : (
@@ -162,6 +163,7 @@ async function activateSetupInferenceUnredacted(
         : {}),
       ...(codexCliApiKey ? { codexCliApiKey } : {}),
       deps,
+      routeAgentId,
     });
     if ("error" in plan) {
       return {
@@ -178,13 +180,14 @@ async function activateSetupInferenceUnredacted(
       const stagedConfig = await applySystemAgentModelSelection({
         config: plan.config,
         model: plan.persistModelRef,
+        ...(params.agentId ? { targetAgentId: testPlan.routeAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
       });
       testPlan = {
         ...plan,
         config: stagedConfig,
-        routeAgentId: resolveDefaultAgentId(stagedConfig),
+        routeAgentId: resolveSystemAgentTargetAgentId(stagedConfig, params.agentId),
       };
     }
 
@@ -324,12 +327,13 @@ async function activateSetupInferenceUnredacted(
       ...(codexRegistryNeedsReload ? { allowCurrent: false } : {}),
     });
     const routeDeps = { pluginMetadataPlugins: routeMetadataSnapshot.plugins };
-    const baselineRoute = await projectDefaultInferenceRoute(cfg, routeDeps);
-    const verifiedRoute = await projectDefaultInferenceRoute(testPlan.config, routeDeps);
+    const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
+    const baselineRoute = await projectInferenceRoute(cfg, requestedAgentId, routeDeps);
+    const verifiedRoute = await projectInferenceRoute(testPlan.config, requestedAgentId, routeDeps);
     const stagedRoute = verifiedRoute.route;
     const stagedExecutionRoute = await resolveSystemAgentConfiguredRouteFromConfig(
       testPlan.config,
-      undefined,
+      requestedAgentId,
       routeDeps,
     );
     if (
@@ -351,10 +355,12 @@ async function activateSetupInferenceUnredacted(
     const baselineTargetModelMetadata = projectSetupTargetModelMetadata(
       cfg,
       stagedRoute.modelLabel,
+      requestedAgentId,
     );
     const sourceTargetModelMetadata = projectSetupTargetModelMetadata(
       sourceCfg,
       stagedRoute.modelLabel,
+      requestedAgentId,
     );
     // OpenClaw executes through the reserved agent id but reuses the default
     // route's agent directory. Only a submitted key stays in the isolated store.
@@ -519,7 +525,7 @@ async function activateSetupInferenceUnredacted(
           ? (latestSnapshot.runtimeConfig ?? latestSnapshot.config)
           : undefined;
       const latestRoute = latestRuntime
-        ? await projectDefaultInferenceRoute(latestRuntime, routeDeps)
+        ? await projectInferenceRoute(latestRuntime, requestedAgentId, routeDeps)
         : undefined;
       if (!latestRoute || !sameDefaultInferenceRoute(latestRoute, verifiedRoute)) {
         return {
@@ -530,7 +536,11 @@ async function activateSetupInferenceUnredacted(
         };
       }
       const latestResolvedRoute = latestRuntime
-        ? await resolveSystemAgentConfiguredRouteFromConfig(latestRuntime, undefined, routeDeps)
+        ? await resolveSystemAgentConfiguredRouteFromConfig(
+            latestRuntime,
+            requestedAgentId,
+            routeDeps,
+          )
         : null;
       if (!latestResolvedRoute) {
         return {

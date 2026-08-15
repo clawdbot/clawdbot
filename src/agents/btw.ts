@@ -22,11 +22,7 @@ import type {
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveSessionAgentId,
-} from "./agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -92,6 +88,7 @@ import {
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
+import { resolveSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
@@ -739,7 +736,6 @@ export async function runBtwSideQuestion(
     config: params.cfg,
     agentId: requestedAgentId,
     agentDir: params.agentDir,
-    inheritedAuthDir: resolveDefaultAgentDir(params.cfg),
     workspaceDir: requestedWorkspaceDir,
     // Gateway-published owners are keyed with this flag, so a gateway-hosted
     // request that omits it can never match one.
@@ -987,11 +983,19 @@ export async function runBtwSideQuestion(
         ? resolvedAttempt.auth.apiKey?.trim()
         : undefined;
     const sideRunId = params.authorityRunId;
-    const sandbox = await resolveSandboxContext({
-      config: params.cfg,
-      sessionKey: params.sandboxSessionKey ?? params.sessionKey ?? sessionId,
-      workspaceDir,
-    });
+    const sandbox =
+      (await resolveSessionPlacementSandbox({
+        agentId: sessionAgentId,
+        config: params.cfg,
+        sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir,
+      })) ??
+      (await resolveSandboxContext({
+        config: params.cfg,
+        sessionKey: params.sandboxSessionKey ?? params.sessionKey ?? sessionId,
+        workspaceDir,
+      }));
     const preparedRunAdmission = prepareSystemAgentRunAdmission(
       params.cfg,
       sideRunId,

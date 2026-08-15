@@ -1,7 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError as createSupersededError,
   isAgentRunRestartAbortReason,
+  isAgentRunSupersededAbortReason,
 } from "../../agents/run-termination.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -16,6 +18,8 @@ import {
   ReplyRunSuccessorAdmissionBlockedError,
   type ReplyOperation,
   type ReplyOperationPhase,
+  type ReplyToolAuthorityProjector,
+  type ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
 import {
   abortFrozenOperations,
@@ -45,13 +49,13 @@ import {
 } from "./reply-run-registry.state.js";
 
 type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
-type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
 type ReplyOperationResult = NonNullable<ReplyOperation["result"]>;
-type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
+type ReplyOperationAbortCode = Extract<ReplyOperationResult, { kind: "aborted" }>["code"];
 
 export function createReplyOperation(params: {
   sessionKey: string;
   sessionId: string;
+  turnKind?: ReplyTurnKind;
   resetTriggered: boolean;
   routeThreadId?: string | number;
   originatingLeafEntryId?: string | null;
@@ -86,7 +90,7 @@ export function createReplyOperation(params: {
   let currentSessionId = sessionId;
   let phase: ReplyOperationPhase = "queued";
   let phaseBeforeGlobalLaneWait: "queued" | "running" | undefined;
-  let staleExpiryReason: ReplyOperationStaleReason | undefined;
+  let staleExpiryReason: replyRunSettle.ReplyOperationStaleReason | undefined;
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
   let clearBarrierSettlement: Promise<void> | undefined;
@@ -94,6 +98,9 @@ export function createReplyOperation(params: {
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
+  let toolAuthorityFingerprint: string | undefined;
+  let toolAuthorityProjector: ReplyToolAuthorityProjector | undefined;
+  let toolAuthorityRoute: { provider: string; model: string } | undefined;
   const ownerSettlement = createDeferredCore();
   let ownerSettled = false;
   const settleOwner = () => {
@@ -218,6 +225,7 @@ export function createReplyOperation(params: {
     get sessionId() {
       return currentSessionId;
     },
+    turnKind: params.turnKind ?? "visible",
     lifecycleGeneration,
     get routeThreadId() {
       return params.routeThreadId;
@@ -236,6 +244,12 @@ export function createReplyOperation(params: {
     },
     get acceptedSteeredInboundAudio() {
       return acceptedSteeredInboundAudio;
+    },
+    get toolAuthorityFingerprint() {
+      return toolAuthorityFingerprint;
+    },
+    get toolAuthorityRoute() {
+      return toolAuthorityRoute;
     },
     get phase() {
       return phase;
@@ -320,6 +334,40 @@ export function createReplyOperation(params: {
     markAcceptedSteeredInboundAudio() {
       acceptedSteeredInboundAudio = true;
     },
+    bindToolAuthorityFingerprint(fingerprint) {
+      const normalized = normalizeOptionalString(fingerprint);
+      if (!normalized) {
+        throw new Error("Reply operation tool authority fingerprint is required");
+      }
+      if (toolAuthorityFingerprint && toolAuthorityFingerprint !== normalized) {
+        throw new Error("Reply operation cannot change tool authority after admission");
+      }
+      toolAuthorityFingerprint = normalized;
+    },
+    bindToolAuthorityProjector(projector) {
+      if (toolAuthorityProjector && toolAuthorityProjector !== projector) {
+        throw new Error("Reply operation cannot change tool authority projector after admission");
+      }
+      toolAuthorityProjector = projector;
+    },
+    projectToolAuthorityFingerprint(overlay) {
+      if (result || !toolAuthorityProjector || !toolAuthorityRoute) {
+        return undefined;
+      }
+      try {
+        return normalizeOptionalString(toolAuthorityProjector(overlay, toolAuthorityRoute));
+      } catch {
+        return undefined;
+      }
+    },
+    bindToolAuthorityRoute(route) {
+      const provider = normalizeOptionalString(route.provider);
+      const model = normalizeOptionalString(route.model);
+      if (!provider || !model) {
+        throw new Error("Reply operation tool authority route is required");
+      }
+      toolAuthorityRoute = { provider, model };
+    },
     updateSessionId(nextSessionId) {
       if (result) {
         return;
@@ -400,12 +448,20 @@ export function createReplyOperation(params: {
           result.kind === "aborted"
             ? result.code === "aborted_for_restart"
               ? "restart"
-              : "user_abort"
+              : result.code === "aborted_for_supersession"
+                ? "superseded"
+                : "user_abort"
             : "superseded",
         );
         return;
       }
       recordActivity();
+      const backendToolAuthorityFingerprint = normalizeOptionalString(
+        handle.toolAuthorityFingerprint,
+      );
+      if (backendToolAuthorityFingerprint) {
+        toolAuthorityFingerprint = backendToolAuthorityFingerprint;
+      }
       attachedBackendByOperation.set(operation, handle);
       if (controller.signal.aborted) {
         handle.cancel("superseded");
@@ -485,6 +541,22 @@ export function createReplyOperation(params: {
         return false;
       }
       abortOperation("restart", createAgentRunRestartAbortError(), "aborted_for_restart");
+      return true;
+    },
+    supersede() {
+      if (result || stateCleared) {
+        return false;
+      }
+      if (abortFrozenOperations.has(operation)) {
+        setResult({ kind: "aborted", code: "aborted_for_supersession" });
+        phase = "aborted";
+        scheduleTerminalSettle();
+        return true;
+      }
+      if (!isReplyOperationAbortable(operation)) {
+        return false;
+      }
+      abortOperation("superseded", createSupersededError(), "aborted_for_supersession");
       return true;
     },
   };
@@ -630,10 +702,15 @@ export function createReplyOperation(params: {
         return;
       }
       const restart = isAgentRunRestartAbortReason(upstreamAbortSignal.reason);
+      const superseded = isAgentRunSupersededAbortReason(upstreamAbortSignal.reason);
       abortOperation(
-        restart ? "restart" : "user_abort",
+        restart ? "restart" : superseded ? "superseded" : "user_abort",
         upstreamAbortSignal.reason,
-        restart ? "aborted_for_restart" : "aborted_by_user",
+        restart
+          ? "aborted_for_restart"
+          : superseded
+            ? "aborted_for_supersession"
+            : "aborted_by_user",
       );
     };
     if (upstreamAbortSignal.aborted) {
@@ -649,7 +726,7 @@ export function createReplyOperation(params: {
 
 export function expireStaleReplyOperation(
   operation: ReplyOperation,
-  reason: ReplyOperationStaleReason,
+  reason: replyRunSettle.ReplyOperationStaleReason,
   options?: ReplyOperationStaleExpiryOptions,
 ): boolean {
   return expireReplyOperationByOperation.get(operation)?.(reason, options) ?? false;

@@ -514,7 +514,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
         agentId,
         cfg,
         context,
-        entry,
         request,
         sessionKey,
         sessionLoadOptions: session.sessionLoadOptions,

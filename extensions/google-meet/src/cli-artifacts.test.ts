@@ -1,4 +1,14 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
@@ -315,6 +325,49 @@ describe("google-meet CLI", () => {
       attendanceStdout.restore();
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "preserves an existing output when the OS rejects a full write",
+    () => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-output-failure-"));
+      const outputPath = path.join(tempDir, "artifacts.md");
+      const prior = "prior export\n";
+      writeFileSync(outputPath, prior);
+      chmodSync(outputPath, 0o640);
+
+      try {
+        const source = path.join(process.cwd(), "extensions/google-meet/src/cli-shared.ts");
+        const script = `import { writeCliOutput } from ${JSON.stringify(source)}; await writeCliOutput({ output: process.env.OPENCLAW_TEST_OUTPUT }, "x".repeat(8192));`;
+        const result = spawnSync(
+          "/bin/sh",
+          [
+            "-c",
+            'ulimit -f 1\nexec "$@"',
+            "--",
+            process.execPath,
+            "--import",
+            "tsx",
+            "--input-type=module",
+            "-e",
+            script,
+          ],
+          {
+            cwd: process.cwd(),
+            env: { ...process.env, OPENCLAW_TEST_OUTPUT: outputPath },
+            encoding: "utf8",
+          },
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(result.signal === "SIGXFSZ" || result.stderr.includes("EFBIG")).toBe(true);
+        expect(readFileSync(outputPath, "utf8")).toBe(prior);
+        expect(statSync(outputPath).mode & 0o777).toBe(0o640);
+        expect(readdirSync(tempDir)).toEqual(["artifacts.md"]);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("prints CSV attendance output", async () => {
     stubMeetArtifactsApi();

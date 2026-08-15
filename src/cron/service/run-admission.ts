@@ -563,6 +563,25 @@ export async function executeQueuedCronRun(params: {
         !isQueuedCronRunReservationCurrent(state, params.jobId, params.reservationIdentity) ||
         job.state.queuedAtMs !== params.reservedAtMs
       ) {
+        const ownership = state.queuedRunReservationsByJobId.get(params.jobId);
+        if (ownership?.identity === params.reservationIdentity) {
+          // A concurrent disable/remove wiped the queued marker while this
+          // reservation waited on admission. Its receipt is still running and
+          // locally owned; abandoning it here would self-fence the job forever
+          // (every later reservation hits the receipt-conflict monitor), so
+          // terminalize like cleanupQueuedCronRunReservations does. locked()
+          // is non-reentrant, hence the direct finish instead of that helper.
+          try {
+            finishCronRunReceipt({
+              handle: ownership.runReceipt,
+              status: "skipped",
+              finishedAtMs: state.deps.nowMs(),
+              error: "cron reservation fenced by concurrent mutation",
+            });
+          } catch {
+            // finishCronRunReceipt retained ownership and scheduled a retry.
+          }
+        }
         releaseQueuedCronRun(state, params.jobId, params.reservationIdentity);
         return undefined;
       }

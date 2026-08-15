@@ -50,6 +50,7 @@ const RECEIPT = {
 const INSTALLATION: WorkerInstallationArtifact = {
   install: "bundle",
   ...RECEIPT,
+  tarballBytes: 1,
   tarballSha256: "b".repeat(64),
   tarballPath: "/gateway/worker-bundle.tgz",
 };
@@ -448,6 +449,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     sessionKey: SESSION_KEY,
     agentId: "main",
     profileId: PROFILE_ID,
+    executionMode: "worker-turn",
   });
   expect(active).toMatchObject({ state: "active", environmentId: ENVIRONMENT_ID });
   expect(runner.starts).toHaveLength(1);
