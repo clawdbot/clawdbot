@@ -152,4 +152,52 @@ describeControlUiE2e("Chat transcript resize anchoring", () => {
       ).toBeLessThanOrEqual(60);
     }
   }, 120_000);
+
+  it("keeps an end-pinned transcript pinned across width-only resizes", async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    contexts.add(context);
+    const page = await context.newPage();
+    const now = Date.now();
+    await installMockGateway(page, {
+      sessionKey: "agent:main:main",
+      historyMessages: Array.from({ length: MESSAGE_COUNT }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: messageContent(index),
+        timestamp: now - (MESSAGE_COUNT - index) * 60_000,
+      })),
+    });
+
+    // Fresh sessions open pinned to the end; leave the scroll untouched.
+    await page.goto(`${controlUi.baseUrl}chat`);
+    await page
+      .getByText(`Message number ${MESSAGE_COUNT - 1}:`)
+      .first()
+      .waitFor({
+        timeout: 15_000,
+      });
+    await settleFrames(page, 30);
+
+    const distanceFromEnd = () =>
+      page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>(
+          ".chat-thread-inner--virtual",
+        )?.parentElement;
+        return scroller
+          ? scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop
+          : Number.NaN;
+      });
+    expect(await distanceFromEnd()).toBeLessThanOrEqual(2);
+
+    // Width-only changes re-wrap every row; the end anchor must follow the
+    // new total size (virtualizer wasAtEnd compensation), not drift upward.
+    for (const width of [1000, 820, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      await settleFrames(page, 30);
+      expect(await distanceFromEnd(), `distance from end at width ${width}`).toBeLessThanOrEqual(2);
+      await page
+        .getByText(`Message number ${MESSAGE_COUNT - 1}:`)
+        .first()
+        .waitFor({ state: "visible", timeout: 2_000 });
+    }
+  }, 120_000);
 });
