@@ -108,6 +108,8 @@ export type AudioTranscriptionRequest = {
   request?: MediaUnderstandingProviderRequestTransportOverrides;
   model?: string;
   language?: string;
+  /** Optional speaker diarization for multi-speaker audio. */
+  enableSpeakerDiarization?: boolean;
   prompt?: string;
   query?: Record<string, string | number | boolean>;
   timeoutMs: number;

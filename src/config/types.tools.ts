@@ -76,6 +76,8 @@ export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
   timeoutSeconds?: number;
   /** Optional language hint for audio transcription. */
   language?: string;
+  /** Optional speaker diarization for multi-speaker audio. */
+  enableSpeakerDiarization?: boolean;
   /** Auth profile id to use for this provider. */
   profile?: string;
   /** Preferred profile id if multiple are available. */
@@ -101,6 +103,8 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
+  /** Default speaker diarization for audio transcription. */
+  enableSpeakerDiarization?: boolean;
   /** Internal request-scoped language override injected by CLI/runtime wrappers. */
   _requestLanguageOverride?: string;
   /** Attachment selection policy. */

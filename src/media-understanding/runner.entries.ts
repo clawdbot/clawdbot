@@ -861,6 +861,8 @@ export async function runProviderEntry(params: {
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
     const audioLanguage = requestOverrides.language ?? entry.language ?? params.config?.language;
+    const audioDiarization =
+      entry.enableSpeakerDiarization ?? params.config?.enableSpeakerDiarization;
     const audioPrompt =
       requestOverrides.prompt ??
       resolveAudioProviderPrompt({
@@ -907,6 +909,7 @@ export async function runProviderEntry(params: {
       request,
       model,
       language: audioLanguage,
+      enableSpeakerDiarization: audioDiarization,
       prompt: audioPrompt,
       query: providerQuery,
       timeoutMs,

@@ -1,0 +1,41 @@
+{
+  "id": "soniox",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "name": "Soniox",
+  "description": "Soniox async speech-to-text (media-understanding) provider.",
+  "setup": {
+    "providers": [
+      {
+        "id": "soniox",
+        "envVars": ["SONIOX_API_KEY"]
+      }
+    ]
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": ["soniox"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "soniox": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "stt-async-v5"
+      },
+      "autoPriority": {
+        "audio": 30
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "Soniox API key. Falls back to SONIOX_API_KEY."
+      }
+    }
+  }
+}
