@@ -518,12 +518,16 @@ function resolveCgroupMountPoints(params: MemoryLimitParams = {}) {
 
 // mountinfo field 4 is the subtree a cgroupfs mount exposes, so /proc/self/cgroup records are
 // relative to it: under a container mount the visible leaf is the mount point itself, not the
-// host-absolute path. A record outside that subtree is not reachable here at all.
+// host-absolute path. A record outside that subtree is not reachable through this mount, and
+// probing the mount root instead would size the build from an unrelated cgroup's limit.
 function relativeCgroupPath(mountRoot: string, cgroupPath: string) {
-  if (mountRoot === "/" || cgroupPath === mountRoot) {
-    return mountRoot === "/" ? cgroupPath : "/";
+  if (mountRoot === "/") {
+    return cgroupPath;
   }
-  return cgroupPath.startsWith(`${mountRoot}/`) ? cgroupPath.slice(mountRoot.length) : "/";
+  if (cgroupPath === mountRoot) {
+    return "/";
+  }
+  return cgroupPath.startsWith(`${mountRoot}/`) ? cgroupPath.slice(mountRoot.length) : null;
 }
 
 // A systemd slice budget lives on the process's own cgroup, never on a hierarchy root, so
@@ -545,7 +549,11 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
     limitFiles: string[],
     cgroupPath: string,
   ) => {
-    const segments = relativeCgroupPath(mount.root, cgroupPath).split("/").filter(Boolean);
+    const relative = relativeCgroupPath(mount.root, cgroupPath);
+    if (relative === null) {
+      return;
+    }
+    const segments = relative.split("/").filter(Boolean);
     for (let depth = segments.length; depth >= 0; depth -= 1) {
       for (const limitFile of limitFiles) {
         paths.push(path.join(mount.mountPoint, ...segments.slice(0, depth), limitFile));
@@ -554,6 +562,7 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
   };
 
   const mounts = resolveCgroupMountPoints(params);
+  let sawMemoryRecord = false;
   for (const line of rawCgroup.split("\n")) {
     const record = /^\d+:([^:]*):(.*)$/u.exec(line);
     if (!record) {
@@ -561,14 +570,18 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
     }
     const controllers = record[1] ?? "";
     if (controllers === "") {
+      sawMemoryRecord = true;
       addHierarchy(mounts.unified, CGROUP_V2_MEMORY_LIMIT_FILES, record[2] ?? "");
     } else if (controllers.split(",").includes("memory")) {
+      sawMemoryRecord = true;
       addHierarchy(mounts.v1Memory, CGROUP_V1_MEMORY_LIMIT_FILES, record[2] ?? "");
     }
   }
-  if (paths.length === 0) {
-    addHierarchy(mounts.unified, CGROUP_V2_MEMORY_LIMIT_FILES, "");
-    addHierarchy(mounts.v1Memory, CGROUP_V1_MEMORY_LIMIT_FILES, "");
+  // Only probe the mounts blind when this process has no memory cgroup record at all; a record
+  // that no mount can represent means the limit is unreadable here, not that the root applies.
+  if (!sawMemoryRecord) {
+    addHierarchy(mounts.unified, CGROUP_V2_MEMORY_LIMIT_FILES, mounts.unified.root);
+    addHierarchy(mounts.v1Memory, CGROUP_V1_MEMORY_LIMIT_FILES, mounts.v1Memory.root);
   }
   return paths;
 }

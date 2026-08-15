@@ -508,6 +508,39 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
+  it("ignores a cgroup mount that cannot represent this process's cgroup", () => {
+    // An inherited namespace can leave a mount whose subtree holds someone else's cgroup.
+    // Sizing the build from it would apply an unrelated limit, so it must be skipped.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/other/branch/openclaw-main-update.service\n"],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /docker/abc123 /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n",
+      ],
+      ["/sys/fs/cgroup/memory.max", `${1024 * 1024 * 1024}\n`],
+      ["/test/meminfo", "MemTotal: 7340032 kB\n"],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      procMeminfoPath: "/test/meminfo",
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    // 7 GiB host total minus headroom, not the unrelated 1 GiB cgroup below the mount.
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+  });
+
   it("clamps explicit tsdown heap settings to the container memory limit", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",
