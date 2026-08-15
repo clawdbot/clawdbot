@@ -1,10 +1,8 @@
-import { resolveAnthropicEphemeralCacheControl } from "@openclaw/ai/transports";
 // Openrouter plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
-  applyAnthropicEphemeralCacheControlMarkers,
   composeProviderStreamWrappers,
   createPayloadPatchStreamWrapper,
   normalizeOpenAICompatibleReasoningReplay,
@@ -271,69 +269,6 @@ function createOpenRouterDeepSeekV4ReplayWrapper(
   );
 }
 
-function readCacheRetention(value: unknown): "long" | "none" | "short" | undefined {
-  return value === "long" || value === "none" || value === "short" ? value : undefined;
-}
-
-function stripCacheRetentionOption(options: Parameters<StreamFn>[2]): Parameters<StreamFn>[2] {
-  if (!options || !Object.hasOwn(options, "cacheRetention")) {
-    return options;
-  }
-  const { cacheRetention: _cacheRetention, ...rest } = options;
-  return rest as Parameters<StreamFn>[2];
-}
-
-/**
- * Production OpenRouter Anthropic cache_control marker wrapper.
- * Runs on the plugin-registered stream path (wrapOpenRouterProviderStream).
- * Verified OpenRouter routes (concrete openrouter.ai baseUrl OR default
- * provider:"openrouter" with no baseUrl) get env/explicit long TTL.
- */
-function createOpenRouterAnthropicCacheWrapper(
-  baseStreamFn: StreamFn | undefined,
-  extraParams?: Record<string, unknown>,
-): StreamFn {
-  return createPayloadPatchStreamWrapper(
-    baseStreamFn,
-    ({ payload, model, options }) => {
-      const cacheRetention =
-        readCacheRetention(options?.cacheRetention) ??
-        readCacheRetention(extraParams?.cacheRetention);
-      // Route already verified by shouldPatch; mark long-TTL eligible so the
-      // default route (baseUrl undefined) is not stuck on the 5-minute marker.
-      applyAnthropicEphemeralCacheControlMarkers(
-        payload,
-        resolveAnthropicEphemeralCacheControl(
-          typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-          cacheRetention,
-          true,
-        ) ?? null,
-      );
-    },
-    {
-      shouldPatch: ({ model }) => shouldPatchAnthropicOpenRouterPayload(model),
-    },
-  );
-}
-
-// Strip cacheRetention from the underlying OpenAI transport options so the
-// OpenRouter Anthropic path only carries markers via payload mutation.
-function createOpenRouterCacheRetentionStripWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying =
-    baseStreamFn ??
-    ((model) => {
-      throw new Error(
-        `OpenRouter cache strip wrapper requires an underlying streamFn for ${model.id}.`,
-      );
-    });
-  return (model, context, options) =>
-    underlying(
-      model,
-      context,
-      shouldPatchAnthropicOpenRouterPayload(model) ? stripCacheRetentionOption(options) : options,
-    );
-}
-
 export function wrapOpenRouterProviderStream(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | null | undefined {
@@ -359,11 +294,5 @@ export function wrapOpenRouterProviderStream(
     (streamFn) => createOpenRouterDeepSeekV4ReplayWrapper(streamFn, ctx.thinkingLevel),
     createOpenRouterAuthHeaderWrapper,
     createOpenRouterAnthropicPrefillWrapper,
-    // Cache markers must live on the registered plugin stream path — the legacy
-    // createOpenRouterSystemCacheWrapper helper is no longer invoked in production.
-    // Order: strip is composed before cache so cache is the outer wrapper and still
-    // sees options.cacheRetention; strip only affects the underlying transport.
-    createOpenRouterCacheRetentionStripWrapper,
-    (streamFn) => createOpenRouterAnthropicCacheWrapper(streamFn, ctx.extraParams),
   );
 }
