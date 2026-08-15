@@ -9,7 +9,7 @@ import {
   MIN_PROMPT_BUDGET_TOKENS,
 } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentMessage, BashExecutionMessage } from "../../runtime/index.js";
 import {
   BRANCH_SUMMARY_PREFIX,
   BRANCH_SUMMARY_SUFFIX,
@@ -171,7 +171,8 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
     if (message.excludeFromContext === true) {
       return 0;
     }
-    tokens += estimateStringTokenPressure(bashExecutionToText(message));
+    const bashMessage: BashExecutionMessage = message;
+    tokens += estimateStringTokenPressure(bashExecutionToText(bashMessage));
     return tokens;
   }
 
@@ -184,9 +185,8 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   }
 
   if (message.role === "assistant") {
-    const content = message.content;
-    if (Array.isArray(content)) {
-      for (const block of content) {
+    if (Array.isArray(message.content)) {
+      for (const block of message.content) {
         if (isRecord(block)) {
           const blockType: unknown = block.type;
           if (blockType === "toolCall" || blockType === "tool_use") {
@@ -197,7 +197,7 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
         tokens += estimateContentBlockTokenPressure(block);
       }
     } else {
-      tokens += estimateContentTokenPressure(content);
+      tokens += estimateContentTokenPressure(message.content);
     }
 
     const toolCalls = legacy.toolCalls ?? legacy.tool_calls;
