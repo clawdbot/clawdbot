@@ -666,6 +666,9 @@ suite.define(() => {
           );
           await page.mouse.move(80, 80);
           await page.mouse.click(300, 100);
+          // Pointer drags leave the divider focused; blur it so the evidence
+          // frame shows the resting divider, not its focus highlight.
+          await divider.evaluate((element) => element.blur());
           await captureRichPanel(page, `rails-tabs-bottom-${themeMode}`);
 
           await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
