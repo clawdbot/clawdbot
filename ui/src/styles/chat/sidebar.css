@@ -645,7 +645,7 @@ openclaw-chat-sidebar-region,
 
 .side-panel-type-menu__item::part(base) {
   min-height: var(--menu-item-height);
-  padding: 7px 8px;
+  padding: 9px 8px;
   border-radius: var(--menu-item-radius);
   background: color-mix(in srgb, var(--text) 3%, transparent);
 }
@@ -740,7 +740,7 @@ openclaw-chat-sidebar-region,
   display: grid;
   width: min(100%, 320px);
   margin-top: 16px;
-  gap: 1px;
+  gap: 6px;
 }
 
 .side-panel-empty__type {
@@ -750,7 +750,7 @@ openclaw-chat-sidebar-region,
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 2px 8px;
+  padding: 9px 10px;
   border: 0;
   border-radius: var(--menu-item-radius);
   background: color-mix(in srgb, var(--text) 3%, transparent);
