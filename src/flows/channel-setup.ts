@@ -1,4 +1,5 @@
 // Channel setup flow configures channels, auth, and workspace bindings.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
@@ -369,8 +370,22 @@ export async function setupChannels(
     if (!adapter) {
       return;
     }
-    const status = await adapter.getStatus({ cfg: next, options, accountOverrides });
-    statusByChannel.set(channel, status);
+    try {
+      const status = await adapter.getStatus({ cfg: next, options, accountOverrides });
+      statusByChannel.set(channel, status);
+    } catch (error) {
+      const detail = sanitizeTerminalText(formatErrorMessage(error));
+      statusByChannel.set(channel, {
+        channel,
+        configured: isChannelConfigured(next, channel),
+        statusLines: [],
+        selectionHint: "status unavailable",
+      });
+      await prompter.note(
+        `Status unavailable (${detail}).\nRetry: ${formatCliCommand(`openclaw channels status --channel ${channel}`)}`,
+        t("wizard.channels.statusTitle"),
+      );
+    }
   };
 
   const enableBundledPluginForSetup = async (channel: ChannelChoice): Promise<boolean> => {
