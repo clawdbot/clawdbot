@@ -1,4 +1,4 @@
-type ResolveSecureTempRoot = typeof import("@openclaw/fs-safe/temp").resolveSecureTempRoot;
+import type { ResolveSecureTempRoot } from "../infra/secure-temp-root.js";
 
 type WorkerDeployRuntime = {
   highlightJs?: unknown;
