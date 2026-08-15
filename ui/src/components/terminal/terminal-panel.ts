@@ -227,7 +227,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         return;
       }
       if (detail.catalog) {
-        this.dockLayout.setRestorableDock("main");
+        this.dockLayout.setDock("main");
       }
       this.dockLayout.setOpen(true);
       void (detail.terminalSessionId
@@ -360,11 +360,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       );
       return;
     }
-    if (dock === "main") {
-      this.dockLayout.toggleDock(dock);
-    } else {
-      this.dockLayout.setDock(dock);
-    }
+    this.dockLayout.setDock(dock);
     void this.updateComplete.then(() => fitAllTerminalSessions(this.terminalSessions.tabs));
   }
 
