@@ -1,10 +1,10 @@
 import {
   buildGatewayConnectAuth,
   buildDeviceAuthPayload,
+  ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-  ConnectErrorDetailCodes,
   formatConnectErrorMessage,
   GatewayProtocolClient,
   GatewayProtocolRequestError,
@@ -19,16 +19,15 @@ import {
   type ErrorShape,
   type EventFrame,
   type HelloOk,
-  shouldPauseGatewayReconnect,
   resolveGatewayConnectScopes,
-  readConnectErrorDetailCode,
   selectGatewayConnectAuth,
   shouldRetryGatewayWithDeviceToken,
   isRetryableGatewayStartupUnavailableError,
-  resolveGatewayStartupRetryAfterMs,
-  resolveSafeTimeoutDelayMs,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  resolveGatewayStartupRetryAfterMs,
+  resolveSafeTimeoutDelayMs,
+  shouldPauseGatewayReconnect,
 } from "@openclaw/gateway-client/browser";
 export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
 import type {
@@ -54,6 +53,12 @@ import {
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
+import {
+  enrichProtocolMismatchDetails,
+  resolveGatewayErrorDetailCode,
+} from "./gateway-connect-errors.ts";
+
+export { resolveGatewayErrorDetailCode };
 
 export class GatewayRequestError extends GatewayProtocolRequestError {
   constructor(error: ErrorShape) {
@@ -65,41 +70,6 @@ export class GatewayRequestError extends GatewayProtocolRequestError {
     });
     this.name = "GatewayRequestError";
   }
-}
-
-function enrichProtocolMismatchDetails(message: string | undefined, details: unknown): unknown {
-  if (readConnectErrorDetailCode(details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
-    return details;
-  }
-  if (!message?.toLowerCase().includes("protocol mismatch")) {
-    return details;
-  }
-  return {
-    code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
-    clientMinProtocol: MIN_CLIENT_PROTOCOL_VERSION,
-    clientMaxProtocol: PROTOCOL_VERSION,
-    ...(details && typeof details === "object" && !Array.isArray(details) ? details : {}),
-  };
-}
-
-export function resolveGatewayErrorDetailCode(
-  error: { details?: unknown } | null | undefined,
-): string | null {
-  return readConnectErrorDetailCode(error?.details);
-}
-
-/**
- * Connect failures that cannot recover while client and server state stay unchanged.
- * AUTH_TOKEN_MISMATCH stays out: the close handler owns its bounded cached-token retry.
- */
-function isNonRecoverableConnectError(error: { details?: unknown } | undefined): boolean {
-  if (!error) {
-    return false;
-  }
-  return shouldPauseGatewayReconnect({
-    details: error.details,
-    protocolMismatchIsTerminal: true,
-  });
 }
 
 function isLoopbackIPv4Host(host: string): boolean {
@@ -147,8 +117,6 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
-type GatewayConnectClientInfo = ConnectParams["client"];
-
 type ConnectPlan = {
   generation: number;
   params: ConnectParams;
@@ -165,6 +133,7 @@ export type GatewayBrowserClientOptions = {
   password?: string;
   clientName?: GatewayClientName;
   clientVersion?: string;
+  clientBuildId?: string;
   platform?: string;
   mode?: GatewayClientMode;
   instanceId?: string;
@@ -270,7 +239,7 @@ async function deriveLegacyV4RecoveryScope(material: string | undefined): Promis
 
 async function buildGatewayConnectDevice(params: {
   deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
-  client: GatewayConnectClientInfo;
+  client: ConnectParams["client"];
   role: string;
   scopes: string[];
   authToken?: string;
@@ -309,12 +278,16 @@ async function buildGatewayConnectDevice(params: {
 
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
+  private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   inboundActivitySeq = 0;
   private lastInboundActivityAtMs: number | null = null;
   private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  // Older shipped Gateways used a closed client schema. Downgrade once per
+  // browser client; a document reload creates a fresh exact-identity attempt.
+  private clientBuildIdCompatibilityDisabled = false;
   // Close/stop advances this generation before another socket can make stale hello work look active.
   private recovery = { value: "", resolved: false, generation: 0 };
   private scopeUpgradeBinding: ScopeUpgradeBinding | null = null;
@@ -405,6 +378,7 @@ export class GatewayBrowserClient {
     this.scopeUpgradeBinding = null;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.clientBuildIdCompatibilityDisabled = false;
   }
 
   get connected() {
@@ -444,9 +418,10 @@ export class GatewayBrowserClient {
   ): Promise<ConnectPlan> {
     this.recovery = { ...this.recovery, generation, resolved: false };
     const role = CONTROL_UI_OPERATOR_ROLE;
-    const client: GatewayConnectClientInfo = {
+    const client: ConnectParams["client"] = {
       id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
       version: this.opts.clientVersion ?? "control-ui",
+      buildId: this.clientBuildIdCompatibilityDisabled ? undefined : this.opts.clientBuildId,
       platform: this.opts.platform ?? navigator.platform ?? "web",
       mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
       instanceId: this.opts.instanceId,
@@ -526,6 +501,7 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
+    this.maxPayloadBytes = hello.policy?.maxPayload;
     this.startTickWatch(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
@@ -610,6 +586,15 @@ export class GatewayBrowserClient {
     const connectErrorCode =
       err instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(err) : null;
     if (
+      !this.clientBuildIdCompatibilityDisabled &&
+      plan.params.client.buildId &&
+      /invalid connect params.*unexpected property.*buildid/iu.test(err.message)
+    ) {
+      this.clientBuildIdCompatibilityDisabled = true;
+      this.client.resetReconnectBackoff(250);
+      return { closeCode: CONNECT_FAILED_CLOSE_CODE, closeReason: "connect retry" };
+    }
+    if (
       shouldRetryGatewayWithDeviceToken({
         retryBudgetUsed: this.deviceTokenRetryBudgetUsed,
         currentDeviceToken: plan.selectedAuth.authDeviceToken,
@@ -675,12 +660,21 @@ export class GatewayBrowserClient {
     });
   }
 
-  request<T = unknown>(
+  async request<T = unknown>(
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
-    return this.client.request<T>(method, params, options);
+    // The UUID request envelope adds 75 bytes with params, 61 when params is omitted.
+    const requestBytes =
+      new TextEncoder().encode(JSON.stringify([method, params])).byteLength +
+      (params === undefined ? 61 : 75);
+    if (this.maxPayloadBytes !== undefined && requestBytes > this.maxPayloadBytes) {
+      throw new Error(
+        "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
+      );
+    }
+    return await this.client.request<T>(method, params, options);
   }
 
   async requestScopeUpgrade(options: { onPending?: (requestId: string) => void } = {}) {
@@ -739,7 +733,10 @@ export class GatewayBrowserClient {
     const retry =
       connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
         ? this.pendingDeviceTokenRetry
-        : !isNonRecoverableConnectError(connectError);
+        : !shouldPauseGatewayReconnect({
+            details: connectError?.details,
+            protocolMismatchIsTerminal: true,
+          });
     return { retry, notify: true, pendingError: error };
   }
 

@@ -62,6 +62,8 @@ export const BOUNDARY_CHECKS = (
     ["lint:tmp:no-raw-channel-fetch", "pnpm", ["run", "lint:tmp:no-raw-channel-fetch"]],
     ["lint:tmp:no-raw-http2-imports", "pnpm", ["run", "lint:tmp:no-raw-http2-imports"]],
     ["lint:agent:ingress-owner", "pnpm", ["run", "lint:agent:ingress-owner"]],
+    ["lint:no-chained-type-assertions", "pnpm", ["run", "lint:no-chained-type-assertions"]],
+    ["lint:no-widen-then-assert", "pnpm", ["run", "lint:no-widen-then-assert"]],
     [
       "lint:plugins:no-register-http-handler",
       "pnpm",

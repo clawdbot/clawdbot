@@ -285,12 +285,12 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           );
         } catch (err) {
           releaseSemanticProvider();
-          this.markLocalEmbeddingProviderDegraded(err);
-          // An aborted caller already stopped waiting; skip fallback-provider
-          // activation so the abandoned search stops instead of re-embedding.
+          // An aborted caller already stopped waiting; keep the provider generation
+          // healthy and skip fallback activation instead of poisoning later searches.
           if (opts?.signal?.aborted) {
             throw err;
           }
+          this.markLocalEmbeddingProviderDegraded(err);
           const message = formatErrorMessage(err);
           const activatedFallback = this.shouldFallbackOnError(err)
             ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
@@ -331,7 +331,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
               );
             } catch (fallbackErr) {
               releaseFallbackProvider();
-              this.markLocalEmbeddingProviderDegraded(fallbackErr);
+              if (!opts?.signal?.aborted) {
+                this.markLocalEmbeddingProviderDegraded(fallbackErr);
+              }
               throw fallbackErr;
             } finally {
               releaseFallbackProvider();
@@ -362,7 +364,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             candidates,
             sourceFilterList,
             vectorProviderIdentity,
+            opts?.signal,
           ).catch((err: unknown) => {
+            opts?.signal?.throwIfAborted();
             log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
             return [];
           })
@@ -423,6 +427,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     limit: number,
     sourceFilterList: MemorySource[],
     providerIdentity: { model: string; aliases: string[] },
+    signal?: AbortSignal,
   ): Promise<Array<MemorySearchResult & { id: string }>> {
     const results = await searchVector({
       db: this.db,
@@ -432,6 +437,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       queryVec,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
+      signal,
       ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
       sourceFilterChunks: this.buildSourceFilter(undefined, sourceFilterList),

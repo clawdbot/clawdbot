@@ -161,9 +161,16 @@ function listSourceDtsOutputs(sourceDir: string, outputPrefix: string) {
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
+  // provider-auth re-exports these signatures into generated SDK declarations.
+  "src/agents/cli-credentials.ts",
   "src/plugins/provider-runtime-model.types.ts",
+  // session-catalog re-exports provider params into generated SDK declarations.
+  "src/plugins/session-catalog.ts",
   "src/plugins/types.ts",
   "src/auto-reply",
+  // doctor-repair-runtime re-exports the state migration contract into the SDK.
+  "src/state/openclaw-state-db.ts",
+  "src/state/openclaw-state-db-contract.ts",
   "packages/ai/src",
   "packages/llm-core/src",
   "packages/markdown-core/src",
@@ -552,7 +559,7 @@ export function isArtifactSetFresh(params: ArtifactFreshParams) {
   }
   // Repair the mtime fast path so later invocations in this checkout skip
   // without re-reading every input byte.
-  const now = new Date();
+  const now = new Date(Math.max(Date.now(), Math.ceil(newestInputMtimeMs)));
   for (const relativePath of params.outputPaths) {
     const outputPath = resolve(rootDir, relativePath);
     if (fs.existsSync(outputPath)) {

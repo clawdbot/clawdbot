@@ -64,9 +64,16 @@ function lifetimeHarness() {
     resolveStarted = resolve;
   });
   const dispose = vi.fn();
+  const reportConnectionFailure = vi.fn();
   const terminateOwnedTree = vi.fn();
   return {
-    contract: { dispose, signal: controller.signal, started, terminateOwnedTree },
+    contract: {
+      dispose,
+      reportConnectionFailure,
+      signal: controller.signal,
+      started,
+      terminateOwnedTree,
+    },
     disconnectAfterStart: () => controller.abort(new Error("worker supervisor lifetime ended")),
     disconnectBeforeStart: () => resolveStarted(false),
     dispose,

@@ -61,7 +61,7 @@ async function readCapturedResponseBodyBounded(
   maxBytes: number,
 ): Promise<CapturedResponseBodyResult> {
   const clone = response.clone();
-  const body = (clone as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
+  const body = clone.body;
   if (!body || typeof body.getReader !== "function") {
     // A real null-body Response consumes as empty. Response-like objects without
     // a stream cannot be read under a byte cap, so never call arrayBuffer().
@@ -76,7 +76,7 @@ async function readCapturedResponseBodyBounded(
   let stalled = false;
   try {
     while (true) {
-      let next: Awaited<ReturnType<typeof reader.read>>;
+      let next: Awaited<ReturnType<typeof readChunkWithIdleTimeout>>;
       try {
         next = await readChunkWithIdleTimeout(
           reader,

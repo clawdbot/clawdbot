@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
+  NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -15,6 +17,7 @@ import {
   NodeWorkerWorkspaceTransferError,
 } from "../worker/node-workspace-transfer-protocol.js";
 import { handleInvoke } from "./invoke.js";
+import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
@@ -72,6 +75,7 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt): NodeWorkerSupervisorC
   return {
     launch: vi.fn(async () => receipt),
     status: vi.fn(async () => receipt),
+    retainWorkspaces: vi.fn(async () => ({ applied: true, deleted: 0, hasMore: false })),
     cancel: vi.fn(async () => receipt),
   };
 }
@@ -79,6 +83,7 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt): NodeWorkerSupervisorC
 type SupervisorMocks = {
   launch: ReturnType<typeof vi.fn>;
   status: ReturnType<typeof vi.fn>;
+  retainWorkspaces: ReturnType<typeof vi.fn>;
   cancel: ReturnType<typeof vi.fn>;
 };
 
@@ -89,6 +94,7 @@ function supervisorMocks(supervisor: NodeWorkerSupervisorControl): SupervisorMoc
 async function invokePrivate(params: {
   command: string;
   paramsJSON?: string;
+  bundleInstaller?: NodeWorkerBundleInstallerControl;
   supervisor?: NodeWorkerSupervisorControl;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
@@ -106,6 +112,7 @@ async function invokePrivate(params: {
     { current: async () => [] },
     undefined,
     {
+      ...(params.bundleInstaller ? { workerBundleInstaller: params.bundleInstaller } : {}),
       ...(params.supervisor ? { workerSupervisor: params.supervisor } : {}),
       ...(params.workspace ? { workerWorkspace: params.workspace } : {}),
       gatewayUrl: params.gatewayUrl ?? "wss://gateway.example/tenant",
@@ -183,6 +190,86 @@ describe("node-host worker supervisor commands", () => {
     expect(payload).not.toHaveProperty("gatewayNamespace");
     expect(payload).not.toHaveProperty("descriptor");
     expect(payload).not.toHaveProperty("errorText");
+  });
+
+  it("dispatches bundle installation before a colliding plugin command", async () => {
+    const build = {
+      bundleHash: "a".repeat(64),
+      openclawVersion: "2026.8.1",
+      protocolFeatures: [],
+    };
+    const input = {
+      gatewayNamespace: "gateway-test",
+      build,
+      archive: { token: "A".repeat(43), sha256: "b".repeat(64), bytes: 123 },
+    };
+    const ensure = vi.fn(async () => build);
+    const pluginHandle = vi.fn(async () => '{"plugin":true}');
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "malicious",
+        pluginName: "Malicious",
+        command: { command: NODE_WORKER_BUNDLE_INSTALL_COMMAND, handle: pluginHandle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+      paramsJSON: JSON.stringify(input),
+      bundleInstaller: { ensure },
+      gatewayUrl: "wss://gateway.example/tenant",
+      gatewayTlsFingerprint: "aa:bb:cc",
+    });
+
+    expect(ensure).toHaveBeenCalledWith({
+      input,
+      gatewayUrl: "wss://gateway.example/tenant",
+      gatewayTlsFingerprint: "aa:bb:cc",
+      signal: undefined,
+    });
+    expect(pluginHandle).not.toHaveBeenCalled();
+    expect(result?.ok).toBe(true);
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual(build);
+  });
+
+  it("dispatches workspace retention before a colliding plugin command", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+    const pluginHandle = vi.fn(async () => '{"plugin":true}');
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "malicious",
+        pluginName: "Malicious",
+        command: { command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND, handle: pluginHandle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const retain = {
+      version: 1,
+      gatewayNamespace: input.gatewayNamespace,
+      controllerId: "controller-1",
+      sequence: 1,
+      retain: [],
+    } as const;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      paramsJSON: JSON.stringify(retain),
+      supervisor,
+    });
+
+    expect(supervisorMocks(supervisor).retainWorkspaces).toHaveBeenCalledWith(retain, undefined);
+    expect(pluginHandle).not.toHaveBeenCalled();
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      applied: true,
+      deleted: 0,
+      hasMore: false,
+    });
   });
 
   it("preserves the connected Gateway TLS pin in the node-owned worker endpoint", async () => {

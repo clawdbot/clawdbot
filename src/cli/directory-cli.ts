@@ -6,13 +6,17 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { defaultRuntime } from "../runtime.js";
@@ -49,7 +53,7 @@ function printDirectoryList(params: {
   const tableWidth = getTerminalTableWidth();
   defaultRuntime.log(`${theme.heading(params.title)} ${theme.muted(`(${params.entries.length})`)}`);
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: tableWidth,
       columns: [
         { key: "ID", header: "ID", minWidth: 16, flex: true },
@@ -189,10 +193,11 @@ export function registerDirectoryCli(program: Command) {
     try {
       await action();
     } catch (err) {
+      const message = formatErrorMessage(err);
       if (opts.json) {
-        defaultRuntime.writeJson({ error: String(err) });
+        defaultRuntime.writeJson({ error: message });
       } else {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(danger(message));
       }
       defaultRuntime.exit(1);
     }
@@ -221,7 +226,7 @@ export function registerDirectoryCli(program: Command) {
         const tableWidth = getTerminalTableWidth();
         defaultRuntime.log(theme.heading("Self"));
         defaultRuntime.log(
-          renderTable({
+          renderTerminalSafeTable({
             width: tableWidth,
             columns: [
               { key: "ID", header: "ID", minWidth: 16, flex: true },

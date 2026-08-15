@@ -47,6 +47,17 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function getMergeFrameworkMachOsBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("merge_framework_machos()");
+  const end = script.indexOf('PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"');
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
 function getSwiftToolchainBlock(): string {
   const script = readFileSync("scripts/lib/swift-toolchain.sh", "utf8");
   const start = script.indexOf("REQUIRED_SWIFT_TOOLS_MAJOR=");
@@ -749,6 +760,57 @@ describe("package-mac-app plist stamping", () => {
     expect(helperCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"');
   });
 
+  it.runIf(process.platform === "darwin")(
+    "merges framework Mach-O binaries when the checkout path contains glob metacharacters",
+    () => {
+      const root = tempDirs.make("openclaw-package-framework-[fixture]-");
+      const primary = path.join(root, "Primary.framework");
+      const secondary = path.join(root, "Secondary.framework");
+      const destination = path.join(root, "Destination.framework");
+      const relativeBinary = path.join("Versions", "A", "OpenClawFixture");
+
+      for (const framework of [primary, secondary, destination]) {
+        mkdirSync(path.dirname(path.join(framework, relativeBinary)), { recursive: true });
+      }
+
+      const fixtureBinary = "/bin/ls";
+      const fixtureArchitectures = spawnSync("/usr/bin/lipo", ["-archs", fixtureBinary], {
+        encoding: "utf8",
+      })
+        .stdout.trim()
+        .split(/\s+/u);
+      const [primaryArchitecture, secondaryArchitecture] = fixtureArchitectures;
+      if (!primaryArchitecture || !secondaryArchitecture) {
+        throw new Error(`${fixtureBinary} must contain at least two architectures`);
+      }
+      const primaryBinary = path.join(primary, relativeBinary);
+      const secondaryBinary = path.join(secondary, relativeBinary);
+      const destinationBinary = path.join(destination, relativeBinary);
+      expect(
+        spawnSync("/usr/bin/lipo", [
+          "-thin",
+          primaryArchitecture,
+          fixtureBinary,
+          "-output",
+          primaryBinary,
+        ]).status,
+      ).toBe(0);
+      expect(spawnSync("/bin/cp", [fixtureBinary, secondaryBinary]).status).toBe(0);
+      writeFileSync(destinationBinary, readFileSync(primaryBinary));
+
+      const result = runHelper(`
+        set -euo pipefail
+        ${getMergeFrameworkMachOsBlock()}
+        merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
+        /usr/bin/lipo -info ${JSON.stringify(destinationBinary)}
+      `);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(primaryArchitecture);
+      expect(result.stdout).toContain(secondaryArchitecture);
+    },
+  );
+
   it.each([
     { title: "keeps the default backend when Xcode's Metal shim works", shimExit: 0, xcrunExit: 0 },
     {
@@ -1346,10 +1408,22 @@ describe("package-mac-app plist stamping", () => {
     const packageScript = readFileSync(scriptPath, "utf8");
     const stageScript = readFileSync("scripts/stage-cua-driver-macos.sh", "utf8");
     const codesignScript = readFileSync("scripts/codesign-mac-app.sh", "utf8");
+    const cuaManifest = JSON.parse(
+      readFileSync("extensions/cua-computer/package.json", "utf8"),
+    ) as {
+      dependencies: Record<string, string>;
+      cuaDriverArtifacts: Record<string, { archiveSha256?: string }>;
+    };
 
     expect(stageScript).toContain('TAG="cua-driver-rs-v${VERSION}"');
     expect(stageScript).toContain(
-      'EXPECTED_SHA256="733e28a3782ac8d325f8fce8b5d97486c1054af755b40dfd086151b34c79377e"',
+      'ARTIFACT_MANIFEST="$ROOT_DIR/extensions/cua-computer/package.json"',
+    );
+    expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
+    expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.19.3");
+    expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
+      "733e28a3782ac8d325f8fce8b5d97486c1054af755b40dfd086151b34c79377e",
     );
     expect(packageScript).toContain(
       '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',

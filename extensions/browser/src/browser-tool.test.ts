@@ -2796,6 +2796,24 @@ describe("browser tool url alias support", () => {
     });
   });
 
+  it("untracks the selected tab when close omits targetId", async () => {
+    browserActionsMocks.browserAct.mockResolvedValueOnce({
+      ok: true,
+      targetId: "selected-tab",
+      url: "https://example.com",
+    });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+
+    await tool.execute?.("call-1", { action: "close" });
+
+    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "selected-tab",
+      baseUrl: undefined,
+      profile: "openclaw",
+    });
+  });
+
   it("never creates tracking records from tab listing or focus", async () => {
     browserClientMocks.browserTabs.mockResolvedValueOnce([
       {
@@ -2816,6 +2834,41 @@ describe("browser tool url alias support", () => {
 
 describe("browser tool act compatibility", () => {
   registerBrowserToolAfterEachReset();
+
+  it.each([
+    {
+      name: "close",
+      request: { kind: "close", targetId: "closed-tab" },
+      result: { ok: true, targetId: "closed-tab", url: "https://example.com" },
+    },
+    {
+      name: "batch close",
+      request: {
+        kind: "batch",
+        targetId: "closed-tab",
+        actions: [{ kind: "close" }],
+      },
+      result: {
+        ok: true,
+        targetId: "closed-tab",
+        results: [{ ok: true }],
+        aborted: { reason: "closed", afterAction: 1, url: "https://example.com", skipped: 0 },
+      },
+    },
+  ])("retires session ownership after act:$name", async ({ request, result }) => {
+    browserActionsMocks.browserAct.mockResolvedValueOnce(result);
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+
+    await tool.execute?.("call-1", { action: "act", request });
+
+    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "closed-tab",
+      baseUrl: undefined,
+      profile: "openclaw",
+    });
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).not.toHaveBeenCalled();
+  });
 
   it("adds a clear note when a batch aborts after navigation", async () => {
     browserActionsMocks.browserAct.mockResolvedValueOnce({

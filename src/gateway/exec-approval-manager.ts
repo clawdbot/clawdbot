@@ -128,6 +128,9 @@ type ExecApprovalManagerOptions<TPayload> = {
     context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },
   ) => void;
   onLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
+  /** Durable timeout expiry can be first observed by a timer, lookup, or replay.
+   * Publish from the local settlement owner so every ordering reaches reviewers. */
+  onExpired?: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
   validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
 };
 
@@ -158,7 +161,7 @@ type PendingEntry<TPayload = ExecApprovalRequestPayload> = {
   record: ExecApprovalRecord<TPayload>;
   resolve: (decision: ExecApprovalDecision | null) => void;
   reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | null;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   handoffRetainCount: number;
   handoffReleasedAtMs: number | null;
@@ -364,7 +367,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       record,
       resolve: resolvePromise!,
       reject: rejectPromise!,
-      timer: null as unknown as ReturnType<typeof setTimeout>,
+      timer: null,
       cleanupTimer: null,
       handoffRetainCount: 0,
       handoffReleasedAtMs: null,
@@ -623,6 +626,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     localResolutionSource: ExecApprovalResolutionSource = "operator",
   ): boolean {
     const persistence = this.options.persistence;
+    const liveRecord = this.pending.get(record.id)?.record;
     if (
       record.kind !== this.approvalKind ||
       (persistence && record.runtimeEpoch !== persistence.runtimeEpoch) ||
@@ -651,6 +655,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     });
     if (settled) {
       this.emitLifecycle({ phase: "terminal", record });
+      if (record.status === "expired" && liveRecord) {
+        try {
+          this.options.onExpired?.(record, liveRecord);
+        } catch (error) {
+          this.reportError(error, { approvalId: record.id, operation: "expire" });
+        }
+      }
     }
     return settled;
   }
@@ -746,7 +757,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (!pending || pending.record.resolvedAtMs !== undefined) {
       return false;
     }
-    clearTimeout(pending.timer);
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
     pending.record.resolvedAtMs = params.resolvedAtMs;
     if (params.decision === null) {
       delete pending.record.decision;
@@ -864,12 +877,16 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   }
 
   private scheduleExpiryTimer(entry: PendingEntry<TPayload>): void {
-    const timerDelayMs = resolveApprovalTimeoutMs(entry.record.expiresAtMs - Date.now());
-    entry.timer = setTimeout(() => {
+    entry.timer = this.createExpiryTimer(entry.record);
+  }
+
+  private createExpiryTimer(record: ExecApprovalRecord<TPayload>): ReturnType<typeof setTimeout> {
+    const timerDelayMs = resolveApprovalTimeoutMs(record.expiresAtMs - Date.now());
+    return setTimeout(() => {
       try {
-        this.expireDue(entry.record.id);
+        this.expireDue(record.id);
       } catch (error) {
-        this.reportError(error, { approvalId: entry.record.id, operation: "expire" });
+        this.reportError(error, { approvalId: record.id, operation: "expire" });
       }
     }, timerDelayMs);
   }

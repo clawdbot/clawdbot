@@ -193,13 +193,13 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
     job_json: JSON.stringify(stripJobRuntimeFields(job)),
     state_json: JSON.stringify(job.state ?? {}),
     runtime_updated_at_ms: job.updatedAtMs,
-    schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>) ?? null,
+    schedule_identity: tryCronScheduleIdentity({ ...job }) ?? null,
     sort_order: sortOrder,
   };
 }
 
 function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStoredJob | null {
-  const raw = structuredClone(job) as unknown as Record<string, unknown>;
+  const raw: Record<string, unknown> = { ...structuredClone(job) };
   const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
   normalizeCronJobIdentityFields(raw);
   const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
@@ -570,7 +570,7 @@ export function updateCronRuntimeRows(
           ...bindStateColumns(job.state ?? {}),
           state_json: JSON.stringify(job.state ?? {}),
           runtime_updated_at_ms: job.updatedAtMs,
-          schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>),
+          schedule_identity: tryCronScheduleIdentity({ ...job }),
         })
         .where("store_key", "=", storeKey)
         .where("job_id", "=", job.id),

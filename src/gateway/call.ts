@@ -111,6 +111,7 @@ type CallGatewayBaseOptions = {
   instanceId?: string;
   minProtocol?: number;
   maxProtocol?: number;
+  requiredCapabilities?: string[];
   requiredMethods?: string[];
   /**
    * Overrides the config path shown in connection error details.
@@ -749,6 +750,27 @@ function ensureGatewaySupportsRequiredMethods(params: {
   }
 }
 
+function ensureGatewaySupportsRequiredCapabilities(params: {
+  requiredCapabilities: string[] | undefined;
+  capabilities: string[] | undefined;
+  attemptedMethod: string;
+}): void {
+  const required = (params.requiredCapabilities ?? []).map((entry) => entry.trim()).filter(Boolean);
+  if (required.length === 0) {
+    return;
+  }
+  const supported = new Set(
+    (params.capabilities ?? []).map((entry) => entry.trim()).filter(Boolean),
+  );
+  for (const capability of required) {
+    if (!supported.has(capability)) {
+      throw new Error(
+        `active gateway does not support required capability "${capability}" for "${params.attemptedMethod}". Update or restart the active gateway and try again.`,
+      );
+    }
+  }
+}
+
 function isRequiredAgentRuntimeIdentityConnectError(err: Error): boolean {
   return err.message.includes(
     "gateway rejected required agent runtime identity auth field; refusing to retry without it",
@@ -896,6 +918,11 @@ async function executeGatewayRequestWithScopes<T>(params: {
             ensureGatewaySupportsRequiredMethods({
               requiredMethods: opts.requiredMethods,
               methods: hello.features?.methods,
+              attemptedMethod: opts.method,
+            });
+            ensureGatewaySupportsRequiredCapabilities({
+              requiredCapabilities: opts.requiredCapabilities,
+              capabilities: hello.features?.capabilities,
               attemptedMethod: opts.method,
             });
             const activeClient = client;

@@ -17,34 +17,6 @@ import type { HandleCommandsParams } from "./commands-types.js";
 describe("handleCompactCommand lifecycle authority", () => {
   beforeEach(resetCompactCommandMocks);
 
-  it("does not abort the command reply run before compacting", async () => {
-    vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(false);
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
-      ok: true,
-      compacted: false,
-    });
-
-    const result = await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(vi.mocked(isEmbeddedAgentRunAbortableForCompaction)).toHaveBeenCalledWith("session-1");
-    expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
-    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();
-    expect(vi.mocked(compactEmbeddedAgentSession)).toHaveBeenCalledOnce();
-  });
-
   it("does not abort a run after the bound session changes", async () => {
     vi.mocked(isCurrentSessionEntry).mockReturnValueOnce(false);
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);

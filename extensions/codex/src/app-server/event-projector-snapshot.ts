@@ -9,9 +9,10 @@ import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 import { promptSnapshot } from "./user-prompt-message.js";
 
 type TurnTaintMetadata = { resultContentSource?: "network"; turnTainted?: true };
+const CODEX_META_KEY = "__openclaw";
 
 function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
-  const metadata = (message as unknown as Record<string, unknown>)["__openclaw"];
+  const metadata = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
   return metadata && typeof metadata === "object" && !Array.isArray(metadata)
     ? (metadata as TurnTaintMetadata)
     : undefined;

@@ -37,6 +37,8 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   it.each([
     { name: "model set", patch: { model: "openai/gpt-5.6-luna" } },
     { name: "model reset", patch: { model: null } },
+    { name: "icon set", patch: { icon: "🦞" } },
+    { name: "icon reset", patch: { icon: null } },
     {
       name: "safe mixed patch",
       patch: { label: "Renamed", archived: true, model: "openai/gpt-5.6-luna" },
@@ -82,7 +84,13 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
             expectedLifecycleRevision: "revision-1",
           },
         ],
-        patch: { label: "Renamed", archived: true, unread: false, model: "openai/gpt-5.6-luna" },
+        patch: {
+          label: "Renamed",
+          icon: "🦞",
+          archived: true,
+          unread: false,
+          model: "openai/gpt-5.6-luna",
+        },
       }),
     ).toBe("operator.write");
     expect(

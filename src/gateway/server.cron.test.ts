@@ -1632,6 +1632,67 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("reports skipped isolated cron runs as failed tasks", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-run-skipped-task-",
+      cronEnabled: false,
+    });
+    cronIsolatedRun.mockResolvedValueOnce({
+      status: "skipped",
+      error: "model endpoint unavailable",
+    });
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "skipped task projection",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "do work" },
+        delivery: { mode: "none" },
+      });
+      const jobId = expectCronJobIdFromResponse(addRes);
+      const finished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+      );
+
+      await runCronJobForce(ws, jobId);
+      expect(await finished).toMatchObject({
+        jobId,
+        status: "skipped",
+        error: "model endpoint unavailable",
+      });
+
+      const history = await rpcReq(ws, "cron.runs", { id: jobId, limit: 1 });
+      expect(history.ok).toBe(true);
+      expect(history.payload).toMatchObject({
+        entries: [
+          expect.objectContaining({
+            jobId,
+            status: "skipped",
+            error: "model endpoint unavailable",
+          }),
+        ],
+      });
+
+      const taskList = await rpcReq(ws, "tasks.list", {});
+      expect(taskList.ok).toBe(true);
+      const tasks = (taskList.payload as { tasks?: Array<Record<string, unknown>> } | undefined)
+        ?.tasks;
+      expect(tasks?.find((task) => task.sourceId === jobId)).toMatchObject({
+        runtime: "cron",
+        status: "failed",
+        error: "model endpoint unavailable",
+      });
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
   test("returns already-running without starting background work", async () => {
     const now = Date.now();
     let resolveRun: ((result: { status: "ok"; summary: string }) => void) | undefined;

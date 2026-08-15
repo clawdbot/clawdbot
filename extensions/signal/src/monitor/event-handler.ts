@@ -747,9 +747,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             async (terminalError: unknown) => {
               // Exhausted retries: release the drain claims so queue retry policy
               // owns redelivery instead of the stall watchdog dead-lettering them.
-              await Promise.all(
-                entries.map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
-              );
+              await lifecycle?.onAbandoned();
               throw terminalError;
             },
           );

@@ -232,7 +232,6 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const questionPanelProps = gatewayQuestionPrompt
     ? createGatewayQuestionPanelProps(gatewayQuestionPrompt, {
-        nowMs: Date.now(),
         collapsed: state.gatewayQuestionCollapsed,
         onCollapsedChange: (collapsed) => {
           state.gatewayQuestionCollapsed = collapsed;

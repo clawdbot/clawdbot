@@ -2,7 +2,14 @@ import {
   COMPUTER_USE_V2_ACTION_NAMES,
   type ComputerActParams,
 } from "openclaw/plugin-sdk/computer-use";
+import {
+  elementArgs,
+  requireWindowTarget,
+  windowPointArgs,
+  type CuaComputerActParams,
+} from "./action-targets.js";
 import { normalizeModifiers, parseKeyChord } from "./actions.js";
+import { handleBrowserAct } from "./browser-actions.js";
 import { EscalationReason, type CuaDriverSession } from "./driver-client.js";
 import {
   actionEnvelope,
@@ -14,15 +21,16 @@ import {
   projectWindows,
   windowObservation,
 } from "./driver-result.js";
+import type { CuaExecutionState } from "./execution-state.js";
 import {
   adoptGeneration,
   resolveAppRef,
-  resolveElementRef,
   resolveObservation,
   resolveWindowRef,
   verifyGeneration,
   type CuaFrameState,
 } from "./frame.js";
+import { handleRecordingAct } from "./recording-actions.js";
 
 const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 const CUA_TARGETED_ACTION_NAMES = new Set([
@@ -38,101 +46,6 @@ const CUA_TARGETED_ACTION_NAMES = new Set([
   "type",
   "key",
 ] as const);
-
-export type CuaComputerActParams = {
-  action: ComputerActParams["action"];
-  displayFrameId?: string;
-  x?: number;
-  y?: number;
-  fromX?: number;
-  fromY?: number;
-  text?: string;
-  keys?: string;
-  modifiers?: string;
-  scrollDirection?: "up" | "down" | "left" | "right";
-  scrollAmount?: number;
-  durationMs?: number;
-  screenIndex?: number;
-  refWidth?: number;
-  windowRef?: string;
-  elementRef?: string;
-  observationId?: string;
-  deliveryMode?: "background" | "foreground";
-  query?: string;
-  depth?: number;
-  maxElements?: number;
-  app?: string;
-  value?: string;
-  path?: string[];
-  x1?: number;
-  y1?: number;
-  x2?: number;
-  y2?: number;
-  reason?:
-    | "ax_tree_pixel_mismatch"
-    | "background_delivery_failed"
-    | "foreground_ineffective"
-    | "no_window_target"
-    | "other";
-};
-
-function requireWindowTarget(
-  driver: CuaDriverSession,
-  state: CuaFrameState,
-  params: CuaComputerActParams,
-) {
-  verifyGeneration(state, driver.generation);
-  if (!params.windowRef) {
-    throw new Error(`COMPUTER_INVALID_REQUEST: windowRef is required for ${params.action}`);
-  }
-  return {
-    ref: params.windowRef,
-    target: resolveWindowRef(state, params.windowRef),
-  };
-}
-
-function observationTarget(state: CuaFrameState, params: CuaComputerActParams, windowRef: string) {
-  if (!params.observationId) {
-    throw new Error(`COMPUTER_STALE_OBSERVATION: observationId is required for ${params.action}`);
-  }
-  return resolveObservation(state, params.observationId, windowRef);
-}
-
-function elementArgs(
-  state: CuaFrameState,
-  params: CuaComputerActParams,
-  windowRef: string,
-): Record<string, unknown> | undefined {
-  if (!params.elementRef) {
-    return undefined;
-  }
-  const observation = observationTarget(state, params, windowRef);
-  const element = resolveElementRef(observation, params.elementRef);
-  return element.elementToken
-    ? { element_token: element.elementToken }
-    : {
-        element_index: element.elementIndex,
-        ...(element.snapshotId ? { snapshot_id: element.snapshotId } : {}),
-      };
-}
-
-function windowPointArgs(
-  state: CuaFrameState,
-  params: CuaComputerActParams,
-  windowRef: string,
-  point: { x?: number; y?: number },
-  label: string,
-): Record<string, unknown> {
-  if (point.x === undefined || point.y === undefined) {
-    throw new Error(`COMPUTER_INVALID_REQUEST: ${label} coordinates are required`);
-  }
-  const observation = observationTarget(state, params, windowRef);
-  return {
-    x: point.x,
-    y: point.y,
-    ...(observation.fromZoom ? { from_zoom: true } : {}),
-  };
-}
 
 async function handleTargetedAct(
   platform: NodeJS.Platform,
@@ -299,10 +212,13 @@ async function handleTargetedAct(
   return JSON.stringify(actionEnvelope(result));
 }
 
+export type { CuaComputerActParams } from "./action-targets.js";
+
 export async function handleV2Act(
   platform: NodeJS.Platform,
   driver: CuaDriverSession,
   state: CuaFrameState,
+  execution: CuaExecutionState,
   params: ComputerActParams,
   handleDesktop: (
     driver: CuaDriverSession,
@@ -321,6 +237,20 @@ export async function handleV2Act(
   }
   if ((CUA_WIRE_ACTION_NAMES as readonly string[]).includes(input.action)) {
     return await handleDesktop(driver, state, params, signal);
+  }
+  const recordingResult = await handleRecordingAct(
+    driver,
+    execution.recording,
+    execution.resources,
+    input,
+    signal,
+  );
+  if (recordingResult !== undefined) {
+    return recordingResult;
+  }
+  const browserResult = await handleBrowserAct(driver, state, execution.resources, input, signal);
+  if (browserResult !== undefined) {
+    return browserResult;
   }
 
   switch (input.action) {
@@ -355,7 +285,7 @@ export async function handleV2Act(
       });
     }
     case "get_cursor_position": {
-      const result = await callWindowTool(driver, state, "get_cursor_position", {}, signal);
+      const result = await driver.callDesktopTool("get_cursor_position", {}, signal);
       return JSON.stringify({
         ok: true,
         details: projectedToolDetails(result, "get_cursor_position"),
@@ -384,20 +314,18 @@ export async function handleV2Act(
       verifyGeneration(state, driver.generation);
       const appName = input.app!;
       const app = resolveAppRef(state, appName);
-      if (appName.startsWith("cua:v2:app:") && !app) {
+      if (!app) {
         throw new Error("COMPUTER_STALE_OBSERVATION: refresh list_apps and retry");
       }
       const result = await callWindowTool(
         driver,
         state,
         "launch_app",
-        app
-          ? app.launchPath
-            ? { launch_path: app.launchPath }
-            : app.bundleId
-              ? { bundle_id: app.bundleId }
-              : { name: app.name }
-          : { name: appName },
+        app.launchPath
+          ? { launch_path: app.launchPath }
+          : app.bundleId
+            ? { bundle_id: app.bundleId }
+            : { name: app.name },
         signal,
       );
       const structured = projectedToolDetails(result, "launch_app");

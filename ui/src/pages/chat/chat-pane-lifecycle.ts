@@ -381,8 +381,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     pageState.confirmConversationReset = () => this.confirmConversationReset();
     pageState.exportCurrentChat = () =>
       exportChatMarkdown(pageState.chatMessages, pageState.assistantName);
+    // Effective-tools previews key their requests on the model override, so a
+    // post-switch refresh only needs a re-render.
     pageState.refreshCurrentSessionTools = async () => {
-      await pageState.onModelChanged?.();
       pageState.requestUpdate?.();
     };
     pageState.refreshCurrentChat = async () => {
@@ -391,6 +392,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     };
     pageState.refreshSessionPullRequests = (options) => this.refreshSessionPullRequests(options);
     pageState.openSessionCompanion = (question) => this.submitSessionCompanionQuestion(question);
+    pageState.retireSessionCompanion = (key, agentId) =>
+      this.sessionCompanionThreads.retire(key, agentId);
     this.state = pageState;
     if (this.sessionKey) {
       const initialSessionKey = this.setPaneSessionKey(this.sessionKey);
@@ -613,7 +616,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.connectionGeneration += 1;
     this.deferredSessionHydrationRequestVersion += 1;
     this.sessionDiscussionPanels.clear();
-    this.sessionCompanionHydrationKey = "";
     this.taskSuggestionsRequestVersion += 1;
     this.taskSuggestions = [];
     this.taskSuggestionBusyIds.clear();

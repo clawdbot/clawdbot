@@ -22,7 +22,7 @@ import {
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
-import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
 import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
@@ -331,14 +331,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           // limitHistoryTurns can orphan tool_result blocks by removing the
           // assistant message that contained the matching tool_use.
           const limited = transcriptPolicy.repairToolUseResultPairing
-            ? sanitizeToolUseResultPairing(truncated, {
-                erroredAssistantResultPolicy: "drop",
-                ...(effectiveModel.api === "openai-responses" ||
-                effectiveModel.api === "azure-openai-responses" ||
-                effectiveModel.api === "openai-chatgpt-responses"
-                  ? { missingToolResultText: "aborted" }
-                  : {}),
-              })
+            ? sanitizeToolUseResultPairingForModel(
+                truncated,
+                effectiveModel.api === "openai-responses" ||
+                  effectiveModel.api === "azure-openai-responses" ||
+                  effectiveModel.api === "openai-chatgpt-responses",
+              )
             : truncated;
           if (limited.length > 0) {
             session.agent.state.messages = limited;

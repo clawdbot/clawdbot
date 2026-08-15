@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
+  compareSessionRowsByUpdatedAt,
   isSystemCreatedSessionRow,
   resolveSessionNavigation,
   visibleSessionMatches,
@@ -435,5 +436,20 @@ describe("isSystemCreatedSessionRow", () => {
     ],
   ] as const)("%s", (_name, fields, expected) => {
     expect(isSystemCreatedSessionRow({ ...base, ...fields } as GatewaySessionRow)).toBe(expected);
+  });
+});
+
+describe("compareSessionRowsByUpdatedAt", () => {
+  it("breaks updatedAt ties by key, matching the gateway list order", () => {
+    // Gateway compareSessionEntryPairs ends with an ascending key tie-break
+    // ("Stable key ties keep offset paging deterministic"); a UI order that
+    // differs makes tied rows visibly swap on the canonical refresh.
+    const rows = [
+      { key: "agent:main:zeta", kind: "direct", updatedAt: null },
+      { key: "agent:main:alpha", kind: "direct", updatedAt: null },
+      { key: "agent:main:mid", kind: "direct", updatedAt: null },
+    ] as GatewaySessionRow[];
+    const sorted = rows.toSorted(compareSessionRowsByUpdatedAt).map((row) => row.key);
+    expect(sorted).toEqual(["agent:main:alpha", "agent:main:mid", "agent:main:zeta"]);
   });
 });

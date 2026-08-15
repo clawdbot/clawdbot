@@ -4,12 +4,16 @@ import {
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { UpdateHoldResult, UpdateScheduleState } from "../api/types.ts";
-import { controlUiVersionDiffersFrom } from "../build-info.ts";
+import { controlUiBuildDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
+  completeDevicePairSetup,
   createDevicePairSetupState,
+  markDevicePairSetupDeliveryUncertain,
   openDevicePairSetup as openDevicePairSetupState,
+  parseDevicePairSetupCompletion,
+  parseDevicePairSetupDeliveryUncertain,
   readDevicePairSetupSnapshot,
   refreshDevicePairSetup as refreshDevicePairSetupState,
   setDevicePairSetupAccess as setPairAccess,
@@ -88,10 +92,7 @@ export function createApplicationOverlays(
     approvalErrors: new Map(),
     approvalNowMs: Date.now(),
     devicePairSetupOpen: false,
-    devicePairSetupLoading: false,
-    devicePairSetupError: null,
-    devicePairSetup: null,
-    devicePairSetupAccess: "full",
+    devicePairSetupLifecycle: { phase: "selection", access: "full" },
     devicePairPendingCount: 0,
     deviceAuthMigration: EMPTY_DEVICE_AUTH_MIGRATION,
   };
@@ -117,6 +118,7 @@ export function createApplicationOverlays(
   const devicePairSetupState = createDevicePairSetupState({
     client: gateway.snapshot.client,
     connected: gateway.snapshot.phase === "connected",
+    onChange: () => publish(),
   });
   const promptState: ExecApprovalPromptState = {
     client: activeClient,
@@ -127,7 +129,7 @@ export function createApplicationOverlays(
     execApprovalExpiryTimers: new Map(),
   };
 
-  const publish = () => {
+  function publish() {
     snapshot = {
       ...snapshot,
       // The update RPC can finish before its restart handoff. Keep consumers
@@ -142,7 +144,7 @@ export function createApplicationOverlays(
     for (const listener of listeners) {
       listener(snapshot);
     }
-  };
+  }
   promptState.execApprovalChanged = publish;
   const pairingPendingCount = createOverlayPairingPendingCount({
     gateway,
@@ -270,7 +272,7 @@ export function createApplicationOverlays(
     }
     if (accessTransition.pairingChanged) {
       pairingPendingCount.invalidate({
-        clear: !operatorAccess.canAdmin && !operatorAccess.canPair,
+        clear: !(operatorAccess.canAdmin || operatorAccess.canPair),
       });
     }
     activeClient = next.client;
@@ -310,6 +312,8 @@ export function createApplicationOverlays(
       if (!next.client) {
         connectedEpoch = 0;
         snapshot = { ...snapshot, controlUiRefreshRequired: false };
+      } else if (next.hello) {
+        snapshot = { ...snapshot, controlUiRefreshRequired: true };
       }
       clearExecApprovalTimers(promptState);
       publish();
@@ -317,6 +321,12 @@ export function createApplicationOverlays(
     }
     const updateSchedule =
       connectedSourceChanged || helloChanged ? readUpdateSchedule(next.hello) : undefined;
+    const serverBuildIdentity = {
+      version: next.hello?.server?.version,
+      buildId: next.hello?.server?.buildId,
+      controlUiBuildSource: next.hello?.server?.controlUiBuildSource,
+    };
+    const exactBuildIdentityAvailable = Boolean(serverBuildIdentity.buildId?.trim());
     snapshot = {
       ...snapshot,
       ...(connectedSourceChanged || helloChanged
@@ -327,7 +337,8 @@ export function createApplicationOverlays(
           }
         : {}),
       controlUiRefreshRequired: connectedSourceChanged
-        ? connectedEpoch > 0 && controlUiVersionDiffersFrom(next.hello?.server?.version)
+        ? (exactBuildIdentityAvailable || connectedEpoch > 0) &&
+          controlUiBuildDiffersFrom(serverBuildIdentity)
         : snapshot.controlUiRefreshRequired,
     };
     publish();
@@ -354,6 +365,20 @@ export function createApplicationOverlays(
 
   const stopEvents = gateway.subscribeEvents((event) => {
     if (disposed || !isGatewayEvent(event)) {
+      return;
+    }
+    if (event.event === "device.pair.setup.completed") {
+      const completion = parseDevicePairSetupCompletion(event.payload);
+      if (completion) {
+        completeDevicePairSetup(devicePairSetupState, completion);
+      }
+      return;
+    }
+    if (event.event === "device.pair.setup.deliveryUncertain") {
+      const outcome = parseDevicePairSetupDeliveryUncertain(event.payload);
+      if (outcome) {
+        markDevicePairSetupDeliveryUncertain(devicePairSetupState, outcome);
+      }
       return;
     }
     if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
@@ -654,9 +679,7 @@ export function createApplicationOverlays(
       publish();
     },
     async secureThisBrowser() {
-      const client = activeClient;
-      const epoch = connectedEpoch;
-      await deviceAuthMigration.secure(client, epoch);
+      await deviceAuthMigration.secure(activeClient, connectedEpoch);
     },
     dispose() {
       disposed = true;

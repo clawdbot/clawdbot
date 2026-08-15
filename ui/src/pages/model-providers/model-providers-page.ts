@@ -13,6 +13,7 @@ import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -116,8 +117,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
-  private observedClient: GatewayBrowserClient | null = null;
-  private clientEpoch = 0;
+  private readonly connectionLifecycle = createGatewayConnectionLifecycle({
+    client: null,
+    phase: "stopped",
+  });
   // Global config writes survive agent switches; their card state does not.
   private agentEpoch = 0;
   private probeEpochs = new Map<string, number>();
@@ -173,6 +176,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
+    this.connectionLifecycle.transition({ client: null, phase: "stopped" });
     void this.refreshTask.run([null, "", false]);
     this.subscriptions.clear();
     super.disconnectedCallback();
@@ -194,8 +198,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   override updated() {
     const snapshot = this.context.gateway.snapshot;
-    if (snapshot.client !== this.observedClient) {
-      this.resetClientState(snapshot.client);
+    if (this.connectionLifecycle.transition(snapshot)) {
+      this.resetConnectionState(snapshot.client, snapshot.phase === "connected");
     }
     if (
       !this.context.agents.state.agentsList &&
@@ -217,9 +221,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     }
   }
 
-  private resetClientState(client: GatewayBrowserClient | null) {
-    this.observedClient = client;
-    this.clientEpoch += 1;
+  private resetConnectionState(client: GatewayBrowserClient | null, connected: boolean) {
     void this.refreshTask.run([null, this.selectedAgentId, false]);
     this.busy = {};
     this.messages = {};
@@ -233,17 +235,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.addProviderId = "";
     this.addProviderKey = "";
     this.defaultsDraft = null;
-    if (client !== this.dataClient) {
+    if (!connected || client !== this.dataClient) {
       this.data = null;
     }
   }
 
   private isCurrentClient(client: GatewayBrowserClient, epoch: number): boolean {
-    return (
-      this.clientEpoch === epoch &&
-      this.observedClient === client &&
-      this.context.gateway.snapshot.client === client
-    );
+    return this.connectionLifecycle.isCurrent({ client, epoch });
   }
 
   private resolveSelectedAgentId(): string {
@@ -353,7 +351,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!client) {
       return { ok: false };
     }
-    const clientEpoch = this.clientEpoch;
+    const clientEpoch = this.connectionLifecycle.epoch;
     const agentEpoch = this.agentEpoch;
     return runModelProviderConfigMutation(
       {
@@ -436,7 +434,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!client || !this.canMutate() || this.busy[key] || this.probeUnsupported) {
       return;
     }
-    const clientEpoch = this.clientEpoch;
+    const clientEpoch = this.connectionLifecycle.epoch;
     const agentId = this.selectedAgentId;
     const probeEpoch = (this.probeEpochs.get(cardId) ?? 0) + 1;
     this.probeEpochs.set(cardId, probeEpoch);
@@ -492,7 +490,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!client || !this.canMutate() || this.busy[key]) {
       return;
     }
-    const clientEpoch = this.clientEpoch;
+    const clientEpoch = this.connectionLifecycle.epoch;
     const agentId = this.selectedAgentId;
     const agentEpoch = this.agentEpoch;
     this.clearProbe(cardId);

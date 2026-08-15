@@ -113,6 +113,18 @@ describe("agents helpers", () => {
     expect(requireAgentSummary(buildAgentSummaries(next), "work").isDefault).toBe(true);
   });
 
+  it("preserves the sole agent as the ambient system owner when adding a second agent", () => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+
+    const next = applyAgentConfig(cfg, { agentId: "helper", name: "Helper" });
+
+    expect(next.agents).toMatchObject({
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {}, helper: { name: "Helper" } },
+    });
+  });
+
   it("applyAgentConfig clears a model override", () => {
     const cfg: OpenClawConfig = {
       agents: {

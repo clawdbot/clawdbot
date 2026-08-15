@@ -16,9 +16,14 @@ export function isCronJobRunning(job: CronJob): boolean {
 }
 
 // "Failed cron" surfaces (cron page, sidebar attention chips) track current
-// actionability, so a failure only counts while the job is still enabled.
-// Disabled jobs keep their historical `lastRunStatus: "error"` for detail
-// views, but a retired job must not be reported as an active problem.
+// actionability, so a failure only counts while the job is still enabled —
+// with one exception: auto-disabled jobs are the ESCALATED failure state, not
+// an operator pause, so hiding them would drop the problem from every failure
+// surface exactly when it became permanent. Operator-paused jobs keep their
+// historical `lastRunStatus: "error"` for detail views without being flagged.
 export function isCronJobActiveFailure(job: CronJob): boolean {
+  if (job.state?.autoDisabled) {
+    return true;
+  }
   return job.enabled && resolveCronJobLastRunStatus(job) === "error";
 }

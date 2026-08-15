@@ -1,7 +1,7 @@
 // Model command shared tests cover shared config and provider helper behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
+import { loadValidConfigOrThrow, resolveModelsTargetAgent, updateConfig } from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -39,6 +39,16 @@ describe("models/shared", () => {
 
     await expect(loadValidConfigOrThrow()).rejects.toThrowError(
       "Invalid config at /tmp/openclaw.json\n- providers.openai.apiKey: Required",
+    );
+  });
+
+  it("names only the supported model-command escape for an ambiguous roster", () => {
+    expect(() =>
+      resolveModelsTargetAgent({
+        agents: { ownership: "explicit", entries: { main: {}, helper: {}, third: {} } },
+      }),
+    ).toThrow(
+      "Multiple agents are configured, but the model command has no explicit owner. Pass --agent <id>.",
     );
   });
 

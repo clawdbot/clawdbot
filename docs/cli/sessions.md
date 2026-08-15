@@ -31,7 +31,7 @@ Flags:
 
 | Flag                 | Description                                                            |
 | -------------------- | ---------------------------------------------------------------------- |
-| `--agent <id>`       | One configured agent store (default: configured default agent).        |
+| `--agent <id>`       | One configured agent store (required for multiple explicit agents).    |
 | `--all-agents`       | Aggregate all configured agent stores.                                 |
 | `--store <path>`     | Explicit store path (cannot combine with `--agent` or `--all-agents`). |
 | `--active <minutes>` | Only show sessions updated within the past N minutes.                  |
@@ -222,10 +222,12 @@ openclaw sessions cleanup --json
   pressure-gated: it only removes stale probe rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
-- `maxEntries` caps only eviction-eligible rows. Protected rows are reported as
-  `keep` and stay outside the allowance, so the total row count can exceed the
-  configured cap. `--enforce` does not remove that protection; unarchive,
-  unpin, or explicitly delete sessions you no longer want to retain.
+- `maxEntries` caps the total live session row count. Protected rows are
+  reported as `keep` and count toward the cap, but they are never automatic
+  eviction targets. If protected rows prevent cleanup from reaching the cap,
+  the store remains above it. `--enforce` does not remove that protection;
+  unarchive, unpin, wait for active work to finish, or explicitly delete
+  sessions you no longer want to retain.
 
 Flags:
 
@@ -235,7 +237,7 @@ Flags:
 | `--enforce`          | Apply maintenance even when `session.maintenance.mode` is `warn`.                                                                                                                                                                                                                                          |
 | `--fix-missing`      | Remove legacy entries whose archived transcript artifacts are missing or header-only/empty, even if they would not normally age/count out yet.                                                                                                                                                             |
 | `--fix-dm-scope`     | When `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying removes those rows from SQLite and preserves their legacy transcript artifacts as deleted archives. |
-| `--active-key <key>` | Protect a specific active key from disk-budget eviction. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.                                                                                               |
+| `--active-key <key>` | Protect a specific active key from automatic maintenance. It still counts toward `maxEntries`. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.                                                         |
 | `--agent <id>`       | Run cleanup for one configured agent store.                                                                                                                                                                                                                                                                |
 | `--all-agents`       | Run cleanup for all configured agent stores.                                                                                                                                                                                                                                                               |
 | `--store <path>`     | Run against a specific legacy store selector path.                                                                                                                                                                                                                                                         |

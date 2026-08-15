@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
+import { CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
 import {
   backfillAcpReplayEstimatedBytes,
   backfillCronJobsFromJobJson,
@@ -105,6 +105,30 @@ export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
   `);
 }
 
+/**
+ * Same-version additive table, registered in LAZY_ADDITIVE_STATE_TABLES so
+ * existing v6 databases stay valid without it. Mirrors the canonical schema;
+ * a downgraded reader simply loses setup-completion reconciliation.
+ */
+export function ensureDevicePairSetupCompletionSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS device_pair_setup_completions (
+      setup_id TEXT NOT NULL PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      device_name TEXT,
+      access TEXT NOT NULL,
+      completed_at_ms INTEGER NOT NULL,
+      delivery_state TEXT NOT NULL CHECK (delivery_state IN ('uncertain', 'confirmed')),
+      retain_until_ms INTEGER NOT NULL
+    ) STRICT
+  `);
+}
+
+/** Lazily add setup correlation only when setup pairing first writes or consumes a token. */
+export function ensureDevicePairSetupBootstrapSchema(database: DatabaseSync): void {
+  ensureColumn(database, "device_bootstrap_tokens", "setup_id TEXT");
+}
+
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
   if (typeof recordJson !== "string") {
     return null;
@@ -188,7 +212,11 @@ function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
 
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureWorkerSessionToolStateSchema(db);
-  for (const { columnName, dataType, tableName } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+  for (const {
+    columnName,
+    dataType,
+    tableName,
+  } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
     ensureColumn(db, tableName, `${columnName} ${dataType}`);
   }
   if (ensureColumn(db, "claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0")) {

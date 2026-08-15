@@ -338,9 +338,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.defaults.authInheritance.agentId":
     "Agent whose legacy credential store remains the inheritance source after default-marker retirement. Written automatically during upgrade when the former owner was not main.",
   "agents.defaults.sessionStore":
-    "Upgrade compatibility owner for a fixed legacy session store until its SQLite database records ownership.",
+    "Upgrade compatibility owner for retired main-agent rows and fixed legacy session stores.",
   "agents.defaults.sessionStore.agentId":
-    "Agent that owns unscoped rows in a fixed legacy session store after default-marker retirement. Written automatically during upgrade when the former owner was not main or the sole agent.",
+    "Agent that owns retired main-agent rows or unscoped rows in a fixed legacy session store after default-marker retirement. Written automatically during upgrade when the former owner was not main or the sole agent.",
   "talk.agentId":
     "Agent that owns Talk sessions created without an explicit agent-scoped session key.",
 };

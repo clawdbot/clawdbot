@@ -139,7 +139,10 @@ describe("runDaemonStatus", () => {
   });
 
   it("renders service-inspection failures as JSON in JSON mode", async () => {
-    gatherDaemonStatus.mockRejectedValueOnce(new Error("service manager unavailable"));
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const error = new Error(`service manager unavailable: Authorization: Bearer ${secret}`);
+    error.name = "ServiceManagerError";
+    gatherDaemonStatus.mockRejectedValueOnce(error);
 
     await expect(
       runDaemonStatus({
@@ -153,8 +156,10 @@ describe("runDaemonStatus", () => {
     expect(printDaemonStatus).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
-      error: "Gateway status failed: Error: service manager unavailable",
+      error: expect.stringContaining("Gateway status failed: service manager unavailable"),
     });
+    expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(error.name);
+    expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(secret);
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });

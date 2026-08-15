@@ -400,7 +400,6 @@ export async function readConfigFileSnapshotForWriteFromContext(
   const assertConfigPathForWrite = () => {
     if (resolveConfigPathForDeps(context.deps) !== context.configPath) {
       throw new ConfigMutationConflictError("config path changed since last load", {
-        currentHash: null,
         retryable: false,
       });
     }

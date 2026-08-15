@@ -6,7 +6,7 @@ import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory, type ChatMetadataResult, type ChatState } from "./chat-history.ts";
+import { loadChatHistory, type ChatMetadataResult } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -241,7 +241,7 @@ export async function refreshChatMetadata(
   const request = { host, client, agentId, version: requestVersion };
   host.chatModelsLoading = true;
   try {
-    if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
+    if (isGatewayMethodAdvertised(host, "chat.metadata") === false) {
       await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT, opts);
       return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
@@ -341,7 +341,7 @@ async function refreshChat(
   const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
-  const historyLoad = loadChatHistory(host as unknown as ChatState, {
+  const historyLoad = loadChatHistory(host, {
     deferBranches: opts?.deferBranches === true,
     startup: opts?.startup === true,
   });
@@ -442,7 +442,7 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
     opts?.startup &&
     host.client &&
     host.connected &&
-    isGatewayMethodAdvertised(host as unknown as ChatState, "chat.startup") !== false,
+    isGatewayMethodAdvertised(host, "chat.startup") !== false,
   );
   const startupMetadataRequestVersion = ownsStartupMetadata
     ? ++host.chatMetadataRequestVersion

@@ -679,8 +679,7 @@ export function writeSessionEntry(
             label: sessionNode.label,
             display_name: sessionNode.display_name,
             category: sessionNode.category,
-            // Clear any retired custom icon without requiring a schema-version migration.
-            icon: null,
+            icon: sessionNode.icon,
             pinned_at: sessionNode.pinned_at,
             archived_at: sessionNode.archived_at,
             last_read_at: sessionNode.last_read_at,

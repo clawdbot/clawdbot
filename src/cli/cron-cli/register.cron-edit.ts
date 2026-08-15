@@ -8,6 +8,7 @@ import type { Command } from "commander";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -496,7 +497,7 @@ export function registerCronEditCommand(cron: Command) {
           defaultRuntime.writeJson(res);
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
-          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.error(danger(formatErrorMessage(err)));
           defaultRuntime.exit(1);
         }
       }),

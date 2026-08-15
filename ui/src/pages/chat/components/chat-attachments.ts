@@ -15,6 +15,7 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
+import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
 
 const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
@@ -138,10 +139,7 @@ function encodeTextAsDataUrl(text: string): string {
   return `data:${LARGE_PASTE_TEXT_MIME_TYPE};base64,${btoa(chunks.join(""))}`;
 }
 
-function createLargePastedTextAttachment(text: string): ChatAttachment {
-  const file = new File([text], `${LARGE_PASTE_TEXT_FILE_PREFIX}${Date.now()}.txt`, {
-    type: LARGE_PASTE_TEXT_MIME_TYPE,
-  });
+function createLargePastedTextAttachment(text: string, file: File): ChatAttachment {
   const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text));
   largePastedTextAttachments.add(attachment);
   const preview = compactPastedTextPreview(text);
@@ -210,7 +208,14 @@ function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsPr
     return false;
   }
   e.preventDefault();
-  const attachment = createLargePastedTextAttachment(text);
+  const file = new File([text], `${LARGE_PASTE_TEXT_FILE_PREFIX}${Date.now()}.txt`, {
+    type: LARGE_PASTE_TEXT_MIME_TYPE,
+  });
+  if (admitAttachmentFiles([file], props.attachmentLimits).length === 0) {
+    // The rejection toast named the file; the clipboard still holds the text.
+    return true;
+  }
+  const attachment = createLargePastedTextAttachment(text, file);
   props.onAttachmentsChange([...currentAttachments(props), attachment]);
   return true;
 }
@@ -249,10 +254,14 @@ function dataImageClipboardFile(
 export function chatAttachmentFromDataUrl(
   dataUrl: string,
   fileName: string,
+  limits?: ChatAttachmentControlsProps["attachmentLimits"],
 ): ChatAttachment | null {
   const baseName = fileName.replace(/\.[a-z0-9]+$/i, "") || "image";
   const parsed = dataImageClipboardFile(dataUrl, baseName);
-  return parsed ? chatAttachmentFromFile(parsed.file, parsed.dataUrl) : null;
+  if (!parsed || admitAttachmentFiles([parsed.file], limits).length === 0) {
+    return null;
+  }
+  return chatAttachmentFromFile(parsed.file, parsed.dataUrl);
 }
 
 function readAttachmentFile(
@@ -301,27 +310,7 @@ async function appendAttachmentFiles(
   if (!props.onAttachmentsChange || candidates.length === 0) {
     return;
   }
-  // Enforce the hello-advertised decoded-size ceilings up front: an oversized
-  // base64 frame would exceed the gateway's WS payload cap and hard-drop the
-  // whole connection (1009) for every pane, so it must never start encoding.
-  const limits = props.attachmentLimits;
-  const fileLimit = (file: File) =>
-    file.type.startsWith("image/") ? limits?.maxImageBytes : limits?.maxBytes;
-  const oversized = limits
-    ? candidates.filter((file) => file.size > (fileLimit(file) ?? Infinity))
-    : [];
-  if (oversized.length > 0) {
-    showToast({
-      message: t("chat.attachments.tooLarge", {
-        names: oversized
-          .slice(0, 3)
-          .map((file) => file.name)
-          .join(", "),
-        more: oversized.length > 3 ? ` +${oversized.length - 3}` : "",
-      }),
-    });
-  }
-  const files = limits ? candidates.filter((file) => !oversized.includes(file)) : [...candidates];
+  const files = admitAttachmentFiles(candidates, props.attachmentLimits);
   if (files.length === 0) {
     return;
   }
@@ -378,6 +367,9 @@ export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachme
       return;
     }
     e.preventDefault();
+    if (admitAttachmentFiles([pasted.file], props.attachmentLimits).length === 0) {
+      return;
+    }
     props.onAttachmentsChange([
       ...currentAttachments(props),
       chatAttachmentFromFile(pasted.file, pasted.dataUrl),

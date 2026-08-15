@@ -454,21 +454,21 @@ describe("session message-cut methods", () => {
     );
   });
 
-  it("rejects externally owned conversations", async () => {
+  it("rejects mutation but lists empty branches for externally owned conversations", async () => {
     linkToUpstreamConversation();
     const respond = await invoke("sessions.branches.switch", "off-path-entry");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("external agent harness"),
+      }),
+    );
+    // Listing is read-only: "no local branches" is the truthful steady state,
+    // not an error to latch into the UI.
     const listed = await invoke("sessions.branches.list");
-
-    for (const response of [respond, listed]) {
-      expect(response).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringContaining("external agent harness"),
-        }),
-      );
-    }
+    expect(listed).toHaveBeenCalledWith(true, { branches: [] }, undefined);
   });
 
   it.each(["sessions.rewind", "sessions.branches.switch"] as const)(

@@ -385,7 +385,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const persisted = loadPersistedSessionStore(storePath);
-      expect(Object.keys(persisted).filter((key) => key !== sessionKey)).toHaveLength(42);
+      expect(Object.keys(persisted)).toHaveLength(42);
       expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
       expect(persisted["agent:main:stale:44"]).toBeUndefined();
     });

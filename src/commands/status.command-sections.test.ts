@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusFooterLines,
+  buildStatusAgentsValue,
   buildStatusHealthRows,
   buildStatusHeartbeatValue,
   buildStatusModelSelectionLines,
@@ -16,6 +17,39 @@ import {
 } from "./status.command-sections.ts";
 
 describe("status.command-sections", () => {
+  it("does not label an arbitrary agent as the default in an explicit fleet", () => {
+    expect(
+      buildStatusAgentsValue({
+        agentStatus: {
+          defaultId: null,
+          bootstrapPendingCount: 0,
+          totalSessions: 0,
+          agents: [
+            {
+              id: "alpha",
+              workspaceDir: "/tmp/alpha",
+              bootstrapPending: false,
+              sessionsPath: "/tmp/alpha/sessions.json",
+              sessionsCount: 0,
+              lastUpdatedAt: null,
+              lastActiveAgeMs: null,
+            },
+            {
+              id: "beta",
+              workspaceDir: "/tmp/beta",
+              bootstrapPending: false,
+              sessionsPath: "/tmp/beta/sessions.json",
+              sessionsCount: 0,
+              lastUpdatedAt: null,
+              lastActiveAgeMs: null,
+            },
+          ],
+        },
+        formatTimeAgo: () => "now",
+      }),
+    ).toBe("2 · no workspaces bootstrapping · sessions 0");
+  });
+
   it("shows when heartbeat is waiting for a delivery route", () => {
     expect(
       buildStatusHeartbeatValue({
