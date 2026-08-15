@@ -331,6 +331,62 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.locator(".chat-group").first().waitFor();
 
+          const topbarButtons = page.locator(".chat-pane__actions .chat-icon-btn");
+          await expect.poll(() => topbarButtons.count()).toBe(5);
+          await expect
+            .poll(async () => {
+              const buttons = (await topbarButtons.all()).map(async (button) => ({
+                button: await button.boundingBox(),
+                glyph: await button.locator(":scope > svg").boundingBox(),
+              }));
+              const geometry = await Promise.all(buttons);
+              const buttonCenters = geometry.map(
+                ({ button }) => (button?.y ?? 0) + (button?.height ?? 0) / 2,
+              );
+              const glyphCenters = geometry.map(
+                ({ glyph }) => (glyph?.y ?? 0) + (glyph?.height ?? 0) / 2,
+              );
+              const taskBadge = await page.locator(".chat-tasks-toggle__badge").boundingBox();
+              const taskButton = geometry[1]!.button;
+              const taskGlyph = geometry[1]!.glyph;
+              const gaps = geometry.slice(1).map(({ button }, index) => {
+                const previous = geometry[index]!.button;
+                return (button?.x ?? 0) - ((previous?.x ?? 0) + (previous?.width ?? 0));
+              });
+              const spread = (values: number[]) => Math.max(...values) - Math.min(...values);
+              return {
+                buttonCenterSpread: spread(buttonCenters),
+                buttonHeights: geometry.map(({ button }) => button?.height),
+                gapSpread: spread(gaps),
+                glyphCenterSpread: spread(glyphCenters),
+                glyphSizes: geometry.map(({ glyph }) => [glyph?.width, glyph?.height]),
+                taskBadgeCenterDelta: Math.abs(
+                  (taskBadge?.y ?? 0) +
+                    (taskBadge?.height ?? 0) / 2 -
+                    ((taskGlyph?.y ?? 0) + (taskGlyph?.height ?? 0) / 2),
+                ),
+                taskBadgeContained:
+                  (taskBadge?.x ?? 0) >= (taskButton?.x ?? 0) &&
+                  (taskBadge?.x ?? 0) + (taskBadge?.width ?? 0) <=
+                    (taskButton?.x ?? 0) + (taskButton?.width ?? 0),
+              };
+            })
+            .toEqual({
+              buttonCenterSpread: 0,
+              buttonHeights: [28, 28, 28, 28, 28],
+              gapSpread: 0,
+              glyphCenterSpread: 0,
+              glyphSizes: [
+                [16, 16],
+                [16, 16],
+                [16, 16],
+                [16, 16],
+                [16, 16],
+              ],
+              taskBadgeCenterDelta: 0,
+              taskBadgeContained: true,
+            });
+
           await page.locator(".chat-side-panel-toggle").click();
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
           expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);

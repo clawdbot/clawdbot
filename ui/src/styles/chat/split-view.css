@@ -545,7 +545,7 @@ openclaw-chat-pane {
 .chat-pane__actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   flex: 0 0 auto;
   /* With the title text-hugging, this claims the leftover width so the
      action cluster stays pinned to the right edge (and doubles as the
@@ -568,6 +568,38 @@ openclaw-chat-pane {
    the flex item that the rule above measures. */
 .chat-pane__actions > openclaw-tooltip {
   display: contents;
+}
+
+.chat-pane__actions .chat-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.chat-pane__actions .chat-icon-btn > svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.6px;
+}
+
+.chat-pane__actions .chat-tasks-toggle {
+  width: auto;
+  gap: 3px;
+  padding-inline: 5px;
+}
+
+.chat-tasks-toggle__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 7px;
+  color: currentColor;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  line-height: 1;
 }
 
 .chat-pane__sharing-menu {
