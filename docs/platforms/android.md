@@ -63,7 +63,7 @@ Google Play and standalone APK installs use different update channels and may ha
 </Warning>
 
 <Note>
-Building a release APK from source or a fork requires your own Android signing identity. Debug builds work without one. The official OpenClaw release key is not included in the repository. See [Sign your app](https://developer.android.com/studio/publish/app-signing) for how to generate and configure a signing key for release builds.
+Building a release artifact (APK or app bundle) from source or a fork requires your own Android signing identity. Debug builds work without one. The official OpenClaw release key is not included in the repository. See [Sign your app](https://developer.android.com/studio/publish/app-signing) for how to generate and configure a signing key for release builds.
 </Note>
 
 ## Mirror and control Android from a remote Mac
