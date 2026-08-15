@@ -34,7 +34,10 @@ import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
-import type { WorkerEnvironmentTeardownAuthorization } from "./provider-lifecycle.js";
+import type {
+  WorkerEnvironmentTeardownAuthorization,
+  WorkerProviderFactReconciliation,
+} from "./provider-lifecycle.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
@@ -159,7 +162,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const inferenceWithDrain = inference as typeof inference & {
     beginSessionDrain(sessionId: string): WorkerInferenceSessionDrain;
   };
-  let reconcileInFlight: Promise<void> | undefined;
+  let reconcileInFlight: Promise<WorkerProviderFactReconciliation[]> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
   let stopping = false;
@@ -326,37 +329,44 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     withLock,
   });
 
-  const reconcileEnvironment = async (environmentId: string) => {
+  const unavailableProviderFacts = (environmentId: string): WorkerProviderFactReconciliation => ({
+    environmentId,
+    hostIsolation: "unavailable",
+  });
+
+  const reconcileEnvironment = async (
+    environmentId: string,
+  ): Promise<WorkerProviderFactReconciliation> => {
     if (stopping) {
-      return;
+      return unavailableProviderFacts(environmentId);
     }
-    await withLock(environmentId, async () => {
+    return await withLock(environmentId, async () => {
       const current = store.get(environmentId);
       if (!current || inState(current, "destroyed", "failed", "orphaned")) {
-        return;
+        return unavailableProviderFacts(environmentId);
       }
-      await providerLifecycle.reconcileRecord(current);
+      return await providerLifecycle.reconcileRecord(current);
     });
   };
 
   const reconcilePass = async () => {
-    const tasks = store
-      .listForReconcile()
-      .map(
-        (candidate) => () =>
-          reconcileEnvironment(candidate.environmentId).catch(() =>
-            warn(
-              `Worker environment reconcile failed (${candidate.environmentId}, ${candidate.providerId})`,
-            ),
-          ),
-      );
-    await runTasksWithConcurrency({ tasks, limit: 8 });
+    const tasks = store.listForReconcile().map(
+      (candidate) => async () =>
+        await reconcileEnvironment(candidate.environmentId).catch(() => {
+          warn(
+            `Worker environment reconcile failed (${candidate.environmentId}, ${candidate.providerId})`,
+          );
+          return unavailableProviderFacts(candidate.environmentId);
+        }),
+    );
+    const { results } = await runTasksWithConcurrency({ tasks, limit: 8 });
     store.pruneTerminalEnvironments();
+    return results;
   };
 
   const reconcileOnce = () => {
     if (stopping) {
-      return Promise.resolve();
+      return Promise.resolve([]);
     }
     return (reconcileInFlight ??= reconcilePass().finally(() => {
       reconcileInFlight = undefined;

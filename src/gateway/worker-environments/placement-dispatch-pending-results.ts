@@ -95,6 +95,7 @@ export async function recoverPendingWorkspaceResults(
   deps: PlacementRecoveryDeps,
   cleanupOrphans: boolean,
   environmentId?: string,
+  freshHostIsolationEnvironmentIds: ReadonlySet<string> = new Set(),
 ): Promise<Set<string>> {
   const { environments, failure, placements } = deps;
   const retainedResultOwners = new Set<string>();
@@ -163,6 +164,15 @@ export async function recoverPendingWorkspaceResults(
         }
         continue;
       }
+      const environment = environments.get(active.environmentId);
+      if (
+        sameActiveEnvironment(active, environment) &&
+        !freshHostIsolationEnvironmentIds.has(active.environmentId)
+      ) {
+        // Provider inspection owns the host-isolation fact consumed by tunnel
+        // creation. A failed inspection must not reuse a stale dedicated-host scope.
+        continue;
+      }
       const localPath = await deps.resolveWorkspacePath(active);
       const priorWorkspaceResultConflict =
         active.workspaceResultConflict ?? (await deps.resolveWorkspaceResultConflict(active));
@@ -197,7 +207,6 @@ export async function recoverPendingWorkspaceResults(
           root: localPath,
           stagedResultRef: preparedWorkerWorkspaceResultRef(canonicalStagedResultRef),
         }));
-      const environment = environments.get(active.environmentId);
       if (
         environment?.state === "attached" &&
         environment.attachedSessionIds.includes(active.sessionId) &&

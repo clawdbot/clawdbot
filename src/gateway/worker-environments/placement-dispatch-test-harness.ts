@@ -370,6 +370,9 @@ export function createHarness(
     }),
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
+      return currentEnvironment
+        ? [{ environmentId: currentEnvironment.environmentId, hostIsolation: "fresh" as const }]
+        : [];
     }),
   };
   const service = createWorkerPlacementDispatchService({

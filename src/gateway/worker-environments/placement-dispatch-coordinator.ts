@@ -109,9 +109,9 @@ export function coordinateWorkerPlacementDispatch(
         }
       }
     },
-    forceDestroyEnvironment: (environmentId, onCleanupError) =>
+    forceDestroyEnvironment: (environmentId, onCleanupError, authorizeAbandonment) =>
       runExclusivePlacementOperation(() =>
-        service.forceDestroyEnvironment(environmentId, onCleanupError),
+        service.forceDestroyEnvironment(environmentId, onCleanupError, authorizeAbandonment),
       ),
     reclaim: async (request) => await runPlacementOperation(() => service.reclaim(request)),
     reconcile: () => runReconciliation(service.reconcile),

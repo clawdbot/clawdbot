@@ -218,8 +218,18 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const reconcile = async (): Promise<void> => {
     // Provider inspection owns host-isolation facts. Refresh them before any
     // recovery tunnel snapshots shared-host versus dedicated-host behavior.
-    await environments.reconcileOnce();
-    const pendingResultOwners = await recoverPendingWorkspaceResults(deps, true);
+    const providerFacts = await environments.reconcileOnce();
+    const freshHostIsolationEnvironmentIds = new Set(
+      providerFacts
+        .filter((result) => result.hostIsolation === "fresh")
+        .map((result) => result.environmentId),
+    );
+    const pendingResultOwners = await recoverPendingWorkspaceResults(
+      deps,
+      true,
+      undefined,
+      freshHostIsolationEnvironmentIds,
+    );
     const journalOwners = blockingWorkspaceJournalSessions(placements);
     for (const placement of placements.listForReconcile()) {
       if (journalOwners.has(placement.sessionId) || pendingResultOwners.has(placement.sessionId)) {
@@ -257,8 +267,18 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   // Runtime sweeps must not classify a live dispatch preparation as a crash. They only repair
   // durable active ownership and retry teardown already fenced by a previous failure.
   const reconcileActive = async (environmentId?: string): Promise<void> => {
-    await environments.reconcileOnce();
-    const pendingResultOwners = await recoverPendingWorkspaceResults(deps, false, environmentId);
+    const providerFacts = await environments.reconcileOnce();
+    const freshHostIsolationEnvironmentIds = new Set(
+      providerFacts
+        .filter((result) => result.hostIsolation === "fresh")
+        .map((result) => result.environmentId),
+    );
+    const pendingResultOwners = await recoverPendingWorkspaceResults(
+      deps,
+      false,
+      environmentId,
+      freshHostIsolationEnvironmentIds,
+    );
     const journalOwners = blockingWorkspaceJournalSessions(placements);
     for (const placement of placements.listForReconcile()) {
       if (journalOwners.has(placement.sessionId) || pendingResultOwners.has(placement.sessionId)) {

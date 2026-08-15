@@ -87,6 +87,11 @@ type WorkerProviderLifecycleOptions = {
 
 export type WorkerEnvironmentTeardownAuthorization = () => boolean;
 
+export type WorkerProviderFactReconciliation = {
+  environmentId: string;
+  hostIsolation: "fresh" | "unavailable";
+};
+
 function requireProviderProvisionTimeoutMs(timeoutMs: number | undefined): number | undefined {
   if (timeoutMs === undefined) {
     return undefined;
@@ -421,7 +426,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       : record;
   };
 
-  const reconcileRecord = async (initialRecord: WorkerEnvironmentRecord): Promise<void> => {
+  const reconcileRecordState = async (
+    initialRecord: WorkerEnvironmentRecord,
+    markHostIsolationFresh: () => void,
+  ): Promise<void> => {
     let record = initialRecord;
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
       return void cancelRequested(record);
@@ -521,6 +529,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       leaseId,
       sharedHost: inspectedSharedHost,
     });
+    markHostIsolationFresh();
     if (record.destroyRequestedAtMs !== null) {
       await finishDestroy(record, provider).catch(() => undefined);
       return;
@@ -595,6 +604,16 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (inState(record, "draining", "destroying")) {
       await finishDestroy(record, provider).catch(() => undefined);
     }
+  };
+
+  const reconcileRecord = async (
+    initialRecord: WorkerEnvironmentRecord,
+  ): Promise<WorkerProviderFactReconciliation> => {
+    let hostIsolation: WorkerProviderFactReconciliation["hostIsolation"] = "unavailable";
+    await reconcileRecordState(initialRecord, () => {
+      hostIsolation = "fresh";
+    });
+    return { environmentId: initialRecord.environmentId, hostIsolation };
   };
 
   const createWithProfile = async (

@@ -79,7 +79,9 @@ describe("worker placement restart recovery", () => {
       });
       placements.markWorkspaceResultPending(claim);
       placements.handoffWorkspaceResultRecovery(claim);
-      currentBundle = { ...support.BUNDLE_ARTIFACT, bundleHash: "c".repeat(64) };
+      if (failure === "bundle") {
+        currentBundle = { ...support.BUNDLE_ARTIFACT, bundleHash: "c".repeat(64) };
+      }
       recoveryState.started = true;
 
       await recovery.reconcile();

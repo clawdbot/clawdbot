@@ -1,3 +1,4 @@
+import { WorkerForcedAbandonmentBlockedError } from "./placement-force-abandon.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import {
   WorkerSessionPlacementRetirementBlockedError,
@@ -12,11 +13,15 @@ export type PlacementSessionEvidenceResolver = (
 ) => Promise<PlacementSessionEvidence>;
 
 type PlacementSessionRetirementDeps = {
-  placements: Pick<WorkerSessionPlacementStore, "get" | "list" | "retireSessionPlacement">;
+  placements: Pick<
+    WorkerSessionPlacementStore,
+    "get" | "isEnvironmentTeardownFenced" | "list" | "retireSessionPlacement"
+  >;
   environments: Pick<WorkerEnvironmentService, "get">;
   forceDestroyEnvironment: (
     environmentId: string,
     onCleanupError?: (error: unknown) => void,
+    authorizeAbandonment?: () => boolean,
   ) => Promise<unknown>;
   createSessionEvidenceResolver: (
     placements: readonly WorkerSessionPlacementRecord[],
@@ -89,13 +94,29 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     if (!environmentId) {
       return;
     }
+    if (deps.placements.isEnvironmentTeardownFenced(environmentId)) {
+      deps.warn(
+        `Worker placement orphan cleanup deferred for ${current.sessionId}: workspace recovery still owns ${environmentId}; explicit forced abandonment is required`,
+      );
+      return;
+    }
     try {
-      await deps.forceDestroyEnvironment(environmentId, (error) => {
-        deps.warn(
-          `Worker placement orphan cleanup deferred for ${current?.sessionId ?? placement.sessionId}: ${String(error)}`,
-        );
-      });
+      await deps.forceDestroyEnvironment(
+        environmentId,
+        (error) => {
+          deps.warn(
+            `Worker placement orphan cleanup deferred for ${current?.sessionId ?? placement.sessionId}: ${String(error)}`,
+          );
+        },
+        () => !deps.placements.isEnvironmentTeardownFenced(environmentId),
+      );
     } catch (error) {
+      if (error instanceof WorkerForcedAbandonmentBlockedError) {
+        deps.warn(
+          `Worker placement orphan cleanup deferred for ${current.sessionId}: ${error.message}`,
+        );
+        return;
+      }
       deps.warn(
         `Worker placement orphan teardown failed for ${current.sessionId}: ${String(error)}`,
       );

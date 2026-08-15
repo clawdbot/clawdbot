@@ -12,6 +12,14 @@ import {
 export const FORCED_WORKER_ABANDONMENT_ERROR =
   "Cloud worker result abandoned by forced operator teardown";
 
+export class WorkerForcedAbandonmentBlockedError extends Error {
+  constructor(environmentId: string) {
+    super(
+      `Workspace recovery still owns ${environmentId}; explicit forced abandonment is required`,
+    );
+  }
+}
+
 async function tryResolveWorkspacePath(
   resolveWorkspacePath: (placement: {
     sessionId: string;
@@ -51,8 +59,15 @@ export async function forceAbandonWorkerEnvironment(params: {
     agentId: string;
   }) => Promise<string>;
   onCleanupError?: (error: unknown) => void;
+  authorizeAbandonment?: () => boolean;
 }): Promise<void> {
   const { environmentId, placements } = params;
+  const assertAbandonmentAllowed = (): void => {
+    if (params.authorizeAbandonment && !params.authorizeAbandonment()) {
+      throw new WorkerForcedAbandonmentBlockedError(environmentId);
+    }
+  };
+  assertAbandonmentAllowed();
   const recoveryError = FORCED_WORKER_ABANDONMENT_ERROR;
   const pendingResults = placements
     .listPendingWorkspaceResults()
@@ -148,6 +163,7 @@ export async function forceAbandonWorkerEnvironment(params: {
           },
         });
       }
+      assertAbandonmentAllowed();
       placements.forceAbandonPendingWorkspaceResult({
         pending,
         recoveryError,
@@ -162,6 +178,7 @@ export async function forceAbandonWorkerEnvironment(params: {
     }
     let current = placements.get(placement.sessionId);
     if (current?.state === "active") {
+      assertAbandonmentAllowed();
       current = placements.startDrain({
         sessionId: current.sessionId,
         environmentId: current.environmentId,
@@ -179,6 +196,7 @@ export async function forceAbandonWorkerEnvironment(params: {
           owner: placementTurnOwner(current),
         } satisfies WorkerSessionTurnClaim;
         await placements.closeWorkerTurnToolState(claim);
+        assertAbandonmentAllowed();
         const abandoned = placements.forceAbandonWorkerTurn({
           claim,
           expectedGeneration: current.generation,
@@ -197,6 +215,7 @@ export async function forceAbandonWorkerEnvironment(params: {
         }
         current = abandoned.record;
       } else {
+        assertAbandonmentAllowed();
         current = placements.startReconcile({
           sessionId: current.sessionId,
           environmentId: current.environmentId,
@@ -206,6 +225,7 @@ export async function forceAbandonWorkerEnvironment(params: {
       }
     }
     if (current && current.state !== "failed") {
+      assertAbandonmentAllowed();
       placements.fail({
         sessionId: current.sessionId,
         expectedGeneration: current.generation,

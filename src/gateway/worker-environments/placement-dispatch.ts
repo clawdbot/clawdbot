@@ -589,13 +589,18 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
 
   return {
     dispatch,
-    forceDestroyEnvironment: (environmentId: string, onCleanupError?: (error: unknown) => void) =>
+    forceDestroyEnvironment: (
+      environmentId: string,
+      onCleanupError?: (error: unknown) => void,
+      authorizeAbandonment?: () => boolean,
+    ) =>
       options.workspaceOperations.run(environmentId, async () => {
         await forceAbandonWorkerEnvironment({
           placements,
           environmentId,
           resolveWorkspacePath: options.resolveWorkspacePath,
           onCleanupError,
+          authorizeAbandonment,
         });
         try {
           return await environments.destroyOwned(environmentId, () =>

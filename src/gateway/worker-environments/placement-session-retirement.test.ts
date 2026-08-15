@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { createPlacementSessionRetirement } from "./placement-session-retirement.js";
 import {
@@ -125,6 +126,7 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
         placements.delete(input.sessionId);
         retired.push(input);
       },
+      isEnvironmentTeardownFenced: () => false,
     },
     environments: {
       get: (environmentId) => environments.get(environmentId) as never,
@@ -236,6 +238,7 @@ describe("placement session retirement", () => {
     expect(harness.forceDestroyEnvironment).toHaveBeenCalledWith(
       "environment:session-active",
       expect.any(Function),
+      expect.any(Function),
     );
     expect(harness.retired).toEqual([
       {
@@ -257,6 +260,7 @@ describe("placement session retirement", () => {
         retireSessionPlacement: () => {
           throw new Error("must not retire");
         },
+        isEnvironmentTeardownFenced: () => false,
       },
       environments: { get: () => undefined },
       forceDestroyEnvironment: async () => {
@@ -295,6 +299,7 @@ describe("placement session retirement", () => {
         retireSessionPlacement: () => {
           throw new WorkerSessionPlacementRetirementBlockedError(placement.sessionId);
         },
+        isEnvironmentTeardownFenced: () => true,
       },
       environments: {
         get: () => ({ state: "destroyed" }) as never,
@@ -312,5 +317,57 @@ describe("placement session retirement", () => {
       expect.stringContaining("Worker placement session retirement deferred for session-retained"),
     );
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("force-abandoned"));
+  });
+
+  it("defers automatic teardown while a real pending result owns the active orphan", async () => {
+    const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-retire-"));
+    try {
+      const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+      const active = seedActivePlacement(placements, {
+        environmentId: "environment:session-pending",
+        ownerEpoch: 2,
+      });
+      if (active.state !== "active") {
+        throw new Error("expected active placement fixture");
+      }
+      const claim = placements.claimTurn({
+        sessionId: active.sessionId,
+        sessionKey: active.sessionKey,
+        agentId: active.agentId,
+        claimId: "claim-pending-retirement",
+        runId: "run-pending-retirement",
+        owner: {
+          kind: "worker",
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+      });
+      placements.markWorkspaceResultPending(claim);
+      const forceDestroyEnvironment = vi.fn(async () => {});
+      const warn = vi.fn();
+      const retirement = createPlacementSessionRetirement({
+        placements,
+        environments: { get: () => ({ state: "attached" }) as never },
+        forceDestroyEnvironment,
+        resolveSessionEvidence: async () => "absent",
+        warn,
+      });
+
+      await retirement.reconcile();
+
+      expect(forceDestroyEnvironment).not.toHaveBeenCalled();
+      expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+      expect(placements.get(active.sessionId)).toMatchObject({
+        state: "active",
+        turnClaim: { claimId: claim.claimId },
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("explicit forced abandonment is required"),
+      );
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
