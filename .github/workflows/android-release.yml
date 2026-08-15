@@ -58,14 +58,15 @@ jobs:
 
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain
-
+      
       - name: Materialize Fork Release Signing
         run: |
           set -euo pipefail
           signing_dir="apps/android/build/release-signing"
           mkdir -p "${signing_dir}"
           keystore_path="${GITHUB_WORKSPACE}/${signing_dir}/release.keystore"
-        
+          
+          # 1. 生成签名文件
           keytool -genkeypair -v \
             -keystore "${keystore_path}" \
             -keyalg RSA -keysize 2048 -validity 3650 \
@@ -74,6 +75,7 @@ jobs:
             -keypass openclawpassword \
             -dname "CN=OpenClawFork, O=Fork, C=CN"
 
+          # 2. 写入 gradle.properties 供 Gradle 读取
           cat > "${signing_dir}/gradle.properties" << EOF
           OPENCLAW_ANDROID_STORE_FILE=${keystore_path}
           OPENCLAW_ANDROID_STORE_PASSWORD=openclawpassword
@@ -84,6 +86,21 @@ jobs:
           mkdir -p ~/.gradle
           cp "${signing_dir}/gradle.properties" ~/.gradle/gradle.properties
 
+          # 3. 提取刚刚生成的临时证书的 SHA-256 指纹
+          cert_fingerprint=$(keytool -list -v -keystore "${keystore_path}" -storepass openclawpassword -alias openclaw | grep "SHA256:" | awk '{print $2}' | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          echo "Generated Cert SHA256: ${cert_fingerprint}"
+
+          # 4. 将当前指纹写回 ReleaseSigning.json 覆盖官方的预期指纹
+          signing_config="apps/android/Config/ReleaseSigning.json"
+          if [[ -f "${signing_config}" ]]; then
+            node -e "
+              const fs = require('fs');
+              const cfg = JSON.parse(fs.readFileSync('${signing_config}', 'utf8'));
+              if (cfg.certificateSha256) cfg.certificateSha256 = '${cert_fingerprint}';
+              if (cfg['third-party']) cfg['third-party'].certificateSha256 = '${cert_fingerprint}';
+              fs.writeFileSync('${signing_config}', JSON.stringify(cfg, null, 2));
+            "
+          fi
 
 
       - name: Prepare and verify signed Android APK
