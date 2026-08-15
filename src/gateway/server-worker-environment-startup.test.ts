@@ -42,12 +42,18 @@ describe("gateway worker environment startup", () => {
         environmentId: "worker-retention-startup",
         ownerEpoch: 1,
       });
+      if (active.state !== "active") {
+        throw new Error("expected active placement");
+      }
       const draining = placements.startDrain({
         sessionId: active.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation,
       });
+      if (draining.state !== "draining") {
+        throw new Error("expected draining placement");
+      }
       const reconciling = placements.startReconcile({
         sessionId: draining.sessionId,
         environmentId: draining.environmentId,

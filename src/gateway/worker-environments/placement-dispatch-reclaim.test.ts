@@ -357,6 +357,9 @@ describe("worker placement dispatch reclaim", () => {
           ownerEpoch: active.activeOwnerEpoch,
           expectedGeneration: active.generation,
         });
+        if (draining.state !== "draining") {
+          throw new Error("expected draining worker placement");
+        }
         const reconciling = placementStore.startReconcile({
           sessionId: draining.sessionId,
           environmentId: draining.environmentId,
