@@ -10,21 +10,28 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 
+/** Gate outcome: "released" for every non-failure release (adoption success,
+ * deferral, abandon, abort); "failed" when the durable adoption rejected.
+ * The failure is carried separately from the value so even a falsy rejection
+ * (`throw undefined`) cannot be conflated with a success release — that
+ * would let the flush's race settle on the lane and skip its
+ * abandon-and-retry path. */
+type FeishuTurnAdoptionGateRelease = { kind: "released" } | { kind: "failed"; failure: unknown };
+
 type FeishuTurnAdoptionGate = {
   /** Wrapped lifecycle to hand to the turn runner, or undefined passthrough. */
   lifecycle: FeishuIngressLifecycle | undefined;
   /**
-   * Resolves when the turn is adopted (or otherwise terminal). Carries the
-   * durable adoption failure when one rejected: releasing a failed adoption
-   * as success would let the flush's race settle on the lane and skip its
-   * abandon-and-retry path. A gate that never resolves when no lifecycle is
-   * given lets the caller's race degrade to the turn-settled leg — today's
-   * full-turn wait.
+   * Resolves when the turn is adopted (or otherwise terminal) as
+   * `{ kind: "released" }`, or `{ kind: "failed", failure }` when the
+   * durable adoption rejected. A gate that never resolves when no lifecycle
+   * is given lets the caller's race degrade to the turn-settled leg —
+   * today's full-turn wait.
    */
-  gate: Promise<unknown>;
+  gate: Promise<FeishuTurnAdoptionGateRelease>;
 };
 
-const NEVER_RESOLVING_GATE = new Promise<unknown>(() => {});
+const NEVER_RESOLVING_GATE = new Promise<FeishuTurnAdoptionGateRelease>(() => {});
 
 export function createTurnAdoptionGate(
   lifecycle: FeishuIngressLifecycle | undefined,
@@ -33,26 +40,27 @@ export function createTurnAdoptionGate(
     return { lifecycle: undefined, gate: NEVER_RESOLVING_GATE };
   }
   let released = false;
-  let resolveGate!: (failure?: unknown) => void;
-  const gate = new Promise<unknown>((resolve) => {
+  let resolveGate!: (release: FeishuTurnAdoptionGateRelease) => void;
+  const gate = new Promise<FeishuTurnAdoptionGateRelease>((resolve) => {
     resolveGate = resolve;
   });
   // The abort listener never forwards its Event argument into the gate: only
-  // a failed durable adoption carries a value, and an abort Event is not one.
-  const onAbort = () => releaseAndDetach();
+  // a rejected durable adoption carries the failed outcome, and an abort
+  // Event is not one.
+  const onAbort = () => releaseAndDetach({ kind: "released" });
   // One function is both the abort listener's target and the release helper;
   // the listener is detached on release so an aborted lifecycle cannot
   // re-enter.
-  const releaseAndDetach = (failure?: unknown) => {
+  const releaseAndDetach = (release: FeishuTurnAdoptionGateRelease) => {
     lifecycle.abortSignal.removeEventListener("abort", onAbort);
     if (released) {
       return;
     }
     released = true;
-    resolveGate(failure);
+    resolveGate(release);
   };
   if (lifecycle.abortSignal.aborted) {
-    releaseAndDetach();
+    releaseAndDetach({ kind: "released" });
   } else {
     lifecycle.abortSignal.addEventListener("abort", onAbort, { once: true });
   }
@@ -63,12 +71,12 @@ export function createTurnAdoptionGate(
     onAdopted: async () => {
       try {
         await lifecycle.onAdopted();
-        releaseAndDetach();
+        releaseAndDetach({ kind: "released" });
       } catch (error) {
         // A failed durable adoption must reject the lane, not release it as
         // success: the flush's race would settle on the lane and skip its
         // abandon-and-retry path (catch → onAbandoned → rethrow → onError).
-        releaseAndDetach(error);
+        releaseAndDetach({ kind: "failed", failure: error });
         throw error;
       }
     },
@@ -77,14 +85,14 @@ export function createTurnAdoptionGate(
     // today's lane-release timing and preserve collect batching.
     onDeferred: () => {
       const accepted = lifecycle.onDeferred();
-      releaseAndDetach();
+      releaseAndDetach({ kind: "released" });
       return accepted;
     },
     onAbandoned: async () => {
       try {
         await lifecycle.onAbandoned();
       } finally {
-        releaseAndDetach();
+        releaseAndDetach({ kind: "released" });
       }
     },
   };
@@ -93,7 +101,7 @@ export function createTurnAdoptionGate(
       try {
         await lifecycle.onFailed?.(error);
       } finally {
-        releaseAndDetach();
+        releaseAndDetach({ kind: "released" });
       }
     };
   }
@@ -114,10 +122,13 @@ export function enqueueAdoptionGatedTurn(params: {
   });
   const task = async () => {
     if (gatedLifecycle?.abortSignal.aborted) {
-      // The turn never ran. Settle the capture first so the flush cannot hang
-      // if the durable abandon rejects; the lane then carries the rejection.
-      settleTurnCapture(Promise.resolve());
-      await gatedLifecycle.onAbandoned();
+      // The turn never ran. The flush observes outcomes through `turn`, so an
+      // abandonment persistence failure must reject the turn (and the lane) —
+      // settling the capture first would let the flush's race resolve on the
+      // turn leg and swallow the failure in the lane.
+      const abandoned = gatedLifecycle.onAbandoned();
+      settleTurnCapture(Promise.resolve(abandoned));
+      await abandoned;
       return;
     }
     // The async wrapper turns a synchronous runTurn throw into a rejection
@@ -125,15 +136,15 @@ export function enqueueAdoptionGatedTurn(params: {
     settleTurnCapture((async () => runTurn(gatedLifecycle))());
     // Release the lane at adoption; the turn's catch leg covers pre-adoption
     // failures (the flush observes them through `turn`). A failed durable
-    // adoption arrives through the gate's carried value and rejects the lane
-    // so the flush's catch → onAbandoned → rethrow → onError path still runs.
-    // The queue's eviction bound still applies because the task itself stays
-    // pending while the turn runs.
-    const adoptionFailure = await Promise.race([gate, turn.catch(() => undefined)]);
-    if (adoptionFailure) {
-      // The gate carries a durable-adoption rejection, which may be a
-      // non-Error value; normalize so the flush's catch observes an Error.
-      throw toErrorObject(adoptionFailure, "Feishu turn adoption failed");
+    // adoption arrives through the gate's carried outcome and rejects the
+    // lane so the flush's catch → onAbandoned → rethrow → onError path still
+    // runs. The queue's eviction bound still applies because the task itself
+    // stays pending while the turn runs.
+    const outcome = await Promise.race([gate, turn.catch(() => undefined)]);
+    if (outcome?.kind === "failed") {
+      // A durable-adoption rejection may be a non-Error value — even falsy
+      // (`throw undefined`); normalize so the flush's catch observes an Error.
+      throw toErrorObject(outcome.failure, "Feishu turn adoption failed");
     }
   };
   const lane = enqueue(sequentialKey, task);

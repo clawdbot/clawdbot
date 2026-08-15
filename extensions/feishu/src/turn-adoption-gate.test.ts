@@ -136,7 +136,7 @@ describe("createTurnAdoptionGate", () => {
     const { lifecycle, controller } = createLifecycle();
     controller.abort(new Error("pre-start abort"));
     const { gate } = createTurnAdoptionGate(lifecycle);
-    await expect(gate).resolves.toBeUndefined();
+    await expect(gate).resolves.toEqual({ kind: "released" });
   });
 });
 
@@ -293,7 +293,7 @@ describe("enqueueAdoptionGatedTurn", () => {
     expect(order).toEqual(["turn:start", "turn:end"]);
   });
 
-  it("settles the turn even when a pre-start abandon rejects", async () => {
+  it("rejects the turn and the lane when a pre-start abandon fails", async () => {
     const { lifecycle, controller, calls } = createLifecycle();
     controller.abort(new Error("pre-start abort"));
     calls.abandoned.mockRejectedValueOnce(new Error("abandon failed"));
@@ -305,8 +305,42 @@ describe("enqueueAdoptionGatedTurn", () => {
         throw new Error("must not run");
       },
     });
-    await expect(turn).resolves.toBeUndefined();
+    // The flush observes outcomes through `turn`: an abandonment persistence
+    // failure must reject the turn — settling it and carrying the failure in
+    // the lane alone would let the flush's race resolve on the turn leg and
+    // swallow the failure.
+    await expect(turn).rejects.toThrow("abandon failed");
     await expect(lane).rejects.toThrow("abandon failed");
+  });
+
+  it("rejects the lane when adoption fails with a falsy value while the turn is still pending", async () => {
+    const { lifecycle, calls } = createLifecycle();
+    calls.adopted.mockRejectedValueOnce(undefined);
+    const turnGate = createDeferred<void>();
+    const order: string[] = [];
+    const { lane, turn } = enqueueAdoptionGatedTurn({
+      enqueue: createQueue(),
+      sequentialKey: "feishu:default:oc-chat",
+      lifecycle,
+      runTurn: async (gated) => {
+        order.push("turn:start");
+        gated?.onAdoptionFinalizing();
+        // The real dispatcher runs the adoption several promise hops deep
+        // (see the Error-valued sibling test); the gate settles before the
+        // turn's rejection lands, so a falsy rejection released as success
+        // would let the flush settle.
+        const adoption = gated?.onAdopted() ?? Promise.resolve();
+        void adoption.catch(() => undefined);
+        await turnGate.promise;
+        await adoption;
+      },
+    });
+    await vi.waitFor(() => expect(order).toEqual(["turn:start"]));
+    // `throw undefined` must still fail the lane: the outcome is tagged, so
+    // a falsy rejection is never conflated with a success release.
+    await expect(lane).rejects.toThrow("Feishu turn adoption failed");
+    turnGate.resolve();
+    await expect(turn).rejects.toBe(undefined);
   });
 
   it("keeps a second same-key task blocked until the first lane releases", async () => {
