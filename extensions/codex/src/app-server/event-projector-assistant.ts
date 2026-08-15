@@ -571,13 +571,12 @@ export class CodexAssistantProjection {
   }
 
   private collectPersistableAssistantTexts(minIndex: number): string[] {
-    const texts: string[] = [];
-    let seenLaterPersistable = false;
-    let seenLaterUnphased = false;
-    // Phase-less agentMessages are replaceable coordination text. Explicit
-    // final_answer items stay unless later native work or a later unphased
-    // message supersedes them.
-    for (let index = this.assistantItemOrder.length - 1; index >= minIndex; index -= 1) {
+    let texts: string[] = [];
+    let replaceable = false;
+    // Walk time order. Unphased text replaces the current segment. Explicit
+    // finals accumulate unless they follow a replacement. Silent payloads
+    // never replace; they only ride along for post-handoff identity.
+    for (let index = minIndex; index < this.assistantItemOrder.length; index += 1) {
       const itemId = this.assistantItemOrder[index];
       if (!itemId || this.assistantPhaseByItem.get(itemId) === "commentary") {
         continue;
@@ -586,17 +585,18 @@ export class CodexAssistantProjection {
       if (!text || this.isToolProgressEchoText(itemId, text)) {
         continue;
       }
+      if (isSilentReplyPayloadText(text)) {
+        texts.push(text);
+        continue;
+      }
       const isTerminalFinal = this.assistantPhaseByItem.get(itemId) === "final_answer";
-      if (seenLaterUnphased || (!isTerminalFinal && seenLaterPersistable)) {
+      if (!isTerminalFinal || replaceable) {
+        texts = [text];
+        replaceable = !isTerminalFinal;
         continue;
       }
       texts.push(text);
-      seenLaterPersistable = true;
-      if (!isTerminalFinal) {
-        seenLaterUnphased = true;
-      }
     }
-    texts.reverse();
     return texts;
   }
 
@@ -627,5 +627,11 @@ export class CodexAssistantProjection {
 }
 
 function shouldAdvancePersistableAssistantBarrier(item: CodexThreadItem): boolean {
-  return shouldClearTerminalPresentationForNativeItem(item) || item.type === "dynamicToolCall";
+  // Sleep is a Codex public Sleep handoff, not mutating presentation work.
+  // Record it here so a later final cannot join the pre-sleep answer.
+  return (
+    shouldClearTerminalPresentationForNativeItem(item) ||
+    item.type === "dynamicToolCall" ||
+    item.type === "sleep"
+  );
 }
