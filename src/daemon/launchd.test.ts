@@ -2732,6 +2732,53 @@ describe("launchd install", () => {
     expect(output).not.toContain("Stopped LaunchAgent");
   });
 
+  it("does not treat a co-located Gateway's own port as busy when stopping a node-host LaunchAgent", async () => {
+    // Regression test for https://github.com/openclaw/openclaw/issues/124296:
+    // `openclaw node stop`/`restart` must not fail with a false-positive
+    // port-collision guard when the node-host and Gateway are co-located on
+    // the same host. The node-host only ever connects outward to the
+    // gateway port as a client and never binds it, so the generic
+    // LaunchAgent stop path must skip the port-release assertion entirely
+    // when stopping a service tagged with the node service kind.
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_SERVICE_KIND: "node",
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    // Simulate the Gateway's own port still being (legitimately) busy on the
+    // same host; this must not fail the node-host stop.
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
+    probePortUsage.mockResolvedValue("busy");
+
+    await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: undefined,
+        LAUNCH_JOB_NAME: undefined,
+        XPC_SERVICE_NAME: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_LAUNCHD_LABEL: undefined,
+      },
+      async () => {
+        await stopLaunchAgent({ env, stdout });
+      },
+    );
+
+    expect(inspectPortUsage).not.toHaveBeenCalled();
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+    expect(output).toContain("Stopped LaunchAgent");
+  });
+
   it("stops LaunchAgent with disable+stop when --disable is passed", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
