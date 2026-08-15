@@ -28,7 +28,9 @@ import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
+  companionPanelActions,
   companionRailTemplate,
+  discussionPanelActions,
   discussionPanelTemplate,
   embeddedSurfaceTemplates,
 } from "./chat-pane-embedded-panels.ts";
@@ -620,6 +622,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+    const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
     const panelTemplates: SidebarPanelTemplates = {
       chat,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
@@ -631,11 +634,10 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
         lastReadAt: selectedSession?.lastReadAt,
         pullRequests: this.sessionPullRequests,
-        companion: this.sessionCompanionThreads.view(state.sessionKey, currentAgentId),
+        companion: companionThread,
         onSubmit: (question) => void this.submitSessionCompanionQuestion(question),
         onDraftChange: (draft) =>
           this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
-        onClear: () => void this.clearSessionCompanion(),
         onVisibilityChange: this.setSessionObserverVisibility,
       }),
       ...embeddedSurfaceTemplates({
@@ -693,12 +695,20 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       hasDiscussion: discussion !== null,
       hasBoard: board.hasBoard,
     });
+    const panelActions: SidebarPanelTemplates = {
+      ...companionPanelActions({
+        connected: state.connected,
+        pendingQuestion: companionThread.pendingQuestion,
+        onClear: () => void this.clearSessionCompanion(),
+      }),
+      ...discussionPanelActions(discussion?.openUrl ?? null),
+    };
     const content = renderSidebarRegion({
       availableWidth: this.paneWidth,
       availableSlots,
       callbacks: sidebarCallbacks,
-      discussionOpenUrl: discussion?.openUrl ?? null,
       layout: sidebarLayout,
+      panelActions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelTemplates,
       primary,

@@ -244,7 +244,6 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) onCommandConsumed?: (generation: number) => void;
   @property({ attribute: false }) onSubmit?: (question: string) => void;
   @property({ attribute: false }) onDraftChange?: (draft: string) => void;
-  @property({ attribute: false }) onClear?: () => void;
   @property({ attribute: false }) onModeChange?: (mode: SessionRailMode) => void;
   @property({ attribute: false }) onVisibilityChange?: (visible: boolean) => void;
   @property({ type: Boolean }) embedded = false;
@@ -639,32 +638,6 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
                     >`}
               </div>
               <div class="rail-header__actions chat-session-rail__actions">
-                <wa-dropdown
-                  class="chat-session-rail__menu"
-                  placement="bottom-end"
-                  @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                    if (event.detail.item.value === "clear") {
-                      this.onClear?.();
-                    }
-                  }}
-                >
-                  <button
-                    slot="trigger"
-                    class="rail-header__action"
-                    type="button"
-                    aria-label=${t("chat.rail.moreActions")}
-                    aria-haspopup="menu"
-                    aria-expanded="false"
-                  >
-                    ${icons.moreHorizontal}
-                  </button>
-                  <wa-dropdown-item
-                    value="clear"
-                    ?disabled=${!this.connected || this.companion.pendingQuestion !== null}
-                  >
-                    ${t("chat.rail.clear")}
-                  </wa-dropdown-item>
-                </wa-dropdown>
                 <button
                   class="rail-header__action chat-session-rail__hide"
                   type="button"

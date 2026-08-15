@@ -125,7 +125,10 @@ function panelsOf(layout: SidebarLayout): SidebarPanel[] {
 class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) layout: SidebarLayout = { columns: [] };
   @property({ attribute: false }) panelTemplates: SidebarPanelTemplates = {};
-  @property({ attribute: false }) panelOpenUrls: Partial<Record<SidebarSlotId, string | null>> = {};
+  // Header actions owned by the active panel. The tabbed model gives a panel no
+  // header of its own, so an action on its content (open externally, clear the
+  // thread) is only reachable if the panel contributes it to the shared header.
+  @property({ attribute: false }) panelActions: SidebarPanelTemplates = {};
   @property({ attribute: false }) availableSlots: SidebarSlotId[] = [];
   @property({ attribute: false }) callbacks: SidebarRegionCallbacks | null = null;
   @property({ type: Boolean }) narrow = false;
@@ -209,7 +212,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     });
     const active = column.panels.find((panel) => panel.id === column.activePanelId) ?? tabs[0];
     const activePanel = column.panels.find((panel) => panel.id === active?.id);
-    const openUrl = (activePanel ? this.panelOpenUrls[activePanel.slot] : null) ?? null;
+    const activeActions = (activePanel ? this.panelActions[activePanel.slot] : null) ?? null;
     return html`
       <header class="rail-header side-panel__header">
         <div class="side-panel__header-tabs">
@@ -233,7 +236,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           })}
           ${this.renderTypeMenu()}
         </div>
-        ${this.renderHeaderActions(openUrl)}
+        ${this.renderHeaderActions(activeActions)}
       </header>
     `;
   }
@@ -264,22 +267,14 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     });
   }
 
-  private renderHeaderActions(openUrl: string | null) {
+  private renderHeaderActions(panelActions: TemplateResult | typeof nothing | null) {
     const expandLabel = t(
       this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand",
     );
     return html`<div class="rail-header__actions side-panel__actions">
-      ${openUrl
+      ${panelActions
         ? html`<span class="side-panel__action-group side-panel__action-group--content">
-            <a
-              class="rail-header__action"
-              href=${openUrl}
-              target="_blank"
-              rel="noopener"
-              aria-label=${t("chat.sessionDiscussion.openExternal")}
-              title=${t("chat.sessionDiscussion.openExternal")}
-              >${icons.externalLink}</a
-            >
+            ${panelActions}
           </span>`
         : nothing}
       ${this.renderDockControls()}

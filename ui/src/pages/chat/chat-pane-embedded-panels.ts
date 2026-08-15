@@ -1,6 +1,8 @@
 import { html } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import { icons } from "../../components/icons.ts";
+import { t } from "../../i18n/index.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -70,7 +72,6 @@ export function companionRailTemplate(params: {
   companion: ChatSessionCompanionThread;
   onSubmit: (question: string) => void;
   onDraftChange: (draft: string) => void;
-  onClear: () => void;
   onVisibilityChange: (visible: boolean) => void;
 }) {
   const { state } = params;
@@ -88,9 +89,66 @@ export function companionRailTemplate(params: {
     .connected=${state.connected}
     .onSubmit=${params.onSubmit}
     .onDraftChange=${params.onDraftChange}
-    .onClear=${params.onClear}
     .onVisibilityChange=${params.onVisibilityChange}
   ></openclaw-chat-session-rail>`;
+}
+
+/**
+ * Side-chat header actions. The clear is destructive, so it stays behind an
+ * overflow menu; it lives in the panel header because the embedded rail has no
+ * header of its own and the gateway reset has no other entry point.
+ */
+export function companionPanelActions(params: {
+  connected: boolean;
+  pendingQuestion: string | null;
+  onClear: () => void;
+}): Partial<SidebarPanelTemplates> {
+  return {
+    companion: html`<wa-dropdown
+      class="chat-session-rail__menu"
+      placement="bottom-end"
+      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        if (event.detail.item.value === "clear") {
+          params.onClear();
+        }
+      }}
+    >
+      <button
+        slot="trigger"
+        class="rail-header__action"
+        type="button"
+        aria-label=${t("chat.rail.moreActions")}
+        aria-haspopup="menu"
+        aria-expanded="false"
+      >
+        ${icons.moreHorizontal}
+      </button>
+      <wa-dropdown-item
+        value="clear"
+        ?disabled=${!params.connected || params.pendingQuestion !== null}
+      >
+        ${t("chat.rail.clear")}
+      </wa-dropdown-item>
+    </wa-dropdown>`,
+  };
+}
+
+/** Discussion header action; the panel body is a cross-origin frame. */
+export function discussionPanelActions(openUrl: string | null): Partial<SidebarPanelTemplates> {
+  if (!openUrl) {
+    return {};
+  }
+  return {
+    discussion: html`<a
+      class="rail-header__action"
+      href=${openUrl}
+      target="_blank"
+      rel="noopener"
+      aria-label=${t("chat.sessionDiscussion.openExternal")}
+      title=${t("chat.sessionDiscussion.openExternal")}
+      >${icons.externalLink}</a
+    >`,
+  };
 }
 
 /** Discussion tab template; absent while the session has no discussion. */

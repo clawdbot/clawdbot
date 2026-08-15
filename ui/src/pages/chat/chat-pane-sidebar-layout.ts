@@ -33,7 +33,9 @@ function ensurePanelRuntime(slot: SidebarSlotId) {
           ? import("../../components/desktop/desktop-panel.ts")
           : slot === "companion"
             ? import("./components/chat-session-rail.ts")
-            : null;
+            : slot === "discussion"
+              ? import("./components/session-discussion-panel.ts")
+              : null;
   if (load) {
     panelRuntimeLoads.set(slot, load);
   }
@@ -43,9 +45,9 @@ export function renderSidebarRegion(params: {
   availableWidth: number;
   callbacks: SidebarRegionCallbacks;
   availableSlots: SidebarSlotId[];
-  discussionOpenUrl: string | null;
   layout: SidebarLayout;
   narrow: boolean;
+  panelActions: SidebarPanelTemplates;
   panelTemplates: SidebarPanelTemplates;
   primary: TemplateResult;
 }): TemplateResult {
@@ -74,7 +76,7 @@ export function renderSidebarRegion(params: {
     <openclaw-chat-sidebar-region
       .layout=${params.layout}
       .panelTemplates=${params.panelTemplates}
-      .panelOpenUrls=${{ discussion: params.discussionOpenUrl }}
+      .panelActions=${params.panelActions}
       .availableSlots=${params.availableSlots}
       .callbacks=${params.callbacks}
       .narrow=${params.narrow}

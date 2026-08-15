@@ -655,28 +655,6 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__exchange")).not.toBeNull();
   });
 
-  it("keeps the destructive clear behind the overflow menu", async () => {
-    const onClear = vi.fn();
-    const element = await mount({ onClear });
-
-    const actions = element.querySelector(".chat-session-rail__actions");
-    expect(
-      actions?.querySelector("wa-dropdown .chat-session-rail__menu, .chat-session-rail__menu"),
-    ).not.toBeNull();
-    // Nothing in the always-visible row destroys the thread: only hide and
-    // collapse sit next to the menu trigger.
-    expect(actions?.querySelectorAll(":scope > button")).toHaveLength(2);
-
-    const clearItem = element.querySelector("wa-dropdown-item[value='clear']");
-    expect(clearItem).not.toBeNull();
-    element
-      .querySelector(".chat-session-rail__menu")
-      ?.dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: { value: "clear" } }, bubbles: false }),
-      );
-    expect(onClear).toHaveBeenCalledOnce();
-  });
-
   it("drops the digest band when there is no digest to show", async () => {
     const withDigest = await mount({ digest: { ...digest(), assessment: "Steady progress." } });
     expect(withDigest.querySelector(".chat-session-rail__digest")).not.toBeNull();

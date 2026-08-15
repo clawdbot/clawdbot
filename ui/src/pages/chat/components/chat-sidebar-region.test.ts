@@ -3,6 +3,7 @@
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../components/resizable-divider.ts";
+import { companionPanelActions } from "../chat-pane-embedded-panels.ts";
 import {
   openSlot,
   setSidebarDock,
@@ -79,6 +80,38 @@ describe("chat sidebar region", () => {
       true,
     );
     expect(root(region).querySelector('[data-panel="detail"]')).not.toBeNull();
+  });
+
+  it("keeps the destructive companion clear reachable, behind the active panel's overflow menu", async () => {
+    const onClear = vi.fn();
+    const region = await createRegion(openSlot(openSlot({ columns: [] }, "detail"), "companion"));
+    region.panelActions = companionPanelActions({
+      connected: true,
+      pendingQuestion: null,
+      onClear,
+    });
+    await region.updateComplete;
+
+    const actions = root(region).querySelector(".side-panel__action-group--content");
+    const menu = actions?.querySelector("wa-dropdown.chat-session-rail__menu");
+    expect(menu).not.toBeNull();
+    // Nothing that destroys the thread sits in the always-visible row.
+    expect(actions?.querySelectorAll(":scope > button")).toHaveLength(0);
+
+    menu?.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: { value: "clear" } }, bubbles: false }),
+    );
+    expect(onClear).toHaveBeenCalledOnce();
+
+    // Actions belong to the active panel only: the companion menu must not
+    // survive a switch to a tab that owns no header action.
+    const detail = region.layout.columns[0]!.panels[0]!;
+    region.layout = {
+      ...region.layout,
+      columns: [{ ...region.layout.columns[0]!, activePanelId: detail.id }],
+    };
+    await region.updateComplete;
+    expect(root(region).querySelector("wa-dropdown.chat-session-rail__menu")).toBeNull();
   });
 
   it("routes tab selection and individual close through the canonical callbacks", async () => {
