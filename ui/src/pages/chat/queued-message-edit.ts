@@ -2,7 +2,10 @@
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import {
+  cloneChatAttachmentsForIndependentOwner,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-store.ts";
 import {
   anyChatOutboxPaneMatches,
   isDurableQueuedMessage,
@@ -30,14 +33,6 @@ type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
   chatAttachments: ChatAttachment[];
   chatQueuedEdit?: QueuedMessageEdit | null;
 };
-
-function releaseUnretainedAttachments(
-  owned: readonly ChatAttachment[],
-  retained: readonly ChatAttachment[],
-): void {
-  const retainedIds = new Set(retained.map((attachment) => attachment.id));
-  releaseChatAttachmentPayloads(owned.filter((attachment) => !retainedIds.has(attachment.id)));
-}
 
 /** Closed outcomes so the page owns the operator-visible wording. */
 type QueuedMessageEditResult = "started" | "unavailable" | "composer-busy";
@@ -106,12 +101,15 @@ export function cancelQueuedMessageEdit(host: QueuedMessageEditHost): boolean {
   if (!edit) {
     return false;
   }
-  // The durable row still owns its original payloads, but anything attached in
-  // the composer during the edit has no owner after cancellation.
-  releaseUnretainedAttachments(host.chatAttachments, edit.attachments);
+  // Keep the current draft visible, but fork any row-owned attachments so the
+  // composer can keep editing even if the queued row later drains or is removed.
+  const originalAttachmentIds = new Set(edit.attachments.map((attachment) => attachment.id));
+  host.chatAttachments = host.chatAttachments.map((attachment) =>
+    originalAttachmentIds.has(attachment.id)
+      ? cloneChatAttachmentsForIndependentOwner([attachment])[0]!
+      : attachment,
+  );
   host.chatQueuedEdit = null;
-  host.chatMessage = "";
-  host.chatAttachments = [];
   return true;
 }
 
@@ -140,5 +138,9 @@ export function retireEditedQueuedMessageSource(
   // ones the replacement still carries must survive, so release only the rest.
   // The payloads come from the token: a successful write already retired the row
   // and told every pane, so re-reading it here would find nothing to release.
-  releaseUnretainedAttachments(edit.attachments, nextAttachments);
+  const retainedIds = new Set(nextAttachments.map((attachment) => attachment.id));
+  const droppedAttachments = edit.attachments.filter(
+    (attachment) => !retainedIds.has(attachment.id),
+  );
+  releaseChatAttachmentPayloads(droppedAttachments);
 }

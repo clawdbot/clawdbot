@@ -102,32 +102,23 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
-  it("leaves the queue untouched when the edit is cancelled", () => {
-    const { host, unsubscribe } = queueHost([{}, {}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-2");
-    host.chatMessage = "half-typed replacement";
-
-    expect(cancelQueuedMessageEdit(host as never)).toBe(true);
-
-    expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
-    expect(host.chatMessage).toBe("");
-    expect(host.chatAttachments).toEqual([]);
-    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
-    unsubscribe();
-  });
-
-  it("releases images added during an abandoned edit", () => {
+  it("returns the current draft to the composer when the edit is cancelled", () => {
     const original = stageQueuedImage("att-original");
     const added = stageQueuedImage("att-added");
-    const { host, unsubscribe } = queueHost([{ attachments: [original] }]);
+    const { host, unsubscribe } = queueHost([{ attachments: [original] }, {}, {}]);
     beginQueuedMessageEdit(host as never, "queued-1");
+    host.chatMessage = "half-typed replacement";
     host.chatAttachments = [original, added];
 
     expect(cancelQueuedMessageEdit(host as never)).toBe(true);
 
-    expect(storedOrder(host)).toEqual(["message 1"]);
-    expect(getChatAttachmentDataUrl(original)).not.toBeNull();
-    expect(getChatAttachmentDataUrl(added)).toBeNull();
+    expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
+    expect(host.chatMessage).toBe("half-typed replacement");
+    expect(host.chatAttachments).toHaveLength(2);
+    expect(host.chatAttachments[0]?.id).not.toBe(original.id);
+    expect(getChatAttachmentDataUrl(host.chatAttachments[0] as ChatAttachment)).not.toBeNull();
+    expect(host.chatAttachments[1]?.id).toBe(added.id);
+    expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
     unsubscribe();
   });
 

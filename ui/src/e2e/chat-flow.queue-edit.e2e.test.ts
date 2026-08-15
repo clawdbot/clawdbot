@@ -118,7 +118,7 @@ suite.define(() => {
           timeout: 10_000,
         })
         .toEqual([...QUEUED]);
-      expect(await composer.inputValue()).toBe("");
+      expect(await composer.inputValue()).toBe("a replacement the operator abandons");
     } finally {
       await suite.closeBrowserContext(context);
     }
