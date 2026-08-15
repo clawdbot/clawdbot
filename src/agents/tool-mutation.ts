@@ -67,6 +67,15 @@ const MESSAGE_READ_ONLY_ACTIONS = new Set([
   "event_list",
 ]);
 
+const MESSAGE_ACKNOWLEDGEMENT_ACTIONS = new Map([
+  ["delete", "delete"],
+  ["remove", "delete"],
+  ["send", "send"],
+  ["sendattachment", "send"],
+  ["send_attachment", "send"],
+  ["upload_file", "send"],
+]);
+
 const REPLAY_SAFE_TOOL_NAMES = new Set([
   "agents_list",
   "conversations_list",
@@ -160,8 +169,8 @@ function resolveAcknowledgementAction(toolName: string, args: unknown): string |
   if (normalized === "edit" || normalized === "apply_patch" || normalized.endsWith("_edit")) {
     return "edit";
   }
-  if (normalized === "message" && action) {
-    return action;
+  if (normalized === "message") {
+    return action ? MESSAGE_ACKNOWLEDGEMENT_ACTIONS.get(action) : undefined;
   }
   if (
     normalized === "sessions_send" ||

@@ -48,6 +48,9 @@ function getMutatingFailureActionPattern(toolName: string, acknowledgementAction
     return "(?:key|press|pressed|type|typed)";
   }
   const normalizedToolName = normalizeOptionalLowercaseString(toolName) ?? "";
+  if (!normalizedAction && normalizedToolName === "message") {
+    return "(?!)";
+  }
   const toolNameParts = getNormalizedToolNameParts(toolName);
   if (normalizedToolName === "write" || toolNameParts.includes("write")) {
     return "(?:write|writing|wrote|save|saved)";

@@ -175,9 +175,20 @@ describe("tool mutation helpers", () => {
         .mutatingAction,
     ).toBe(true);
     expect(
+      buildToolMutationState("message", { action: "sendAttachment", path: "/tmp/report.pdf" })
+        .acknowledgementAction,
+    ).toBe("send");
+    expect(
       buildToolMutationState("message", { action: "upload-file", path: "/tmp/report.pdf" })
         .mutatingAction,
     ).toBe(true);
+    expect(
+      buildToolMutationState("message", { action: "upload-file", path: "/tmp/report.pdf" })
+        .acknowledgementAction,
+    ).toBe("send");
+    expect(
+      buildToolMutationState("message", { action: "future-action" }).acknowledgementAction,
+    ).toBeUndefined();
     for (const action of ["poll", "topic-create", "role-add", "ban", "future-action"]) {
       expect(buildToolMutationState("message", { action }).mutatingAction, action).toBe(true);
     }
@@ -194,6 +205,7 @@ describe("tool mutation helpers", () => {
       expect(buildToolMutationState("message", { action }).mutatingAction, action).toBe(false);
     }
     expect(buildToolMutationState("message", {}).mutatingAction).toBe(true);
+    expect(buildToolMutationState("message", {}).acknowledgementAction).toBeUndefined();
     expect(buildToolMutationState("cron", { action: "runs" }).mutatingAction).toBe(false);
     for (const action of ["config.get", "config.schema.lookup"]) {
       expect(buildToolMutationState("gateway", { action }).mutatingAction, action).toBe(false);

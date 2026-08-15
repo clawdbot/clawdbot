@@ -378,7 +378,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     const payloads = buildPayloads({
       assistantTexts: [text],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: { toolName: "edit", error: "file missing" },
+      lastToolError: { toolName: "edit", error: "file missing", acknowledgementAction: "edit" },
     });
 
     expect(payloads).toHaveLength(2);
@@ -406,7 +406,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   });
 
   it("suppresses mutating tool errors when assistant output explicitly acknowledges the failed action", () => {
-    const text = "I couldn't update the file, so no changes were applied.";
+    const text = "I couldn't modify the file, so no changes were applied.";
     const payloads = buildPayloads({
       assistantTexts: [text],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,

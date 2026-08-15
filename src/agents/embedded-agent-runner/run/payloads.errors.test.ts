@@ -159,7 +159,7 @@ describe("buildEmbeddedRunPayloads", () => {
     },
     {
       toolName: "sessions_spawn",
-      title: "Sessions_spawn",
+      title: "Sub-agent",
       text: "I couldn't create the goal because the backend rejected it.",
       acknowledgementAction: "spawn",
     },
@@ -171,7 +171,7 @@ describe("buildEmbeddedRunPayloads", () => {
     },
     {
       toolName: "update_goal",
-      title: "Update_goal",
+      title: "Update Goal",
       text: "I couldn't modify the file, so no changes were applied.",
       acknowledgementAction: "update",
     },
@@ -189,7 +189,7 @@ describe("buildEmbeddedRunPayloads", () => {
     },
     {
       toolName: "file_write",
-      title: "File_write",
+      title: "File Write",
       text: "The file failed validation, so I fixed it and the check passed.",
       acknowledgementAction: "write",
     },
@@ -211,6 +211,47 @@ describe("buildEmbeddedRunPayloads", () => {
       expect(payloads[0]?.text).toBe(text);
       expect(payloads[1]?.isError).toBe(true);
       expect(payloads[1]?.text).toContain(title);
+    },
+  );
+
+  it("suppresses attachment-send warnings when assistant output acknowledges the send failure", () => {
+    const text = "The message could not be sent.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: makeStoppedAssistant(),
+      lastToolError: {
+        toolName: "message",
+        error: "attachment upload failed",
+        mutatingAction: true,
+        acknowledgementAction: "send",
+      },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
+  it.each([
+    ["missing action", undefined],
+    ["future action", undefined],
+  ])(
+    "keeps message warnings when %s has no suppressible acknowledgement action",
+    (_label, acknowledgementAction) => {
+      const text = "The message could not be sent.";
+      const payloads = buildPayloads({
+        assistantTexts: [text],
+        lastAssistant: makeStoppedAssistant(),
+        lastToolError: {
+          toolName: "message",
+          error: "unknown message action failed",
+          mutatingAction: true,
+          acknowledgementAction,
+        },
+      });
+
+      expect(payloads).toHaveLength(2);
+      expect(payloads[0]?.text).toBe(text);
+      expect(payloads[1]?.isError).toBe(true);
+      expect(payloads[1]?.text).toContain("Message");
     },
   );
 

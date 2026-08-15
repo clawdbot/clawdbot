@@ -85,6 +85,39 @@ describe("tool terminal outcome observer", () => {
       mutatingAction: true,
       acknowledgementAction: "delete",
     });
+
+    expect(
+      createToolTerminalObserver("run-message-attachment-acknowledgement-action")({
+        toolName: "message",
+        arguments: { action: "sendAttachment", path: "/tmp/report.pdf" },
+        outcome: "failure",
+        failure: { error: "attachment failed" },
+      }).lastToolError,
+    ).toMatchObject({
+      toolName: "message",
+      mutatingAction: true,
+      acknowledgementAction: "send",
+    });
+
+    expect(
+      createToolTerminalObserver("run-message-future-acknowledgement-action")({
+        toolName: "message",
+        arguments: { action: "future-action", id: "message:1" },
+        outcome: "failure",
+        failure: { error: "future action failed" },
+      }).lastToolError,
+    ).toMatchObject({
+      toolName: "message",
+      mutatingAction: true,
+    });
+    expect(
+      createToolTerminalObserver("run-message-missing-acknowledgement-action")({
+        toolName: "message",
+        arguments: {},
+        outcome: "failure",
+        failure: { error: "missing action failed" },
+      }).lastToolError,
+    ).not.toHaveProperty("acknowledgementAction");
   });
 
   it("uses host execution and adjusted-argument evidence before fallback facts", () => {
