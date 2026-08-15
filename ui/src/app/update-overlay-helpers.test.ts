@@ -322,6 +322,24 @@ describe("update schedule hydration", () => {
     ).toEqual([{ sha: "abc", subject: "kept" }]);
   });
 
+  // The canonical schema caps commits at 5 entries (maxItems: 5) and the
+  // Updates page renders every entry this reader returns. An out-of-contract
+  // producer payload past that cap must not grow the rendered list.
+  it("caps commits at five entries even when every entry is valid", () => {
+    const commits = Array.from({ length: 8 }, (_, index) => ({
+      sha: `sha${index}`,
+      subject: `commit ${index}`,
+    }));
+    expect(
+      readUpdateAvailableValue({
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.2",
+        channel: "stable",
+        commits,
+      })?.commits,
+    ).toEqual(commits.slice(0, 5));
+  });
+
   // Drift guard: whatever the canonical schema accepts must still reach the
   // overlay. This fails if a schema change outgrows the reader.
   it.each([

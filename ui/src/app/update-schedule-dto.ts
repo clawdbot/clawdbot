@@ -27,6 +27,13 @@ function isBoundedInteger(value: unknown, minimum: number): value is number {
   return Number.isInteger(value) && (value as number) >= minimum;
 }
 
+// Mirrors commits: Type.Array(UpdateCommitSchema, { maxItems: 5 }) in
+// packages/gateway-protocol/src/schema/config.ts. The Updates page renders
+// every entry this reader returns, so the render-side cap is the protocol's
+// own contract, not extra strictness: keep it even though the rest of this
+// reader is tolerant of out-of-range producer data.
+const MAX_COMMITS = 5;
+
 export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
   const snapshot = hello?.snapshot;
   if (!isRecord(snapshot)) {
@@ -48,7 +55,10 @@ export function readUpdateAvailableValue(update: unknown): UpdateAvailable | nul
   // Per-entry filtering rather than all-or-nothing: one malformed commit should
   // not hide the rest of the list. Subject length stays unbounded here because
   // the canonical maxLength counts grapheme clusters, which a String#length
-  // check silently misreads for emoji and combining marks.
+  // check silently misreads for emoji and combining marks. The MAX_COMMITS
+  // slice below still applies after filtering: the Updates page renders every
+  // returned entry, so an out-of-range producer payload must not grow the
+  // rendered list past the protocol's own cap.
   const rawCommits = update.commits;
   const commits = Array.isArray(rawCommits)
     ? rawCommits
@@ -59,6 +69,7 @@ export function readUpdateAvailableValue(update: unknown): UpdateAvailable | nul
             typeof commit.subject === "string",
         )
         .map((commit) => ({ sha: commit.sha, subject: commit.subject }))
+        .slice(0, MAX_COMMITS)
     : undefined;
   return {
     currentVersion: update.currentVersion,
