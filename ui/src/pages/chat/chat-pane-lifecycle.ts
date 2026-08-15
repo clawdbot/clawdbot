@@ -381,8 +381,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     pageState.confirmConversationReset = () => this.confirmConversationReset();
     pageState.exportCurrentChat = () =>
       exportChatMarkdown(pageState.chatMessages, pageState.assistantName);
+    // Effective-tools previews key their requests on the model override, so a
+    // post-switch refresh only needs a re-render.
     pageState.refreshCurrentSessionTools = async () => {
-      await pageState.onModelChanged?.();
       pageState.requestUpdate?.();
     };
     pageState.refreshCurrentChat = async () => {

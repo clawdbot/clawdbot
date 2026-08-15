@@ -43,7 +43,6 @@ type ChatModelSettingsHost = ChatSessionRefreshHost & {
   chatModelCatalog: Parameters<typeof resolveChatModelOverrideValue>[0]["chatModelCatalog"];
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   chatThinkingLevel: string | null;
-  onModelChanged?: () => unknown;
   sessions: SessionCapability;
   sessionsResult?: SessionsListResult | null;
   requestUpdate?: () => void;
@@ -444,7 +443,6 @@ export async function switchChatModel(
           ...scopedAgentParamsForSession(host, targetSessionKey),
           ownsModelOverride,
           reconcile: async () => {
-            await host.onModelChanged?.();
             await refreshCurrentChatSessionList(host);
           },
         },

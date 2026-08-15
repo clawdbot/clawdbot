@@ -120,7 +120,6 @@ export type ChatPageHost = ChatHost &
     imageLightboxRequestVersion: number;
     querySelector: (selectors: string) => Element | null;
     renderLifecycle: RenderLifecycle;
-    onModelChanged: () => Promise<void> | void;
     resetToolStream: () => void;
     resetChatScroll: () => void;
     resetChatInputHistoryNavigation: () => void;
