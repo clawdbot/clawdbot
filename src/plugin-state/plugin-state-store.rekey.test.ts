@@ -91,4 +91,24 @@ describe("plugin state keyed store rekey", () => {
     expect(store.lookup("legacy")).toBeUndefined();
     expect(store.lookup("scoped")).toEqual({ version: 2 });
   });
+
+  it("reports invalid rekey values as rekey operations", async () => {
+    const store = createPluginStateKeyedStore<{ version: number }>("memory-wiki", {
+      namespace: "ownership-rekey-invalid",
+      maxEntries: 10,
+    });
+    if (!store.rekey) {
+      throw new Error("plugin state rekey unavailable");
+    }
+    const failure = await store
+      .rekey("legacy", "scoped", { version: BigInt(1) as unknown as number })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toMatchObject({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "rekey",
+    });
+  });
 });

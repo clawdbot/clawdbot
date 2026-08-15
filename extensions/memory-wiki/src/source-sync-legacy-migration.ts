@@ -194,7 +194,12 @@ export async function migrateLegacyImportedSourceSyncKeys(params: {
       return "migrated";
     }
     try {
-      await raw.register(nextStoreKey, nextValue);
+      // registerIfAbsent, not register: a racing sync that wrote the scoped
+      // key after the lookup above owns the newer row, and an upsert would
+      // silently overwrite it with the older legacy value. An already-owned
+      // target means the replacement is durable, so the legacy duplicate goes
+      // either way.
+      await raw.registerIfAbsent(nextStoreKey, nextValue);
       await raw.delete(row.storeKey);
       return "migrated";
     } catch (error) {

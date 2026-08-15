@@ -141,22 +141,23 @@ function prepareRegisterParams(
   value: unknown,
   defaultTtlMs?: number,
   opts?: { ttlMs?: number },
+  operation: PluginStateStoreOperation = "register",
 ): PreparedRegisterParams {
-  const normalizedKey = validateKey(key, "register");
+  const normalizedKey = validateKey(key, operation);
   const json = serializePluginStoreJson({
     value,
     label: "plugin state value",
     maxBytes: MAX_PLUGIN_STATE_VALUE_BYTES,
     errors: {
-      invalid: (message) => invalidInput(message, "register"),
+      invalid: (message) => invalidInput(message, operation),
       limit: (message) =>
         new PluginStateStoreError(message, {
           code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-          operation: "register",
+          operation,
         }),
     },
   });
-  const ttlMs = validateOptionalTtlMs(opts?.ttlMs, "register") ?? defaultTtlMs;
+  const ttlMs = validateOptionalTtlMs(opts?.ttlMs, operation) ?? defaultTtlMs;
   return {
     key: normalizedKey,
     valueJson: json,
@@ -282,7 +283,13 @@ function createSyncKeyedStoreForPluginId<T>(
     rekey(key, nextKey, value) {
       const normalizedKey = validateKey(key, "rekey");
       const normalizedNextKey = validateKey(nextKey, "rekey");
-      const prepared = prepareRegisterParams(normalizedNextKey, value, defaultTtlMs);
+      const prepared = prepareRegisterParams(
+        normalizedNextKey,
+        value,
+        defaultTtlMs,
+        undefined,
+        "rekey",
+      );
       return pluginStateRekey({
         pluginId,
         namespace,

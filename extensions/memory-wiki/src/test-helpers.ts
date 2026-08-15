@@ -165,6 +165,11 @@ export function createCapacityCappedKeyedStore(cap: number) {
       if (values.has(key)) {
         return false;
       }
+      if (values.size >= cap) {
+        throw Object.assign(new Error("namespace row limit reached"), {
+          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+        });
+      }
       values.set(key, value);
       return true;
     },

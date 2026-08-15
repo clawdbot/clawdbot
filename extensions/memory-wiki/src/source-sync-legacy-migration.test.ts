@@ -385,6 +385,10 @@ describe("memory wiki source sync legacy key migration", () => {
             ops.push(`register:${key}`);
             await store.register(key, value);
           },
+          async registerIfAbsent(key, value) {
+            ops.push(`registerIfAbsent:${key}`);
+            return store.registerIfAbsent(key, value);
+          },
           async delete(key) {
             ops.push(`delete:${key}`);
             return store.delete(key);
@@ -420,15 +424,15 @@ describe("memory wiki source sync legacy key migration", () => {
       result: { translatedCount: 1, prunedCount: 0, retainedKeys: [], capacityRetainedKeys: [] },
     });
 
-    // Legacy hosts without rekey: register-first when there is room, and the
-    // legacy row stays durable at capacity instead of entering a delete-first
-    // window — the next doctor run retries it.
+    // Legacy hosts without rekey: registerIfAbsent-first when there is room,
+    // and the legacy row stays durable at capacity instead of entering a
+    // delete-first window — the next doctor run retries it.
     await expect(runWithCap(4, false, false)).resolves.toEqual({
-      ops: [`register:${scopedStoreKey}`, `delete:${legacyStoreKey}`],
+      ops: [`registerIfAbsent:${scopedStoreKey}`, `delete:${legacyStoreKey}`],
       result: { translatedCount: 1, prunedCount: 0, retainedKeys: [], capacityRetainedKeys: [] },
     });
     await expect(runWithCap(2, true, false)).resolves.toEqual({
-      ops: [`register:${scopedStoreKey}`],
+      ops: [`registerIfAbsent:${scopedStoreKey}`],
       result: {
         translatedCount: 0,
         prunedCount: 0,
@@ -436,6 +440,62 @@ describe("memory wiki source sync legacy key migration", () => {
         capacityRetainedKeys: [legacySyncKey],
       },
     });
+  });
+
+  it("never overwrites a racing scoped row on hosts without atomic rekey", async () => {
+    const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
+    const vaultRoot = path.join(stateDir, "vault");
+    const legacySyncKey = "/tmp/race.md";
+    const scopedSyncKey = `bridge:${legacySyncKey}`;
+    const vaultRootKey = resolveVaultRootKey(vaultRoot);
+    const legacyStoreKey = resolveStateEntryKey(vaultRootKey, legacySyncKey);
+    const scopedStoreKey = resolveStateEntryKey(vaultRootKey, scopedSyncKey);
+    const legacyEntry = {
+      group: "bridge" as const,
+      pagePath: "sources/race.md",
+      sourcePath: legacySyncKey,
+      sourceUpdatedAtMs: 1,
+      sourceSize: 2,
+      renderFingerprint: "fp",
+    };
+    const capped = createCapacityCappedKeyedStore(4);
+    const openKeyedStore = <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
+      const store = capped.openKeyedStore<T>(options);
+      return {
+        ...store,
+        // Hosts predating atomic rekey expose no rekey method at all.
+        rekey: undefined,
+        async registerIfAbsent(key, value) {
+          // A concurrent sync wins the race after the migration's lookup:
+          // inject its newer scoped row before the insert-if-absent runs.
+          if (key === scopedStoreKey && !capped.values.has(key)) {
+            capped.values.set(key, {
+              ...(value as object),
+              renderFingerprint: "racing-fp",
+            });
+          }
+          return store.registerIfAbsent(key, value);
+        },
+      };
+    };
+    await writeMemoryWikiSourceSyncState(
+      vaultRoot,
+      { version: 1, entries: { [legacySyncKey]: { ...legacyEntry } } },
+      createMemoryWikiSourceSyncStateStore(openKeyedStore),
+    );
+
+    const result = await migrateLegacyImportedSourceSyncKeys({
+      vaultRoot,
+      openKeyedStore,
+      unsafeLocalConfiguredPaths: [],
+    });
+
+    // The racing row keeps its newer value; only the legacy duplicate goes.
+    expect(result.translatedCount).toBe(1);
+    expect(capped.values.get(scopedStoreKey)).toMatchObject({
+      renderFingerprint: "racing-fp",
+    });
+    expect(capped.values.has(legacyStoreKey)).toBe(false);
   });
 
   it("drops the legacy duplicate when the scoped key is already owned", async () => {
