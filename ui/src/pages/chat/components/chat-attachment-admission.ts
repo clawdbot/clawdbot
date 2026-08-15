@@ -8,8 +8,6 @@
 import { t } from "../../../i18n/index.ts";
 import { showToast } from "../../../lib/toast.ts";
 
-export type ChatAttachmentLimits = { maxBytes: number; maxImageBytes: number };
-
 function skippedFilesToast(messageKey: string, skipped: readonly File[]): void {
   if (skipped.length === 0) {
     return;
@@ -27,7 +25,7 @@ function skippedFilesToast(messageKey: string, skipped: readonly File[]): void {
 
 export function admitAttachmentFiles(
   candidates: readonly File[],
-  limits: ChatAttachmentLimits | undefined,
+  limits: { maxBytes: number; maxImageBytes: number } | undefined,
 ): File[] {
   const fileLimit = (file: File) =>
     file.type.startsWith("image/") ? limits?.maxImageBytes : limits?.maxBytes;
