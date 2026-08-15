@@ -1,3 +1,4 @@
+import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -6,6 +7,7 @@ import { withTimeout } from "./app-server/timeout.js";
 import { createCodexCliNodeConversationBindingData } from "./conversation-binding-data.js";
 import { CODEX_CLI_SESSION_RESUME_COMMAND } from "./node-cli-sessions.js";
 import {
+  adoptedOwnerSourceKey,
   adoptedSourceKey,
   continueOperations,
   createOrReuseNodeAdoptedSession,
@@ -256,6 +258,7 @@ async function readNodeCodexHistory(params: {
 }
 
 async function continueNodeCodexSessionInner(params: {
+  agentId: string;
   api: OpenClawPluginApi;
   config: OpenClawConfig;
   hostId: string;
@@ -282,6 +285,7 @@ async function continueNodeCodexSessionInner(params: {
   });
   requireContinuableNodeRecord(record);
   const existing = findNodeAdoptedSessionEntry({
+    agentId: params.agentId,
     config: params.config,
     runtime: params.api.runtime,
     hostId: params.hostId,
@@ -302,6 +306,7 @@ async function continueNodeCodexSessionInner(params: {
       record,
     });
     adopted = await createOrReuseNodeAdoptedSession({
+      agentId: params.agentId,
       api: params.api,
       config: params.config,
       hostId: params.hostId,
@@ -337,6 +342,7 @@ async function continueNodeCodexSessionInner(params: {
 }
 
 export async function continueNodeCodexSession(params: {
+  agentId?: string;
   api: OpenClawPluginApi;
   config: OpenClawConfig;
   hostId: string;
@@ -353,22 +359,27 @@ export async function continueNodeCodexSession(params: {
   if (!nodeId || params.hostId !== `node:${nodeId}`) {
     throw new CatalogParamsError("Codex session catalog hostId is invalid");
   }
+  const agentId = resolveSessionAgentIds({
+    config: params.config,
+    agentId: params.agentId,
+  }).defaultAgentId;
   const sourceKey = adoptedSourceKey(`node:${nodeId}`, params.threadId);
-  const current = continueOperations.get(sourceKey) as
+  const operationKey = adoptedOwnerSourceKey(agentId, `node:${nodeId}`, params.threadId);
+  const current = continueOperations.get(operationKey) as
     | Promise<Awaited<ReturnType<typeof continueNodeCodexSessionInner>>>
     | undefined;
   if (current) {
     return await current;
   }
   const operation = runSessionActionExclusive(sourceKey, async () =>
-    continueNodeCodexSessionInner(params),
+    continueNodeCodexSessionInner({ ...params, agentId }),
   );
-  continueOperations.set(sourceKey, operation);
+  continueOperations.set(operationKey, operation);
   try {
     return await operation;
   } finally {
-    if (continueOperations.get(sourceKey) === operation) {
-      continueOperations.delete(sourceKey);
+    if (continueOperations.get(operationKey) === operation) {
+      continueOperations.delete(operationKey);
     }
   }
 }

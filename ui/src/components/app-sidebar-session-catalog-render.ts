@@ -66,7 +66,7 @@ type SessionCatalogGroupsParams = {
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   catalogOpenTarget: "viewer" | "terminal";
   terminalAvailable: boolean;
-  onOpenTerminal: (key: CatalogSessionKey) => void;
+  onOpenTerminal: (key: CatalogSessionKey, agentId: string) => void;
   onOpenMenu: (
     request: CatalogSessionMenuRequest,
     x: number,
@@ -426,11 +426,12 @@ function renderCatalogSessionRow(
   const stateDescription = running ? t("sessionsView.activeRun") : "";
   const stateId = running ? sidebarSessionStateId(key) : undefined;
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
-  const openTerminal = () => params.onOpenTerminal(catalogKey);
+  const openTerminal = () => params.onOpenTerminal(catalogKey, params.newSessionAgentId);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
     params.onOpenMenu(
       {
         key: catalogKey,
+        agentId: params.newSessionAgentId,
         routeId,
         navigation,
         canOpenTerminal: session.canOpenTerminal === true,

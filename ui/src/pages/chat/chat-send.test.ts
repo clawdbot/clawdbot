@@ -9380,7 +9380,7 @@ describe("handleSendChat", () => {
     ]);
   });
 
-  it("releases queued attachment payloads when the queued item is removed", () => {
+  it("releases queued attachment payloads once across duplicate removal", () => {
     const revokeObjectURL = vi.fn();
     vi.stubGlobal(
       "URL",
@@ -9401,12 +9401,16 @@ describe("handleSendChat", () => {
       file,
     });
     const host = makeChatHost({
-      chatQueue: [{ id: "queued", text: "later", createdAt: 1, attachments: [attachment] }],
+      chatQueue: [
+        { id: "queued", text: "later", createdAt: 1, attachments: [attachment] },
+        { id: "sibling", text: "keep me", createdAt: 2 },
+      ],
     });
 
-    removeQueuedMessage(host, "queued");
+    expect(removeQueuedMessage(host, "queued")).toBe("removed");
+    expect(removeQueuedMessage(host, "queued")).toBe("absent");
 
-    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatQueue).toEqual([expect.objectContaining({ id: "sibling" })]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:queued");
   });

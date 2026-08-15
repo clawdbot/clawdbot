@@ -18,8 +18,6 @@ import { parseStrictNonNegativeDecimal as readNonNegativeInteger } from "./lib/n
 import { sleep } from "./lib/sleep.mjs";
 import { resolveBuildRequirement } from "./run-node.mts";
 
-export { readNonNegativeInteger };
-
 const DEFAULTS = {
   outputDir: path.join(process.cwd(), ".local", "gateway-watch-regression"),
   windowMs: 10_000,

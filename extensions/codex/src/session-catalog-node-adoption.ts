@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -81,13 +80,12 @@ export function adoptionSessionKeyRest(sessionKey: string): string {
   return parseAgentSessionKey(trimmed)?.rest ?? trimmed;
 }
 
-export function listSupervisionAgentIds(config: OpenClawConfig): string[] {
-  const defaultAgentId = resolveDefaultAgentId(config);
-  return [defaultAgentId, ...listAgentIds(config).filter((agentId) => agentId !== defaultAgentId)];
-}
-
 export function adoptedSourceKey(hostId: string, threadId: string): string {
   return `${hostId}\u0000${threadId}`;
+}
+
+export function adoptedOwnerSourceKey(agentId: string, hostId: string, threadId: string): string {
+  return `${agentId}\u0000${adoptedSourceKey(hostId, threadId)}`;
 }
 
 export function lastTerminalTurnId(thread: CodexThread): string | undefined {
@@ -138,6 +136,7 @@ function readNodeSessionMarker(entry: CatalogSessionEntry): CodexNodeSessionMark
 }
 
 export function listNodeAdoptedSessionEntries(params: {
+  agentId?: string;
   config?: OpenClawConfig;
   runtime: PluginRuntime;
   includeInitializing?: boolean;
@@ -145,6 +144,7 @@ export function listNodeAdoptedSessionEntries(params: {
 }): Map<string, AdoptedSessionEntry> {
   const adopted = new Map<string, AdoptedSessionEntry>();
   for (const { agentId, entry, sessionKey } of listSessionCatalogEntries({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     config: params.config ?? {},
     runtime: params.runtime,
     sessionEntries: params.sessionEntries,
@@ -181,6 +181,7 @@ export function listNodeAdoptedSessionEntries(params: {
 }
 
 export function findNodeAdoptedSessionEntry(params: {
+  agentId?: string;
   config: OpenClawConfig;
   runtime: PluginRuntime;
   hostId: string;
@@ -269,6 +270,7 @@ export async function finalizeNodeAdoptedSession(params: {
 }
 
 export async function createOrReuseNodeAdoptedSession(params: {
+  agentId: string;
   api: OpenClawPluginApi;
   config: OpenClawConfig;
   hostId: string;
@@ -277,6 +279,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
   history: CodexNodeHistory;
 }): Promise<AdoptedSessionEntry> {
   const existing = findNodeAdoptedSessionEntry({
+    agentId: params.agentId,
     config: params.config,
     runtime: params.api.runtime,
     hostId: params.hostId,
@@ -296,7 +299,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
     const created = await params.api.runtime.agent.session.createSessionEntry({
       cfg: params.config,
       key: nodeAdoptionSessionKey(params.hostId, params.record.threadId),
-      agentId: resolveDefaultAgentId(params.config),
+      agentId: params.agentId,
       recoverMatchingInitialEntry: true,
       ...(params.record.name?.trim() ? { label: params.record.name.trim() } : {}),
       ...(params.record.cwd?.trim() ? { spawnedCwd: params.record.cwd.trim() } : {}),
@@ -335,6 +338,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
     };
   } catch (error) {
     const raced = findNodeAdoptedSessionEntry({
+      agentId: params.agentId,
       config: params.config,
       runtime: params.api.runtime,
       hostId: params.hostId,

@@ -72,7 +72,9 @@ Browser targets, pages, page elements, and dialogs are opaque capabilities. Reta
 
 ### Maintainer live-proof rig
 
-The repository includes a macOS-only development rig that preserves the real vertical path: agent-facing `computer` tool, Gateway `node.invoke`, paired Mac node, and the selected node-local provider. It is deliberately isolated from the operator app and Gateway.
+The repository includes a development rig that preserves the real vertical path: agent-facing `computer` tool, Gateway `node.invoke`, paired node, and the selected node-local provider. It is deliberately isolated from the operator app and Gateway. The macOS path uses the signed app node; the Linux path uses the opt-in `cua-computer` plugin in a real X11 session.
+
+#### macOS
 
 Build a signed app from a clean, committed checkout, choose a fresh profile and non-default loopback port, and prepare the two config views:
 
@@ -94,6 +96,35 @@ scripts/dev/computer-use-macos-live-rig.sh proof \
 ```
 
 The proof runner first requires the sole connected computer node to advertise the requested provider, then executes `screenshot`, `list_windows`, `get_window_state`, background element click and type, and re-observes the window. It saves the structured result and target-window before/after images under the scratch directory and fails unless the provider matches, the target started non-frontmost, the frontmost app and cursor stayed unchanged, target content changed, and the final effect was confirmed or a structured refusal. Restart the isolated app with the other provider and rerun the same proof. Do not use port `18789`, the default profile, or `/Applications/OpenClaw.app` for this rig.
+
+#### Linux X11 through Crabbox
+
+Run Linux proof on a Crabbox Linux host, not on a macOS container. A direct AWS Crabbox lease with Xvfb is sufficient because Xvfb is a real X11 server; a local container on macOS is not remote Linux desktop proof. Install the X11 fixture prerequisites on the disposable host, then start an isolated session:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y at-spi2-core dbus-x11 gir1.2-gtk-3.0 jq openbox python3-gi x11-utils xdotool xvfb
+
+dbus-run-session -- bash
+export DISPLAY=:99 XDG_SESSION_TYPE=x11 NO_AT_BRIDGE=0
+Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp &
+openbox >/tmp/openclaw-cu-openbox.log 2>&1 &
+
+scratch="$(mktemp -d /tmp/openclaw-cu-live.XXXXXX)"
+scripts/dev/computer-use-macos-live-rig.sh prepare-linux \
+  cu-linux-live-proof 29431 "$scratch"
+```
+
+Run the emitted `gateway`, `node`, and `fixture` commands in separate panes that inherit the same `DISPLAY` and `DBUS_SESSION_BUS_ADDRESS`. The isolated configs share one scratch-only random Gateway token, and the gateway silently approves loopback node-device pairing. The node command surface remains an explicit approval: run the emitted `nodes` command after the node finishes reconnecting, read `.pending[0].requestId`, and pass it to `scripts/dev/computer-use-macos-live-rig.sh approve "$scratch" <request-id>`. Rerun `nodes` until exactly one connected node advertises `provider.id: "cua-computer"`.
+
+Execute the same proof runner against the non-frontmost GTK fixture:
+
+```bash
+scripts/dev/computer-use-macos-live-rig.sh proof \
+  "$scratch" cua "OpenClaw CUA X11 Target" "W3-LINUX CONFIRMED"
+```
+
+The result and `window-before.png` / `window-after.png` stay under the scratch directory. A confirmed mutation must preserve the sentinel as the active X11 window and leave the pointer unchanged. An upstream `background_unavailable` or `background_occluded` result is valid refusal evidence only when it remains structured and no foreground retry is attempted. The rig rejects native Wayland even when `DISPLAY` is also present for XWayland; switch to X11 instead of claiming Wayland coverage.
 
 ### Windows and Linux (experimental, direct SDK)
 

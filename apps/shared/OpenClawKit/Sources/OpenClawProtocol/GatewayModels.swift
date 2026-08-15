@@ -5135,6 +5135,7 @@ public struct SessionCatalogPullRequestSummary: Codable, Sendable {
 
 public struct SessionCatalogSession: Codable, Sendable {
     public let threadid: String
+    public let sourcehomeid: String?
     public let name: String?
     public let cwd: String?
     public let status: String
@@ -5156,6 +5157,7 @@ public struct SessionCatalogSession: Codable, Sendable {
 
     public init(
         threadid: String,
+        sourcehomeid: String? = nil,
         name: String? = nil,
         cwd: String? = nil,
         status: String,
@@ -5176,6 +5178,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         canopenterminal: Bool? = nil)
     {
         self.threadid = threadid
+        self.sourcehomeid = sourcehomeid
         self.name = name
         self.cwd = cwd
         self.status = status
@@ -5198,6 +5201,7 @@ public struct SessionCatalogSession: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case threadid = "threadId"
+        case sourcehomeid = "sourceHomeId"
         case name
         case cwd
         case status
@@ -5385,6 +5389,8 @@ public struct SessionsCatalogReadParams: Codable, Sendable {
     public let catalogid: String
     public let hostid: String
     public let threadid: String
+    public let agentid: String?
+    public let sourcehomeid: String?
     public let limit: Int?
     public let cursor: String?
 
@@ -5392,12 +5398,16 @@ public struct SessionsCatalogReadParams: Codable, Sendable {
         catalogid: String,
         hostid: String,
         threadid: String,
+        agentid: String? = nil,
+        sourcehomeid: String? = nil,
         limit: Int? = nil,
         cursor: String? = nil)
     {
         self.catalogid = catalogid
         self.hostid = hostid
         self.threadid = threadid
+        self.agentid = agentid
+        self.sourcehomeid = sourcehomeid
         self.limit = limit
         self.cursor = cursor
     }
@@ -5406,6 +5416,8 @@ public struct SessionsCatalogReadParams: Codable, Sendable {
         case catalogid = "catalogId"
         case hostid = "hostId"
         case threadid = "threadId"
+        case agentid = "agentId"
+        case sourcehomeid = "sourceHomeId"
         case limit
         case cursor
     }
@@ -5445,21 +5457,29 @@ public struct SessionsCatalogContinueParams: Codable, Sendable {
     public let catalogid: String
     public let hostid: String
     public let threadid: String
+    public let agentid: String?
+    public let sourcehomeid: String?
 
     public init(
         catalogid: String,
         hostid: String,
-        threadid: String)
+        threadid: String,
+        agentid: String? = nil,
+        sourcehomeid: String? = nil)
     {
         self.catalogid = catalogid
         self.hostid = hostid
         self.threadid = threadid
+        self.agentid = agentid
+        self.sourcehomeid = sourcehomeid
     }
 
     private enum CodingKeys: String, CodingKey {
         case catalogid = "catalogId"
         case hostid = "hostId"
         case threadid = "threadId"
+        case agentid = "agentId"
+        case sourcehomeid = "sourceHomeId"
     }
 }
 
@@ -5481,17 +5501,23 @@ public struct SessionsCatalogArchiveParams: Codable, Sendable {
     public let catalogid: String
     public let hostid: String
     public let threadid: String
+    public let agentid: String?
+    public let sourcehomeid: String?
     public let confirmnootherrunner: Bool
 
     public init(
         catalogid: String,
         hostid: String,
         threadid: String,
+        agentid: String? = nil,
+        sourcehomeid: String? = nil,
         confirmnootherrunner: Bool)
     {
         self.catalogid = catalogid
         self.hostid = hostid
         self.threadid = threadid
+        self.agentid = agentid
+        self.sourcehomeid = sourcehomeid
         self.confirmnootherrunner = confirmnootherrunner
     }
 
@@ -5499,6 +5525,8 @@ public struct SessionsCatalogArchiveParams: Codable, Sendable {
         case catalogid = "catalogId"
         case hostid = "hostId"
         case threadid = "threadId"
+        case agentid = "agentId"
+        case sourcehomeid = "sourceHomeId"
         case confirmnootherrunner = "confirmNoOtherRunner"
     }
 }

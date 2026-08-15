@@ -250,7 +250,7 @@ function createQaSuiteScenarioFlowApi(params: QaSuiteScenarioFlowApiParams) {
   });
 }
 
-export function createQaSuiteScenarioStepRunner(
+function createQaSuiteScenarioStepRunner(
   env: QaSuiteScenarioFlowEnv,
   scenario: QaSeedScenarioWithSource,
   vars: Record<string, unknown>,
