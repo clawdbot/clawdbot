@@ -48,6 +48,7 @@ type ConfigWriteCoordinatorContext = {
   trackLoad: (key: "config" | "schema", promise: Promise<unknown>) => Promise<void>;
   resetLoads: () => void;
   resetConfigLoad: () => void;
+  refreshConnectionState: () => Promise<boolean>;
   canCallConfigMethod: (
     method: ConfigMethod,
     options?: { requireAdvertisement?: boolean },
@@ -67,6 +68,7 @@ export function createConfigWriteCoordinator({
   trackLoad,
   resetLoads,
   resetConfigLoad,
+  refreshConnectionState,
   canCallConfigMethod,
   cancelAppliedRefresh,
   reconcileAppliedRefresh,
@@ -452,8 +454,7 @@ export function createConfigWriteCoordinator({
               ? cloneConfigObject(state.configForm)
               : null;
           const draftRawBefore = draftFormBefore ? serializeConfigForm(draftFormBefore) : null;
-          const reconcile = run(() => loadConfig(state));
-          void trackLoad("config", reconcile);
+          const reconcile = refreshConnectionState();
           void reconcile.then((loaded) => {
             if (isDisposed()) {
               return;
@@ -509,7 +510,7 @@ export function createConfigWriteCoordinator({
             reconcileAppliedRefresh();
           });
         } else {
-          reconcileAppliedRefresh();
+          void refreshConnectionState().then(() => reconcileAppliedRefresh());
         }
       }
     }
