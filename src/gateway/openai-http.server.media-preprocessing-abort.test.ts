@@ -34,9 +34,9 @@ import {
   createDocumentExtractorCapacityError,
   DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
 } from "../plugins/document-extractor-types.js";
+import { getFreePort } from "../test-utils/ports.js";
 import {
-  agentCommand,
-  getFreePort,
+  agentCommandMock,
   installGatewayTestHooks,
   startGatewayServerWithRetries,
 } from "./test-helpers.js";
@@ -150,7 +150,7 @@ describe("OpenAI HTTP media preprocessing", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    expect(agentCommand).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
   });
 
   it("returns a retryable service-unavailable response when PDF extraction is saturated", async () => {
@@ -195,7 +195,7 @@ describe("OpenAI HTTP media preprocessing", () => {
         code: DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
       },
     });
-    expect(agentCommand).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
   });
 
   it("aborts blocked OpenResponses PDF parsing when the client disconnects", async () => {
@@ -263,6 +263,6 @@ describe("OpenAI HTTP media preprocessing", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    expect(agentCommand).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
   });
 });

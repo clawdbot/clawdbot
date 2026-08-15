@@ -10,6 +10,7 @@ import {
   type DocumentExtractionResult,
   type DocumentExtractorPlugin,
 } from "openclaw/plugin-sdk/document-extractor";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 
 const MAX_EXTRACTED_TEXT_CHARS = 200_000;
 const MAX_RENDER_DIMENSION = 10_000;
@@ -208,13 +209,6 @@ function resolvePdfExtractionWorkerUrl(currentModuleUrl = import.meta.url): URL 
   return new URL(`./document-extractor.worker${extension}`, currentModuleUrl);
 }
 
-function toError(value: unknown, fallback: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  return new Error(typeof value === "string" ? value : fallback, { cause: value });
-}
-
 class PdfWorkerPool {
   private total = 0;
   private readonly failed = new WeakSet<PdfExtractionWorker>();
@@ -279,7 +273,9 @@ class PdfWorkerPool {
           if (!this.waiters.delete(waiter)) {
             return;
           }
-          reject(toError(signal.reason, "PDF extraction aborted while waiting for a worker"));
+          reject(
+            toErrorObject(signal.reason, "PDF extraction aborted while waiting for a worker"),
+          );
         },
       };
       this.waiters.add(waiter);
@@ -394,7 +390,7 @@ class PdfWorkerPool {
       waiter.signal.removeEventListener("abort", waiter.onAbort);
       if (waiter.signal.aborted) {
         waiter.reject(
-          toError(waiter.signal.reason, "PDF extraction aborted while waiting for a worker"),
+          toErrorObject(waiter.signal.reason, "PDF extraction aborted while waiting for a worker"),
         );
         continue;
       }
@@ -406,7 +402,7 @@ class PdfWorkerPool {
             : this.createWorkerLease(waiter.createWorker),
         );
       } catch (error) {
-        waiter.reject(toError(error, "PDF extraction worker failed to start"));
+        waiter.reject(toErrorObject(error, "PDF extraction worker failed to start"));
       }
     }
   }
@@ -480,7 +476,7 @@ async function extractPdfContentInWorker(
       try {
         worker = createWorker(workerUrl, execArgv ? { execArgv } : {});
       } catch (error) {
-        throw toError(error, "PDF extraction worker failed to start");
+        throw toErrorObject(error, "PDF extraction worker failed to start");
       }
       return worker;
     },
@@ -506,7 +502,7 @@ async function extractPdfContentInWorker(
         };
         const onAbort = () => {
           settle(
-            () => reject(toError(signal.reason, "PDF extraction aborted before completion")),
+            () => reject(toErrorObject(signal.reason, "PDF extraction aborted before completion")),
             false,
           );
         };
@@ -523,7 +519,7 @@ async function extractPdfContentInWorker(
                   request.onImageExtractionError?.(new Error(error));
                 }
               } catch (error) {
-                reject(toError(error, "PDF image extraction error callback failed"));
+                reject(toErrorObject(error, "PDF image extraction error callback failed"));
                 return;
               }
               if (result.status === "error") {
@@ -536,7 +532,7 @@ async function extractPdfContentInWorker(
           );
         };
         const onError = (error: unknown) => {
-          settle(() => reject(toError(error, "PDF extraction worker failed")), false);
+          settle(() => reject(toErrorObject(error, "PDF extraction worker failed")), false);
         };
         const onExit = (code: number) => {
           const message =
@@ -557,7 +553,10 @@ async function extractPdfContentInWorker(
         try {
           worker.postMessage(workerInput);
         } catch (error) {
-          settle(() => reject(toError(error, "PDF extraction worker request failed")), false);
+          settle(
+            () => reject(toErrorObject(error, "PDF extraction worker request failed")),
+            false,
+          );
         }
       }),
   );

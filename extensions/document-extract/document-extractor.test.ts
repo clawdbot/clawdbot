@@ -397,10 +397,12 @@ describe("PDF document extractor", () => {
     await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(3));
     await vi.waitFor(() => expect(Atomics.load(startedView, 2)).toBe(1));
 
+    const secondAssertion = expect(pending[1]).rejects.toThrow("release second PDF worker");
+    const thirdAssertion = expect(pending[2]).rejects.toThrow("release queued PDF worker");
     controllers[1].abort(new Error("release second PDF worker"));
     controllers[2].abort(new Error("release queued PDF worker"));
-    await expect(pending[1]).rejects.toThrow("release second PDF worker");
-    await expect(pending[2]).rejects.toThrow("release queued PDF worker");
+    await secondAssertion;
+    await thirdAssertion;
     expect(workers[1]?.threadId).toBe(-1);
     expect(workers[2]?.threadId).toBe(-1);
     expect(pdfDocument.extract).not.toHaveBeenCalled();

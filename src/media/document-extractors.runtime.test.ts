@@ -76,6 +76,7 @@ describe("extractDocumentContent", () => {
         maxPages: 1,
         maxPixels: 100,
         minTextChars: 10,
+        config: {},
       });
     } catch (error) {
       extractionError = error;
@@ -140,6 +141,7 @@ describe("extractDocumentContent", () => {
         maxPages: 1,
         maxPixels: 100,
         minTextChars: 10,
+        config: {},
       }),
     ).rejects.toBe(capacityError);
   });

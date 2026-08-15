@@ -154,7 +154,7 @@ describe("PDF tool prepared-runtime cancellation", () => {
       );
 
       await extractionStarted;
-      const assertion = expect(execution).rejects.toThrow("PDF extraction cancelled");
+      const assertion = expect(execution).rejects.toThrow("agent run cancelled");
       controller.abort(new Error("agent run cancelled"));
       await assertion;
 
