@@ -27,6 +27,7 @@ import { resolveReplyRoutingDecision } from "./routing-policy.js";
 
 export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyState) {
   const {
+    boundAcpDispatchSessionKey,
     cfg,
     ctx,
     groupId,
@@ -49,7 +50,8 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     sessionAcpMeta && sessionStoreEntry.entry
       ? { ...sessionStoreEntry.entry, acp: sessionAcpMeta }
       : sessionStoreEntry.entry;
-  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionEntryWithAcp);
+  const suppressAcpChildUserDelivery =
+    isParentOwnedBackgroundAcpSession(sessionEntryWithAcp) && !boundAcpDispatchSessionKey;
   const normalizedRouteReplyChannel = normalizeMessageChannel(replyRoute.channel);
   const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
   const normalizedSurfaceChannel = normalizeMessageChannel(ctx.Surface);
