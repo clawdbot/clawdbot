@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolvePluginNpmGenerationProjectDir } from "./install-paths.js";
+import {
+  resolvePluginNpmGenerationProjectDir,
+  resolvePluginNpmProjectDir,
+} from "./install-paths.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
 
 const retentionTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -14,44 +17,50 @@ import {
 } from "./managed-npm-retention.js";
 
 describe("managed npm retention", () => {
-  it("cleans retired generations while preserving the active install root", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-retention-"));
-    const npmDir = path.join(stateDir, "npm");
-    const packageName = "@openclaw/codex";
-    const oldProjectRoot = resolvePluginNpmGenerationProjectDir({
-      npmDir,
-      packageName,
-      generationKey: "codex-v1",
-    });
-    const activeProjectRoot = resolvePluginNpmGenerationProjectDir({
-      npmDir,
-      packageName,
-      generationKey: "codex-v2",
-    });
-    const oldPackageDir = path.join(oldProjectRoot, "node_modules", "@openclaw", "codex");
-    const activePackageDir = path.join(activeProjectRoot, "node_modules", "@openclaw", "codex");
-    fs.mkdirSync(oldPackageDir, { recursive: true });
-    fs.mkdirSync(activePackageDir, { recursive: true });
-    await markRetainedManagedNpmInstall({
-      packageDir: oldPackageDir,
-      pluginId: "codex",
-      reason: "test-retired-generation",
-    });
+  it.each(["ordinary", "generation"] as const)(
+    "cleans a retired %s project while preserving the active install root",
+    async (layout) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-retention-"));
+      const npmDir = path.join(stateDir, "npm");
+      const packageName = "@openclaw/codex";
+      const oldProjectRoot =
+        layout === "ordinary"
+          ? resolvePluginNpmProjectDir({ npmDir, packageName })
+          : resolvePluginNpmGenerationProjectDir({
+              npmDir,
+              packageName,
+              generationKey: "codex-v1",
+            });
+      const activeProjectRoot = resolvePluginNpmGenerationProjectDir({
+        npmDir,
+        packageName,
+        generationKey: "codex-v2",
+      });
+      const oldPackageDir = path.join(oldProjectRoot, "node_modules", "@openclaw", "codex");
+      const activePackageDir = path.join(activeProjectRoot, "node_modules", "@openclaw", "codex");
+      fs.mkdirSync(oldPackageDir, { recursive: true });
+      fs.mkdirSync(activePackageDir, { recursive: true });
+      await markRetainedManagedNpmInstall({
+        packageDir: oldPackageDir,
+        pluginId: "codex",
+        reason: "test-retired-generation",
+      });
 
-    try {
-      await expect(
-        cleanupRetainedManagedNpmInstallGenerations({
-          npmDir,
-          activeInstallPaths: [activePackageDir],
-        }),
-      ).resolves.toBe(1);
-      expect(fs.existsSync(oldProjectRoot)).toBe(false);
-      expect(fs.existsSync(activeProjectRoot)).toBe(true);
-      expect(hasRetainedManagedNpmInstallMarker(activePackageDir)).toBe(false);
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
+      try {
+        await expect(
+          cleanupRetainedManagedNpmInstallGenerations({
+            npmDir,
+            activeInstallPaths: [activePackageDir],
+          }),
+        ).resolves.toBe(1);
+        expect(fs.existsSync(oldProjectRoot)).toBe(false);
+        expect(fs.existsSync(activeProjectRoot)).toBe(true);
+        expect(hasRetainedManagedNpmInstallMarker(activePackageDir)).toBe(false);
+      } finally {
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("cleans retained packages from the legacy shared npm root", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-retention-"));
@@ -75,6 +84,24 @@ describe("managed npm retention", () => {
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it("preserves a noncanonical project root even when it has a retained marker", async () => {
+    const stateDir = retentionTempDirs.make("openclaw-retention-noncanonical-");
+    const npmDir = path.join(stateDir, "npm");
+    const projectRoot = path.join(npmDir, "projects", "noncanonical-sibling");
+    const packageDir = path.join(projectRoot, "node_modules", "@openclaw", "codex");
+    const siblingFile = path.join(projectRoot, "must-remain.txt");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(siblingFile, "preserve me", "utf8");
+    await markRetainedManagedNpmInstall({
+      packageDir,
+      pluginId: "codex",
+      reason: "test-retired-generation",
+    });
+
+    await expect(cleanupRetainedManagedNpmInstallGenerations({ npmDir })).resolves.toBe(0);
+    expect(fs.readFileSync(siblingFile, "utf8")).toBe("preserve me");
   });
 
   it.each(["project", "legacy"] as const)(

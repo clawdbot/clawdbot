@@ -9,6 +9,7 @@ import { readOpenClawManagedNpmRootOverrides } from "../infra/npm-managed-root.j
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
+  isPluginNpmProjectDir,
   resolveDefaultPluginGitDir,
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
@@ -227,7 +228,12 @@ function resolveNpmManagedProjectInstall(params: {
   ) {
     return null;
   }
-  return { installPath: npmRoot, npmRoot, packageName };
+  const ownsProjectRoot = isPluginNpmProjectDir({
+    packageName,
+    projectDir: npmRoot,
+    npmDir: path.dirname(params.projectsDir),
+  });
+  return { installPath: ownsProjectRoot ? npmRoot : params.installPath, npmRoot, packageName };
 }
 
 function resolveNpmPackageNameFromInstallPath(params: {

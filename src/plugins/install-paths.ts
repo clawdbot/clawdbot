@@ -124,10 +124,35 @@ export function resolvePluginNpmProjectDir(params: {
 
 const PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR = "__openclaw-generation__";
 const PLUGIN_NPM_GENERATION_KEY_HASH_CHARS = 16;
+const PLUGIN_NPM_GENERATION_KEY_DIR_NAME_PATTERN = new RegExp(
+  `^g-[a-f0-9]{${PLUGIN_NPM_GENERATION_KEY_HASH_CHARS}}$`,
+  "u",
+);
 
 /** Resolves the managed npm artifact-generation project directory prefix for a package. */
 export function resolvePluginNpmGenerationProjectDirPrefix(packageName: string): string {
   return `${encodePluginNpmProjectDirName(packageName)}${PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR}`;
+}
+
+/** Checks whether a project directory has the exact managed shape owned by a package. */
+export function isPluginNpmProjectDir(params: {
+  packageName: string;
+  projectDir: string;
+  npmDir?: string;
+}): boolean {
+  const projectDir = path.resolve(params.projectDir);
+  if (path.dirname(projectDir) !== path.resolve(resolvePluginNpmProjectsDir(params.npmDir))) {
+    return false;
+  }
+  if (projectDir === path.resolve(resolvePluginNpmProjectDir(params))) {
+    return true;
+  }
+  const projectName = path.basename(projectDir);
+  const generationPrefix = resolvePluginNpmGenerationProjectDirPrefix(params.packageName);
+  return (
+    projectName.startsWith(generationPrefix) &&
+    PLUGIN_NPM_GENERATION_KEY_DIR_NAME_PATTERN.test(projectName.slice(generationPrefix.length))
+  );
 }
 
 /** Encodes a package generation fingerprint into a compact project directory suffix. */

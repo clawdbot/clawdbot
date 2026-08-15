@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { runCommandWithTimeout } from "../process/exec.js";
 import { toRepoRelativePath } from "../test-utils/repo-files.js";
-import { resolvePluginNpmProjectDir } from "./install-paths.js";
+import {
+  resolvePluginNpmGenerationProjectDir,
+  resolvePluginNpmGenerationProjectDirPrefix,
+  resolvePluginNpmProjectDir,
+} from "./install-paths.js";
 import { resolvePluginInstallDir } from "./install.js";
 import {
   cleanupTrackedTempDirsAsync,
@@ -1236,14 +1240,23 @@ describe("uninstallPlugin", () => {
     await expectPathAccessState(pluginDir, "missing");
   });
 
-  it("uninstalls per-plugin npm project packages through their project root", async () => {
+  it.each([
+    { name: "ordinary", generationKey: undefined },
+    { name: "generation", generationKey: "kitchen-sink-v2" },
+  ])("uninstalls $name per-plugin npm projects through their project root", async (fixture) => {
     const stateDir = path.join(tempDir, "state");
     const extensionsDir = path.join(stateDir, "extensions");
     const npmBaseDir = path.join(stateDir, "npm");
-    const npmRoot = resolvePluginNpmProjectDir({
-      npmDir: npmBaseDir,
-      packageName: "@openclaw/kitchen-sink",
-    });
+    const npmRoot = fixture.generationKey
+      ? resolvePluginNpmGenerationProjectDir({
+          npmDir: npmBaseDir,
+          packageName: "@openclaw/kitchen-sink",
+          generationKey: fixture.generationKey,
+        })
+      : resolvePluginNpmProjectDir({
+          npmDir: npmBaseDir,
+          packageName: "@openclaw/kitchen-sink",
+        });
     const pluginDir = path.join(npmRoot, "node_modules", "@openclaw", "kitchen-sink");
     const hoistedDir = path.join(npmRoot, "node_modules", "is-number");
     await fs.mkdir(pluginDir, { recursive: true });
@@ -1305,6 +1318,102 @@ describe("uninstallPlugin", () => {
     expectNpmUninstallCommand({ packageName: "@openclaw/kitchen-sink", npmRoot });
     await expectPathAccessState(pluginDir, "missing");
     await expectPathAccessState(npmRoot, "missing");
+  });
+
+  it.each([
+    ["unrelated sibling", "noncanonical-sibling"],
+    [
+      "ordinary-name lookalike",
+      `${path.basename(
+        resolvePluginNpmProjectDir({
+          npmDir: "/managed/npm",
+          packageName: "@openclaw/kitchen-sink",
+        }),
+      )}-lookalike`,
+    ],
+    [
+      "malformed generation prefix",
+      `${path.basename(
+        resolvePluginNpmProjectDir({
+          npmDir: "/managed/npm",
+          packageName: "@openclaw/kitchen-sink",
+        }),
+      )}__openclaw-generation_g-0123456789abcdef`,
+    ],
+    [
+      "short generation suffix",
+      `${resolvePluginNpmGenerationProjectDirPrefix("@openclaw/kitchen-sink")}g-0123456789abcde`,
+    ],
+    [
+      "uppercase generation suffix",
+      `${resolvePluginNpmGenerationProjectDirPrefix("@openclaw/kitchen-sink")}g-0123456789abcdeF`,
+    ],
+    [
+      "generation suffix lookalike",
+      `${resolvePluginNpmGenerationProjectDirPrefix("@openclaw/kitchen-sink")}g-0123456789abcdef-extra`,
+    ],
+  ])("preserves a noncanonical npm project root ($name)", async (_name, projectName) => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const npmRoot = path.join(stateDir, "npm", "projects", projectName);
+    const pluginDir = path.join(npmRoot, "node_modules", "@openclaw", "kitchen-sink");
+    const siblingFile = path.join(npmRoot, "must-remain.txt");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "@openclaw/kitchen-sink": "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
+    await fs.writeFile(siblingFile, "preserve me");
+
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
+        },
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
+
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) {
+      throw new Error(plan.error);
+    }
+    expect(plan.directoryRemoval).toEqual({
+      target: pluginDir,
+      cleanup: {
+        kind: "npm",
+        npmRoot,
+        packageName: "@openclaw/kitchen-sink",
+      },
+    });
+
+    const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+
+    expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
+    await expectPathAccessState(pluginDir, "missing");
+    await expect(fs.readFile(siblingFile, "utf8")).resolves.toBe("preserve me");
   });
 
   it("repairs remaining npm plugin openclaw peer links after npm uninstall prunes them", async () => {
