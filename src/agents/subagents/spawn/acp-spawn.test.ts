@@ -911,10 +911,11 @@ describe("spawnAcpDirect", () => {
     // Native/in-process spawn forwards "required" instead (subagent-spawn.ts);
     // if ACP ever claimed "required" here, a failed task-row write would abort
     // an ACP run the registry never actually owns.
-    const registeredAcpRun = hoisted.registerSubagentRunMock.mock.calls[0]?.[0] as
-      | { taskRowOwnership?: unknown }
-      | undefined;
-    expect(registeredAcpRun?.taskRowOwnership).toBeUndefined();
+    const registeredAcpRun = expectRecordFields(
+      firstMockCall(hoisted.registerSubagentRunMock, "ACP subagent registration")[0],
+      {},
+    );
+    expect(registeredAcpRun.taskRowOwnership).toBeUndefined();
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       mode: "persistent",
