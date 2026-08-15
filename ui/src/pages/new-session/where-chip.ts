@@ -7,6 +7,7 @@ import {
   renderSessionMenuItem,
 } from "./cloud-target.ts";
 import type { DraftCloudProfile, DraftEnvironment, DraftNode } from "./discovery.ts";
+import { draftNodeUpdateIssue, isDraftNodeSessionEligible } from "./discovery.ts";
 import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
 import { resolvePlacePickerSections } from "./place-picker-sections.ts";
 
@@ -19,7 +20,7 @@ type WhereChipState = Readonly<{
 }>;
 
 function nodeUpdateIssueCopy(node: DraftNode): string | undefined {
-  const issue = node.issues?.find((candidate) => candidate.code === "update-required");
+  const issue = draftNodeUpdateIssue(node);
   return issue
     ? t("newSession.nodeUpdateRequired", {
         updateCommand: issue.updateCommand,
@@ -154,7 +155,7 @@ export function renderWhereChip(params: {
                     sub: nodeSuffixes[index],
                     facts: updateIssue ? [updateIssue] : params.state.deviceFacts.get(node.nodeId),
                     checked: params.execNode === node.nodeId,
-                    disabled: !node.connected || Boolean(updateIssue),
+                    disabled: !isDraftNodeSessionEligible(node),
                     title: updateIssue ?? nodeTooltip(node),
                     onSelect: () => params.onSelectExecNode(node.nodeId),
                   },

@@ -52,6 +52,14 @@ export type DraftEnvironment = {
 
 export type BrowserTarget = { nodeId: string; label: string };
 
+export function draftNodeUpdateIssue(node: DraftNode): RuntimeTargetIssue | undefined {
+  return node.issues?.find((issue) => issue.code === "update-required");
+}
+
+export function isDraftNodeSessionEligible(node: DraftNode): boolean {
+  return node.canExec && node.connected && draftNodeUpdateIssue(node) === undefined;
+}
+
 function normalizeTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.trunc(value)
