@@ -2,14 +2,12 @@ import {
   COMPUTER_USE_V2_ACTION_NAMES,
   type ComputerActParams,
 } from "openclaw/plugin-sdk/computer-use";
+import { elementArgs, requireWindowTarget, windowPointArgs } from "./action-targets.js";
 import { normalizeModifiers, parseKeyChord } from "./actions.js";
+import { handleBrowserAct } from "./browser-actions.js";
 import { EscalationReason, type CuaDriverSession } from "./driver-client.js";
 import {
   actionEnvelope,
-  browserBinding,
-  browserDialogEnvelope,
-  browserObservation,
-  browserToolEnvelope,
   callWindowTool,
   nativeWindows,
   projectApps,
@@ -20,16 +18,8 @@ import {
 } from "./driver-result.js";
 import {
   adoptGeneration,
-  clearDialogRef,
-  invalidateBrowserObservation,
-  resolveBrowserElementRef,
-  resolveBrowserObservation,
-  resolveBrowserRef,
-  resolveDialogRef,
   resolveAppRef,
-  resolveElementRef,
   resolveObservation,
-  resolvePageRef,
   resolveWindowRef,
   verifyGeneration,
   type CuaFrameState,
@@ -108,106 +98,6 @@ export type CuaComputerActParams = {
     | "no_window_target"
     | "other";
 };
-
-function requireWindowTarget(
-  driver: CuaDriverSession,
-  state: CuaFrameState,
-  params: CuaComputerActParams,
-) {
-  verifyGeneration(state, driver.generation);
-  if (!params.windowRef) {
-    throw new Error(`COMPUTER_INVALID_REQUEST: windowRef is required for ${params.action}`);
-  }
-  return {
-    ref: params.windowRef,
-    target: resolveWindowRef(state, params.windowRef),
-  };
-}
-
-function observationTarget(state: CuaFrameState, params: CuaComputerActParams, windowRef: string) {
-  if (!params.observationId) {
-    throw new Error(`COMPUTER_STALE_OBSERVATION: observationId is required for ${params.action}`);
-  }
-  return resolveObservation(state, params.observationId, windowRef);
-}
-
-function elementArgs(
-  state: CuaFrameState,
-  params: CuaComputerActParams,
-  windowRef: string,
-): Record<string, unknown> | undefined {
-  if (!params.elementRef) {
-    return undefined;
-  }
-  const observation = observationTarget(state, params, windowRef);
-  const element = resolveElementRef(observation, params.elementRef);
-  return element.elementToken
-    ? { element_token: element.elementToken }
-    : {
-        element_index: element.elementIndex,
-        ...(element.snapshotId ? { snapshot_id: element.snapshotId } : {}),
-      };
-}
-
-function browserTarget(
-  driver: CuaDriverSession,
-  state: CuaFrameState,
-  params: CuaComputerActParams,
-) {
-  verifyGeneration(state, driver.generation);
-  if (!params.browserRef || !params.pageRef) {
-    throw new Error(
-      `COMPUTER_INVALID_REQUEST: browserRef and pageRef are required for ${params.action}`,
-    );
-  }
-  const browser = resolveBrowserRef(state, params.browserRef);
-  const page = resolvePageRef(state, params.browserRef, params.pageRef);
-  return {
-    browserRef: params.browserRef,
-    pageRef: params.pageRef,
-    targetId: browser.targetId,
-    tabId: page.tabId,
-  };
-}
-
-function browserElement(
-  state: CuaFrameState,
-  params: CuaComputerActParams,
-  target: { browserRef: string; pageRef: string },
-  elementRef = params.elementRef,
-): string | undefined {
-  if (!elementRef) {
-    return undefined;
-  }
-  if (!params.observationId) {
-    throw new Error(`COMPUTER_STALE_OBSERVATION: observationId is required for ${params.action}`);
-  }
-  const observation = resolveBrowserObservation(
-    state,
-    params.observationId,
-    target.browserRef,
-    target.pageRef,
-  );
-  return resolveBrowserElementRef(observation, elementRef);
-}
-
-function windowPointArgs(
-  state: CuaFrameState,
-  params: CuaComputerActParams,
-  windowRef: string,
-  point: { x?: number; y?: number },
-  label: string,
-): Record<string, unknown> {
-  if (point.x === undefined || point.y === undefined) {
-    throw new Error(`COMPUTER_INVALID_REQUEST: ${label} coordinates are required`);
-  }
-  const observation = observationTarget(state, params, windowRef);
-  return {
-    x: point.x,
-    y: point.y,
-    ...(observation.fromZoom ? { from_zoom: true } : {}),
-  };
-}
 
 async function handleTargetedAct(
   platform: NodeJS.Platform,
@@ -397,6 +287,10 @@ export async function handleV2Act(
   if ((CUA_WIRE_ACTION_NAMES as readonly string[]).includes(input.action)) {
     return await handleDesktop(driver, state, params, signal);
   }
+  const browserResult = await handleBrowserAct(driver, state, input, signal);
+  if (browserResult !== undefined) {
+    return browserResult;
+  }
 
   switch (input.action) {
     case "list_apps": {
@@ -574,213 +468,6 @@ export async function handleV2Act(
       );
       return JSON.stringify(windowObservation(result, state, ref, { fromZoom: true }));
     }
-    case "get_browser_state": {
-      verifyGeneration(state, driver.generation);
-      if (input.windowRef) {
-        const window = resolveWindowRef(state, input.windowRef);
-        const result = await callWindowTool(
-          driver,
-          state,
-          "get_browser_state",
-          { pid: window.pid, window_id: window.windowId },
-          signal,
-        );
-        return JSON.stringify(browserBinding(result, state, input.windowRef));
-      }
-      const target = browserTarget(driver, state, input);
-      const snapshotFormat = input.snapshotFormat ?? "dom_refs_v1";
-      if (
-        snapshotFormat === "dom_refs_v1" &&
-        (input.elementRef || input.query || input.continuation)
-      ) {
-        throw new Error(
-          "COMPUTER_INVALID_REQUEST: elementRef, query, and continuation require snapshotFormat=semantic_v2",
-        );
-      }
-      const scopeRef = browserElement(state, input, target);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "get_browser_state",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
-          snapshot_format: snapshotFormat,
-          include_screenshot: input.includeScreenshot ?? true,
-          ...(scopeRef ? { scope_ref: scopeRef } : {}),
-          ...(input.query ? { query: input.query } : {}),
-          ...(input.continuation ? { continuation: input.continuation } : {}),
-        },
-        signal,
-      );
-      return JSON.stringify(browserObservation(result, state, target));
-    }
-    case "browser_prepare": {
-      const { target } = requireWindowTarget(driver, state, input);
-      const profile = input.profile ?? "isolated_new";
-      if (profile === "isolated_named" && !input.profileName) {
-        throw new Error(
-          "COMPUTER_INVALID_REQUEST: profileName is required for an isolated_named browser profile",
-        );
-      }
-      if (profile === "isolated_new" && input.profileName) {
-        throw new Error(
-          "COMPUTER_INVALID_REQUEST: profileName is valid only for an isolated_named browser profile",
-        );
-      }
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_prepare",
-        {
-          pid: target.pid,
-          allow_launch: true,
-          profile: {
-            mode: profile,
-            ...(input.profileName ? { name: input.profileName } : {}),
-          },
-        },
-        signal,
-      );
-      return JSON.stringify(browserToolEnvelope(result, "browser_prepare"));
-    }
-    case "browser_navigate": {
-      const target = browserTarget(driver, state, input);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_navigate",
-        { target_id: target.targetId, tab_id: target.tabId, url: input.url },
-        signal,
-      );
-      invalidateBrowserObservation(state);
-      return JSON.stringify(browserToolEnvelope(result, "browser_navigate"));
-    }
-    case "browser_click": {
-      const target = browserTarget(driver, state, input);
-      resolveBrowserObservation(state, input.observationId!, target.browserRef, target.pageRef);
-      const ref = browserElement(state, input, target);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_click",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
-          ...(ref ? { ref } : {}),
-          ...(input.x !== undefined ? { x: input.x } : {}),
-          ...(input.y !== undefined ? { y: input.y } : {}),
-          ...(input.inputRoute ? { input_route: input.inputRoute } : {}),
-        },
-        signal,
-      );
-      return JSON.stringify(browserToolEnvelope(result, "browser_click"));
-    }
-    case "browser_type": {
-      const target = browserTarget(driver, state, input);
-      const ref = browserElement(state, input, target)!;
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_type",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
-          ref,
-          text: input.text,
-          ...(input.mode ? { mode: input.mode } : {}),
-          ...(input.replace !== undefined ? { replace: input.replace } : {}),
-        },
-        signal,
-      );
-      return JSON.stringify(browserToolEnvelope(result, "browser_type"));
-    }
-    case "browser_dialog": {
-      const target = browserTarget(driver, state, input);
-      const dialogId =
-        input.dialogAction === "inspect"
-          ? undefined
-          : resolveDialogRef(state, input.dialogRef!, target.browserRef, target.pageRef);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_dialog",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
-          action: input.dialogAction,
-          ...(dialogId ? { dialog_id: dialogId } : {}),
-          ...(input.promptText !== undefined ? { prompt_text: input.promptText } : {}),
-          ...(input.deliveryMode ? { delivery_mode: input.deliveryMode } : {}),
-        },
-        signal,
-      );
-      if (input.dialogAction !== "inspect") {
-        clearDialogRef(state);
-      }
-      return JSON.stringify(browserDialogEnvelope(result, state, target));
-    }
-    case "browser_set_input_files": {
-      const target = browserTarget(driver, state, input);
-      const ref = browserElement(state, input, target)!;
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_set_input_files",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
-          ref,
-          files: input.files,
-        },
-        signal,
-      );
-      return JSON.stringify(browserToolEnvelope(result, "browser_set_input_files"));
-    }
-    case "browser_download": {
-      const target = browserTarget(driver, state, input);
-      const ref = browserElement(state, input, target)!;
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_download",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
-          ref,
-          destination_root: input.destinationRoot,
-        },
-        signal,
-      );
-      return JSON.stringify(browserToolEnvelope(result, "browser_download"));
-    }
-    case "browser_pointer": {
-      const target = browserTarget(driver, state, input);
-      resolveBrowserObservation(state, input.observationId!, target.browserRef, target.pageRef);
-      const ref = browserElement(state, input, target);
-      const destinationRef = browserElement(state, input, target, input.destinationElementRef);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "browser_pointer",
-        {
-          target_id: target.targetId,
-          tab_id: target.tabId,
-          action: input.pointerAction,
-          ...(input.inputRoute ? { input_route: input.inputRoute } : {}),
-          ...(ref ? { ref } : {}),
-          ...(input.x !== undefined ? { x: input.x } : {}),
-          ...(input.y !== undefined ? { y: input.y } : {}),
-          ...(destinationRef ? { destination_ref: destinationRef } : {}),
-          ...(input.toX !== undefined ? { to_x: input.toX } : {}),
-          ...(input.toY !== undefined ? { to_y: input.toY } : {}),
-          ...(input.deltaX !== undefined ? { delta_x: input.deltaX } : {}),
-          ...(input.deltaY !== undefined ? { delta_y: input.deltaY } : {}),
-        },
-        signal,
-      );
-      return JSON.stringify(browserToolEnvelope(result, "browser_pointer"));
-    }
     case "escalate_scope": {
       const reason = {
         ax_tree_pixel_mismatch: EscalationReason.AxTreePixelMismatch,
@@ -804,4 +491,3 @@ export async function handleV2Act(
       throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${input.action}`);
   }
 }
-/* oxlint-disable max-lines -- One action switch is the canonical CUA v2 mapper; splitting browser actions would fork its ref/session lifecycle. */
