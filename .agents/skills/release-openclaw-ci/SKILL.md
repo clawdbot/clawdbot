@@ -166,11 +166,15 @@ node scripts/full-release-validation-at-sha.mjs \
   --target-ref release/YYYY.M.PATCH
 ```
 
-Never raw-dispatch the workflow without `target_context_ref` (the helper's
-`--target-ref` records it). Trusted-workflow release-branch CI passes
-`target_ref` + `release_candidate_ref`; never `release_gate` there — it
-requires workflow head == target. (The PR-head ci.yml fallback below is a
-different dispatch and does use `release_gate=true`.)
+For regular `release/*` validation, never raw-dispatch the workflow without
+`target_context_ref` (the helper's `--target-ref` records it); the
+extended-stable `.33+` canonical-branch dispatch below is the one exception —
+there the SHA-pinned helper's `release-ci/*` identity is rejected, so it
+dispatches without `target_context_ref` by design. Trusted-workflow
+release-branch CI passes `target_ref` + `release_candidate_ref`; never
+`release_gate` there — it requires workflow head == target. (The PR-head
+ci.yml fallback below is a different dispatch and does use
+`release_gate=true`.)
 
 For immutable workflow proof on a moving `main`, use
 `pnpm ci:full-release --sha <code-sha> --target-ref
