@@ -1070,12 +1070,11 @@ export function createComputerTool(options?: {
     | { nodeId: string; providerGeneration: string; observationId: string }
     | undefined;
   const replaceParameterSchema = (actions: readonly ComputerUseV2ActionName[]) => {
-    const next = createComputerToolSchema(actions) as unknown as Record<string, unknown>;
-    const target = parameterSchema as unknown as Record<string, unknown>;
-    for (const key of Object.keys(target)) {
-      delete target[key];
+    const next = createComputerToolSchema(actions);
+    for (const key of Object.keys(parameterSchema)) {
+      Reflect.deleteProperty(parameterSchema, key);
     }
-    Object.assign(target, next);
+    Object.assign(parameterSchema, next);
   };
   const bindNodeCapabilities = (node: NodeListNode) => {
     const next = node.computerUse;
@@ -1496,7 +1495,7 @@ export function createComputerTool(options?: {
               gatewayOpts,
               nodeId,
               command: COMPUTER_ACT_COMMAND,
-              commandParams: wireParams as unknown as Record<string, unknown>,
+              commandParams: { ...wireParams },
               timeoutMs: invokeTimeoutMs,
               idempotencyKey: computerActIdempotencyKey({
                 scope: options?.idempotencyScope,

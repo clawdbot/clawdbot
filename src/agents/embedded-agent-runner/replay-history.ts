@@ -136,7 +136,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       }
       touched = true;
       out.push({
-        ...(msg as unknown as Record<string, unknown>),
+        ...msg,
         content: annotated,
       } as AgentMessage);
       continue;
@@ -168,7 +168,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       };
       touched = true;
       out.push({
-        ...(msg as unknown as Record<string, unknown>),
+        ...msg,
         content: nextContent,
       } as AgentMessage);
       continue;
@@ -176,7 +176,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
 
     touched = true;
     out.push({
-      ...(msg as unknown as Record<string, unknown>),
+      ...msg,
       content: [
         {
           type: "text",
@@ -593,7 +593,7 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       continue;
     }
     out[i] = {
-      ...(message as unknown as Record<string, unknown>),
+      ...message,
       usage: normalizedUsage,
     } as AgentMessage;
     touched = true;

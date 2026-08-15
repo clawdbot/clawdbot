@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -55,6 +56,10 @@ const AMBIGUOUS_MAIN_PUSH_GUARD = `if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$
   exit 1
 fi`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const TSX_IMPORT = import.meta.resolve("tsx");
+const TYPESCRIPT_NODE_MODULES = path.dirname(
+  path.dirname(fileURLToPath(import.meta.resolve("typescript/package.json"))),
+);
 const MATURITY_GENERATED_PR_PATHS = [
   "qa/maturity-scores.yaml",
   "docs/maturity/scorecard.md",
@@ -144,19 +149,24 @@ function runWorkflowShellScript(
   try {
     let moduleIndex = 0;
     const moduleRoot = options.cwd ?? process.cwd();
-    const rewritten = script.replace(
-      /node (?:--import tsx )?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\1(?=\n|$)/gu,
-      (_match, _marker: string, body: string) => {
-        const modulePath = path.join(
-          moduleRoot,
-          `.openclaw-${path.basename(root)}-${moduleIndex}.mjs`,
-        );
-        moduleIndex += 1;
-        modulePaths.push(modulePath);
-        writeFileSync(modulePath, `${body}\n`, "utf8");
-        return `${quoteShell(process.execPath)} --import ${quoteShell(import.meta.resolve("tsx"))} ${quoteShell(modulePath)}`;
-      },
-    );
+    const rewritten = script
+      .replace(
+        /node (?:--import tsx )?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\1(?=\n|$)/gu,
+        (_match, _marker: string, body: string) => {
+          const modulePath = path.join(
+            moduleRoot,
+            `.openclaw-${path.basename(root)}-${moduleIndex}.mjs`,
+          );
+          moduleIndex += 1;
+          modulePaths.push(modulePath);
+          writeFileSync(modulePath, `${body}\n`, "utf8");
+          return `${quoteShell(process.execPath)} --import ${quoteShell(TSX_IMPORT)} ${quoteShell(modulePath)}`;
+        },
+      )
+      .replaceAll(
+        "manifest_node_args+=(--import tsx)",
+        `manifest_node_args+=(--import ${quoteShell(TSX_IMPORT)})`,
+      );
     const scriptPath = path.join(root, "run.sh");
     writeFileSync(scriptPath, rewritten.endsWith("\n") ? rewritten : `${rewritten}\n`, "utf8");
     return spawnSync("bash", [scriptPath], {
@@ -1011,9 +1021,9 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   );
   const nodeModules = path.join(checkout, "node_modules");
   if (!existsSync(nodeModules)) {
-    symlinkSync(path.resolve("node_modules"), nodeModules, "dir");
+    symlinkSync(TYPESCRIPT_NODE_MODULES, nodeModules, "dir");
   }
-  return spawnSync(process.execPath, ["--import", "tsx", "scripts/check-protocol-since.mts"], {
+  return spawnSync(process.execPath, ["--import", TSX_IMPORT, "scripts/check-protocol-since.mts"], {
     cwd: checkout,
     encoding: "utf8",
     env: { ...process.env, PROTOCOL_SINCE_BASE_SHA: baseSha },
