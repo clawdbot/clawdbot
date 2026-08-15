@@ -2,7 +2,10 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
-import { isUiGlobalSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
+} from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
   captureChatCommandTarget,
@@ -229,6 +232,22 @@ async function reconcileStoredChatOutboxHead(
   const connectionEpoch = host.connectionEpoch;
   if (!client || !host.connected) {
     return "blocked";
+  }
+  // A never-attempted head cannot be in server history, so its reconcile only
+  // needs the active-run answer — which the event that woke this drain already
+  // recorded into the session row. Skipping the 1000-message chat.history here
+  // stops one full-history RPC per transcript event while a run streams.
+  // Attempted items keep the fetch: delivered-detection must retire their
+  // bubbles even mid-run, and a missing row falls through conservatively.
+  const neverAttempted =
+    (item.sendAttempts ?? 0) === 0 && item.sendRequestStartedAtMs === undefined;
+  if (neverAttempted) {
+    const row = host.sessions.state.result?.sessions.find((session) =>
+      areUiSessionKeysEquivalent(session.key, outbox.sessionKey),
+    );
+    if (row && isSessionRunActive(row)) {
+      return "blocked";
+    }
   }
   const historyArgs = [host, outbox, item, client, connectionEpoch, dependencies] as const;
   const history = await readCurrentStoredChatHistory(...historyArgs);
