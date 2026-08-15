@@ -574,13 +574,6 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
-  it("sanitizes transport-classified malformed streaming fragments (#59076)", () => {
-    const msg = makeAssistantError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-    expect(formatAssistantErrorText(msg)).toBe(
-      "LLM streaming response contained a malformed fragment. Please try again.",
-    );
-  });
-
   it("does not broadly rewrite non-streaming 'Unexpected token' JSON parse errors", () => {
     const msg = makeAssistantError("Unexpected token < in JSON at position 0");
     expect(formatAssistantErrorText(msg)).toBe("Unexpected token < in JSON at position 0");

@@ -12,6 +12,11 @@ on:
         required: true
         default: false
         type: boolean
+      use_github_hosted_runners:
+        description: Use GitHub-hosted Ubuntu for npm preflight
+        required: false
+        default: false
+        type: boolean
       preflight_run_id:
         description: Existing successful preflight workflow run id to promote without rebuilding
         required: false
@@ -76,7 +81,7 @@ jobs:
   preflight_openclaw_npm:
     if: ${{ inputs.preflight_only }}
     # Preflight builds the full release package before publish; ubuntu-latest can OOM in tsdown.
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     permissions:
       contents: read
     steps:
@@ -1195,11 +1200,7 @@ jobs:
           fi
           current_selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
           current_selector_ref="v${current_selector_version}"
-          if ! git rev-parse --verify "${current_selector_ref}^{commit}" >/dev/null 2>&1; then
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
-              "refs/tags/${current_selector_ref}:refs/tags/${current_selector_ref}"
-          fi
-          current_selector_sha="$(git rev-parse "${current_selector_ref}^{commit}")"
+          current_selector_sha="$(git -C trusted-workflow rev-parse --verify "refs/tags/${current_selector_ref}^{commit}")"
           node trusted-workflow/scripts/plugin-sdk-api-release-evidence.mjs \
             --manifest "$MANIFEST_FILE" \
             --head "$EXPECTED_RELEASE_SHA" \

@@ -23,6 +23,7 @@ import {
 } from "./session-accessor.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
@@ -64,6 +65,24 @@ function resolveCombinedStorePath(paths: string[], storeConfig?: string): string
     : typeof storeConfig === "string" && storeConfig.trim()
       ? storeConfig.trim()
       : "(multiple)";
+}
+
+function resolveCombinedDatabasePath(
+  targets: Array<{ agentId: string; storePath: string }>,
+  defaultAgentId: string,
+): string {
+  const paths = [
+    ...new Set(
+      targets.map(
+        (target) =>
+          resolveSqliteTargetFromSessionStorePath(target.storePath, {
+            agentId: target.agentId,
+            defaultAgentId,
+          }).path,
+      ),
+    ),
+  ];
+  return paths.length === 1 ? expectDefined(paths[0], "database path at 0") : "(multiple)";
 }
 
 function loadGatewayStoreEntries(params: {
@@ -302,7 +321,7 @@ export function loadCombinedSessionStoreForGatewayCore(
         });
       }
     }
-    const durableStorePath = resolveSessionStorePathCore(storeConfig, { agentId: defaultAgentId });
+    const durableStorePath = resolveCombinedDatabasePath(durableTargets, defaultAgentId);
     const incognitoStorePaths = mergeOpenIncognitoStores({
       cfg,
       combined,
@@ -359,7 +378,7 @@ export function loadCombinedSessionStoreForGatewayCore(
   });
 
   const durableStorePaths = durableTargets.map((target) => target.storePath);
-  const durableStorePath = resolveCombinedStorePath(durableStorePaths, storeConfig);
+  const durableStorePath = resolveCombinedDatabasePath(durableTargets, defaultAgentId);
   const storePath = resolveCombinedStorePath(
     [...durableStorePaths, ...incognitoStorePaths],
     storeConfig,

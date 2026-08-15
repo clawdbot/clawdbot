@@ -10,7 +10,6 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
@@ -62,10 +61,8 @@ import {
   isRestartRecoveryLifecycleEvent,
   isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
-import {
-  resolveSessionSubscriptionKey,
-  resolveSessionSubscriptionKeys,
-} from "./session-subscription-keys.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -142,10 +139,6 @@ function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown 
   return { ...payload, data: projectedData };
 }
 
-function resolveHeartbeatAckMaxChars(): number {
-  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-}
-
 function resolveHeartbeatContext(runId: string, sourceRunId?: string) {
   const primary = getAgentRunContext(runId);
   if (primary?.isHeartbeat) {
@@ -211,7 +204,7 @@ function normalizeHeartbeatChatFinalText(params: {
 
   const stripped = stripHeartbeatToken(params.text, {
     mode: "heartbeat",
-    maxAckChars: resolveHeartbeatAckMaxChars(),
+    maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   });
   if (!stripped.didStrip) {
     return { suppress: false, text: params.text };
@@ -693,12 +686,17 @@ export function createAgentEventHandler({
   };
 
   const resolveSessionDeliveryKeys = (sessionKey: string, agentId?: string) => {
-    const canonicalKey = resolveSessionSubscriptionKey(sessionKey, agentId ?? "");
-    if (canonicalKey === sessionKey) {
-      return [canonicalKey];
+    if (sessionKey.trim().toLowerCase() !== "global") {
+      return [sessionKey];
     }
-    const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
-    return resolveSessionSubscriptionKeys(sessionKey, agentId ?? defaultAgentId, defaultAgentId);
+    const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
+      getRuntimeConfig(),
+      sessionKey,
+    );
+    const deliveryAgentId = agentId ?? compatibilityOwnerAgentId;
+    return deliveryAgentId
+      ? resolveSessionSubscriptionKeys(sessionKey, deliveryAgentId, compatibilityOwnerAgentId)
+      : [];
   };
   const sendNodeSessionPayloadForAgent = (
     sessionKey: string,
@@ -839,8 +837,8 @@ export function createAgentEventHandler({
           timeoutPhase: evt.data?.timeoutPhase,
           error: evt.data?.error,
         });
-        const terminalState =
-          CHAT_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminalOutcome)];
+        const terminalClassification = classifyAgentRunTerminalOutcome(terminalOutcome);
+        const terminalState = CHAT_STATE_BY_TERMINAL_CLASSIFICATION[terminalClassification];
         if (!(opts?.skipChatErrorFinal && terminalState === "error")) {
           emitChatTerminal(
             terminalSessionKey,
@@ -850,8 +848,13 @@ export function createAgentEventHandler({
             terminalState,
             terminalOutcome.error ?? evt.data?.error,
             terminalOutcome.stopReason,
-            readChatErrorKind(evt.data?.errorKind) ??
-              resolveChatErrorKindFromError(evt.data?.error),
+            // Timeout is a recorded classification, not event metadata: the
+            // lifecycle producer emits no errorKind, so without this the UI
+            // shows a generic "failed" while sessions.list says "timeout".
+            terminalClassification === "timeout"
+              ? "timeout"
+              : (readChatErrorKind(evt.data?.errorKind) ??
+                  resolveChatErrorKindFromError(evt.data?.error)),
             {
               agentId: terminalAgentId,
               controlUiVisible: isControlUiVisible,

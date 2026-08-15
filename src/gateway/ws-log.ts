@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Gateway WebSocket log formatting.
 // Redacts and compacts request/response/event metadata for console diagnostics.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
@@ -164,7 +165,7 @@ function renderSingleErrorForLog(error: Error): string {
   if (error.message) {
     parts.push(error.message);
   }
-  const codeValue = (error as unknown as { code?: unknown }).code;
+  const codeValue = isRecord(error) ? error.code : undefined;
   const code =
     typeof codeValue === "string" || typeof codeValue === "number" ? String(codeValue) : "";
   if (code) {
@@ -175,12 +176,12 @@ function renderSingleErrorForLog(error: Error): string {
 
 function renderErrorChainForLog(error: Error): string {
   const segments: string[] = [renderSingleErrorForLog(error)];
-  let current: unknown = (error as unknown as { cause?: unknown }).cause;
+  let current: unknown = error.cause;
   let depth = 0;
   while (current !== undefined && current !== null && depth < 8) {
     if (current instanceof Error) {
       segments.push(renderSingleErrorForLog(current));
-      current = (current as unknown as { cause?: unknown }).cause;
+      current = current.cause;
     } else {
       segments.push(stringifyNonErrorCause(current));
       current = undefined;

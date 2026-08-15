@@ -134,11 +134,10 @@ export async function completeSubagentRunAttempt(
       if (!snapshot) {
         return;
       }
-      const target = currentEntry as unknown as Record<string, unknown>;
-      for (const key of Object.keys(target)) {
-        delete target[key];
+      for (const key of Object.keys(currentEntry)) {
+        Reflect.deleteProperty(currentEntry, key);
       }
-      Object.assign(target, snapshot);
+      Object.assign(currentEntry, snapshot);
     };
     const recoveryRequested = completeParams.recoverInterrupted === true;
     if (

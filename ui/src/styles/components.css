@@ -31,12 +31,20 @@ openclaw-session-owner-chip {
   color: white;
   font-weight: 700;
   line-height: 1;
+  transition:
+    filter var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.session-owner-chip--away {
+  filter: grayscale(0.8);
+  opacity: 0.45;
 }
 
 .session-owner-chip--row {
-  width: 16px;
-  height: 16px;
-  font-size: 8px;
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
 }
 
 .session-owner-chip--header {
@@ -57,9 +65,16 @@ openclaw-session-owner-chip {
 .session-glyph {
   position: relative;
   display: inline-flex;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.session-glyph--circular .session-glyph__content {
+  width: 20px;
+  height: 20px;
 }
 
 .session-glyph__content {
@@ -71,9 +86,14 @@ openclaw-session-owner-chip {
   transition: transform var(--duration-fast) ease;
 }
 
+.session-glyph__emoji {
+  font-size: 15px;
+  line-height: 1;
+}
+
 /* The ring is a circle, so square artwork (page icons, thumbnails, arbitrary
-   SVGs) must shrink to keep its corners inside it. Circular avatars already
-   fit. A 16px square scaled below 0.75 clears the ring's 17px inner circle. */
+   SVGs) must shrink to keep its corners inside it. A 16px square scaled below
+   0.75 clears its 21px inner circle; 20px circular avatars fill their lead. */
 .session-glyph--running .session-glyph__content {
   transform: scale(0.72);
 }
@@ -615,15 +635,13 @@ openclaw-session-owner-chip {
   line-height: 1;
 }
 
-/* Passive notification, so it sits in the trailing bottom corner rather than
- * centered over the content column, where it landed on top of the chat composer's
- * controls. Overlapping the composer region from the corner is accepted. The host
- * shows one toast at a time (`show()` replaces the active one), so there is no
- * stack to offset against. */
+/* Passive notifications stay in the trailing top corner, away from the chat
+ * composer and other bottom-docked controls. The host shows one toast at a time
+ * (`show()` replaces the active one), so there is no stack to offset against. */
 .app-toast {
   position: fixed;
   right: calc(20px + var(--safe-area-right));
-  bottom: calc(20px + var(--safe-area-bottom));
+  top: calc(20px + var(--safe-area-top));
   z-index: var(--z-toast);
   display: flex;
   align-items: center;
@@ -638,7 +656,7 @@ openclaw-session-owner-chip {
 }
 
 /* A corner toast degenerates at phone widths, where it would span nearly the
- * whole viewport anyway. Use the full-width bottom idiom instead. */
+ * whole viewport anyway. Use the full-width top idiom instead. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .app-toast {
     left: max(12px, var(--safe-area-left));
@@ -904,7 +922,7 @@ openclaw-github-link-hovercard-provider {
   }
 }
 
-@media (max-width: 520px) {
+@media (max-width: 560px) {
   .github-link-hovercard {
     padding: 14px;
   }
@@ -1394,6 +1412,43 @@ openclaw-github-link-hovercard-provider {
   stroke-linejoin: round;
 }
 
+.scope-upgrade-chip-row {
+  display: flex;
+  min-height: 30px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.scope-upgrade-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 5px 11px;
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 9%, var(--bg-elevated));
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.scope-upgrade-chip:hover {
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg-elevated));
+}
+
+.scope-upgrade-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.scope-upgrade-chip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 .callout.danger {
   border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
   background: linear-gradient(
@@ -1620,17 +1675,10 @@ openclaw-chat-session-rail {
 
 .chat-session-rail__header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
   flex: 0 0 auto;
-  padding: 12px 10px 10px 14px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .chat-session-rail__header-copy {
-  display: grid;
-  gap: 5px;
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -2023,6 +2071,7 @@ openclaw-chat-session-rail {
   position: static;
   width: 100%;
   height: 100%;
+  border-left-width: 0;
 }
 
 @media (max-width: 768px) {
@@ -2806,7 +2855,7 @@ td.data-table-key-col {
 }
 
 .chat-queue__item--steered {
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  background: var(--info-subtle);
 }
 
 /* The edited row keeps its slot so the operator can see where the corrected
@@ -2891,6 +2940,10 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+.chat-queue__item--steered .chat-queue__icon {
+  color: var(--info);
+}
+
 /* Reconnect rows mirror the connection pill's amber status dot so the queue
    reads as quiet auto-retry status, not a failure needing action. */
 .chat-queue__dot {
@@ -2922,8 +2975,8 @@ td.data-table-key-col {
 }
 
 .chat-queue__badge--steered {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--info) 16%, transparent);
+  color: var(--info);
 }
 
 .chat-queue__item--failed .chat-queue__badge {
@@ -3381,6 +3434,66 @@ td.data-table-key-col {
   font-size: 12px;
 }
 
+.secret-reveal__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Same tile geometry as .summary-stat__icon, in the ok tone: the outcome is settled,
+   and the mark says so before any sentence is read. */
+.secret-reveal__status {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+
+.secret-reveal__status svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* The reassurance carries full text weight, unlike the muted .exec-approval-sub it
+   replaced; this is the zone that should read as settled rather than incidental. */
+.secret-reveal__body {
+  margin-top: 16px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.secret-reveal__body p {
+  margin: 0;
+}
+
+.secret-reveal__callout {
+  margin-top: 12px;
+  text-wrap: balance;
+}
+
+/* .btn's resting border (--border) sits within ~4/255 of --card in dark
+   (#1e2028 on #161920), so a neutral button reads as unpainted on this surface.
+   --border-strong is the token that separates from a card in both themes; the
+   inherited .btn:hover still supplies the hover surface. */
+.secret-reveal__dismiss {
+  border-color: var(--border-strong);
+}
+
+/* Trailing rationale: readable, but never competing with the outcome above it. */
+.secret-reveal__note {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /* ===========================================
    Agents
    =========================================== */
@@ -3632,12 +3745,6 @@ td.data-table-key-col {
 
 .agents-refresh-btn {
   white-space: nowrap;
-}
-
-.btn--ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--muted);
 }
 
 .btn--ghost:hover:not(:disabled) {
@@ -4265,7 +4372,7 @@ td.data-table-key-col {
   padding: clamp(24px, 3vw, 52px);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .md-preview-dialog__panel {
     width: 100%;
     min-height: calc(100vh - 12px);
@@ -4676,7 +4783,7 @@ td.data-table-key-col {
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1320px) {
   .agent-tool-summary {
     grid-template-columns: minmax(0, 1fr) auto;
   }
@@ -4690,7 +4797,7 @@ td.data-table-key-col {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .agent-tools-group__summary {
     flex-wrap: wrap;
     align-items: flex-start;
@@ -4791,13 +4898,13 @@ td.data-table-key-col {
   }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1100px) {
   .agent-tools-list {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 640px) {
   .agents-toolbar-row {
     flex-direction: column;
     align-items: stretch;
@@ -5288,6 +5395,53 @@ td.data-table-key-col {
   text-align: center;
 }
 
+.device-pair-setup__state {
+  display: grid;
+  min-height: 250px;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.device-pair-setup__state-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--bg-elevated);
+  color: var(--muted);
+}
+
+.device-pair-setup__state-icon--success {
+  border-color: color-mix(in srgb, var(--ok) 32%, var(--border));
+  background: color-mix(in srgb, var(--ok) 10%, var(--bg-elevated));
+  color: var(--ok);
+}
+
+.device-pair-setup__state-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.device-pair-setup__state h3 {
+  margin: 2px 0 0;
+  color: var(--text-strong);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+.device-pair-setup__state p {
+  margin: -6px 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .device-pair-setup__footer {
   display: flex;
   align-items: center;
@@ -5299,11 +5453,32 @@ td.data-table-key-col {
 }
 
 .device-pair-setup__footer a {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 4px;
+  border-radius: 4px;
   color: var(--muted);
+  text-underline-offset: 2px;
 }
 
 .device-pair-setup__footer a:hover {
   color: var(--text);
+}
+
+.device-pair-setup__footer a:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  color: var(--text);
+}
+
+.device-pair-setup__external-icon {
+  display: inline-flex;
+}
+
+.device-pair-setup__external-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 @media (max-width: 640px) {
@@ -5326,6 +5501,10 @@ td.data-table-key-col {
 
   .device-pair-setup__access {
     grid-template-columns: 1fr;
+  }
+
+  .device-pair-setup__footer a {
+    min-height: 44px;
   }
 }
 
@@ -5475,18 +5654,10 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.session-row-badge--approval,
-.session-approval-badge {
+.session-row-badge--approval {
   display: inline-flex;
   align-items: center;
   color: var(--warn);
-}
-
-.session-approval-badge svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .session-row-badge--cloud[data-placement-state="failed"] {
@@ -5506,6 +5677,14 @@ td.data-table-key-col {
 
 .session-row-badge--cloud[data-workspace-conflicts] {
   color: var(--warn);
+}
+
+.session-row-badge--cloud[data-disk-space-status="warning"] {
+  color: var(--warn);
+}
+
+.session-row-badge--cloud[data-disk-space-status="critical"] {
+  color: var(--danger);
 }
 
 .session-row-badge svg {
@@ -5626,7 +5805,7 @@ td.data-table-key-col {
 
 .session-run-spinner,
 .session-glyph__ring {
-  animation: session-run-spin 0.8s linear infinite;
+  animation: session-run-spin 1.6s linear infinite;
 }
 
 @keyframes session-run-spin {

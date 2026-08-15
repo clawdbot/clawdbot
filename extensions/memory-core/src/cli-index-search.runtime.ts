@@ -6,7 +6,9 @@ import {
   buildCliMemorySearchSessionKey,
   formatAuditCounts,
   formatExtraPaths,
+  formatMemoryIndexOutcome,
   resolveMemoryPluginConfig,
+  scanMemoryManagerSources,
   withMemoryCommand,
 } from "./cli-runtime-common.js";
 import {
@@ -149,6 +151,8 @@ export async function runMemoryIndex(
           },
         );
         let postIndexStatus = manager.status();
+        const scan = await scanMemoryManagerSources(postIndexStatus, agentId);
+        const outcome = formatMemoryIndexOutcome(postIndexStatus, scan, agentId);
         let semanticVectorAvailable = postIndexStatus.vector?.semanticAvailable;
         const vectorStoreAvailable =
           postIndexStatus.vector?.storeAvailable ?? postIndexStatus.vector?.available;
@@ -171,14 +175,13 @@ export async function runMemoryIndex(
           postIndexStatus.vector?.available ??
           postIndexStatus.vector?.storeAvailable;
         const vectorLoadErr = postIndexStatus.vector?.loadError;
+        defaultRuntime.log(outcome);
         if (vectorEnabled && vectorAvailable === false) {
           // Indexing still persisted chunks/FTS state; keep the command successful but
           // emit a stderr warning so operators and scripts can detect degraded recall.
           defaultRuntime.error(
             `Memory index WARNING (${agentId}): chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(vectorLoadErr)}. Vector recall degraded.`,
           );
-        } else {
-          defaultRuntime.log(`Memory index updated (${agentId}).`);
         }
       } catch (err) {
         const message = formatErrorMessage(err);

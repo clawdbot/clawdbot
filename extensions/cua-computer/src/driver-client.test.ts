@@ -2,28 +2,47 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   close: vi.fn(),
+  callTool: vi.fn(async () => ({})),
   create: vi.fn(),
   createConfigured: vi.fn(),
   createTrustedSession: vi.fn(),
   endSession: vi.fn(async () => ({})),
+  escalateSession: vi.fn(async () => ({
+    session: "openclaw-test",
+    captureScope: "desktop",
+    effectiveScope: "desktop",
+    desktopUnlocked: true,
+  })),
   getDesktopState: vi.fn(async () => ({})),
+  getSessionState: vi.fn(async () => ({
+    session: "openclaw-test",
+    captureScope: "desktop",
+    effectiveScope: "desktop",
+    desktopUnlocked: true,
+  })),
   isAvailable: vi.fn(() => true),
   startSession: vi.fn(async () => ({})),
   shutdown: vi.fn(async () => {}),
 }));
 
 const sdk = {
-  CaptureScope: { Desktop: "desktop" },
+  CaptureScope: { Window: "window", Desktop: "desktop" },
   ClickButton: { Left: 0, Right: 1, Middle: 2 },
   CuaDriver: { create: mocks.create, createConfigured: mocks.createConfigured },
   DesktopScope: { Desktop: 0 },
+  EscalationReason: { Other: "other" },
   ScrollBy: { Line: 0 },
   ScrollDirection: { Up: 0, Down: 1, Left: 2, Right: 3 },
   SessionPermissionMode: { Unrestricted: "unrestricted" },
   createTrustedSession: mocks.createTrustedSession,
 };
 
-import { ClickButton, createCuaDriver, ScrollDirection } from "./driver-client.js";
+import {
+  ClickButton,
+  createCuaDriver,
+  EscalationReason,
+  ScrollDirection,
+} from "./driver-client.js";
 
 const authorization = {
   allowedModes: ["unrestricted"],
@@ -42,8 +61,11 @@ describe("CUA Driver direct session", () => {
     });
     mocks.createTrustedSession.mockReturnValue({
       close: mocks.close,
+      callTool: mocks.callTool,
       endSession: mocks.endSession,
+      escalateSession: mocks.escalateSession,
       getDesktopState: mocks.getDesktopState,
+      getSessionState: mocks.getSessionState,
       startSession: mocks.startSession,
     });
   });
@@ -64,7 +86,7 @@ describe("CUA Driver direct session", () => {
     });
   });
 
-  it("uses configured creation and one fixed trusted OpenClaw session", async () => {
+  it("uses configured creation and fixed window and desktop sessions", async () => {
     const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
     expect(driver.isAvailable()).toBe(true);
@@ -73,19 +95,21 @@ describe("CUA Driver direct session", () => {
       claudeCodeCompatibility: false,
       authorization,
     });
-    expect(mocks.createTrustedSession).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        publicSession: expect.stringMatching(/^openclaw-/),
-        mode: "unrestricted",
-        ttlSeconds: authorization.maxSessionTtlSeconds,
-        idleTtlSeconds: authorization.maxIdleTtlSeconds,
-      }),
-    );
+    expect(mocks.createTrustedSession).toHaveBeenCalledTimes(2);
+    for (const [, options] of mocks.createTrustedSession.mock.calls) {
+      expect(options).toEqual(
+        expect.objectContaining({
+          publicSession: expect.stringMatching(/^openclaw-(window|desktop)-/),
+          mode: "unrestricted",
+          ttlSeconds: authorization.maxSessionTtlSeconds,
+          idleTtlSeconds: authorization.maxIdleTtlSeconds,
+        }),
+      );
+    }
 
     await driver.dispose();
     await driver.dispose();
-    expect(mocks.close).toHaveBeenCalledOnce();
+    expect(mocks.close).toHaveBeenCalledTimes(2);
     expect(mocks.shutdown).toHaveBeenCalledOnce();
   });
 
@@ -93,7 +117,9 @@ describe("CUA Driver direct session", () => {
     const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
     await Promise.all([driver.getDesktopState(), driver.getDesktopState()]);
-    const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
+    const sessionOptions = mocks.createTrustedSession.mock.calls.find(([, options]) =>
+      options.publicSession.startsWith("openclaw-desktop-"),
+    )?.[1];
 
     expect(mocks.startSession).toHaveBeenCalledOnce();
     expect(mocks.startSession).toHaveBeenCalledWith(
@@ -107,6 +133,54 @@ describe("CUA Driver direct session", () => {
 
     await driver.dispose();
     expect(mocks.endSession).toHaveBeenCalledWith({ session: sessionOptions.publicSession });
+  });
+
+  it("keeps the window session immutable across desktop actions and escalation", async () => {
+    const driver = createCuaDriver({ loadSdk: () => sdk as never });
+
+    await driver.getDesktopState();
+    await driver.callTool("list_windows", {});
+    await driver.callDesktopTool("get_cursor_position", {});
+    await driver.escalateScope(EscalationReason.Other);
+    await driver.callTool("list_windows", {});
+    const windowOptions = mocks.createTrustedSession.mock.calls.find(([, options]) =>
+      options.publicSession.startsWith("openclaw-window-"),
+    )?.[1];
+    const desktopOptions = mocks.createTrustedSession.mock.calls.find(([, options]) =>
+      options.publicSession.startsWith("openclaw-desktop-"),
+    )?.[1];
+    expect(mocks.startSession).toHaveBeenCalledWith(
+      { session: windowOptions.publicSession, captureScope: "window" },
+      undefined,
+    );
+    expect(mocks.startSession).toHaveBeenCalledWith(
+      { session: desktopOptions.publicSession, captureScope: "desktop" },
+      undefined,
+    );
+    expect(mocks.callTool).toHaveBeenCalledTimes(3);
+    expect(mocks.callTool).toHaveBeenNthCalledWith(
+      1,
+      "list_windows",
+      JSON.stringify({ session: windowOptions.publicSession }),
+      undefined,
+    );
+    expect(mocks.callTool).toHaveBeenCalledWith(
+      "get_cursor_position",
+      JSON.stringify({ session: desktopOptions.publicSession }),
+      undefined,
+    );
+    expect(mocks.getSessionState).toHaveBeenCalledWith(
+      { session: desktopOptions.publicSession },
+      undefined,
+    );
+    expect(mocks.escalateSession).not.toHaveBeenCalled();
+    expect(mocks.callTool).toHaveBeenNthCalledWith(
+      3,
+      "list_windows",
+      JSON.stringify({ session: windowOptions.publicSession }),
+      undefined,
+    );
+    await driver.dispose();
   });
 
   it("keeps a missing native desktop library behind command availability", async () => {

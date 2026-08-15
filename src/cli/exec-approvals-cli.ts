@@ -17,7 +17,10 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
@@ -534,7 +537,7 @@ function renderPendingApprovals(entries: PendingApprovalCliEntry[]): void {
   const now = Date.now();
   defaultRuntime.log(`${theme.heading("Pending approvals")} ${theme.muted(`(${entries.length})`)}`);
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "ID", header: "ID", minWidth: 16, flex: true },
@@ -827,7 +830,7 @@ function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
     Notes: `${summary.security.note}; ${summary.ask.note}`,
   }));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "Scope", header: "Scope", minWidth: 12 },
@@ -901,7 +904,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
 
   defaultRuntime.log(heading("Approvals"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: tableWidth,
       columns: [
         { key: "Field", header: "Field", minWidth: 8 },
@@ -920,7 +923,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   defaultRuntime.log("");
   defaultRuntime.log(heading("Allowlist"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: tableWidth,
       columns: [
         { key: "Target", header: "Target", minWidth: 10 },
@@ -951,7 +954,7 @@ function renderNativeApprovalsSnapshot(snapshot: NativeExecApprovalsSnapshot, ta
   ];
   defaultRuntime.log(heading("Approvals"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "Field", header: "Field", minWidth: 8 },
@@ -968,7 +971,7 @@ function renderNativeApprovalsSnapshot(snapshot: NativeExecApprovalsSnapshot, ta
   defaultRuntime.log("");
   defaultRuntime.log(heading("Rules"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },

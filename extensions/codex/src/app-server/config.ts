@@ -24,6 +24,7 @@ export type {
 } from "./config-contracts.js";
 export { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-policy.js";
 export {
+  isCodexRemoteExecPlacementSandbox,
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
   resolveCodexPluginsPolicy,
@@ -33,7 +34,6 @@ export {
   resolveCodexAppServerUserHomeDir,
   resolveCodexModelBackedReviewerPolicyContext,
 } from "./config-reviewer.js";
-export { isCodexAppServerApprovalPolicyAllowedByRequirements } from "./config-requirements.js";
 export {
   codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,

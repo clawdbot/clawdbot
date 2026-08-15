@@ -457,13 +457,6 @@
       "text": "NIP-05"
     },
     {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-bubble.ts",
-      "text": "JSON"
-    },
-    {
       "count": 1,
       "kind": "html-text",
       "name": "text",
@@ -574,6 +567,13 @@
       "name": "text",
       "path": "ui/src/pages/devices/view-exec-approvals.ts",
       "text": "exec host=gateway/node"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/model-providers/default-models-view.ts",
+      "text": "i"
     },
     {
       "count": 4,

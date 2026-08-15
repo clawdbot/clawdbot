@@ -1,7 +1,6 @@
 // Storage-neutral session maintenance operations for the file-backed session store.
 import path from "node:path";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
-import { countSessionEntryMaintenanceEligibleEntries } from "./store-maintenance-eligibility.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -103,6 +102,7 @@ async function applyWarnOnlyMaintenance(params: {
   maintenance: ResolvedSessionMaintenanceConfig;
   beforeCount: number;
   shouldRunEntryMaintenance: boolean;
+  preserveSessionKeys: ReadonlySet<string> | undefined;
 }): Promise<void> {
   const activeSessionKey = params.operation.activeSessionKey?.trim();
   if (activeSessionKey && params.shouldRunEntryMaintenance) {
@@ -111,6 +111,7 @@ async function applyWarnOnlyMaintenance(params: {
       activeSessionKey,
       pruneAfterMs: params.maintenance.pruneAfterMs,
       maxEntries: params.maintenance.maxEntries,
+      preserveKeys: params.preserveSessionKeys,
     });
     if (warning) {
       params.operation.log.warn(
@@ -205,10 +206,7 @@ async function applyEnforcedMaintenance(params: {
   const removedSessionFiles = new Map<string, string | undefined>();
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
-    entryCount: countSessionEntryMaintenanceEligibleEntries(
-      params.operation.store,
-      params.preserveSessionKeys,
-    ),
+    entryCount: Object.keys(params.operation.store).length,
     force: params.forceMaintenance,
   })
     ? pruneStaleModelRunEntries(params.operation.store, params.maintenance.modelRunPruneAfterMs, {
@@ -224,10 +222,7 @@ async function applyEnforcedMaintenance(params: {
     },
     preserveKeys: params.preserveSessionKeys,
   });
-  const countAfterPrune = countSessionEntryMaintenanceEligibleEntries(
-    params.operation.store,
-    params.preserveSessionKeys,
-  );
+  const countAfterPrune = Object.keys(params.operation.store).length;
   const shouldRunCapMaintenance =
     params.forceMaintenance ||
     shouldRunSessionEntryMaintenance({
@@ -296,7 +291,7 @@ export async function applyFileBackedSessionStoreMaintenance(
     baseKeys: [params.activeSessionKey],
   });
   const shouldRunEntryMaintenance = shouldRunSessionEntryMaintenance({
-    entryCount: countSessionEntryMaintenanceEligibleEntries(params.store, preserveSessionKeys),
+    entryCount: beforeCount,
     maxEntries: maintenance.maxEntries,
     force: forceMaintenance,
   });
@@ -307,6 +302,7 @@ export async function applyFileBackedSessionStoreMaintenance(
       maintenance,
       beforeCount,
       shouldRunEntryMaintenance,
+      preserveSessionKeys,
     });
     return { changedStore: false };
   }

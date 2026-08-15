@@ -456,6 +456,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       OPENCLAW_CI_TARGET_CONTEXT_TARGET:
         "${{ steps.target_context_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
+      OPENCLAW_CI_RUNNER_BACKEND: "${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}",
       OPENCLAW_CI_RUN_ANDROID:
         "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
       OPENCLAW_CI_RUN_CONTROL_UI_I18N:
@@ -527,6 +528,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(pluginManifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mts"');
     expect(pluginManifestScript).toContain('"./scripts/lib/extension-test-plan.mts"');
     expect(pluginManifestScript).toContain('"./scripts/lib/ci-node-test-plan.mts"');
+    expect(pluginManifestScript).toContain("const { createNodeTestShards } = await import");
+    expect(pluginManifestScript).not.toContain("createNodeTestShardBundles");
+    expect(pluginManifestScript).not.toContain("compactMode");
+    expect(pluginManifestScript).not.toContain("runnerBackend");
     expect(pluginManifestScript).toContain('shard.shardName === "agentic-plugins"');
     expect(pluginManifestScript).toContain(
       "Plugin prerelease plan unavailable in target ref; skipping static and Docker plugin prerelease lanes.",

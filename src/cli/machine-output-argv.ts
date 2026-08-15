@@ -11,8 +11,10 @@ export type MachineOutputResolverParams = {
 export type MachineOutputResolver = (params: MachineOutputResolverParams) => boolean;
 
 /** Normalize Node's absent `isTTY` property to the public resolver's boolean contract. */
-export function isMachineOutputStdoutTTY(stdout: object = process.stdout): boolean {
-  return Reflect.get(stdout, "isTTY") === true;
+export function isMachineOutputStdoutTTY(
+  stdout: { readonly isTTY?: boolean } = process.stdout,
+): boolean {
+  return stdout.isTTY === true;
 }
 
 /** Locate the root command after supported root options without loading descriptor catalogs. */

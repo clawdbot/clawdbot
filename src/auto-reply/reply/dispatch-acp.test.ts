@@ -8,11 +8,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
+import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
+import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
+import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
+import {
+  configureChannelAdmissionEvidenceCollection,
+  registerChannelAdmissionEvidenceOwner,
+} from "../../channels/message-access/admission-evidence.js";
+import { resolveStableChannelMessageIngress } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import {
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
@@ -23,6 +32,7 @@ import {
   appendRecentHistoryImageContext,
   resolveRecentInboundHistoryImages,
 } from "./history-media.js";
+import { finalizeInboundContext } from "./inbound-context.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -363,16 +373,19 @@ async function runDispatch(params: {
     opts?: { reason?: string; error?: string },
   ) => void;
   markIdle?: (reason: string) => void;
+  ctx?: FinalizedRuntimeMsgContext;
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
   return tryDispatchAcpReplyCore({
-    ctx: buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      SessionKey: targetSessionKey,
-      BodyForAgent: params.bodyForAgent,
-      ...params.ctxOverrides,
-    }),
+    ctx:
+      params.ctx ??
+      buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: targetSessionKey,
+        BodyForAgent: params.bodyForAgent,
+        ...params.ctxOverrides,
+      }),
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     ...(params.runId ? { runId: params.runId } : {}),
@@ -532,6 +545,72 @@ describe("tryDispatchAcpReplyCore", () => {
     bindingServiceMocks.unbind.mockReset();
     bindingServiceMocks.unbind.mockResolvedValue([]);
     globalThis.fetch = originalFetch;
+  });
+
+  it("admits ACP message turns with the original channel participant", async () => {
+    const captured: unknown[] = [];
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const clearSink = configureExecutionIdentityAdmissionSink((work) => {
+      captured.push(work);
+      return true;
+    });
+    const owner = { channelId: "discord", record: {}, epoch: {}, isLive: () => true };
+    const clearOwner = registerChannelAdmissionEvidenceOwner(owner);
+    try {
+      setReadyAcpResolution();
+      const channelIngress = await resolveStableChannelMessageIngress({
+        channelId: "discord",
+        accountId: "default",
+        subject: { stableId: "person-42" },
+        conversation: { kind: "group", id: "room-1" },
+        contextBinding: {
+          agentId: "main",
+          sessionKey,
+          messageId: "msg-acp",
+          inboundEventKind: "user_request",
+        },
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
+      const buildContext = createHostChannelInboundEventContextBuilder(
+        buildChannelInboundEventContext,
+        owner,
+      );
+      const ctx = finalizeInboundContext(
+        await buildContext({
+          channel: "discord",
+          accountId: "default",
+          messageId: "msg-acp",
+          from: "discord:channel:room-1",
+          sender: { id: "person-42" },
+          conversation: { kind: "group", id: "room-1" },
+          route: { agentId: "main", routeSessionKey: sessionKey },
+          reply: { to: "discord:channel:room-1" },
+          message: { rawBody: "run acp", bodyForAgent: "run acp" },
+          channelIngress,
+        }),
+      );
+
+      await runDispatch({
+        bodyForAgent: "run acp",
+        cfg: createAcpTestConfig({ logging: { audit: { executionIdentity: true } } }),
+        ctx,
+      });
+
+      expect(captured).toMatchObject([
+        {
+          kind: "capture",
+          envelope: {
+            ingress: { kind: "acp", state: "present" },
+            invoker: { state: "present", kind: "person" },
+          },
+        },
+      ]);
+    } finally {
+      clearOwner();
+      clearSink();
+      clearCollection();
+    }
   });
 
   it("projects normal ACP dispatch lifecycle and tool events into audit diagnostics", async () => {

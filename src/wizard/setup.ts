@@ -1,8 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
-import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
+import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
+import type { OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { ConfigMutationConflictError } from "../config/config.js";
 import { createMergePatch } from "../config/merge-patch.js";
@@ -36,6 +38,7 @@ import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.mod
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
   hasQuickstartGatewayOverrides,
+  formatQuickstartGatewaySummary,
   readSetupConfigFileSnapshot,
   readValidSetupConfigFile,
   requireRiskAcknowledgement,
@@ -53,18 +56,6 @@ const loadOnboardConfigModule = createLazyRuntimeModule(
   () => import("../commands/onboard-config.js"),
 );
 
-function hasConfiguredDefaultModel(config: OpenClawConfig): boolean {
-  return resolveAgentModelPrimaryValue(config.agents?.defaults?.model) !== undefined;
-}
-
-function isSetupImportFlowChoice(flow: SetupFlowChoice): boolean {
-  return flow === "import" || flow.startsWith("import:");
-}
-
-function resolveImportProviderFromFlowChoice(flow: SetupFlowChoice): string | undefined {
-  return flow.startsWith("import:") ? flow.slice("import:".length) : undefined;
-}
-
 export async function runSetupWizard(
   opts: OnboardOptions,
   runtimeInput: RuntimeEnv | undefined,
@@ -81,8 +72,7 @@ async function runSetupWizardOnce(
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
-  let runtime = runtimeInput;
-  runtime ??= defaultRuntime;
+  const runtime = runtimeInput ?? defaultRuntime;
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   await onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.setup.intro"));
@@ -156,7 +146,8 @@ async function runSetupWizardOnce(
     command: formatCliCommand("openclaw configure"),
   });
   const manualHint = t("wizard.setup.flowAdvancedHint");
-  const hasExistingModelConfig = hasConfiguredDefaultModel(baseConfig);
+  const hasExistingModelConfig =
+    resolveAgentModelPrimaryValue(baseConfig.agents?.defaults?.model) !== undefined;
   const migrationDetections = await detectSetupMigrationSources({ config: baseConfig, runtime });
   const migrationOptions = await listSetupMigrationOptions({
     baseConfig,
@@ -240,8 +231,8 @@ async function runSetupWizardOnce(
   let usedImportFlow = false;
   let acknowledgeMigrationPromotion: (() => Promise<void>) | undefined;
   let importedInferenceVerified = false;
-  while (opts.importFrom || isSetupImportFlowChoice(flow)) {
-    const importFrom = opts.importFrom ?? resolveImportProviderFromFlowChoice(flow);
+  while (opts.importFrom || flow === "import" || flow.startsWith("import:")) {
+    const importFrom = opts.importFrom ?? (flow.startsWith("import:") ? flow.slice(7) : undefined);
     prompter.disableBackNavigation?.();
     let migrationOutcome: Awaited<ReturnType<typeof runSetupMigrationImport>>;
     try {
@@ -262,9 +253,7 @@ async function runSetupWizardOnce(
           }
           const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
           if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
-            throw new ConfigMutationConflictError("config changed during migration promotion", {
-              currentHash: latest.hash ?? null,
-            });
+            throw new ConfigMutationConflictError("config changed during migration promotion");
           }
           return await writeWizardConfigFile(cfg, {
             allowConfigSizeDrop: true,
@@ -302,6 +291,14 @@ async function runSetupWizardOnce(
     flow = "quickstart";
     break;
   }
+  const importSuppliedRoster = usedImportFlow && listAgentEntries(baseConfig).length > 0;
+  if (importSuppliedRoster && opts.agentName !== undefined) {
+    runtime.error(
+      "--agent-name cannot be combined with an import that supplies an agent roster. Remove --agent-name or choose an import without agents.",
+    );
+    runtime.exit(1);
+    return;
+  }
   const wizardFlow: WizardFlow = flow === "advanced" ? "advanced" : "quickstart";
   const hasExplicitQuickstartGatewayOverrides =
     wizardFlow === "quickstart" && hasQuickstartGatewayOverrides(opts);
@@ -312,52 +309,13 @@ async function runSetupWizardOnce(
   );
 
   if (flow === "quickstart") {
-    const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
-      if (value === "loopback") {
-        return t("wizard.gateway.bindLoopback");
-      }
-      if (value === "lan") {
-        return t("wizard.gateway.bindLan");
-      }
-      if (value === "custom") {
-        return t("wizard.gateway.bindCustom");
-      }
-      if (value === "tailnet") {
-        return t("wizard.gateway.bindTailnet");
-      }
-      return t("wizard.gateway.bindAuto");
-    };
-    const formatAuth = (value: GatewayAuthChoice) => {
-      if (value === "token") {
-        return t("wizard.setup.quickstartAuthTokenDefault");
-      }
-      return t("common.password");
-    };
-    const formatTailscale = (value: "off" | "serve" | "funnel") => {
-      return t(`wizard.gatewayTailscale.${value}`);
-    };
-    const quickstartLines = [
-      ...(quickstartGateway.hasExisting && !hasExplicitQuickstartGatewayOverrides
-        ? [t("wizard.setup.quickstartKeepSettings")]
-        : []),
-      t("wizard.setup.quickstartGatewayPort", { port: quickstartGateway.port }),
-      t("wizard.setup.quickstartGatewayBind", { bind: formatBind(quickstartGateway.bind) }),
-      ...(quickstartGateway.bind === "custom" && quickstartGateway.customBindHost
-        ? [
-            t("wizard.setup.quickstartGatewayCustomIp", {
-              host: quickstartGateway.customBindHost,
-            }),
-          ]
-        : []),
-      t("wizard.setup.quickstartGatewayAuth", {
-        auth: formatAuth(quickstartGateway.authMode),
-      }),
-      t("wizard.setup.quickstartTailscaleExposure", {
-        exposure: formatTailscale(quickstartGateway.tailscaleMode),
-      }),
-      t("wizard.setup.quickstartDirectChannels"),
-    ];
-    await prompter.note(quickstartLines.join("\n"), "QuickStart");
+    await prompter.note(
+      formatQuickstartGatewaySummary(
+        quickstartGateway,
+        quickstartGateway.hasExisting && !hasExplicitQuickstartGatewayOverrides,
+      ),
+      "QuickStart",
+    );
   }
 
   const localPort = quickstartGateway.port;
@@ -526,13 +484,20 @@ async function runSetupWizardOnce(
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
     await loadOnboardConfigModule();
-  const hasAuthoredRoster = hasResolvedRosterBeforeMigrations(currentSetupSnapshot);
+  const hasAuthoredRoster =
+    importSuppliedRoster || hasResolvedRosterBeforeMigrations(currentSetupSnapshot);
   const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
     requestedWorkspaceDir,
     prompter,
     hasAuthoredRoster,
   });
+  const firstAgent = await firstAgentOnboarding.promptFirstOnboardingAgent(
+    hasAuthoredRoster,
+    opts.agentName,
+    prompter,
+    opts.nonInteractive,
+  );
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
     baseConfig,
     requestedWorkspaceDir,
@@ -564,8 +529,17 @@ async function runSetupWizardOnce(
     prompter,
     runtime,
   });
-  const onboard = (await import("../commands/onboard-agent.js")).ensureOnboardingConfig;
-  nextConfig = (await onboard(gateway.nextConfig, workspaceDir, usedImportFlow, baseConfig)).config;
+  const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
+  const onboardingAgent = await ensureOnboardingAgent({
+    config: gateway.nextConfig,
+    workspace: workspaceDir,
+    preserveCandidateRoster: usedImportFlow,
+    baseConfig,
+    ...(firstAgent ? { firstAgent } : {}),
+  });
+  nextConfig = onboardingAgent.config;
+  const migrationWarnings = onboardingAgent.sessionMigrationWarnings;
+  await firstAgentOnboarding.showSessionMigrationWarnings(prompter, migrationWarnings);
 
   let liveModelVerified = false;
   let setupConfigPersisted = false;
@@ -574,7 +548,7 @@ async function runSetupWizardOnce(
   if (
     opts.nonInteractive !== true &&
     !importedInferenceVerified &&
-    hasConfiguredDefaultModel(nextConfig) &&
+    resolveAgentModelPrimaryValue(nextConfig.agents?.defaults?.model) !== undefined &&
     ((usedImportFlow && keepExistingModelConfig) || opts.authChoice !== "skip")
   ) {
     const verificationTarget = resolveOnboardingAgentTarget(nextConfig);

@@ -437,14 +437,19 @@ export async function executeActAction(params: {
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
   onTabActivity?: (targetId: string | undefined) => void;
+  onTabClose?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   const effectiveRequest = withConfiguredActTimeout(request, profile);
   // resolvedTargetId is the id the act actually ran against (retry paths swap
   // it), so page-state capture must use it rather than the original request's.
   const finishActResult = async (result: unknown, resolvedTargetId: string | undefined) => {
-    params.onTabActivity?.(resolvedTargetId);
     const aborted = readBrowserBatchAbort(result);
+    const onTabResult =
+      effectiveRequest.kind === "close" || aborted?.reason === "closed"
+        ? params.onTabClose
+        : params.onTabActivity;
+    onTabResult?.(resolvedTargetId);
     const formatted = formatActToolResult(result, aborted);
     if (!actObservedNavigation(result, aborted)) {
       return formatted;

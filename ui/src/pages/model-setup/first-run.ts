@@ -78,21 +78,24 @@ function startModelSetupFirstRunRedirect(params: {
     ) {
       return;
     }
-    const connection = { client: snapshot.client, hello: snapshot.hello };
+    const agentId = params.context.agentSelection.state.selectedId;
+    const connection = { client: snapshot.client, hello: snapshot.hello, agentId };
     if (
       connection.client === attemptedConnection?.client &&
-      connection.hello === attemptedConnection?.hello
+      connection.hello === attemptedConnection?.hello &&
+      connection.agentId === attemptedConnection?.agentId
     ) {
       return;
     }
     attemptedConnection = connection;
-    void detectModelSetup(snapshot.client)
+    void detectModelSetup(snapshot.client, agentId ?? undefined)
       .then((result) => {
         const current = params.context.gateway.snapshot;
         if (
           current.phase !== "connected" ||
           current.client !== connection.client ||
-          current.hello !== connection.hello
+          current.hello !== connection.hello ||
+          params.context.agentSelection.state.selectedId !== connection.agentId
         ) {
           return;
         }
@@ -107,6 +110,12 @@ function startModelSetupFirstRunRedirect(params: {
       });
   };
   const unsubscribe = params.context.gateway.subscribe(handleSnapshot);
+  const unsubscribeSelection = params.context.agentSelection.subscribe(() =>
+    handleSnapshot(params.context.gateway.snapshot),
+  );
   handleSnapshot(params.context.gateway.snapshot);
-  return unsubscribe;
+  return () => {
+    unsubscribe();
+    unsubscribeSelection();
+  };
 }

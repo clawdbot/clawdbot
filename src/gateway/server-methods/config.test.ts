@@ -154,9 +154,7 @@ beforeEach(() => {
       nextConfig: OpenClawConfig;
     }) => {
       if (snapshot.hash !== storedHash) {
-        throw new ConfigMutationConflictError("config changed since last load", {
-          currentHash: storedHash,
-        });
+        throw new ConfigMutationConflictError("config changed since last load");
       }
       storedConfig = nextConfig;
       storedHash = `next-hash-${nextHash}`;
@@ -451,9 +449,7 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => {
       storedConfig = { ui: { prefs: { locale: "de" } } };
       storedHash = "raced-hash";
-      throw new ConfigMutationConflictError("config changed since last load", {
-        currentHash: storedHash,
-      });
+      throw new ConfigMutationConflictError("config changed since last load");
     });
 
     const { respond } = await invokeConfigPatch({

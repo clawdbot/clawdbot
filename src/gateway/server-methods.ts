@@ -56,6 +56,7 @@ import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
+import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 type CoreGatewayHandlerModuleLoader = () => Promise<GatewayRequestHandlers>;
 
@@ -512,6 +513,10 @@ export async function runWithGatewayRequestEnvelope<T>(
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         return await options.reject(error.error);
+      }
+      const staleInstall = classifyGatewayStaleInstall(error);
+      if (staleInstall) {
+        return await options.reject(staleInstall.error);
       }
       throw error;
     }

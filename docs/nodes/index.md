@@ -371,12 +371,24 @@ byte-offset cursors and bounded backward file reads, so selecting a large
 session or loading an older page does not read the whole JSONL history into one
 Gateway response.
 
-The list and read commands are read-only. They expose catalog metadata and transcript
-content only through the generic `sessions.catalog.list` and
-`sessions.catalog.read` methods to an authenticated operator connection with
-`operator.write`. A Gateway-local Claude CLI row can be adopted from the normal
-Chat composer: OpenClaw imports bounded visible history, resumes with
-`--fork-session` on the first turn, and leaves the source transcript untouched.
+Catalog RPCs keep their normal method scopes: `sessions.catalog.list` and
+`sessions.catalog.read` require `operator.read`; `sessions.catalog.continue` and
+`sessions.catalog.archive` require `operator.write`.
+
+Catalog visibility also follows the authenticated caller. An `operator.admin`
+connection sees every discovered row. When the Gateway has durable profiles for
+fewer than two people, catalog visibility is unchanged and rows remain unfiltered.
+On a multi-user Gateway, a non-admin connection sees and can read, continue, or
+archive only rows whose recorded `createdActor.id` matches the caller's Gateway
+profile. Unattributed host CLI or desktop sessions are hidden from those callers.
+This is a privacy and coordination boundary inside one trusted Gateway domain,
+not hostile-user isolation; use separate agents or Gateway/host trust boundaries
+when people must not share access to files, credentials, or tools. See
+[Multi-user mode](/concepts/multi-user).
+
+A Gateway-local Claude CLI row can be adopted from the normal Chat composer:
+OpenClaw imports bounded visible history, resumes with `--fork-session` on the
+first turn, and leaves the source transcript untouched.
 
 A headless node host can opt into the same continuation flow:
 
@@ -427,11 +439,26 @@ only while those declarations match, and provisioning requires the node and
 Gateway versions to match exactly. If they differ, update the node before
 retrying.
 
-This setting completes device-environment provisioning and session-host status;
-it does **not** yet make device turn dispatch succeed. The Gateway still returns
-`device-runner-transport-unimplemented` until the local-install chain adds
-supervised launch and workspace transport. Do not treat the status as proof that
-a complete turn can run on the device yet.
+This setting enables supervised session turns on the paired device, including
+Gateway-owned workspace transfer and result reconciliation. Each node runs at
+most two worker processes by default. A third launch waits up to 10 seconds for
+a durable slot; while both slots are occupied, the node remains available for
+status and cancellation but is not selected for a new session turn.
+
+If the device is offline before a turn is dispatched, the Gateway waits up to
+10 seconds and then returns a visible retry/reconnect error while keeping the
+session placement available for a later attempt. Gateway restart likewise
+preserves an idle device placement and reconnects its tunnel lazily on the next
+turn. A paired node remains dormant for 14 days after its exact recorded
+disconnect; at that boundary its old worker environment is treated as gone and
+the session placement reconciles normally. Pairing itself remains, so a later
+reconnect can provision a fresh environment. Legacy pairings without exact node
+disconnect history are retained fail-safe rather than expired from unrelated
+device activity. Removing the device pairing, silently pruning a superseded
+pairing, or removing only its node role invalidates clients first, then runs
+targeted environment and placement reconciliation; explicit removal waits for
+the credential fence before returning success, and the periodic sweep retries
+failed provider or placement cleanup.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.

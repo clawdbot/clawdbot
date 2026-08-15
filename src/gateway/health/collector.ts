@@ -9,8 +9,8 @@ import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/s
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
@@ -31,12 +31,12 @@ import {
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { buildNonSensitiveProbeFailure, resolveHealthAccountContext } from "./account-context.js";
+import { buildContextEngineHealthSummary } from "./context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "./delivery-queue.js";
 import type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
-  ContextEngineHealthSummary,
   HealthSummary,
   PluginHealthErrorSummary,
   PluginHealthSummary,
@@ -56,23 +56,6 @@ const debugHealth = (
     healthLog.info(message, meta);
   }
 };
-
-function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefined {
-  const quarantined: ContextEngineHealthSummary["quarantined"] = [];
-  for (const entry of listContextEngineQuarantines()) {
-    const summary: ContextEngineHealthSummary["quarantined"][number] = {
-      engineId: entry.engineId,
-      operation: entry.operation,
-      reason: entry.reason,
-      failedAt: entry.failedAt.getTime(),
-    };
-    if (entry.owner) {
-      summary.owner = entry.owner;
-    }
-    quarantined.push(summary);
-  }
-  return quarantined.length > 0 ? { quarantined } : undefined;
-}
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
@@ -109,6 +92,7 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
 }
 
 export async function buildHealthSessionSummary(storePath: string, agentId?: string) {
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
   const { listSessionEntriesReadOnly } = await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
   let listed: ReturnType<typeof listSessionEntriesReadOnly>;
@@ -134,7 +118,7 @@ export async function buildHealthSessionSummary(storePath: string, agentId?: str
     age: session.updatedAt ? Date.now() - session.updatedAt : null,
   }));
   return {
-    path: storePath,
+    path: databasePath,
     count: sessions.length,
     recent,
   } satisfies HealthSummary["sessions"];

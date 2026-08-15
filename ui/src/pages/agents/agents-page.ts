@@ -544,13 +544,13 @@ class AgentsPage
     }
   }
 
-  private ensureModelCatalog() {
+  private ensureModelCatalog(options: { refresh?: boolean } = {}) {
     const client = this.client;
     const agentId = this.resolveSelectedAgentId();
     if (!client || !this.connected || !agentId) {
       return;
     }
-    if (this.chatModelCatalogClient === client) {
+    if (!options.refresh && this.chatModelCatalogClient === client) {
       const cached = this.chatModelCatalogByAgentId.get(agentId);
       if (cached) {
         this.chatModelCatalog = cached;
@@ -574,8 +574,8 @@ class AgentsPage
     const request = { client, generation, agentId };
     this.chatModelCatalogRequest = request;
     this.chatModelCatalogError = null;
-    // Only chat metadata projects the selected agent's private provider/auth
-    // scope; models.list always resolves against the default agent.
+    // Chat metadata carries the selected agent's already-prepared startup models
+    // without initiating the live discovery reserved for explicit picker use.
     void client
       .request<{ models?: ModelCatalogEntry[] }>("chat.metadata", { agentId })
       .then((result) => {
@@ -1114,7 +1114,10 @@ class AgentsPage
             stageAgentPrimaryModel(this.context.runtimeConfig, agentId, modelId);
             void refreshVisibleToolsEffectiveForCurrentSession(this);
           },
-          onModelCatalogRetry: () => this.ensureModelCatalog(),
+          // Availability facts (provider keys added/removed, new models) go
+          // stale in the per-agent cache; opening the picker re-reads them,
+          // mirroring the chat composer's on-open refresh.
+          onModelCatalogRetry: () => this.ensureModelCatalog({ refresh: true }),
           onModelFallbacksChange: (agentId, fallbacks) => {
             if (this.canCall("config.set", "operator.admin")) {
               stageAgentModelFallbacks(this.context.runtimeConfig, agentId, fallbacks);

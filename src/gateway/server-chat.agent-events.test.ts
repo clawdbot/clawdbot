@@ -3251,9 +3251,40 @@ describe("agent event handler", () => {
       runId: "client-timeout",
       state: "error",
       stopReason: "timeout",
+      // The recorded classification must reach the browser as errorKind or
+      // the projection renders a generic "failed" while sessions.list says
+      // "timeout".
+      errorKind: "timeout",
       errorMessage: "agent provider timeout",
     });
     expect(payload).not.toHaveProperty("message");
+  });
+
+  it("classifies a timeout end without error text via the recorded outcome", () => {
+    // Idle/run-budget timeouts end with no error field; without deriving
+    // errorKind from the terminal classification the projection falls back
+    // to text-sniffing an undefined error and renders a generic "failed".
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerChatRun(chatRunState, "provider-idle-timeout", "session-idle", "client-idle");
+
+    emitAgentEvent(
+      handler,
+      "provider-idle-timeout",
+      "lifecycle",
+      { phase: "end", aborted: true, stopReason: "timeout", timeoutPhase: "idle" },
+      { seq: 2, ts: 1_500 },
+    );
+
+    const payload = expectDefined(
+      chatBroadcastCalls(broadcast)[0],
+      "chatBroadcastCalls(broadcast)[0] test invariant",
+    )[1] as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      runId: "client-idle",
+      state: "error",
+      stopReason: "timeout",
+      errorKind: "timeout",
+    });
   });
 
   it.each([
@@ -3632,12 +3663,15 @@ describe("agent event handler", () => {
   });
 
   it("keeps selected-agent global chat events scoped to the linked agent", () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+    });
     const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
-    registerChatRun(chatRunState, "run-global-main", "global", "client-global-main", {
-      agentId: "main",
+    registerChatRun(chatRunState, "run-global-work", "global", "client-global-work", {
+      agentId: "work",
     });
 
-    emitAgentEvent(handler, "run-global-main", "assistant", { text: "main global reply" });
+    emitAgentEvent(handler, "run-global-work", "assistant", { text: "work global reply" });
 
     const chatPayload = chatBroadcastCalls(broadcast)[0]?.[1] as {
       agentId?: string;
@@ -3645,13 +3679,12 @@ describe("agent event handler", () => {
     };
     expect(chatPayload).toEqual(
       expect.objectContaining({
-        agentId: "main",
+        agentId: "work",
         sessionKey: "global",
       }),
     );
     const nodeCalls = sessionChatCalls(nodeSendToSession);
-    expect(nodeCalls[0]?.[0]).toBe("agent:main:global");
-    expect(nodeCalls.map(([sessionKey]) => sessionKey)).toContain("global");
+    expect(nodeCalls.map(([sessionKey]) => sessionKey)).toEqual(["agent:work:global"]);
   });
 
   it("persists selected-agent global lifecycle state with the linked agent", () => {

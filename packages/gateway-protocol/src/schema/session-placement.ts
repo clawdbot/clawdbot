@@ -65,6 +65,17 @@ const SessionPlacementAckProperties = {
   ),
 };
 
+export const SessionPlacementDiskSpaceSchema = closedObject({
+  status: Type.Union([Type.Literal("ok"), Type.Literal("warning"), Type.Literal("critical")]),
+  availableBytes: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  totalBytes: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  observedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+});
+
+const SessionPlacementDiskSpaceProperties = {
+  diskSpace: Type.Optional(SessionPlacementDiskSpaceSchema),
+};
+
 const WorkspaceResultConflictSchema = closedObject({
   paths: Type.Array(NonEmptyString, { minItems: 1, maxItems: 256 }),
   stagedResultRef: NonEmptyString,
@@ -105,6 +116,7 @@ function createWorkerOwnedSessionPlacementSchema<
     ...SessionPlacementWorkspaceProperties,
     ...SessionPlacementAckProperties,
     ...SessionPlacementConflictProperties,
+    ...SessionPlacementDiskSpaceProperties,
   });
 }
 
@@ -210,6 +222,7 @@ export const SessionsReclaimResultSchema = Type.Object(
 
 export const SessionPlacementProtocolSchemas = {
   SessionPlacementState: SessionPlacementStateSchema,
+  SessionPlacementDiskSpace: SessionPlacementDiskSpaceSchema,
   LocalSessionPlacement: LocalSessionPlacementSchema,
   RequestedSessionPlacement: RequestedSessionPlacementSchema,
   ProvisioningSessionPlacement: ProvisioningSessionPlacementSchema,
@@ -228,6 +241,7 @@ export const SessionPlacementProtocolSchemas = {
 } as const;
 
 export type SessionPlacement = Static<typeof SessionPlacementSchema>;
+export type SessionPlacementDiskSpace = Static<typeof SessionPlacementDiskSpaceSchema>;
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;
 export type SessionsReclaimParams = Static<typeof SessionsReclaimParamsSchema>;

@@ -3,7 +3,7 @@
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eWaitTimeoutMs, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -123,7 +123,7 @@ async function openChat(
       viewport: { height: 900, width: 1280 },
     });
     page = await context.newPage();
-    page.setDefaultTimeout(15_000);
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     const gateway = await installMockGateway(page, {
       deferredMethods,
       methodResponses: { "models.authStatus": authStatus, ...extraMethodResponses },

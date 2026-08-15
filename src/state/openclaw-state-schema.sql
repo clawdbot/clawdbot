@@ -564,6 +564,7 @@ CREATE INDEX IF NOT EXISTS idx_device_pairing_paired_approved
 CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
   token_key TEXT NOT NULL PRIMARY KEY,
   token TEXT NOT NULL,
+  setup_id TEXT,
   ts INTEGER NOT NULL,
   device_id TEXT,
   public_key TEXT,
@@ -576,6 +577,22 @@ CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_device_bootstrap_tokens_ts
   ON device_bootstrap_tokens(ts);
+
+-- Terminal outcome of a redeemed setup credential. The bootstrap row is deleted
+-- on redemption, so this is the only durable proof a setup code succeeded; the
+-- presenting client reconciles it when the completion broadcast is missed.
+-- Non-secret only: never the bootstrap token or anything derived from it.
+-- Bounded by retention to a handful of live rows, so the primary key is the
+-- only access path worth having.
+CREATE TABLE IF NOT EXISTS device_pair_setup_completions (
+  setup_id TEXT NOT NULL PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  device_name TEXT,
+  access TEXT NOT NULL,
+  completed_at_ms INTEGER NOT NULL,
+  delivery_state TEXT NOT NULL CHECK (delivery_state IN ('uncertain', 'confirmed')),
+  retain_until_ms INTEGER NOT NULL
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   shortcode TEXT,
@@ -929,6 +946,10 @@ CREATE TABLE IF NOT EXISTS node_worker_launches (
   )
 ) STRICT;
 
+CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
+  ON node_worker_launches(completed_at_ms, launch_id)
+  WHERE completed_at_ms IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS voicewake_triggers (
   config_key TEXT NOT NULL,
   position INTEGER NOT NULL,
@@ -1016,6 +1037,7 @@ CREATE TABLE IF NOT EXISTS installed_plugin_index (
   migration_version INTEGER NOT NULL,
   policy_hash TEXT NOT NULL,
   generated_at_ms INTEGER NOT NULL,
+  workspace_dir TEXT,
   refresh_reason TEXT,
   install_records_json TEXT NOT NULL,
   plugins_json TEXT NOT NULL,
@@ -1496,6 +1518,36 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_agent_session
   ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
   WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
 
+-- One owner-native receipt is also the durable execution fence. Receipts
+-- survive job deletion so operators can distinguish a run from log inference.
+CREATE TABLE IF NOT EXISTS cron_run_receipts (
+  receipt_id TEXT PRIMARY KEY,
+  store_key TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  config_revision TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  request_run_id TEXT,
+  status TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  owner_start_time INTEGER,
+  started_at_ms INTEGER NOT NULL,
+  finished_at_ms INTEGER,
+  error_text TEXT,
+  CHECK (status IN ('running', 'ok', 'error', 'skipped', 'interrupted', 'superseded')),
+  CHECK (
+    (status = 'running' AND finished_at_ms IS NULL)
+    OR
+    (status != 'running' AND finished_at_ms IS NOT NULL)
+  )
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_run_receipts_active_job
+  ON cron_run_receipts(store_key, job_id)
+  WHERE status = 'running';
+
+CREATE INDEX IF NOT EXISTS idx_cron_run_receipts_job_history
+  ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);
+
 -- Runtime-private authority is independent of job_json so downgraded writers
 -- can rewrite recognized job config without erasing or silently widening it.
 CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (
@@ -1950,7 +2002,9 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 CREATE TABLE IF NOT EXISTS session_groups (
   name TEXT NOT NULL PRIMARY KEY,
   position INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  cwd TEXT,
+  worktree INTEGER
 ) STRICT;
 
 -- Gateway-owned sidebar section layout. IDs are ungrouped, groups, work, or
@@ -2010,6 +2064,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
   WHERE lease_id IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_worker_environments_terminal_changed
+  ON worker_environments(state_changed_at_ms, environment_id);
+
 -- Provider-advertised fallback ports preserve stable retry order separately
 -- from the downgrade-sensitive canonical worker environment row.
 CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
@@ -2027,6 +2084,7 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   session_id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
   session_key TEXT NOT NULL,
+  execution_mode TEXT CHECK (execution_mode IN ('worker-turn', 'remote-exec')),
   state TEXT NOT NULL CHECK (
     state IN (
       'local',
@@ -2126,9 +2184,13 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   CHECK (
     turn_claim_owner IS NULL
     OR
-    (turn_claim_owner IS 'local' AND state IN ('local', 'requested', 'failed'))
+    (turn_claim_owner IS 'local' AND (
+      state IN ('local', 'requested', 'failed')
+      OR (state IN ('active', 'draining') AND execution_mode IS 'remote-exec')
+    ))
     OR
     (turn_claim_owner IS 'worker' AND state IN ('active', 'draining')
+      AND (execution_mode IS NULL OR execution_mode IS 'worker-turn')
       AND turn_claim_owner_epoch IS active_owner_epoch)
   )
 ) STRICT;
@@ -2412,6 +2474,7 @@ CREATE TABLE IF NOT EXISTS secret_store_entries (
   updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
   updated_by TEXT,
   deleted_at_ms INTEGER,
+  allowed_hosts TEXT,
   CHECK ((scope_kind = 'team' AND scope_id = '') OR (scope_kind = 'identity' AND length(scope_id) > 0)),
   PRIMARY KEY (scope_kind, scope_id, name)
 ) STRICT;

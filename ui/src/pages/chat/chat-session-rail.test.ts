@@ -401,6 +401,32 @@ describe("ChatSessionCompanionThreads", () => {
     expect(threads.view("one").exchanges).toEqual([]);
   });
 
+  it("retires one session without clearing unrelated companion state", () => {
+    const threads = new ChatSessionCompanionThreads();
+    threads.setDraft("one", "retire me", "main");
+    threads.setDraft("two", "keep me", "main");
+
+    threads.retire("one", "main");
+
+    expect(threads.view("one", "main").draft).toBe("");
+    expect(threads.view("two", "main").draft).toBe("keep me");
+  });
+
+  it("adopts an empty restarted-Gateway thread without discarding its local draft", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.hydrate("one", async () => ({
+      exchanges: [{ question: "Before restart", answer: "Old answer", ts: 1 }],
+    }));
+    threads.setDraft("one", "unsent local draft");
+
+    await threads.hydrate("one", async () => ({ exchanges: [] }));
+
+    expect(threads.view("one")).toMatchObject({
+      draft: "unsent local draft",
+      exchanges: [],
+    });
+  });
+
   it.each(["resolve", "reject"] as const)(
     "does not resurrect a reset request after a late $outcome",
     async (outcome) => {
@@ -558,6 +584,17 @@ describe("ChatSessionRailElement", () => {
       ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
+  });
+
+  it("keeps the ticking rail section out of screen-reader live regions", async () => {
+    const element = await mount();
+    const section = element.querySelector(".chat-session-rail--expanded");
+    // The section wraps a 1Hz elapsed clock; aria-live here would announce
+    // every tick. The message thread owns the polite region instead.
+    expect(section?.hasAttribute("aria-live")).toBe(false);
+    expect(element.querySelector(".chat-session-rail__thread")?.getAttribute("aria-live")).toBe(
+      "polite",
+    );
   });
 
   it("does not reopen or report visible after hide when an automatic open arrives", async () => {

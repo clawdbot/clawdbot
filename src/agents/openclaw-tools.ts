@@ -160,6 +160,8 @@ export function createOpenClawTools(
     sameChannelThreadRequired?: boolean;
     /** Mutable model-context generation used to expire screenshot coordinate frames. */
     computerContextEpoch?: { value: number };
+    /** Registers run-owned cleanup for tools that hold node resources. */
+    registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
     /** Internal review-run restrictions and proposal provenance. */
     skillWorkshop?: SkillWorkshopRunOptions;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
@@ -475,6 +477,7 @@ export function createOpenClawTools(
                   // Run ids expire before later assistant runs can reuse a provider call id.
                   idempotencyScope: options?.runId,
                   contextEpoch: options?.computerContextEpoch,
+                  registerRunCleanup: options?.registerRunCleanup,
                 }),
               ]),
           createCronTool({

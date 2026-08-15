@@ -76,14 +76,6 @@ function registerChatAttachmentPayload(
   return attachment;
 }
 
-async function refreshVisibleToolsEffectiveForCurrentSessionForTest(state: ChatHeaderTestState) {
-  const agentId = state.agentsSelectedId ?? "main";
-  const sessionKey = state.sessionKey;
-  await state.client?.request("tools.effective", { agentId, sessionKey });
-  const override = state.sessions.state.modelOverrides[sessionKey];
-  state.toolsEffectiveResultKey = `${agentId}:${sessionKey}:model=${override ?? "(default)"}`;
-  state.toolsEffectiveResult = { agentId, profile: "coding", groups: [] };
-}
 const buildChatItemsMock = vi.fn(
   (props: {
     messages: unknown[];
@@ -255,7 +247,6 @@ type ChatHeaderTestState = {
   toolsEffectiveResult: unknown;
   applySettings(patch: Partial<UiSettings>): void;
   loadAssistantIdentity(): void;
-  onModelChanged(): void | Promise<void>;
   resetChatInputHistoryNavigation(): void;
   resetChatScroll(): void;
   resetToolStream(): void;
@@ -501,8 +492,6 @@ function createChatHeaderState(
     resetChatInputHistoryNavigation: vi.fn(),
     resetToolStream: vi.fn(),
     resetChatScroll: vi.fn(),
-    onModelChanged: (): Promise<void> =>
-      refreshVisibleToolsEffectiveForCurrentSessionForTest(state),
   };
   sessions.subscribe((next) => {
     state.sessionsResult = next.result;
@@ -821,11 +810,8 @@ function createSessionWorkspace(
     activeId: null,
     dock: "right",
     narrowLayout: false,
-    dockDragging: false,
-    dockDragZone: null,
     onToggleCollapsed: () => undefined,
     onSetDock: () => undefined,
-    onDockDragStart: () => undefined,
     onRefresh: () => undefined,
     onBrowsePath: () => undefined,
     onCopyPath: () => undefined,
@@ -1092,6 +1078,71 @@ describe("cloud workspace conflict notice", () => {
       "git show 'refs/openclaw/worker-results/claim-mixed:src/safe.ts'",
       "git checkout 'refs/openclaw/worker-results/claim-mixed' -- ':(top,literal)src/safe.ts'",
     ]);
+  });
+});
+
+describe("cloud worker disk-space notice", () => {
+  it.each([
+    {
+      status: "warning" as const,
+      availableBytes: 400 * 1024 * 1024,
+      role: "status",
+      title: "Cloud session disk space is low",
+      copy: "96% used · 400 MB free. Delete unneeded files or stop the cloud worker before large writes.",
+    },
+    {
+      status: "critical" as const,
+      availableBytes: 50 * 1024 * 1024,
+      role: "alert",
+      title: "Cloud session disk space is critically low",
+      copy: "New writes may fail and stop the agent.",
+    },
+  ])("renders persistent $status action guidance above the conversation", (sample) => {
+    const container = renderChatView({
+      diskSpace: {
+        status: sample.status,
+        availableBytes: sample.availableBytes,
+        totalBytes: 10 * 1024 * 1024 * 1024,
+        observedAtMs: 1_000,
+      },
+    });
+    const notice = requireElement(container, ".chat-cloud-disk-space-notice", "disk-space notice");
+
+    expect(notice.getAttribute("role")).toBe(sample.role);
+    expect(notice.textContent).toContain(sample.title);
+    expect(notice.textContent).toContain(sample.copy);
+    expect(notice.querySelector("svg")).not.toBeNull();
+    expect(notice.querySelector("button")).toBeNull();
+    expect(notice.parentElement?.classList.contains("chat-main__conversation-column")).toBe(true);
+    expect(notice.nextElementSibling?.classList.contains("chat-main__conversation")).toBe(true);
+  });
+
+  it.each(["ok" as const, undefined])("clears for %s disk-space projection", (status) => {
+    const container = document.createElement("div");
+    renderChatInto(container, {
+      diskSpace: {
+        status: "warning",
+        availableBytes: 400,
+        totalBytes: 1_000,
+        observedAtMs: 1,
+      },
+    });
+    expect(container.querySelector(".chat-cloud-disk-space-notice")).not.toBeNull();
+
+    renderChatInto(
+      container,
+      status
+        ? {
+            diskSpace: {
+              status,
+              availableBytes: 800,
+              totalBytes: 1_000,
+              observedAtMs: 2,
+            },
+          }
+        : {},
+    );
+    expect(container.querySelector(".chat-cloud-disk-space-notice")).toBeNull();
   });
 });
 
@@ -1777,8 +1828,8 @@ describe("chat composer workbench", () => {
     expect(main?.parentElement).toBe(workbench);
     expect(rail?.parentElement).toBe(workbench);
     expect(Array.from(workbench?.children ?? []).map((child) => child.className)).toEqual([
-      "chat-workspace-rail",
       "chat-workbench__main",
+      "chat-workspace-rail",
     ]);
     expect(container.querySelector(".chat-workspace-rail__path")?.textContent?.trim()).toBe(
       "/workspace",
@@ -1846,7 +1897,7 @@ describe("chat composer workbench", () => {
     openSpy.mockRestore();
   });
 
-  it("forces the workspace rail to the bottom dock and drops side-dock controls on narrow panes", () => {
+  it("forces the workspace rail to the bottom dock on narrow panes", () => {
     const container = renderChatView({
       sessionWorkspace: createSessionWorkspace({
         narrowLayout: true,
@@ -1861,8 +1912,43 @@ describe("chat composer workbench", () => {
     expect(container.querySelector(".chat-workspace-rail")).not.toBeNull();
     expect(container.querySelector(".chat-workspace-rail__dock")).toBeNull();
     expect(container.querySelector(".chat-workspace-rail__grip")).toBeNull();
-    expect(container.querySelector(".chat-workspace-rail__terminal")).toBeNull();
-    expect(container.querySelector(".chat-session-diff-toggle")).toBeNull();
+    expect(container.querySelector('button[aria-label="Toggle terminal"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Toggle browser panel"]')).not.toBeNull();
+    expect(container.querySelector(".chat-session-diff-toggle")).not.toBeNull();
+  });
+
+  it("keeps a preferred bottom workspace below a side-docked Tasks rail", () => {
+    const container = renderChatView({
+      sessionWorkspace: createSessionWorkspace({ dock: "bottom" }),
+      workspaceRail: [820, html`<div class="chat-workspace-rail-resizer"></div>`],
+      backgroundTasks: createBackgroundTasks(),
+      tasksRail: [330, html`<div class="chat-tasks-rail-resizer"></div>`],
+    });
+
+    const workbench = container.querySelector(".chat-workbench");
+    expect(workbench?.classList.contains("chat-workbench--dock-bottom")).toBe(true);
+    expect(workbench?.classList.contains("chat-workbench--workspace-open")).toBe(false);
+    expect(workbench?.classList.contains("chat-workbench--tasks-open")).toBe(true);
+    expect(workbench?.querySelector(".chat-workspace-rail-resizer")).toBeNull();
+    expect(workbench?.querySelector(".chat-tasks-rail-resizer")).not.toBeNull();
+    expect(
+      (workbench as HTMLElement | null)?.style.getPropertyValue("--chat-workspace-rail-width"),
+    ).toBe("820px");
+  });
+
+  it("keeps the pane header in the conversation column while rails span the workbench", () => {
+    const container = renderChatView({
+      header: html`<header class="chat-pane__header">Session</header>`,
+      sessionWorkspace: createSessionWorkspace(),
+      workspaceRail: [344, html`<div class="chat-workspace-rail-resizer"></div>`],
+    });
+
+    const workbench = container.querySelector<HTMLElement>(".chat-workbench");
+    const column = container.querySelector(".chat-main__conversation-column");
+    expect(column?.firstElementChild?.classList.contains("chat-pane__header")).toBe(true);
+    expect(container.querySelector(".chat-workspace-rail")?.contains(column)).toBe(false);
+    expect(workbench?.style.getPropertyValue("--chat-workspace-rail-width")).toBe("344px");
+    expect(workbench?.querySelector(".chat-workspace-rail-resizer")).not.toBeNull();
   });
 
   it("moves the background-tasks rail to a bottom strip on narrow panes", () => {
@@ -3311,6 +3397,29 @@ describe("chat composer IME composition", () => {
     expect(onHistoryKeydown).not.toHaveBeenCalled();
   });
 
+  it("recovers Enter-send after a composition is abandoned via blur", () => {
+    // Browsers can drop compositionend (detach/blur mid-IME). The composing
+    // flag persists across renders, so without the blur reset Enter, history
+    // keys, and command menus stay dead until the Send button is clicked.
+    const onSend = vi.fn();
+    const container = renderChatView({ onSend, draft: "hello" });
+    const textarea = getComposerTextarea(container);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "hello";
+    textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+
+    const enterEvent = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(enterEvent);
+
+    expect(enterEvent.defaultPrevented).toBe(true);
+    expect(onSend).toHaveBeenCalledOnce();
+  });
+
   it("invalidates after handled input history navigation", () => {
     const onRequestUpdate = vi.fn();
     const onHistoryKeydown = vi.fn(() => ({
@@ -3480,13 +3589,14 @@ describe("chat composer sizing", () => {
 
 describe("chat slash menu accessibility", () => {
   function replaceSkillCommands(
-    ...skills: Array<{ key: string; name?: string; description: string }>
+    ...skills: Array<{ key: string; name?: string; skillDisplayName?: string; description: string }>
   ) {
     replaceSlashCommands([
       ...buildFallbackSlashCommands(),
-      ...skills.map(({ key, name = key, description }) => ({
+      ...skills.map(({ key, name = key, skillDisplayName, description }) => ({
         key,
         name,
+        skillDisplayName,
         description,
         source: "skill" as const,
         skillModelVisible: true,
@@ -3629,7 +3739,11 @@ describe("chat slash menu accessibility", () => {
   });
 
   it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
-    replaceSkillCommands({ key: "prose", description: "Draft polished prose." });
+    replaceSkillCommands({
+      key: "prose_writer",
+      skillDisplayName: "Prose Writer",
+      description: "Draft polished prose.",
+    });
     const onSlashIntent = vi.fn(async () => undefined);
     const { container } = createReactiveDraftHarness({ onSlashIntent });
 
@@ -3640,14 +3754,18 @@ describe("chat slash menu accessibility", () => {
     const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
     const renderedTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
     expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
-    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("$prose");
+    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
     expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
     expect(renderedTextarea?.getAttribute("aria-expanded")).toBe("true");
     expect(onSlashIntent).toHaveBeenCalledOnce();
   });
 
   it("fills a selected $ skill without submitting the surrounding prompt", async () => {
-    replaceSkillCommands({ key: "prose", description: "Draft polished prose." });
+    replaceSkillCommands({
+      key: "prose_writer",
+      skillDisplayName: "Prose Writer",
+      description: "Draft polished prose.",
+    });
     let draft = "";
     const onDraftChange = vi.fn((next: string) => {
       draft = next;
@@ -3658,12 +3776,12 @@ describe("chat slash menu accessibility", () => {
 
     keydownComposer(container, "Enter");
 
-    expect(draft).toBe("Polish this with $prose:");
+    expect(draft).toBe("Polish this with $prose_writer:");
     expect(onSend).not.toHaveBeenCalled();
     expect(container.querySelector(".skill-menu")).toBeNull();
     await Promise.resolve();
     const completed = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(completed?.selectionStart).toBe("Polish this with $prose:".length);
+    expect(completed?.selectionStart).toBe("Polish this with $prose_writer:".length);
   });
 
   it("consumes a trailing hyphen from an incomplete skill query", () => {
@@ -3741,7 +3859,7 @@ describe("chat slash menu accessibility", () => {
     keydownComposer(container, "ArrowDown");
     expect(
       container.querySelector(".skill-menu .slash-menu-item--active .slash-menu-name")?.textContent,
-    ).toBe("$beta");
+    ).toBe("beta");
     keydownComposer(container, "Enter");
 
     expect(draft).toBe("Use $beta ");
@@ -5331,18 +5449,47 @@ describe("chat model controls", () => {
     expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
   });
 
-  it("shows an empty state instead of a configured default when no usable models exist", () => {
+  it("shows disabled configured models and model setup when no model has authentication", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.6-sol",
       modelProvider: "openai",
-      models: [],
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          available: false,
+        },
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          available: false,
+        },
+      ],
     });
-    const container = renderModelControls(state);
+    const onModelSetup = vi.fn();
+    const container = renderModelControls(state, {
+      agentDefaultModel: "openai/gpt-5.6-sol",
+      onModelSetup,
+    });
 
-    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    const options = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
+    expect([...options].map((option) => option.dataset.chatModelOption)).toEqual([
+      "openai/gpt-5.6-sol",
+      "openai/gpt-5.6-luna",
+    ]);
+    expect(options[0]?.textContent).toContain("GPT-5.6 Sol");
+    expect(options[0]?.textContent).toContain("Default");
+    expect([...options].every((option) => option.disabled)).toBe(true);
+    expect([...options].every((option) => option.textContent?.includes("Sign-in needed"))).toBe(
+      true,
+    );
     expect(
       container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
-    ).toContain("No models available");
+    ).toContain("Authentication failed. Review the provider credential or sign-in, then retry.");
+    container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
   it("applies a model selection immediately", () => {
@@ -5356,6 +5503,19 @@ describe("chat model controls", () => {
     modelOption?.click();
 
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
+  });
+
+  it("requests live wildcard discovery when the model picker opens", () => {
+    const { state } = createOpenAiHeaderState();
+    const onModelPickerOpen = vi.fn();
+    const container = renderModelControls(state, { onModelPickerOpen });
+
+    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    expect(picker).toBeInstanceOf(HTMLDetailsElement);
+    picker!.open = true;
+    picker!.dispatchEvent(new Event("toggle"));
+
+    expect(onModelPickerOpen).toHaveBeenCalledOnce();
   });
 
   it("keeps model enabled while write-only access disables effort controls", () => {
@@ -6195,7 +6355,12 @@ describe("chat model controls", () => {
           return patchResult;
         },
       ),
-      refresh: async () => {},
+      // The list refresh is the reconcile step switchChatModel awaits; holding
+      // it open models a slow reconciliation inside the settings lane.
+      refresh: async () => {
+        reconciliationStarted.resolve();
+        await releaseReconciliation.promise;
+      },
       setModelOverride: vi.fn(),
       patchRowLocal: vi.fn(),
     };
@@ -6217,10 +6382,6 @@ describe("chat model controls", () => {
           thinkingLevel: "high",
         },
       ]),
-      onModelChanged: async () => {
-        reconciliationStarted.resolve();
-        await releaseReconciliation.promise;
-      },
     } as unknown as Parameters<typeof switchChatModel>[0];
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");

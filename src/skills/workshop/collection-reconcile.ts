@@ -50,7 +50,7 @@ import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { prepareSkillProposalDraft } from "./proposal-draft.js";
 import { withSkillCollectionLock } from "./target-lock.js";
-import { assertWritableSkillTarget } from "./workspace-skill-read.js";
+import { assertWritableSkillTarget, isWorkspaceOwnedSkillTarget } from "./workspace-skill-read.js";
 
 const BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
 
@@ -82,6 +82,11 @@ export function listWritableSkillCollection(
       try {
         assertWritableSkillTarget(workspaceDir, skill);
       } catch {
+        continue;
+      }
+      // Autonomous reconciliation may drop whole skill directories, so its
+      // inventory is narrower than manual proposal apply's explicit symlink opt-in.
+      if (!isWorkspaceOwnedSkillTarget(workspaceDir, skill)) {
         continue;
       }
       const filePath = path.resolve(skill.filePath);
@@ -218,12 +223,13 @@ export async function reconcileSkillCollection(params: {
             continue;
           }
           const skill = currentByName.get(entry.name)!;
-          droppedSkills.push(await stageSkillCollectionDrop(skill));
+          droppedSkills.push(await stageSkillCollectionDrop({ ...skill, workspaceDir }));
         }
         await commitCollectionBackup(workspaceDir, backup);
       } catch (error) {
         try {
           await rollbackSkillCollectionMutation({
+            workspaceDir,
             appliedWrites,
             droppedSkills,
           });

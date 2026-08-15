@@ -6,6 +6,7 @@ export {
   getLoadedChannelPluginOrigin,
   listChannelPlugins,
   normalizeChannelId,
+  resolveChannelPluginRegistration,
 } from "./registry.js";
 export {
   applyChannelMatchMeta,

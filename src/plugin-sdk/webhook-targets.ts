@@ -97,10 +97,10 @@ export function registerWebhookTargetWithPluginRoute<T extends { path: string }>
   });
 }
 
-const pathTeardownByTargetMap = new WeakMap<Map<string, unknown[]>, Map<string, () => void>>();
+const pathTeardownByTargetMap = new WeakMap<object, Map<string, () => void>>();
 
 function getPathTeardownMap<T>(targetsByPath: Map<string, T[]>): Map<string, () => void> {
-  const mapKey = targetsByPath as unknown as Map<string, unknown[]>;
+  const mapKey = targetsByPath;
   const existing = pathTeardownByTargetMap.get(mapKey);
   if (existing) {
     return existing;

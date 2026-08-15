@@ -6,6 +6,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { REQUEST, type PlacementStore } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -27,12 +28,9 @@ describe("device worker placement dispatch", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("provisions the environment and surfaces the honest transport gate", async () => {
+  it("provisions, syncs, and activates a local-install device environment", async () => {
     const harness = createHarness(placementStore);
-    const transportError = Object.assign(
-      new Error("device-runner-transport-unimplemented: launch is pending"),
-      { code: "device-runner-transport-unimplemented" },
-    );
+    bindDeviceWorkerAvailability(harness.environments, async () => true);
     vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
       ...harness.ready,
       providerId: "device",
@@ -49,7 +47,6 @@ describe("device worker placement dispatch", () => {
       sharedHost: true,
       tunnelStatus: "stopped",
     });
-    vi.mocked(harness.environments.startTunnel).mockRejectedValue(transportError);
     const request = {
       ...REQUEST,
       profileId: "device:device-1",
@@ -60,8 +57,10 @@ describe("device worker placement dispatch", () => {
       },
     };
 
-    await expect(harness.service.dispatch(request)).rejects.toMatchObject({
-      code: "device-runner-transport-unimplemented",
+    await expect(harness.service.dispatch(request)).resolves.toMatchObject({
+      state: "active",
+      workerBundleHash: "a".repeat(64),
+      remoteWorkspaceDir: "/worker/workspace",
     });
 
     expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
@@ -77,10 +76,58 @@ describe("device worker placement dispatch", () => {
       ownerEpoch: harness.ready.ownerEpoch,
       sessionId: REQUEST.sessionId,
     });
-    expect(harness.environments.destroy).toHaveBeenCalledWith(harness.ready.environmentId);
-    expect(harness.placements.current()).toMatchObject({
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
+  });
+
+  it("records an unavailable device dispatch as a durable failed placement", async () => {
+    const harness = createHarness(placementStore);
+    bindDeviceWorkerAvailability(harness.environments, async () => false);
+    const states: string[] = [];
+    const request = {
+      ...REQUEST,
+      profileId: "device:offline-device",
+      deviceId: "offline-device",
+      inheritedProfile: {
+        providerId: "device",
+        profileSnapshot: {
+          install: "bundle" as const,
+          settings: { device: "offline-device" },
+        },
+      },
+    };
+
+    await expect(
+      harness.service.dispatch(request, (placement) => states.push(placement.state)),
+    ).rejects.toThrow("device worker requires a connected current node host");
+
+    expect(states).toEqual(["requested", "failed"]);
+    expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+    expect(createWorkerSessionPlacementStore({ database }).get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
-      recoveryError: expect.stringContaining("device-runner-transport-unimplemented"),
+      environmentId: null,
+      recoveryError: expect.stringContaining("connected current node host"),
+      terminalReason: expect.stringContaining("connected current node host"),
+      terminalAtMs: 1_000,
     });
+  });
+
+  it("adopts an offline paired-device placement without eagerly starting its tunnel", async () => {
+    const harness = createHarness(placementStore);
+    await harness.environments.attachSession({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: REQUEST.sessionId,
+    });
+    harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentProviderId("device");
+    harness.log.length = 0;
+
+    await harness.service.reconcile();
+
+    expect(harness.log).toEqual(["environment:reconcile", "workspace", "placement:adopted"]);
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 });

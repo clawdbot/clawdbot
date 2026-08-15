@@ -181,6 +181,7 @@ function resolveHeartbeatOwnerRoute(params: {
 /** Read-only owner-route probe for status/doctor surfaces. Unproven targets fail closed. */
 export function hasResolvableHeartbeatOwnerRoute(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
 }): boolean {
@@ -196,6 +197,7 @@ export function hasResolvableHeartbeatOwnerRoute(params: {
  */
 export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
@@ -219,6 +221,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
         preparedExplicitPlugin = resolveOutboundChannelPlugin({
           channel: rawTarget,
           cfg,
+          agentId: params.agentId,
           allowBootstrap: true,
         });
         if (preparedExplicitPlugin) {
@@ -307,14 +310,14 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   // Bootstrap once after a concrete route exists, then carry the prepared plugin
   // through account validation, target policy, and allow-from comparison.
+  const preparedPlugin = preparedExplicitPlugin ?? ownerRoute?.plugin;
   const plugin =
-    preparedExplicitPlugin ??
-    ownerRoute?.plugin ??
     resolveOutboundChannelPlugin({
       channel: resolvedTarget.channel,
       cfg,
+      agentId: params.agentId,
       allowBootstrap: true,
-    });
+    }) ?? preparedPlugin;
 
   if (heartbeatAccountId) {
     const listAccountIds = plugin?.config.listAccountIds;
@@ -497,6 +500,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   const plugin = resolveOutboundChannelPlugin({
     channel: delivery.channel,
     cfg: params.cfg,
+    agentId: params.agentId,
     allowBootstrap: true,
   });
   const resolveSessionRoute = plugin?.messaging?.resolveOutboundSessionRoute;

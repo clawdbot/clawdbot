@@ -13,7 +13,10 @@ import {
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
-import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
+import {
+  hasSessionPresenceViewers,
+  projectPresencePayload,
+} from "../../components/viewer-facepile.ts";
 import { workspaceIconRouteUrl } from "../../components/workspace-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -25,6 +28,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
+import { displayedChatSessionBranches } from "./chat-history.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
@@ -335,6 +339,17 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       reclaimingKey: this.headerPlacementReclaimingKey,
       row,
     });
+    const key = this.state?.sessionKey ?? "";
+    const selfId = sharingSnapshot.selfUser?.id;
+    const instanceId = sharingSnapshot.client?.instanceId;
+    const result = this.state?.sessionsResult;
+    const showOwnerChip =
+      (result?.creators ?? listSessionCreators(result?.sessions ?? [])).length >= 2;
+    const renderedOwnerId = showOwnerChip ? row?.createdActor?.id : undefined;
+    const presence = projectPresencePayload(this.presencePayload, selfId, instanceId);
+    const ownerViewing = presence.users.some(
+      (user) => user.id === renderedOwnerId && user.watchedSessions.includes(key),
+    );
     const header = renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -342,11 +357,8 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       navDrawerOpen: this.navDrawerOpen,
       title: this.paneTitle,
       session: row,
-      showOwnerChip:
-        (
-          this.state?.sessionsResult?.creators ??
-          listSessionCreators(this.state?.sessionsResult?.sessions ?? [])
-        ).length >= 2,
+      showOwnerChip,
+      ownerViewing,
       catalog,
       editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
       renameValue: this.headerRenameValue,
@@ -355,10 +367,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       workspaceIcon: this.resolveWorkspaceIcon(workspace.root ? row?.key : undefined),
       parentSession: resolveChatPaneParentSession(row, this.state?.sessionsResult?.sessions ?? []),
       branch,
-      branches:
-        this.state && this.state.chatBranchesSessionKey === this.state.sessionKey
-          ? (this.state.chatBranches ?? [])
-          : [],
+      branches: this.state ? displayedChatSessionBranches(this.state) : [],
       branchSwitchDisabledReason,
       platform: this.headerPlatform,
       canReveal,
@@ -379,18 +388,14 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
       presence:
         !catalog &&
-        hasSessionPresenceViewers(
-          this.presencePayload,
-          this.context.gateway.snapshot.selfUser?.id,
-          this.context.gateway.snapshot.client?.instanceId,
-          this.state?.sessionKey ?? "",
-        )
+        hasSessionPresenceViewers(this.presencePayload, selfId, instanceId, key, renderedOwnerId)
           ? html`<openclaw-viewer-facepile
               class="chat-pane__presence"
               .presencePayload=${this.presencePayload}
-              .selfUserId=${this.context.gateway.snapshot.selfUser?.id}
-              .selfInstanceId=${this.context.gateway.snapshot.client?.instanceId}
-              .sessionKey=${this.state?.sessionKey}
+              .selfUserId=${selfId}
+              .selfInstanceId=${instanceId}
+              .sessionKey=${key}
+              .excludeUserId=${renderedOwnerId}
               .maxVisible=${4}
               variant="session"
             ></openclaw-viewer-facepile>`
@@ -467,6 +472,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
               .layoutActions=${layoutMenuActions}
               .actionDisabledReasons=${actionDisabledReasons}
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
+              .forkFromLastCompleted=${row.hasActiveRun === true}
               .archiveAllowed=${archiveAllowed}
               .deleteAllowed=${deleteAllowed}
               .onOpen=${() => {

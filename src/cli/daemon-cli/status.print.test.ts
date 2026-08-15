@@ -10,6 +10,7 @@ import { printDaemonStatus } from "./status.print.js";
 const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),
   error: vi.fn<(line: string) => void>(),
+  writeJson: vi.fn<(value: unknown) => void>(),
 }));
 const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn((_opts?: unknown) => ({ httpUrl: "http://127.0.0.1:18789" })),
@@ -100,11 +101,41 @@ describe("printDaemonStatus", () => {
   beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
+    runtime.writeJson.mockReset();
     renderGatewayServiceCleanupHintsMock.mockReset().mockReturnValue([]);
     resolveControlUiLinksMock.mockClear();
     isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
     isWSLEnvMock.mockClear();
+  });
+
+  it("preserves Gateway server metadata while sanitizing JSON output", () => {
+    const servers = [
+      { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" },
+      { version: "2026.5.6", connId: "conn-1" },
+    ];
+    for (const server of servers) {
+      printDaemonStatus(
+        {
+          service: {
+            label: "LaunchAgent",
+            loaded: true,
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            command: { programArguments: ["node"], environment: { OPENCLAW_STATE_DIR: "/tmp" } },
+          },
+          rpc: { ok: true, server },
+          extraServices: [],
+        },
+        { json: true, deep: true },
+      );
+    }
+
+    expect(
+      runtime.writeJson.mock.calls.map(
+        ([payload]) => (payload as { rpc?: { server?: unknown } }).rpc?.server,
+      ),
+    ).toEqual(servers);
   });
 
   it("prints host desktop state and auth type", () => {

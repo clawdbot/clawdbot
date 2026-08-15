@@ -51,11 +51,8 @@ export type SessionWorkspaceProps = {
   /** Pane too narrow for a side rail: presentation forces the bottom dock
    * (the persisted dock preference still applies once the pane widens). */
   narrowLayout: boolean;
-  dockDragging: boolean;
-  dockDragZone: ChatWorkspaceDock | null;
   onToggleCollapsed: () => void;
   onSetDock: (dock: ChatWorkspaceDock) => void;
-  onDockDragStart: (event: PointerEvent) => void;
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
   onCopyPath: (path: string) => void;
@@ -64,6 +61,7 @@ export type SessionWorkspaceProps = {
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
+  onToggleCustodian?: () => void;
   /** Opens the session diff panel; absent until a usable checkout is known. */
   onOpenDiff?: () => void;
 };
@@ -76,8 +74,6 @@ type SessionWorkspaceState = {
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
   collapsed: boolean;
   dock: ChatWorkspaceDock;
-  dockDragging: boolean;
-  dockDragZone: ChatWorkspaceDock | null;
   error: string | null;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
@@ -160,8 +156,6 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
     // Dock preference is app-wide, seeded from the host's loaded settings;
     // per-session state just carries it forward.
     dock: current?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
-    dockDragging: false,
-    dockDragZone: null,
     error: null,
     list: null,
     loading: false,
@@ -627,82 +621,12 @@ function setSessionWorkspaceDock(state: SessionWorkspaceHost, dock: ChatWorkspac
   const workspace = getWorkspaceState(state);
   if (workspace.dock !== dock) {
     workspace.dock = dock;
-    // Keep the host's settings snapshot in step so the next session's
-    // workspace state seeds from the same dock without a storage read.
     if (state.settings) {
       state.settings = { ...state.settings, chatWorkspaceDock: dock };
     }
     patchSettings({ chatWorkspaceDock: dock });
   }
   requestUpdate(state);
-}
-
-/** Drag the rail by its header to re-dock it inside the pane: the right and
- * bottom bands of .chat-workbench are drop zones (mirrors the terminal
- * panel's right/bottom dock). A small threshold keeps plain clicks intact. */
-function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: PointerEvent) {
-  if (event.button !== 0) {
-    return;
-  }
-  const grip = event.currentTarget;
-  if (!(grip instanceof HTMLElement)) {
-    return;
-  }
-  const workbench = grip.closest<HTMLElement>(".chat-workbench");
-  if (!workbench) {
-    return;
-  }
-  const workspace = getWorkspaceState(state);
-  const startX = event.clientX;
-  const startY = event.clientY;
-
-  const resolveZone = (x: number, y: number): ChatWorkspaceDock | null => {
-    const rect = workbench.getBoundingClientRect();
-    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-      return null;
-    }
-    if (y > rect.bottom - rect.height * 0.32) {
-      return "bottom";
-    }
-    return x > rect.right - rect.width * 0.3 ? "right" : null;
-  };
-
-  const handleMove = (move: PointerEvent) => {
-    if (!workspace.dockDragging) {
-      if (Math.hypot(move.clientX - startX, move.clientY - startY) < 5) {
-        return;
-      }
-      workspace.dockDragging = true;
-      workspace.dockDragZone = resolveZone(move.clientX, move.clientY);
-      requestUpdate(state);
-      return;
-    }
-    const zone = resolveZone(move.clientX, move.clientY);
-    if (zone !== workspace.dockDragZone) {
-      workspace.dockDragZone = zone;
-      requestUpdate(state);
-    }
-  };
-  const finish = (apply: boolean) => {
-    grip.removeEventListener("pointermove", handleMove);
-    grip.removeEventListener("pointerup", handleUp);
-    grip.removeEventListener("pointercancel", handleCancel);
-    const zone = workspace.dockDragZone;
-    workspace.dockDragging = false;
-    workspace.dockDragZone = null;
-    if (apply && zone) {
-      setSessionWorkspaceDock(state, zone);
-      return;
-    }
-    requestUpdate(state);
-  };
-  const handleUp = () => finish(true);
-  const handleCancel = () => finish(false);
-
-  grip.setPointerCapture(event.pointerId);
-  grip.addEventListener("pointermove", handleMove);
-  grip.addEventListener("pointerup", handleUp);
-  grip.addEventListener("pointercancel", handleCancel);
 }
 
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
@@ -779,11 +703,8 @@ export function createSessionWorkspaceProps(
     activeId: workspace.activeId,
     dock: workspace.dock,
     narrowLayout: options?.narrowLayout === true,
-    dockDragging: workspace.dockDragging,
-    dockDragZone: workspace.dockDragZone,
     onToggleCollapsed: () => toggleSessionWorkspace(state),
     onSetDock: (dock) => setSessionWorkspaceDock(state, dock),
-    onDockDragStart: (event) => startSessionWorkspaceDockDrag(state, event),
     onRefresh: () => loadWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceSearchTimer(workspace);
@@ -981,6 +902,62 @@ export function renderSessionWorkspaceRail(
   // Narrow panes always present the rail as a bottom strip; a side column
   // would crush the thread below its readable minimum.
   const dock = sessionWorkspace.narrowLayout ? "bottom" : sessionWorkspace.dock;
+  const terminalButton = sessionWorkspace.onToggleTerminal
+    ? html`
+        <openclaw-tooltip .content=${t("terminal.toggle")}>
+          <button
+            type="button"
+            class="rail-header__action chat-workspace-rail__terminal"
+            aria-label=${t("terminal.toggle")}
+            @click=${sessionWorkspace.onToggleTerminal}
+          >
+            ${icons.terminal}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const browserButton = sessionWorkspace.onToggleBrowser
+    ? html`
+        <openclaw-tooltip .content=${t("browser.toggle")}>
+          <button
+            type="button"
+            class="rail-header__action chat-workspace-rail__terminal"
+            aria-label=${t("browser.toggle")}
+            @click=${sessionWorkspace.onToggleBrowser}
+          >
+            ${icons.globe}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const custodianButton = sessionWorkspace.onToggleCustodian
+    ? html`
+        <openclaw-tooltip .content=${t("custodian.panel.toggle")}>
+          <button
+            type="button"
+            class="rail-header__action chat-workspace-rail__terminal"
+            aria-label=${t("custodian.panel.toggle")}
+            @click=${sessionWorkspace.onToggleCustodian}
+          >
+            ${icons.lobster}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const diffButton = sessionWorkspace.onOpenDiff
+    ? html`
+        <openclaw-tooltip .content=${t("chat.sessionDiff.show")}>
+          <button
+            type="button"
+            class="rail-header__action chat-workspace-rail__terminal chat-session-diff-toggle"
+            aria-label=${t("chat.sessionDiff.show")}
+            @click=${sessionWorkspace.onOpenDiff}
+          >
+            ${icons.diff}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
   const files = sessionWorkspace.list?.files ?? [];
   const modifiedFiles = files.filter((file) => file.kind === "modified");
   const readFiles = files.filter((file) => file.kind === "read");
@@ -1256,20 +1233,15 @@ export function renderSessionWorkspaceRail(
         `;
   return html`
     <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
-      <div class="chat-workspace-rail__header">
-        <!-- Grip: drag the rail onto the pane's right/bottom band to re-dock
-             it (chat-view renders the drop zones while dragging). -->
-        <div
-          class="chat-workspace-rail__title ${sessionWorkspace.narrowLayout
-            ? ""
-            : "chat-workspace-rail__grip"}"
-          title=${sessionWorkspace.narrowLayout ? nothing : t("chat.workspaceFiles.dragToDock")}
-          @pointerdown=${sessionWorkspace.narrowLayout ? nothing : sessionWorkspace.onDockDragStart}
-        >
-          <span class="chat-workspace-rail__eyebrow">${t("chat.workspaceFiles.workspace")}</span>
-          <strong>${t("chat.workspaceFiles.files")}</strong>
+      <div class="rail-header chat-workspace-rail__header">
+        <div class="rail-header__copy chat-workspace-rail__title">
+          <span class="rail-header__eyebrow chat-workspace-rail__eyebrow"
+            >${t("chat.workspaceFiles.workspace")}</span
+          >
+          <strong class="rail-header__title">${t("chat.workspaceFiles.files")}</strong>
         </div>
-        <div class="chat-workspace-rail__actions">
+        <div class="rail-header__actions chat-workspace-rail__actions">
+          ${diffButton} ${terminalButton} ${browserButton} ${custodianButton}
           ${sessionWorkspace.narrowLayout
             ? nothing
             : html`
@@ -1279,7 +1251,7 @@ export function renderSessionWorkspaceRail(
                     : t("chat.workspaceFiles.dockBottom")}
                 >
                   <button
-                    class="btn btn--ghost btn--sm chat-workspace-rail__dock"
+                    class="rail-header__action chat-workspace-rail__dock"
                     type="button"
                     aria-label=${dock === "bottom"
                       ? t("chat.workspaceFiles.dockRight")
@@ -1293,7 +1265,7 @@ export function renderSessionWorkspaceRail(
               `}
           <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
             <button
-              class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
+              class="rail-header__action chat-workspace-rail__refresh"
               type="button"
               aria-label=${t("chat.workspaceFiles.refresh")}
               ?disabled=${sessionWorkspace.loading}
@@ -1305,7 +1277,7 @@ export function renderSessionWorkspaceRail(
           <openclaw-tooltip .content=${`${t("chat.workspaceFiles.collapse")} (⇧⌘B)`}>
             <button
               type="button"
-              class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
+              class="rail-header__action chat-workspace-rail__collapse-toggle"
               aria-label=${t("chat.workspaceFiles.collapse")}
               aria-keyshortcuts="Meta+Shift+B"
               aria-expanded="true"

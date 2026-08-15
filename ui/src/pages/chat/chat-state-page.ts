@@ -170,7 +170,6 @@ export function createPageState(
     chatBranches: [],
     chatBranchesSessionKey: null,
     chatBranchesConnectionEpoch: null,
-    chatBranchesLoading: false,
     chatToolMessages: [],
     chatThinkingLevel: null,
     chatVerboseLevel: null,
@@ -203,6 +202,7 @@ export function createPageState(
     chatModelsLoading: false,
     chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
+    chatModelCatalogError: null,
     modelAuthStatusResult: null,
     modelAuthStatusError: null,
     sessionsResult: null,
@@ -267,7 +267,6 @@ export function createPageState(
   } as unknown as ChatPageHost;
 
   state.resetToolStream = () => resetToolStream(state as never);
-  state.onModelChanged = () => undefined;
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {

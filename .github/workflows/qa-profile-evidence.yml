@@ -172,7 +172,7 @@ jobs:
           set -euo pipefail
 
           selected_revision="$(git rev-parse HEAD)"
-          expected_sha="${EXPECTED_SHA,,}"
+          expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
           branch_candidate="${INPUT_REF#refs/heads/}"
           tag_candidate="${INPUT_REF#refs/tags/}"
           trusted_reason=""
@@ -181,7 +181,7 @@ jobs:
             echo "expected_sha must be a full 40-character SHA; got: ${EXPECTED_SHA}" >&2
             exit 1
           fi
-          if [[ -n "${expected_sha// }" && "${selected_revision,,}" != "$expected_sha" ]]; then
+          if [[ -n "${expected_sha// }" && "$selected_revision" != "$expected_sha" ]]; then
             echo "Ref '${INPUT_REF}' resolved to ${selected_revision}, expected ${EXPECTED_SHA}." >&2
             exit 1
           fi

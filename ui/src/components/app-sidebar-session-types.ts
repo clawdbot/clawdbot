@@ -1,3 +1,4 @@
+import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
@@ -66,6 +67,8 @@ export type SidebarRecentSession = {
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  /** Raw Gateway liveness used for operations even when display status is terminal. */
+  gatewayHasActiveRun?: boolean;
   activeRunIds?: readonly string[];
   modelSelectionLocked: boolean;
   kind?: string;
@@ -74,6 +77,7 @@ export type SidebarRecentSession = {
   visibility?: SessionVisibility;
   draftOwnedBySelf?: boolean;
   category?: string;
+  icon?: string;
   boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
@@ -82,6 +86,7 @@ export type SidebarRecentSession = {
   acpSession?: boolean;
   worktreeId?: string;
   placementState?: SessionPlacementState;
+  diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
   cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
@@ -187,6 +192,7 @@ export type SidebarSessionPatch = {
   pinned?: boolean;
   unread?: boolean;
   label?: string | null;
+  icon?: string | null;
   category?: string | null;
 };
 

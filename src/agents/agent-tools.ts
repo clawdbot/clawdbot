@@ -31,6 +31,7 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -197,6 +198,8 @@ type OpenClawCodingToolsOptions = {
   oneShotCliRun?: boolean;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /** Exact admitted run instance for lifecycle-bound subprocess capabilities. */
+  operationalRunInstance?: OperationalRunInstanceRef;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Diagnostic trace context for hook/log correlation during this run. */
@@ -302,6 +305,8 @@ type OpenClawCodingToolsOptions = {
   modelHasVision?: boolean;
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
+  /** Registers run-owned cleanup for tools that hold node resources. */
+  registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
   /** Require explicit message targets (no implicit last-route sends). */
   requireExplicitMessageTarget?: boolean;
   /** Visible source replies must be sent through the message tool when set to message_tool_only. */
@@ -586,6 +591,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       scopeKey,
       sessionKey: options?.sessionKey,
       runId: options?.runId,
+      operationalRunInstance: options?.operationalRunInstance,
       // Detached completions return to the live session, not the sandbox policy scope.
       notifySessionKey: options?.runSessionKey ?? options?.sessionKey,
       sessionId: options?.sessionId,
@@ -792,6 +798,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             hasRepliedRef: options?.hasRepliedRef,
             modelHasVision: options?.modelHasVision,
             computerContextEpoch: options?.computerContextEpoch,
+            registerRunCleanup: options?.registerRunCleanup,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
             sourceReplyOnly,

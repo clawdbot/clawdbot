@@ -177,9 +177,9 @@ export async function importSessionCatalogHistory(params: {
         continue;
       }
       const message = {
-        ...(imported as unknown as Record<string, unknown>),
+        ...imported,
         idempotencyKey: `${params.catalogId}-catalog:${params.threadId}:${item.id ?? index}`,
-      } as unknown as AgentMessage;
+      };
       await transcript.appendMessage({
         message,
         idempotencyLookup: "scan",
