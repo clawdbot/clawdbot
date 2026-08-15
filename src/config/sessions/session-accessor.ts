@@ -129,6 +129,7 @@ export {
   countSessionEntryRowsReadOnly,
   ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
+  ensureTranscriptGenerationsForCanonicalRepair,
   hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,
   clearPluginOwnedSessionState,
