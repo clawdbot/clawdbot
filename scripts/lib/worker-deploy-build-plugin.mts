@@ -8,11 +8,16 @@ const PLAYWRIGHT_PACKAGE_INIT = `    packageRoot = import_path9.default.join(__d
     binPath = import_path9.default.join(packageRoot, "bin");`;
 const PLAYWRIGHT_BROWSER_REGISTRY_INIT =
   '    registry = new Registry(require(import_path20.default.join(packageRoot, "browsers.json")));';
+const WORKER_BROWSER_RUNTIME_COMPOSITION = `import { createAttachedBrowserToolRuntime } from "../../extensions/browser/runtime-api.js";
+export default { createAttachedBrowserToolRuntime };`;
 
-/** Removes Playwright's package-manifest runtime read from the standalone worker build. */
+/** Composes bundled-plugin runtime and removes dependency package reads from the worker build. */
 export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
   const coreBundlePath = fs.realpathSync(path.join(playwrightRoot, "lib/coreBundle.js"));
+  const browserRuntimeBridgePath = fs.realpathSync(
+    path.resolve("src/worker/worker-deploy-browser-runtime.ts"),
+  );
   const packageJson = JSON.parse(
     fs.readFileSync(path.join(playwrightRoot, "package.json"), "utf8"),
   ) as { name: string; version: string };
@@ -26,16 +31,19 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   return {
     name: WORKER_DEPLOY_BUILD_PLUGIN_NAME,
     transform(this: { error(message: string): never }, code: string, id: string) {
-      if (!id.replaceAll("\\", "/").endsWith("/playwright-core/lib/coreBundle.js")) {
-        return null;
-      }
       let resolvedId: string;
       try {
         resolvedId = fs.realpathSync(path.resolve(id));
       } catch {
         return null;
       }
-      if (resolvedId !== coreBundlePath) {
+      if (resolvedId === browserRuntimeBridgePath) {
+        return WORKER_BROWSER_RUNTIME_COMPOSITION;
+      }
+      if (
+        resolvedId !== coreBundlePath ||
+        !id.replaceAll("\\", "/").endsWith("/playwright-core/lib/coreBundle.js")
+      ) {
         return null;
       }
       if (

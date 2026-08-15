@@ -13,7 +13,7 @@ export type WorkerBrowserRuntime = {
     ensureAttachTarget: () => Promise<void>;
     agentSessionKey?: string;
     agentDir?: string;
-    workspaceDir?: string;
+    workspaceDir: string;
   }) => Promise<{
     tool: AnyAgentTool;
     dispose: () => Promise<void>;

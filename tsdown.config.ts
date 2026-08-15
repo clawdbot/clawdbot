@@ -164,7 +164,7 @@ function nodeBuildConfig(
     outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
     sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: buildInputOptions,
+    inputOptions: (options) => buildInputOptions(options),
   };
 }
 
@@ -215,7 +215,7 @@ function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig 
     name: config.name ?? TSDOWN_PACKAGE_CONFIG_GROUP,
     outDir: config.outDir ?? tsdownPackageOutputRoot(packageDir),
     sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: buildInputOptions,
+    inputOptions: (options) => buildInputOptions(options),
   };
 }
 

@@ -6,7 +6,7 @@
  */
 import playwrightCoreDefault from "playwright-core";
 import type * as PlaywrightCore from "playwright-core";
-import coreBundle from "playwright-core/lib/coreBundle";
+import coreBundle from "./playwright-core-bundle.runtime.mjs";
 
 /** Runtime playwright-core module instance. */
 export const playwrightCore = playwrightCoreDefault as typeof PlaywrightCore;

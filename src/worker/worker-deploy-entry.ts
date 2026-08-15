@@ -1,5 +1,5 @@
 import "./worker-deploy-runtime.js";
-import { createAttachedBrowserToolRuntime } from "../../extensions/browser/runtime-api.js";
+import workerDeployBrowserRuntime from "./worker-deploy-browser-runtime.js";
 import { runWorkerProcess } from "./worker-process.js";
 
 const args = process.argv.slice(2);
@@ -10,5 +10,5 @@ const internalWorkerIpc = args[0] === "--internal-worker-ipc";
 
 await runWorkerProcess({
   internalWorkerIpc,
-  browserRuntime: { createAttachedBrowserToolRuntime },
+  browserRuntime: workerDeployBrowserRuntime,
 });

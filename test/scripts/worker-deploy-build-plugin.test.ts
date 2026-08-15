@@ -1,14 +1,29 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createWorkerDeployBuildPlugin } from "../../scripts/lib/worker-deploy-build-plugin.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const fail = (message: string): never => {
   throw new Error(message);
 };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker deploy build plugin", () => {
+  it("composes the bundled Browser runtime only in the deploy build", () => {
+    const bridgePath = path.resolve("src/worker/worker-deploy-browser-runtime.ts");
+    const source = fs.readFileSync(bridgePath, "utf8");
+    const plugin = createWorkerDeployBuildPlugin();
+
+    const transformed = plugin.transform.call({ error: fail }, source, bridgePath);
+
+    expect(transformed).toContain(
+      'import { createAttachedBrowserToolRuntime } from "../../extensions/browser/runtime-api.js";',
+    );
+    expect(transformed).toContain("export default { createAttachedBrowserToolRuntime };");
+    expect(transformed).not.toContain("was not composed by the build");
+  });
+
   it("inlines Playwright package identity without a runtime manifest read", () => {
     const coreBundlePath = path.resolve("node_modules/playwright-core/lib/coreBundle.js");
     const source = fs.readFileSync(coreBundlePath, "utf8");
@@ -31,20 +46,16 @@ describe("worker deploy build plugin", () => {
   it("matches the canonical dependency path behind a pnpm-style symlink", () => {
     const sourceRoot = path.resolve("node_modules/playwright-core");
     const source = fs.readFileSync(path.join(sourceRoot, "lib/coreBundle.js"), "utf8");
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-worker-build-plugin-"));
+    const tempRoot = tempDirs.make("openclaw-worker-build-plugin-");
     const linkedRoot = path.join(tempRoot, "node_modules", "playwright-core");
     fs.mkdirSync(path.dirname(linkedRoot), { recursive: true });
     fs.symlinkSync(sourceRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
-    try {
-      const plugin = createWorkerDeployBuildPlugin(tempRoot);
-      const resolvedId = fs.realpathSync(path.join(linkedRoot, "lib/coreBundle.js"));
+    const plugin = createWorkerDeployBuildPlugin(tempRoot);
+    const resolvedId = fs.realpathSync(path.join(linkedRoot, "lib/coreBundle.js"));
 
-      const transformed = plugin.transform.call({ error: fail }, source, resolvedId);
+    const transformed = plugin.transform.call({ error: fail }, source, resolvedId);
 
-      expect(transformed).toContain('packageJSON = {"name":"playwright-core","version":"1.62.1"};');
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+    expect(transformed).toContain('packageJSON = {"name":"playwright-core","version":"1.62.1"};');
   });
 
   it("fails closed when the dependency-owned bootstrap shape changes", () => {
