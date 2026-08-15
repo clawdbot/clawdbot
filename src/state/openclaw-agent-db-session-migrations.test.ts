@@ -427,7 +427,7 @@ describe("agent DB conversation migration", () => {
     expect(remaining).toEqual([]);
   });
 
-  it("settles legacy pending rows and normalizes legacy cleared shells", () => {
+  it("settles legacy pending rows and normalizes only proven legacy cleared shells", () => {
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(":memory:");
     databases.push(database);
@@ -439,9 +439,16 @@ describe("agent DB conversation migration", () => {
         entry_valid INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       );
+      CREATE TABLE session_windows (
+        session_id TEXT PRIMARY KEY,
+        session_key TEXT NOT NULL
+      );
     `);
     const insert = database.prepare(
       "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, ?, ?)",
+    );
+    const insertWindow = database.prepare(
+      "INSERT INTO session_windows (session_id, session_key) VALUES (?, ?)",
     );
     insert.run(
       "agent:main:main",
@@ -450,10 +457,20 @@ describe("agent DB conversation migration", () => {
       0,
       100,
     );
+    // Proven legacy cleared shell: {"delivery":{"kind":"none"}} with a retained window.
     insert.run(
       "agent:main:cron:legacy-run",
       "session-cron",
       JSON.stringify({ delivery: { kind: "none" } }),
+      -1,
+      100,
+    );
+    insertWindow.run("session-cron", "agent:main:cron:legacy-run");
+    // Partial-but-recoverable row without identity: must be preserved for Doctor repair.
+    insert.run(
+      "agent:main:malformed",
+      "session-malformed",
+      JSON.stringify({ delivery: { kind: "none" }, icon: "archive" }),
       -1,
       100,
     );
@@ -479,6 +496,11 @@ describe("agent DB conversation migration", () => {
         session_key: "agent:main:main",
         entry_valid: 1,
         entry_json: JSON.stringify({ sessionId: "session-main", updatedAt: 100 }),
+      },
+      {
+        session_key: "agent:main:malformed",
+        entry_valid: -1,
+        entry_json: JSON.stringify({ delivery: { kind: "none" }, icon: "archive" }),
       },
       {
         session_key: "agent:main:shell",
