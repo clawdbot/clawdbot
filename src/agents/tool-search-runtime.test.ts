@@ -1,3 +1,14 @@
+import {
+  Agent,
+  type AgentEvent,
+  type AgentTool,
+  type StreamFn,
+} from "openclaw/plugin-sdk/agent-core";
+import {
+  type AssistantMessage,
+  createAssistantMessageEventStream,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +35,7 @@ import {
   registerHeadlessToolSearchCatalog,
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   ToolSearchRuntime,
 } from "./tool-search.js";
@@ -316,6 +328,151 @@ describe("Tool Search dispatcher argument preparation", () => {
     const noSelector = { args: { path: "/x" } };
     const prepared = callTool!.prepareArguments?.(noSelector);
     expect(Value.Check(callTool!.parameters, prepared)).toBe(false);
+  });
+
+  // The two tests above call prepareArguments/execute on the real tool object
+  // directly, proving the normalizer and schema in isolation but skipping the
+  // agent loop's own prepare -> validate sequence (prepareToolCallArguments /
+  // validateToolArguments in packages/agent-core/src/agent-loop.ts). The tests
+  // below drive a real Agent through that exact orchestration so a
+  // double-wrapped payload is proven recoverable end to end, not just at the
+  // tool boundary (#124084 real-behavior-proof follow-up).
+  describe("through the real agent loop", () => {
+    const model: Model = {
+      id: "test-model",
+      name: "Test Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1000,
+      maxTokens: 1000,
+    };
+
+    function makeAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
+      return {
+        role: "assistant",
+        content,
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
+        timestamp: 1,
+      };
+    }
+
+    function createSingleToolCallStreamFn(toolCall: {
+      id: string;
+      name: string;
+      arguments: unknown;
+    }): StreamFn {
+      // The agent loop calls streamFn again for the turn after the tool
+      // result is appended. Return the tool call once, then a plain stop
+      // turn so the run terminates instead of replaying the same tool call.
+      const turns: AssistantMessage["content"][] = [
+        [{ type: "toolCall", ...toolCall }],
+        [{ type: "text", text: "done" }],
+      ];
+      let turnIndex = 0;
+      return () => {
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          const content = turns[turnIndex] ?? turns.at(-1) ?? [];
+          turnIndex += 1;
+          const message = makeAssistantMessage(content);
+          stream.push({ type: "done", reason: message.stopReason, message });
+          stream.end();
+        });
+        return stream;
+      };
+    }
+
+    function findToolExecutionEnd(
+      events: AgentEvent[],
+    ): Extract<AgentEvent, { type: "tool_execution_end" }> | undefined {
+      return events.find(
+        (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+          event.type === "tool_execution_end",
+      );
+    }
+
+    it("dispatches a real double-wrapped tool_call payload through prepareToolCallArguments", async () => {
+      const target = fakeTool("inspect_resource");
+      const { catalogRef, config } = createRuntime([target]);
+      const callTool = createToolSearchTools({ catalogRef, config }).find(
+        (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
+      );
+      expect(callTool).toBeDefined();
+
+      const doubleWrapped = { args: { id: "inspect_resource", args: { path: "/x" } } };
+      const streamFn = createSingleToolCallStreamFn({
+        id: "call-1",
+        name: TOOL_CALL_RAW_TOOL_NAME,
+        arguments: doubleWrapped,
+      });
+      const events: AgentEvent[] = [];
+      const agent = new Agent({
+        initialState: { model, tools: [callTool, target] as AgentTool[] },
+        streamFn,
+      });
+      agent.subscribe((event) => {
+        events.push(event);
+      });
+
+      await agent.prompt("call inspect_resource with a double-wrapped payload");
+
+      expect(target.execute).toHaveBeenCalledOnce();
+      expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ path: "/x" });
+      // No errorKind means prepareToolCallArguments succeeded and dispatch never
+      // hit the argument-validation immediate-outcome branch (agent-loop.ts:1409).
+      expect(findToolExecutionEnd(events)).toMatchObject({
+        toolCallId: "call-1",
+        isError: false,
+      });
+      expect(findToolExecutionEnd(events)?.errorKind).toBeUndefined();
+    });
+
+    it("dispatches a real double-wrapped tool_describe payload through prepareToolCallArguments", async () => {
+      const target = fakeTool("inspect_resource");
+      const { catalogRef, config } = createRuntime([target]);
+      const describeTool = createToolSearchTools({ catalogRef, config }).find(
+        (tool) => tool.name === TOOL_DESCRIBE_RAW_TOOL_NAME,
+      );
+      expect(describeTool).toBeDefined();
+
+      const doubleWrapped = { input: { id: "inspect_resource" } };
+      const streamFn = createSingleToolCallStreamFn({
+        id: "call-1",
+        name: TOOL_DESCRIBE_RAW_TOOL_NAME,
+        arguments: doubleWrapped,
+      });
+      const events: AgentEvent[] = [];
+      const agent = new Agent({
+        initialState: { model, tools: [describeTool] as AgentTool[] },
+        streamFn,
+      });
+      agent.subscribe((event) => {
+        events.push(event);
+      });
+
+      await agent.prompt("describe inspect_resource with a double-wrapped payload");
+
+      expect(findToolExecutionEnd(events)).toMatchObject({
+        toolCallId: "call-1",
+        isError: false,
+      });
+      expect(findToolExecutionEnd(events)?.errorKind).toBeUndefined();
+    });
   });
 });
 
