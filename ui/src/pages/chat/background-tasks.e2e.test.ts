@@ -242,7 +242,7 @@ suite.define(() => {
         });
         await detailPanel.getByText("Completed").waitFor({ state: "visible" });
         await page
-          .locator(".side-panel__header > .tabstrip wa-tab")
+          .locator(".side-panel__header .tabstrip wa-tab")
           .filter({ hasText: "Tasks" })
           .click();
         const completedRow = rail.locator(
@@ -268,7 +268,7 @@ suite.define(() => {
         expect(cancelRequest.params).toEqual({ taskId: "task-cron" });
         expect(page.url()).toBe(chatUrl);
         await page
-          .locator(".side-panel__header > .tabstrip wa-tab")
+          .locator(".side-panel__header .tabstrip wa-tab")
           .filter({ hasText: "Review" })
           .click();
         await detailPanel.waitFor({ state: "visible" });

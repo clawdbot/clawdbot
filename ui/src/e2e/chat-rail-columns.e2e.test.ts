@@ -145,9 +145,9 @@ function scenario(): ControlUiMockGatewayScenario {
 }
 
 async function seedSettings(page: Page, themeMode: "light" | "dark") {
-  const key = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+  const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
   await page.addInitScript(
-    ({ key, sessionKey, themeMode }) => {
+    ({ key, sessionKey: seededSessionKey, themeMode: seededThemeMode }) => {
       if (localStorage.getItem(key) !== null) {
         return;
       }
@@ -155,28 +155,28 @@ async function seedSettings(page: Page, themeMode: "light" | "dark") {
         key,
         JSON.stringify({
           theme: "claw",
-          themeMode,
+          themeMode: seededThemeMode,
           sidebarSessionLayouts: {
-            [sessionKey]: { columns: [], open: false, expanded: false },
+            [seededSessionKey]: { columns: [], open: false, expanded: false },
           },
         }),
       );
     },
-    { key, sessionKey, themeMode },
+    { key: settingsKey, sessionKey, themeMode },
   );
 }
 
 async function seedDockReservationRegression(page: Page, dock: "bottom" | "right") {
-  const key = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+  const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
   await page.addInitScript(
-    ({ dock, key, sessionKey }) => {
+    ({ dock: seededDock, key, sessionKey: seededSessionKey }) => {
       localStorage.setItem(
         key,
         JSON.stringify({
           theme: "claw",
           themeMode: "light",
           sidebarSessionLayouts: {
-            [sessionKey]: { columns: [], dock, open: false, expanded: false },
+            [seededSessionKey]: { columns: [], dock: seededDock, open: false, expanded: false },
           },
         }),
       );
@@ -185,13 +185,20 @@ async function seedDockReservationRegression(page: Page, dock: "bottom" | "right
         JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
       );
     },
-    { dock, key, sessionKey },
+    { dock, key: settingsKey, sessionKey },
   );
 }
 
 function sidePanel(page: Page): Locator {
   return page.locator(".sidebar-region__right-runtime .side-panel");
 }
+
+// Scope tab queries to the panel's own header: Terminal and Browser render the
+// same strip inside the panel body, so an unscoped descendant match would also
+// collect their inner rails. Match descendants of that header rather than a
+// direct child, so header layout wrappers can change without silently emptying
+// every tab assertion.
+const sidePanelTabLabelSelector = ":scope > .side-panel__header .tabstrip-tab__label";
 
 async function openFromEmpty(page: Page, label: string) {
   const button = sidePanel(page).locator(".side-panel-empty__type").filter({ hasText: label });
@@ -220,13 +227,13 @@ async function selectTab(page: Page, label: string) {
 
 async function tabLabels(page: Page): Promise<string[]> {
   return sidePanel(page)
-    .locator(":scope > .side-panel__header > .tabstrip .tabstrip-tab__label")
+    .locator(sidePanelTabLabelSelector)
     .evaluateAll((elements) => elements.map((element) => element.textContent?.trim() ?? ""));
 }
 
 async function narrowestRailTabLabel(page: Page): Promise<number> {
   return sidePanel(page)
-    .locator(":scope > .side-panel__header > .tabstrip .tabstrip-tab__label")
+    .locator(sidePanelTabLabelSelector)
     .evaluateAll((labels) =>
       Math.min(...labels.map((label) => (label as HTMLElement).getBoundingClientRect().width)),
     );
@@ -476,7 +483,6 @@ suite.define(() => {
             name: "Close Files",
             exact: true,
           });
-          const desktopTab = sidePanel(page).locator("wa-tab").filter({ hasText: "Desktop" });
           const desktopClose = sidePanel(page).getByRole("button", {
             name: "Close Desktop",
             exact: true,
@@ -529,7 +535,7 @@ suite.define(() => {
           await expect
             .poll(() =>
               sidePanel(page)
-                .locator(":scope > .side-panel__header .tabstrip-tab__label")
+                .locator(sidePanelTabLabelSelector)
                 .evaluateAll((labels) =>
                   labels.some((label) => {
                     const element = label as HTMLElement;
@@ -538,9 +544,7 @@ suite.define(() => {
                 ),
             )
             .toBe(true);
-          const railLabels = sidePanel(page).locator(
-            ":scope > .side-panel__header .tabstrip-tab__label",
-          );
+          const railLabels = sidePanel(page).locator(sidePanelTabLabelSelector);
           const overflowingLabelIndex = await railLabels.evaluateAll((labels) =>
             labels.findIndex((label) => label.hasAttribute("data-tooltip-overflow")),
           );
@@ -569,7 +573,7 @@ suite.define(() => {
           await expect
             .poll(() =>
               sidePanel(page)
-                .locator(":scope > .side-panel__header > wa-tab-group.tabstrip")
+                .locator(":scope > .side-panel__header wa-tab-group.tabstrip")
                 .evaluate((group) => {
                   const tabsPart = group.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
                   if (!tabsPart) {
@@ -749,9 +753,7 @@ suite.define(() => {
             .toBeCloseTo(resizedWidth, 0);
           expect(
             await sidePanel(page)
-              .locator(
-                ":scope > .side-panel__header > .tabstrip wa-tab[active] .tabstrip-tab__label",
-              )
+              .locator(":scope > .side-panel__header wa-tab[active] .tabstrip-tab__label")
               .textContent(),
           ).toContain("Files");
 
@@ -785,7 +787,7 @@ suite.define(() => {
           expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);
           await openFromEmpty(page, "Terminal");
           const terminalLabel = sidePanel(page)
-            .locator(":scope > .side-panel__header .tabstrip-tab__label")
+            .locator(sidePanelTabLabelSelector)
             .filter({ hasText: "Terminal" });
           await expect
             .poll(() =>
@@ -825,27 +827,29 @@ suite.define(() => {
             .getByRole("button", { name: "Close Terminal", exact: true })
             .click();
           await expect.poll(() => tabLabels(page)).toEqual(["Review", "Tasks"]);
+          // Closing back down to a strip that fits must release the shrink state:
+          // the in-pill fade is a symptom of overflow, so labels that fit again
+          // report their natural width and carry no mask.
           await expect
             .poll(() =>
               sidePanel(page)
-                .locator(":scope > .side-panel__header .tabstrip-tab__label")
+                .locator(sidePanelTabLabelSelector)
                 .evaluateAll((labels) =>
                   labels.every((label) => {
                     const element = label as HTMLElement;
                     const trigger = element.parentElement;
                     const mask = trigger ? getComputedStyle(trigger).maskImage : "none";
                     return (
-                      element.classList.contains("is-overflowing") &&
-                      trigger?.classList.contains("has-label-overflow") === true &&
-                      mask.includes("16px") &&
-                      mask.includes("rgba(0, 0, 0, 0)") &&
-                      getComputedStyle(element).maskImage === "none"
+                      element.scrollWidth <= element.clientWidth + 1 &&
+                      !element.classList.contains("is-overflowing") &&
+                      trigger?.classList.contains("has-label-overflow") === false &&
+                      mask === "none"
                     );
                   }),
                 ),
             )
             .toBe(true);
-          await captureRichPanel(page, `rails-tabs-fade-${themeMode}`);
+          await captureRichPanel(page, `rails-tabs-reflow-${themeMode}`);
         },
       );
     },

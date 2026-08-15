@@ -5,6 +5,11 @@ export async function openChatSidePanelType(page: Page, label: string): Promise<
   if ((await panel.count()) === 0) {
     await page.locator(".chat-side-panel-toggle").click();
   }
+  // An empty panel offers its type list; a populated one offers the header "+" menu,
+  // and only one of the two ever exists. The toggle above renders asynchronously, so
+  // settle on whichever surface arrives before branching — probing first would read
+  // an unrendered panel as populated and then wait forever for a "+" that never comes.
+  await panel.locator(".side-panel-empty__types, .side-panel__header-tabs").first().waitFor();
   const emptyChoice = panel.locator(".side-panel-empty__type").filter({ hasText: label });
   if ((await emptyChoice.count()) > 0) {
     await emptyChoice.click();
