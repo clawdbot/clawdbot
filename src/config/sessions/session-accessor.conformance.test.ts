@@ -49,7 +49,11 @@ import {
   branchCompactionCheckpointSession,
   restoreCompactionCheckpointSession,
 } from "./session-accessor.sqlite-checkpoint.js";
-import { listSessionEntryRows, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import {
+  listSessionEntriesReadOnly,
+  listSessionEntryRows,
+  replaceSessionEntrySync,
+} from "./session-accessor.sqlite-entry.js";
 import { forkSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
@@ -1273,7 +1277,7 @@ describe("sqlite session normalization", () => {
     });
   });
 
-  it("marks identity-only row updates pending validation", async () => {
+  it("fails loud for identity-only row updates bypassing the accessor", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sessionKey = "agent:main:identity-update";
     await replaceSessionEntry(
@@ -1281,15 +1285,16 @@ describe("sqlite session normalization", () => {
       { sessionId: "identity-session", updatedAt: 10 },
     );
     const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    // Direct-SQL identity mutation without the retired entry_valid write-triggers: the
+    // runtime validator still rejects the row on a fresh read because the persisted
+    // sessionId no longer matches current_session_id.
     database.db
-      .prepare("UPDATE session_nodes SET updated_at = 11 WHERE session_key = ?")
-      .run(sessionKey);
+      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+      .run(JSON.stringify({ sessionId: "identity-session-changed", updatedAt: 10 }), sessionKey);
 
-    expect(
-      database.db
-        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
-        .get(sessionKey),
-    ).toEqual({ entry_valid: 0 });
+    expect(() =>
+      listSessionEntriesReadOnly({ agentId: "main", env, storePath: paths.sqlitePath }),
+    ).toThrow("openclaw doctor --fix");
   });
 
   it("writes a valid session beside an unrelated malformed legacy row", async () => {
