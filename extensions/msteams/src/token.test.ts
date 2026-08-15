@@ -6,6 +6,7 @@ import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
+import { MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES } from "./delegated-state.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
@@ -526,6 +527,23 @@ describe("resolveDelegatedAccessToken", () => {
     expect(loadDelegatedTokens({ accountId: "finance" })).toBeUndefined();
     expect(existsSync(path.join(stateDir ?? "", "state", "openclaw.sqlite"))).toBe(true);
     expect(existsSync(path.join(stateDir ?? "", "msteams-delegated.json"))).toBe(false);
+  });
+
+  it("isolates delegated-token capacity across named accounts", () => {
+    for (let index = 0; index < MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES; index += 1) {
+      saveDelegatedTokens(
+        { ...delegatedTokens, accessToken: `account-${index}-access` },
+        { accountId: `account-${index}` },
+      );
+    }
+
+    expect(() =>
+      saveDelegatedTokens(
+        { ...delegatedTokens, accessToken: "isolated-access" },
+        { accountId: "isolated" },
+      ),
+    ).not.toThrow();
+    expect(loadDelegatedTokens({ accountId: "isolated" })?.accessToken).toBe("isolated-access");
   });
 });
 
