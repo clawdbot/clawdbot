@@ -14,22 +14,19 @@ export function renderLobsterPetDismissMenu(params: {
   if (!position) {
     return nothing;
   }
-  // Web Awesome caps `#menu` to `--auto-size-available-height` and its `size`
-  // middleware runs after `flip`, so a popup anchored near a viewport edge is
-  // shrunk in place instead of flipping and silently scrolls its own items.
-  // The pet lives on the footer ledge, i.e. always at the bottom edge, so the
-  // anchor is clamped like every other pointer-anchored menu (session-menu.ts,
-  // catalog-session-menu.ts, native-link-menu.ts, sidebar-menus-controller.ts).
-  const menuWidth = 264;
-  const menuHeight = 80;
-  const x = Math.max(8, Math.min(position.x, window.innerWidth - menuWidth - 8));
-  const y = Math.max(8, Math.min(position.y, window.innerHeight - menuHeight - 8));
+  // wa-dropdown enables `flip` but never sets `flip-fallback-placements`, so
+  // its fallback list stays empty and `flip` can never move the popup off its
+  // preferred placement (confirmed in the installed Web Awesome 3.10.0
+  // popup source). The pet lives on the footer ledge, always the bottom
+  // edge, so `top-start` is the placement that actually has room; `shift`
+  // and `auto-size` (already on for every wa-dropdown) then react to the
+  // menu's real measured content instead of a guessed width/height.
   return html`
     <openclaw-menu-surface>
       <wa-dropdown
         class="session-menu lobster-pet-dismiss-menu"
         .open=${true}
-        placement="bottom-start"
+        placement="top-start"
         .distance=${0}
         aria-label=${t("quickSettings.appearance.lobsterVisits")}
         @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
@@ -48,7 +45,7 @@ export function renderLobsterPetDismissMenu(params: {
           tabindex="-1"
           aria-hidden="true"
           aria-label=${t("quickSettings.appearance.lobsterVisits")}
-          style="position: fixed; left: ${x}px; top: ${y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+          style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
         <wa-dropdown-item class="session-menu__item" value="dismiss"
           >${t("common.dismiss")}</wa-dropdown-item
