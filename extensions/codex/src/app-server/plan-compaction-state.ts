@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentPlanStep } from "openclaw/plugin-sdk/channel-outbound";
 import type { CodexAppServerClient } from "./client.js";
@@ -9,6 +10,11 @@ const RESTORED_PLAN_PREAMBLE =
   "OpenClaw restored the active task list after context compaction. " +
   "This is application state, not a new user request. Continue the current task and call " +
   "update_plan whenever a status changes.";
+const RESTORED_PLAN_MAX_STEPS = 50;
+const RESTORED_PLAN_MAX_STEP_BYTES = 512;
+const RESTORED_PLAN_MAX_EXPLANATION_BYTES = 2 * 1024;
+const RESTORED_PLAN_MAX_PAYLOAD_BYTES = 32 * 1024;
+const RESTORED_PLAN_TRUNCATION_SUFFIX = "…";
 
 /** Retains the latest projected plan so Codex compaction cannot discard it. */
 export class CodexCompactionPlanState {
@@ -18,16 +24,11 @@ export class CodexCompactionPlanState {
     if (event.stream !== "plan") {
       return;
     }
-    const steps = readPlanSteps(event.data.steps);
-    if (steps.length === 0) {
+    const plan = readBoundedPlan(event.data.explanation, event.data.steps);
+    if (!plan) {
       return;
     }
-    this.latestPlan = {
-      ...(typeof event.data.explanation === "string"
-        ? { explanation: event.data.explanation }
-        : {}),
-      steps,
-    };
+    this.latestPlan = plan;
   }
 
   async restore(params: {
@@ -50,10 +51,7 @@ export class CodexCompactionPlanState {
             content: [
               {
                 type: "input_text",
-                text: `${RESTORED_PLAN_PREAMBLE}\n${JSON.stringify({
-                  explanation: this.latestPlan.explanation,
-                  plan: this.latestPlan.steps,
-                })}`,
+                text: `${RESTORED_PLAN_PREAMBLE}\n${serializePlan(this.latestPlan)}`,
               },
             ],
           },
@@ -62,6 +60,49 @@ export class CodexCompactionPlanState {
       { timeoutMs: params.timeoutMs, signal: params.signal },
     );
   }
+}
+
+function readBoundedPlan(explanationValue: unknown, stepsValue: unknown): StoredPlan | undefined {
+  const explanation =
+    typeof explanationValue === "string"
+      ? truncateUtf8(explanationValue, RESTORED_PLAN_MAX_EXPLANATION_BYTES)
+      : undefined;
+  const steps: AgentPlanStep[] = [];
+  for (const step of readPlanSteps(stepsValue)) {
+    if (steps.length >= RESTORED_PLAN_MAX_STEPS) {
+      break;
+    }
+    const boundedStep = {
+      ...step,
+      step: truncateUtf8(step.step, RESTORED_PLAN_MAX_STEP_BYTES),
+    };
+    const candidate = {
+      ...(explanation ? { explanation } : {}),
+      steps: [...steps, boundedStep],
+    };
+    if (Buffer.byteLength(serializePlan(candidate), "utf8") > RESTORED_PLAN_MAX_PAYLOAD_BYTES) {
+      break;
+    }
+    steps.push(boundedStep);
+  }
+  return steps.length > 0 ? { ...(explanation ? { explanation } : {}), steps } : undefined;
+}
+
+function serializePlan(plan: StoredPlan): string {
+  return JSON.stringify({ explanation: plan.explanation, plan: plan.steps });
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value);
+  if (bytes.byteLength <= maxBytes) {
+    return value;
+  }
+  const suffixBytes = Buffer.byteLength(RESTORED_PLAN_TRUNCATION_SUFFIX, "utf8");
+  let end = Math.max(0, maxBytes - suffixBytes);
+  while (end > 0 && (bytes[end] ?? 0) >> 6 === 0b10) {
+    end -= 1;
+  }
+  return `${bytes.subarray(0, end).toString("utf8")}${RESTORED_PLAN_TRUNCATION_SUFFIX}`;
 }
 
 function readPlanSteps(value: unknown): AgentPlanStep[] {
