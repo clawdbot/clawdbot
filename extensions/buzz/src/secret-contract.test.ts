@@ -106,4 +106,68 @@ describe("Buzz secret contract", () => {
       { path: "channels.buzz.accounts.ada.privateKey", ownerId: "buzz:ada" },
     ]);
   });
+
+  it("scopes the owner contract to effective named-account inputs", () => {
+    const collectDigests = (params: {
+      accountRelayUrl?: string;
+      env?: NodeJS.ProcessEnv;
+      groupPolicy?: "open" | "allowlist";
+      rootPrivateKeyId?: string;
+      rootRelayUrl?: string;
+    }) => {
+      const sourceConfig = {
+        channels: {
+          buzz: {
+            relayUrl: params.rootRelayUrl ?? "wss://default.example.com",
+            privateKey: {
+              source: "env",
+              provider: "default",
+              id: params.rootPrivateKeyId ?? "BUZZ_DEFAULT_KEY",
+            },
+            groupPolicy: params.groupPolicy ?? "allowlist",
+            accounts: {
+              ada: {
+                relayUrl: params.accountRelayUrl ?? "wss://ada.example.com",
+                privateKey: { source: "env", provider: "default", id: "BUZZ_ADA_KEY" },
+                authTag: { source: "env", provider: "default", id: "BUZZ_ADA_AUTH_TAG" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const context = createResolverContext({ sourceConfig, env: params.env ?? {} });
+
+      collectRuntimeConfigAssignments({
+        config: structuredClone(sourceConfig),
+        defaults: undefined,
+        context,
+      });
+
+      return context.assignments
+        .filter((assignment) => assignment.ownerId === "buzz:ada")
+        .map((assignment) => assignment.ownerContractDigest);
+    };
+
+    const initial = collectDigests({
+      env: {
+        BUZZ_ADA_KEY: "healthy-key",
+        BUZZ_ADA_AUTH_TAG: "healthy-tag",
+      },
+    });
+    const failedReload = collectDigests({});
+    const rootOnlyChanged = collectDigests({
+      rootPrivateKeyId: "BUZZ_NEW_DEFAULT_KEY",
+      rootRelayUrl: "wss://new-default.example.com",
+    });
+    const accountChanged = collectDigests({ accountRelayUrl: "wss://changed.example.com" });
+    const inheritedPolicyChanged = collectDigests({ groupPolicy: "open" });
+
+    expect(initial).toHaveLength(2);
+    expect(initial[0]).toBeDefined();
+    expect(new Set(initial).size).toBe(1);
+    expect(failedReload).toEqual(initial);
+    expect(rootOnlyChanged).toEqual(initial);
+    expect(accountChanged[0]).not.toBe(initial[0]);
+    expect(inheritedPolicyChanged[0]).not.toBe(initial[0]);
+  });
 });

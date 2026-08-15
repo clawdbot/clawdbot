@@ -1,3 +1,4 @@
+import { mergeAccountConfig } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectSecretInputAssignment,
@@ -9,13 +10,36 @@ import {
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
 const CREDENTIAL_FIELDS = ["privateKey", "authTag"] as const;
+const ACCOUNT_OWNED_FIELDS = [
+  "name",
+  "relayUrl",
+  "privateKey",
+  "authTag",
+  "groups",
+  "defaultTo",
+] as const;
 
-function accountSecretOwner(accountId: string) {
+function createBuzzAccountSecretOwner(
+  accountId: string,
+  channel: Record<string, unknown>,
+  account: Record<string, unknown>,
+) {
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const contract = mergeAccountConfig({
+    channelConfig: channel,
+    accountConfig: account,
+    omitKeys: [
+      "defaultAccount",
+      ...(normalizedAccountId === DEFAULT_ACCOUNT_ID ? [] : ACCOUNT_OWNED_FIELDS),
+    ],
+  });
+
   return {
     ownerKind: "account" as const,
-    ownerId: `buzz:${normalizeAccountId(accountId)}`,
+    ownerId: `buzz:${normalizedAccountId}`,
     requiredForGateway: false,
     disposition: "isolate" as const,
+    contract,
   };
 }
 
@@ -50,7 +74,7 @@ export function collectRuntimeConfigAssignments(params: {
       active: defaultAccountEnabled && !hasOwnProperty(defaultAccount?.account ?? {}, field),
       inactiveReason:
         "Buzz channel or default account is disabled, or the scoped default account overrides the legacy root credential.",
-      owner: accountSecretOwner(DEFAULT_ACCOUNT_ID),
+      owner: createBuzzAccountSecretOwner(DEFAULT_ACCOUNT_ID, buzz, defaultAccount?.account ?? {}),
       apply: (value) => {
         buzz[field] = value;
       },
@@ -73,7 +97,7 @@ export function collectRuntimeConfigAssignments(params: {
         context: params.context,
         active: enabled,
         inactiveReason: "Buzz account is disabled.",
-        owner: accountSecretOwner(accountId),
+        owner: createBuzzAccountSecretOwner(accountId, buzz, account),
         apply: (value) => {
           account[field] = value;
         },
