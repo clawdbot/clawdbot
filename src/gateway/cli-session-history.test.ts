@@ -974,9 +974,10 @@ describe("cli session history", () => {
     // One aggregate is covered by the single imported block; the surplus copy
     // of the genuinely repeated turn survives as fallback history.
     expect(
-      merged.filter((message) =>
-        String(readRecord(message).idempotencyKey ?? "").startsWith("cli-assistant:"),
-      ),
+      merged.filter((message) => {
+        const key = readRecord(message).idempotencyKey;
+        return typeof key === "string" && key.startsWith("cli-assistant:");
+      }),
     ).toHaveLength(1);
   });
 
@@ -1096,9 +1097,10 @@ describe("cli session history", () => {
 
       expect(messages).toHaveLength(3);
       expect(
-        messages.some((message) =>
-          String(readRecord(message).idempotencyKey ?? "").startsWith("cli-assistant:"),
-        ),
+        messages.some((message) => {
+          const key = readRecord(message).idempotencyKey;
+          return typeof key === "string" && key.startsWith("cli-assistant:");
+        }),
       ).toBe(false);
       const importedAssistantBlocks = messages.filter((message) => {
         const record = readRecord(message);
