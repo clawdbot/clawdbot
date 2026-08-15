@@ -5,6 +5,7 @@
  */
 import { resolvePluginWebSearchConfig } from "../../config/plugin-web-search-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isLegacyWebSearchProviderConfigKey } from "../../config/web-search-legacy-provider-keys.js";
 
 /** Reads the legacy top-level web search credential value. */
 export function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
@@ -54,6 +55,9 @@ export function mergeScopedSearchConfig(
 ): Record<string, unknown> | undefined {
   const next: Record<string, unknown> = { ...searchConfig };
   delete next.apiKey;
+  if (isLegacyWebSearchProviderConfigKey(key)) {
+    delete next[key];
+  }
   if (!pluginConfig) {
     return Object.keys(next).length > 0 ? next : undefined;
   }
