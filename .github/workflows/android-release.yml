@@ -41,46 +41,44 @@ jobs:
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain
 
-
-      - name: Build Android APK
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
+      - name: Materialize Fork Release Signing
         run: |
           set -euo pipefail
-          mkdir -p dist
-          
-          cd apps/android
-          chmod +x gradlew
-          
-          # Debug 构建
-          ./gradlew assembleThirdPartyDebug --no-daemon
-          
-          # 查找生成的 APK
-          version="$(node -p 'require("../apps/android/version.json").version')"
-          apk_path="app/build/outputs/apk/third-party/debug/OpenClaw-${version}-third-party-debug.apk"
-          
-          test -f "${apk_path}" || {
-            echo "❌ APK not found, checking all APKs:"
-            find . -name "*.apk" -type f | head -10
-            exit 1
-          }
-          
-          cp "${apk_path}" ../../dist/OpenClaw-Android.apk
-          cd ../../dist
-          sha256sum OpenClaw-Android.apk > OpenClaw-Android-SHA256SUMS.txt
-          
-          echo "✅ Built: $(ls -la OpenClaw-Android.apk)"
+          signing_dir="apps/android/build/release-signing"
+          mkdir -p "${signing_dir}"
+          keystore_path="${GITHUB_WORKSPACE}/${signing_dir}/release.keystore"
+        
+          keytool -genkeypair -v \
+            -keystore "${keystore_path}" \
+            -keyalg RSA -keysize 2048 -validity 3650 \
+            -alias openclaw \
+            -storepass openclawpassword \
+            -keypass openclawpassword \
+            -dname "CN=OpenClawFork, O=Fork, C=CN"
+
+          cat > "${signing_dir}/gradle.properties" << EOF
+          OPENCLAW_ANDROID_STORE_FILE=${keystore_path}
+          OPENCLAW_ANDROID_STORE_PASSWORD=openclawpassword
+          OPENCLAW_ANDROID_KEY_ALIAS=openclaw
+          OPENCLAW_ANDROID_KEY_PASSWORD=openclawpassword
+          EOF
+
+          mkdir -p ~/.gradle
+          cp "${signing_dir}/gradle.properties" ~/.gradle/gradle.properties
+
+
 
       - name: Prepare and verify signed Android APK
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          GIT_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           mkdir -p dist
             base_dir="${RUNNER_TEMP}/fallback-android-release"
             mkdir -p "${base_dir}"
 
-            bun apps/android/scripts/build-release-artifacts.ts --artifact third-party --debug
+            bun apps/android/scripts/build-release-artifacts.ts --artifact third-party
 
             version="$(node -p 'require("./apps/android/version.json").version')"
             source_apk="apps/android/build/release-artifacts/openclaw-${version}-third-party-release.apk"
@@ -108,6 +106,12 @@ jobs:
             exit 1
           fi
 
+    - name: Upload Signed Android APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: OpenClaw-Android-Release
+        path: dist/
+        retention-days: 14
 
       - name: Remove materialized signing files
         if: ${{ always() }}
