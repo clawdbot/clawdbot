@@ -109,6 +109,7 @@ function makeClient(
     caps?: string[];
     commands?: string[];
     computerUse?: unknown;
+    declaredComputerUse?: unknown;
     workerRuns?: WorkerAdmissionHandshake;
     permissions?: Record<string, boolean>;
     declaredCaps?: string[];
@@ -143,6 +144,7 @@ function makeClient(
       caps: opts.caps ?? [],
       commands: opts.commands ?? [],
       computerUse: opts.computerUse,
+      declaredComputerUse: opts.declaredComputerUse,
       workerRuns: opts.workerRuns,
       permissions: opts.permissions,
       declaredCaps: opts.declaredCaps,
@@ -295,18 +297,22 @@ function authorizeSystemRun(registry: NodeRegistry, overrides: Partial<SystemRun
   });
 }
 
+function computerUseDescriptor() {
+  return {
+    contractVersion: 2 as const,
+    provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+    actions: ["screenshot", "left_click"] as const,
+    targets: ["screen"] as const,
+    deliveryModes: ["foreground"] as const,
+    observations: ["image"] as const,
+    features: { recording: false, agentCursor: false, multiDisplay: false },
+  };
+}
+
 describe("gateway/node-registry", () => {
   it("retains the validated Computer Use declaration on the live session", () => {
     const registry = createNodeRegistry();
-    const computerUse = {
-      contractVersion: 2,
-      provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-      actions: ["screenshot", "left_click"],
-      targets: ["screen"],
-      deliveryModes: ["foreground"],
-      observations: ["image"],
-      features: { recording: false, agentCursor: false, multiDisplay: false },
-    };
+    const computerUse = computerUseDescriptor();
     const client = makeClient("conn-computer", "node-computer", [], {
       commands: ["screen.snapshot", "computer.act"],
       computerUse,
@@ -2751,11 +2757,13 @@ describe("gateway/node-registry", () => {
 
   it("refreshes effective live surface within the declared surface", () => {
     const registry = createTestNodeRegistry();
+    const computerUse = computerUseDescriptor();
     const client = makeClient("conn-1", "node-1", [], {
       caps: [],
       commands: [],
       declaredCaps: ["talk"],
-      declaredCommands: ["talk.ptt.start"],
+      declaredCommands: ["talk.ptt.start", "computer.act", "screen.snapshot"],
+      declaredComputerUse: computerUse,
       declaredPermissions: { microphone: true, camera: false },
     });
 
@@ -2765,15 +2773,21 @@ describe("gateway/node-registry", () => {
 
     const updated = registry.updateSurface("node-1", {
       caps: ["talk", "screen"],
-      commands: ["talk.ptt.start", "system.run"],
+      commands: ["talk.ptt.start", "computer.act", "screen.snapshot", "system.run"],
       permissions: { microphone: true, camera: true },
     });
 
     expect(updated?.caps).toEqual(["talk"]);
-    expect(updated?.commands).toEqual(["talk.ptt.start"]);
+    expect(updated?.commands).toEqual(["talk.ptt.start", "computer.act", "screen.snapshot"]);
+    expect(updated?.computerUse).toEqual(computerUse);
     expect(updated?.permissions).toEqual({ microphone: true, camera: false });
     expect(client.connect.caps).toEqual(["talk"]);
-    expect((client.connect as { commands?: string[] }).commands).toEqual(["talk.ptt.start"]);
+    expect((client.connect as { commands?: string[] }).commands).toEqual([
+      "talk.ptt.start",
+      "computer.act",
+      "screen.snapshot",
+    ]);
+    expect(client.connect.computerUse).toEqual(computerUse);
   });
 
   it("advances the exact live session with its approved surface generation", () => {

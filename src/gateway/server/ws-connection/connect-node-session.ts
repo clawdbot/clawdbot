@@ -185,12 +185,14 @@ export async function prepareGatewayNodeConnect(
   const nodeConnectParams = connectParams as ConnectParams & {
     declaredCaps?: string[];
     declaredCommands?: string[];
+    declaredComputerUse?: unknown;
     declaredPermissions?: Record<string, boolean>;
     sessionCapsCeiling?: string[];
     sessionCommandsCeiling?: string[];
   };
   nodeConnectParams.declaredCaps = reconciliation.declaredCaps;
   nodeConnectParams.declaredCommands = reconciliation.declaredCommands;
+  nodeConnectParams.declaredComputerUse = reconciliation.declaredComputerUse;
   nodeConnectParams.declaredPermissions = reconciliation.declaredPermissions;
   const pluginSurfaces = pluginNodeCapabilities.map((surface) => surface.surface);
   if (usesLegacyNodeProtocol) {
