@@ -258,6 +258,35 @@ describe("worker environment service", () => {
     });
   });
 
+  it("persists provider-owned host isolation while placement teardown is fenced", async () => {
+    const environmentId = "worker-fenced-isolation-change";
+    support.seedReady(environmentId, undefined, false);
+    const placementStore = {
+      hasWorkerTurn: vi.fn(() => false),
+      isEnvironmentTeardownFenced: vi.fn(() => true),
+      validateWorkerTurn: vi.fn(() => false),
+      isWorkerTurnToolAuthorized: vi.fn(() => false),
+      updateAckCursors: vi.fn(),
+    };
+    const stop = vi.fn(async () => {
+      expect(support.testState.store.get(environmentId)?.sharedHost).toBe(false);
+    });
+    const tunnelManager = {
+      status: () => "connected" as const,
+      start: vi.fn(),
+      stop,
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const provider = support.createProvider({
+      inspect: async () => ({ status: "active", sharedHost: true }),
+    });
+
+    await support.createService(provider, { placementStore, tunnelManager }).reconcileOnce();
+
+    expect(stop).toHaveBeenCalledWith(environmentId, undefined);
+    expect(support.testState.store.get(environmentId)?.sharedHost).toBe(true);
+  });
+
   it.each([
     { status: "destroyed" as const, expectedState: "failed" },
     { status: "unknown" as const, expectedState: "orphaned" },

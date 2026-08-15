@@ -50,7 +50,6 @@ export function createHarness(
     terminalizeReclaimOnTunnelDrop?: boolean;
     terminalizedReclaimError?: Error;
     environmentGeneration?: number;
-    destroyPendingOwnerDuringEnvironmentReconcile?: boolean;
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -371,18 +370,6 @@ export function createHarness(
     }),
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
-      if (
-        options.destroyPendingOwnerDuringEnvironmentReconcile &&
-        currentEnvironment?.state === "attached" &&
-        placementStore
-          .listPendingWorkspaceResults()
-          .some((pending) => currentEnvironment?.attachedSessionIds.includes(pending.sessionId))
-      ) {
-        // Model stale-bundle provider reconciliation: destroying the attached
-        // lease here loses an unstaged result unless placement recovery ran first.
-        log.push("environment:stale-bundle-destroy");
-        currentEnvironment = destroyedEnvironment(currentEnvironment.ownerEpoch + 1);
-      }
     }),
   };
   const service = createWorkerPlacementDispatchService({

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { ensureWorkspaceRetentionSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import type {
   WorkerSessionPlacementRecord,
@@ -126,6 +127,7 @@ function loadEnvironmentTeardownFacts(
   db: DatabaseSync,
   environmentIds: readonly string[],
 ): EnvironmentTeardownFacts {
+  ensureWorkspaceRetentionSchema(db);
   // Keep bulk placement projection on one bounded fact load. Per-row discovery here
   // synchronously amplifies sessions.list latency for every failed placement.
   const uniqueEnvironmentIds = [...new Set(environmentIds)];

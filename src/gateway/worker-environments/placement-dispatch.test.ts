@@ -109,44 +109,44 @@ describe("worker placement dispatch", () => {
     expect(restartedHarness.log).not.toContain("workspace:resume");
   });
 
-  it("recovers an unstaged pending result before stale-bundle provider reconciliation", async () => {
-    const originalHarness = createHarness(placementStore);
-    const active = originalHarness.placements.seedActive(2);
-    originalHarness.markEnvironmentOwnerEpoch(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const claim = placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "stale-bundle-pending-claim",
-      runId: "stale-bundle-pending-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
-    placementStore.markWorkspaceResultPending(claim);
+  it.each(["reconcile", "reconcileActive"] as const)(
+    "%s refreshes provider facts before recovering an unstaged pending result",
+    async (reconcile) => {
+      const originalHarness = createHarness(placementStore);
+      const active = originalHarness.placements.seedActive(2);
+      originalHarness.markEnvironmentOwnerEpoch(2);
+      if (active.state !== "active") {
+        throw new Error("active placement fixture was not active");
+      }
+      const claim = placementStore.claimTurn({
+        ...REQUEST,
+        claimId: "stale-bundle-pending-claim",
+        runId: "stale-bundle-pending-run",
+        owner: {
+          kind: "worker",
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+      });
+      placementStore.markWorkspaceResultPending(claim);
 
-    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-    const restartedHarness = createHarness(restartedStore, {
-      destroyPendingOwnerDuringEnvironmentReconcile: true,
-    });
-    restartedHarness.markEnvironmentOwnerEpoch(2);
+      const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+      const restartedHarness = createHarness(restartedStore);
+      restartedHarness.markEnvironmentOwnerEpoch(2);
 
-    await restartedHarness.service.reconcile();
+      await restartedHarness.service[reconcile]();
 
-    expect(restartedHarness.log.indexOf("workspace:reconcile")).toBeLessThan(
-      restartedHarness.log.indexOf("environment:reconcile"),
-    );
-    expect(restartedHarness.log).not.toContain("environment:stale-bundle-destroy");
-    expect(restartedHarness.placements.current()).toMatchObject({
-      state: "reclaimed",
-      turnClaim: null,
-      workspaceBaseManifestRef: restartedHarness.reconciledManifestRef,
-    });
-    expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
-  });
+      expect(restartedHarness.log.indexOf("environment:reconcile")).toBeLessThan(
+        restartedHarness.log.indexOf("workspace:reconcile"),
+      );
+      expect(restartedHarness.placements.current()).toMatchObject({
+        state: "reclaimed",
+        turnClaim: null,
+        workspaceBaseManifestRef: restartedHarness.reconciledManifestRef,
+      });
+      expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
+    },
+  );
 
   it("keeps a previous-instance pending result fenced when another session is attached", async () => {
     const originalHarness = createHarness(placementStore);
@@ -748,8 +748,8 @@ describe("worker placement dispatch", () => {
     await harness.service.reconcile();
 
     expect(harness.log).toEqual([
-      "workspace",
       "environment:reconcile",
+      "workspace",
       "tunnel:attached",
       "placement:adopted",
     ]);
@@ -791,8 +791,8 @@ describe("worker placement dispatch", () => {
       terminalAtMs: expect.any(Number),
     });
     expect(harness.log).toEqual([
-      "workspace",
       "environment:reconcile",
+      "workspace",
       "placement:draining",
       "placement:reconciling",
       "placement:failed",
@@ -865,8 +865,8 @@ describe("worker placement dispatch", () => {
       recoveryError: "Active worker turn claim cannot be proven live after gateway restart",
     });
     expect(harness.log).toEqual([
-      "workspace",
       "environment:reconcile",
+      "workspace",
       "placement:draining",
       "placement:reconciling",
       "teardown:stop",
@@ -889,8 +889,8 @@ describe("worker placement dispatch", () => {
       activeOwnerEpoch: harness.attached.ownerEpoch,
     });
     expect(harness.log).toEqual([
-      "workspace",
       "environment:reconcile",
+      "workspace",
       "attach",
       "tunnel:attached",
       "activation",
@@ -927,8 +927,8 @@ describe("worker placement dispatch", () => {
       recoveryError: "Worker dispatch interrupted in draining",
     });
     expect(harness.log).toEqual([
-      "workspace",
       "environment:reconcile",
+      "workspace",
       "placement:reconciling",
       "teardown:stop",
       "teardown:destroy",
@@ -946,8 +946,8 @@ describe("worker placement dispatch", () => {
       state: "reclaimed",
     });
     expect(harness.log).toEqual([
-      "workspace",
       "environment:reconcile",
+      "workspace",
       "placement:draining",
       "placement:reconciling",
       "teardown:stop",

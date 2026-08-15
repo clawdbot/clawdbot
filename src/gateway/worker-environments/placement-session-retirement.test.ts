@@ -10,6 +10,7 @@ import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { createPlacementSessionRetirement } from "./placement-session-retirement.js";
 import {
   createWorkerSessionPlacementStore,
+  WorkerSessionPlacementRetirementBlockedError,
   type WorkerSessionPlacementRetirement,
 } from "./placement-store.js";
 
@@ -282,5 +283,34 @@ describe("placement session retirement", () => {
     expect(harness.resolveSessionEvidence.mock.calls.map(([placement]) => placement)).toEqual(
       placements,
     );
+  });
+
+  it("reports automatic retirement deferred by retained workspace recovery", async () => {
+    const placement = failedPlacement(activePlacement("session-retained"));
+    const warn = vi.fn();
+    const retirement = createPlacementSessionRetirement({
+      placements: {
+        get: () => placement,
+        list: () => [placement],
+        retireSessionPlacement: () => {
+          throw new WorkerSessionPlacementRetirementBlockedError(placement.sessionId);
+        },
+      },
+      environments: {
+        get: () => ({ state: "destroyed" }) as never,
+      },
+      forceDestroyEnvironment: async () => {
+        throw new Error("must not destroy an already terminal environment");
+      },
+      createSessionEvidenceResolver: async () => async () => "absent",
+      warn,
+    });
+
+    await retirement.reconcile();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Worker placement session retirement deferred for session-retained"),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("force-abandoned"));
   });
 });

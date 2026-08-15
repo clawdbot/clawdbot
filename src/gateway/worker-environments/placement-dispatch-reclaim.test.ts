@@ -306,6 +306,87 @@ describe("worker placement dispatch reclaim", () => {
     expect(placementStore.get(active.sessionId)).not.toHaveProperty("workspaceResultConflict");
   });
 
+  it.each(["pending result", "retained workspace journal"] as const)(
+    "refuses to retire a failed placement with a %s owner",
+    async (recoveryOwner) => {
+      const harness = createHarness(placementStore);
+      const active = harness.placements.seedActive(7);
+      if (active.state !== "active") {
+        throw new Error("expected active worker placement");
+      }
+      const owner = {
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        placementGeneration: active.generation,
+      };
+      let failed;
+      if (recoveryOwner === "pending result") {
+        const claim = placementStore.claimTurn({
+          ...REQUEST,
+          owner: {
+            kind: "worker",
+            environmentId: active.environmentId,
+            ownerEpoch: active.activeOwnerEpoch,
+          },
+          claimId: "retirement-pending-claim",
+          runId: "retirement-pending-run",
+        });
+        placementStore.markWorkspaceResultPending(claim);
+        failed = await placementStore.failPendingWorkspaceResult({
+          pending: placementStore.listPendingWorkspaceResults()[0]!,
+          recoveryError: "workspace recovery requires operator action",
+        });
+      } else {
+        const basePack = Buffer.from("retained retirement base pack");
+        placementStore.beginWorkspaceReconciliation(owner, {
+          version: 1,
+          temporaryNonce: "c".repeat(32),
+          baseManifestRef: active.workspaceBaseManifestRef,
+          currentManifestRef: `sha256:${"d".repeat(64)}`,
+          baseEntries: [],
+          appliedEntries: [],
+          baseTree: "e".repeat(40),
+          basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+          basePack,
+        });
+        placementStore.retainWorkspaceReconciliationForForcedAbandonment(owner);
+        const draining = placementStore.startDrain({
+          sessionId: active.sessionId,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+          expectedGeneration: active.generation,
+        });
+        const reconciling = placementStore.startReconcile({
+          sessionId: draining.sessionId,
+          environmentId: draining.environmentId,
+          ownerEpoch: draining.activeOwnerEpoch,
+          expectedGeneration: draining.generation,
+        });
+        failed = placementStore.fail({
+          sessionId: reconciling.sessionId,
+          expectedGeneration: reconciling.generation,
+          recoveryError: "workspace recovery requires operator action",
+        });
+      }
+
+      expect(() =>
+        placementStore.retireSessionPlacement({
+          sessionId: failed.sessionId,
+          expectedState: "failed",
+          expectedGeneration: failed.generation,
+        }),
+      ).toThrow("must be force-abandoned before retirement");
+      expect(placementStore.get(active.sessionId)).toMatchObject({ state: "failed" });
+      expect(placementStore.listPendingWorkspaceResults().length).toBe(
+        recoveryOwner === "pending result" ? 1 : 0,
+      );
+      expect(placementStore.listWorkspaceReconciliationOwners().length).toBe(
+        recoveryOwner === "retained workspace journal" ? 1 : 0,
+      );
+    },
+  );
+
   it("applies a prepared staged result before requiring its manifest commit", async () => {
     const harness = createHarness(placementStore, {
       reconcileCommitsManifest: false,

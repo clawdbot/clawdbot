@@ -514,9 +514,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       // Workspace actions capture isolation at tunnel creation. Fence the old actions before
       // committing a provider-owned change so no reconciliation can use stale host scope.
       await tunnels?.stop(record.environmentId);
-      if (options.placementStore?.isEnvironmentTeardownFenced(record.environmentId)) {
-        return;
-      }
     }
     record = store.reconcileSharedHost({
       environmentId: record.environmentId,

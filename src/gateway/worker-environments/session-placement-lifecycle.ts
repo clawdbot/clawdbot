@@ -1,7 +1,8 @@
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
-import type {
-  WorkerSessionPlacementRetirement,
-  WorkerSessionPlacementStore,
+import {
+  WorkerSessionPlacementRetirementBlockedError,
+  type WorkerSessionPlacementRetirement,
+  type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import type {
   WorkerEnvironmentServiceContract,
@@ -20,8 +21,17 @@ type Placement = WorkerSessionPlacementRecord;
 type PlacementState = Placement["state"];
 
 export class SessionWorkerPlacementMutationError extends Error {
-  constructor(state: PlacementState, action: PlacementMutationAction, key: string) {
-    super(`Session ${key} cannot ${action} while cloud worker placement is ${state}.`);
+  constructor(
+    state: PlacementState,
+    action: PlacementMutationAction,
+    key: string,
+    forceAbandonEnvironmentId?: string,
+  ) {
+    super(
+      forceAbandonEnvironmentId
+        ? `Session ${key} cannot ${action} while its failed cloud worker retains an unreconciled workspace result. Run environments.destroy with force=true for environment ${forceAbandonEnvironmentId} only to permanently abandon its remote workspace changes, then retry.`
+        : `Session ${key} cannot ${action} while cloud worker placement is ${state}.`,
+    );
   }
 }
 
@@ -107,6 +117,20 @@ function resolveSessionWorkerPlacementMutationGuard(
     return retirementGuard(placement);
   }
   if (params.action === "delete" && placement.state === "failed") {
+    if (
+      placement.environmentId &&
+      placement.terminalRecovery?.action === "force-destroy-environment"
+    ) {
+      return {
+        status: "blocked",
+        error: new SessionWorkerPlacementMutationError(
+          placement.state,
+          params.action,
+          params.key,
+          placement.environmentId,
+        ),
+      };
+    }
     // Failed environments retain their lease until teardown is proven, so they stay fenced.
     if (
       isFailedWorkerPlacementEnvironmentGone({
@@ -134,7 +158,19 @@ export function retireSessionWorkerPlacementBeforeMutation(
   if (!retirementService?.retireSessionPlacement) {
     throw new Error("Worker session placement retirement service is unavailable");
   }
-  retirementService.retireSessionPlacement(guard);
+  try {
+    retirementService.retireSessionPlacement(guard);
+  } catch (error) {
+    if (error instanceof WorkerSessionPlacementRetirementBlockedError) {
+      return new SessionWorkerPlacementMutationError(
+        guard.expectedState,
+        params.action,
+        params.key,
+        error.environmentId,
+      );
+    }
+    throw error;
+  }
   return undefined;
 }
 

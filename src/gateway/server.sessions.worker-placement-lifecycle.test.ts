@@ -312,6 +312,43 @@ test("sessions.delete rejects failed placement while its worker lease remains", 
   expect(placementService.retireSessionPlacement).not.toHaveBeenCalled();
 });
 
+test("sessions.delete directs retained failed recovery through explicit forced abandonment", async () => {
+  await createSessionStoreDir();
+  const sessionKey = "discord:group:retained-worker-session";
+  const sessionId = "sess-retained-worker-delete";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const placement = terminalPlacementRecord(sessionId, "failed");
+  if (placement.state !== "failed") {
+    throw new Error("expected failed placement fixture");
+  }
+  placement.terminalRecovery = {
+    action: "force-destroy-environment",
+    dataLoss: "unreconciled-workspace-result",
+  };
+  const placementService = sequencedPlacementService([placement]);
+
+  const deleted = await directSessionReq(
+    "sessions.delete",
+    { key: sessionKey },
+    {
+      context: {
+        workerEnvironmentService: {
+          get: () => ({ state: "destroyed" }),
+          hasInferenceForSession: () => false,
+          resolveInferenceSessionForRunId: () => undefined,
+        } as never,
+        workerSessionPlacementService: placementService,
+      },
+    },
+  );
+
+  expect(deleted.ok).toBe(false);
+  expect(deleted.error?.message).toContain("environments.destroy with force=true");
+  expect(deleted.error?.message).toContain("permanently abandon its remote workspace changes");
+  expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
+  expect(placementService.retireSessionPlacement).not.toHaveBeenCalled();
+});
+
 test.each([
   { name: "local", state: "local" as const },
   { name: "reclaimed", state: "reclaimed" as const },

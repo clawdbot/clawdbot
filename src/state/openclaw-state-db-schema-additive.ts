@@ -140,6 +140,7 @@ export function ensureWorkspaceRetentionSchema(database: DatabaseSync): void {
   if (workspaceRetentionSchemaConnections.has(database)) {
     return;
   }
+  const cacheable = !database.isTransaction;
   ensureColumn(database, "worker_workspace_reconciliations", "forced_abandonment_retained INTEGER");
   database
     .prepare(
@@ -158,7 +159,9 @@ export function ensureWorkspaceRetentionSchema(database: DatabaseSync): void {
          )`,
     )
     .run(LEGACY_FORCED_WORKER_ABANDONMENT_ERROR);
-  workspaceRetentionSchemaConnections.add(database);
+  if (cacheable) {
+    workspaceRetentionSchemaConnections.add(database);
+  }
 }
 
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {

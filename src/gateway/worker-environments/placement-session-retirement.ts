@@ -1,5 +1,8 @@
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import {
+  WorkerSessionPlacementRetirementBlockedError,
+  type WorkerSessionPlacementStore,
+} from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 
@@ -22,6 +25,12 @@ type PlacementSessionRetirementDeps = {
 };
 
 export function createPlacementSessionRetirement(deps: PlacementSessionRetirementDeps) {
+  const reportRetirementError = (sessionId: string, error: unknown): void => {
+    if (error instanceof WorkerSessionPlacementRetirementBlockedError) {
+      deps.warn(`Worker placement session retirement deferred for ${sessionId}: ${error.message}`);
+    }
+  };
+
   const retireCurrent = (placement: WorkerSessionPlacementRecord): boolean => {
     if (placement.turnClaim) {
       return false;
@@ -71,7 +80,8 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       if (retireCurrent(current)) {
         return;
       }
-    } catch {
+    } catch (error) {
+      reportRetirementError(current.sessionId, error);
       return;
     }
 
@@ -98,8 +108,9 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     }
     try {
       retireCurrent(current);
-    } catch {
+    } catch (error) {
       // A concurrent placement transition owns the next reconciliation pass.
+      reportRetirementError(current.sessionId, error);
     }
   };
 

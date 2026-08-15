@@ -50,6 +50,7 @@ import {
 import {
   clearWorkerWorkspaceReconciliation,
   createPlacementWorkspaceJournalOps,
+  hasWorkerWorkspaceReconciliation,
 } from "./placement-workspace-journal.js";
 import {
   createPlacementWorkspaceResultOps,
@@ -67,6 +68,17 @@ export type WorkerSessionPlacementRetirement = {
   expectedState: (typeof RETIRABLE_PLACEMENT_STATES)[number];
   expectedGeneration: number;
 };
+
+export class WorkerSessionPlacementRetirementBlockedError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly environmentId?: string,
+  ) {
+    super(
+      `Worker session placement ${sessionId} retains cloud workspace recovery that must be force-abandoned before retirement`,
+    );
+  }
+}
 
 function exactConflictPath(value: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -228,6 +240,20 @@ export function createWorkerSessionPlacementStore(
         throw new Error(`Cannot retire worker session placement from ${input.expectedState}`);
       }
       write((db) => {
+        const current = find(db, sessionId);
+        if (
+          input.expectedState === "failed" &&
+          current?.state === "failed" &&
+          current.generation === input.expectedGeneration &&
+          current.turnClaim === null &&
+          (hasWorkerWorkspacePendingResult(db, sessionId) ||
+            hasWorkerWorkspaceReconciliation(db, sessionId))
+        ) {
+          throw new WorkerSessionPlacementRetirementBlockedError(
+            sessionId,
+            current.environmentId ?? undefined,
+          );
+        }
         const result = executeSqliteQuerySync(
           db,
           query(db)

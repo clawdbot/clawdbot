@@ -67,6 +67,18 @@ export function clearWorkerWorkspaceReconciliation(
   );
 }
 
+export function hasWorkerWorkspaceReconciliation(db: DatabaseSync, sessionId: string): boolean {
+  return Boolean(
+    executeSqliteQuerySync(
+      db,
+      query(db)
+        .selectFrom("worker_workspace_reconciliations")
+        .select("session_id")
+        .where("session_id", "=", sessionId),
+    ).rows[0],
+  );
+}
+
 export function retainWorkerWorkspaceReconciliation(
   db: DatabaseSync,
   owner: WorkerWorkspaceJournalOwner,

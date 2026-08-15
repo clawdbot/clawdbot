@@ -270,6 +270,44 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
+  it("retries lazy retention schema installation after its caller rolls back", () => {
+    const database = createGlobalDatabase();
+    try {
+      database.exec(
+        "ALTER TABLE worker_workspace_reconciliations DROP COLUMN forced_abandonment_retained;",
+      );
+      expect(() => {
+        database.exec("BEGIN IMMEDIATE;");
+        try {
+          ensureWorkspaceRetentionSchema(database);
+          throw new Error("fault after lazy schema installation");
+        } catch (error) {
+          database.exec("ROLLBACK;");
+          throw error;
+        }
+      }).toThrow("fault after lazy schema installation");
+      expect(
+        readColumnContract(
+          database,
+          "worker_workspace_reconciliations",
+          "forced_abandonment_retained",
+        ),
+      ).toBeUndefined();
+
+      ensureWorkspaceRetentionSchema(database);
+
+      expect(
+        readColumnContract(
+          database,
+          "worker_workspace_reconciliations",
+          "forced_abandonment_retained",
+        ),
+      ).toMatchObject({ type: "INTEGER" });
+    } finally {
+      database.close();
+    }
+  });
+
   it("accepts a migrated required column with its temporary default", () => {
     const schemaWithoutMigratedColumn = OPENCLAW_STATE_SCHEMA_SQL.replace(
       "  owner_session_key TEXT,\n  name TEXT NOT NULL,\n  description TEXT,\n",
