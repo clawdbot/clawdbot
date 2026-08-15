@@ -357,6 +357,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       const startupGeneration = this.connectionGeneration;
       const startupSessionKey = state.sessionKey;
       const agentsListBeforeStartup = this.context.agents.state.agentsList;
+      const rosterRevisionBeforeStartup = this.context.agents.state.listRevision;
       const clientIsCurrent = () =>
         this.connectionGeneration === startupGeneration &&
         this.connectedClient === startupClient &&
@@ -364,10 +365,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         state.connected;
       state.onAgentsList = (agentsList, client) => {
         const ownsRoster =
-          clientIsCurrent() && this.context.agents.state.agentsList === agentsListBeforeStartup;
-        if (ownsRoster) {
-          this.context.agents.adoptList(agentsList, client);
-        }
+          clientIsCurrent() &&
+          this.context.agents.adoptList(agentsList, client, rosterRevisionBeforeStartup);
         return ownsRoster;
       };
       const finishStartup = async () => {

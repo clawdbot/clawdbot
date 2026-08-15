@@ -68,6 +68,49 @@ const multiAgentRoster = [
 ];
 
 suite.define(() => {
+  it("keeps a newer in-flight roster ahead of delayed chat startup", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          defaultAgentId: "main",
+          deferredMethods: ["chat.startup"],
+        });
+
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        await gateway.deferNext("agents.list");
+        await gateway.emitGatewayEvent("config.changed", { path: "agents.entries" });
+        await gateway.waitForRequest("agents.list");
+        await gateway.resolveDeferred("chat.startup", {
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+            agents: [{ id: "main", name: "Stale Main" }],
+          },
+          messages: [],
+          metadata: { models: [] },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        });
+        await gateway.resolveDeferred("agents.list", {
+          defaultId: "research",
+          mainKey: "main",
+          scope: "agent",
+          agents: [{ id: "research", name: "Research" }],
+        });
+
+        const sidebar = page.locator("openclaw-app-sidebar");
+        await expect
+          .poll(async () =>
+            (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
+          )
+          .toBe("Research");
+      },
+    );
+  });
+
   it("keeps a refreshed roster ahead of delayed chat startup", async () => {
     if (captureUiProof) {
       await mkdir(proofDir, { recursive: true });

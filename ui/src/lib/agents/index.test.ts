@@ -146,7 +146,7 @@ describe("createAgentCapability lifecycle", () => {
       scope: "per-sender" as const,
       agents: [{ id: "main" }, { id: "research" }],
     };
-    agents.adoptList(adopted, client);
+    agents.adoptList(adopted, client, agents.state.listRevision);
 
     expect(agents.state.agentsList).toEqual(adopted);
     expect(agents.state.agentsLoading).toBe(false);
@@ -154,6 +154,35 @@ describe("createAgentCapability lifecycle", () => {
     pending.resolve({ defaultId: "main", agents: [{ id: "main" }] });
     await staleLoad;
     expect(agents.state.agentsList).toEqual(adopted);
+    agents.dispose();
+  });
+
+  it("rejects startup adoption after a newer list request begins", async () => {
+    const pending = deferred<unknown>();
+    const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+    const startupRevision = agents.state.listRevision;
+
+    const currentLoad = agents.refreshList();
+    expect(
+      agents.adoptList(
+        { defaultId: "stale", mainKey: "main", scope: "per-sender", agents: [{ id: "stale" }] },
+        client,
+        startupRevision,
+      ),
+    ).toBe(false);
+
+    const current = {
+      defaultId: "research",
+      mainKey: "main",
+      scope: "per-sender" as const,
+      agents: [{ id: "research" }],
+    };
+    pending.resolve(current);
+    await currentLoad;
+    expect(agents.state.agentsList).toEqual(current);
     agents.dispose();
   });
 
