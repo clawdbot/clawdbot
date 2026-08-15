@@ -731,9 +731,10 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
     entries: { main: { sessionId: "sess-local", updatedAt: 10 } },
   });
 
-  const configuredOnly = await directSessionHandlerReq<{
-    sessions: Array<{ key: string }>;
-  }>("sessions.list", { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true });
+  const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
+  );
   expect(configuredOnly.ok).toBe(true);
   expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
     "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
@@ -741,9 +742,10 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
     "agent:main:main",
   ]);
 
-  const broad = await directSessionHandlerReq<{
-    sessions: Array<{ key: string }>;
-  }>("sessions.list", { includeGlobal: false, includeUnknown: false });
+  const broad = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    { includeGlobal: false, includeUnknown: false },
+  );
   expect(broad.ok).toBe(true);
   expect(broad.payload?.sessions.map((session) => session.key)).toEqual([
     "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
