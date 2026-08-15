@@ -1,6 +1,8 @@
 name: Android Release
 
 on:
+  schedule:
+    - cron: "0 0 * * *" # 北京时间每天 08:00
   workflow_dispatch:
     inputs:
       tag:
