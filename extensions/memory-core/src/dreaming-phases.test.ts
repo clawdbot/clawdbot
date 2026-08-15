@@ -18,9 +18,11 @@ import {
 } from "./dreaming-phases.js";
 import { previewRemHarness } from "./rem-harness.js";
 import {
+  applyShortTermPromotions,
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
   resolveShortTermPhaseSignalStorePath,
+  resolveShortTermRecallStorePath,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
@@ -637,6 +639,163 @@ describe("memory-core dreaming phases", () => {
     expect(after[0]?.snippet).toContain("Keep retention at 365 days.");
   });
 
+  it("promotes an ingested daily-file candidate into MEMORY.md through rank and apply (W10 D3)", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    // Paragraph-style lines: the daily-ingestion chunk snippet then matches
+    // the file text verbatim, so the candidate survives rehydration at apply
+    // time. (List-marker lines are rewritten by ingestion — "- a" / "- b"
+    // becomes "a; b" — which can never relocate against the raw file and is
+    // reported as a content-mismatch skip.)
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      ["# 2026-04-05", "", "Move backups to S3 Glacier.", "Keep retention at 365 days."].join("\n"),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
+    const ranked = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs,
+    });
+    expect(ranked.length).toBeGreaterThan(0);
+
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const memoryBefore = await fs.readFile(memoryPath, "utf-8").catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return "";
+      }
+      throw err;
+    });
+
+    const applied = await applyShortTermPromotions({
+      workspaceDir,
+      candidates: ranked,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs,
+    });
+
+    expect(applied.applied).toBeGreaterThan(0);
+    expect(applied.skipped).toEqual([]);
+    const memoryAfter = await fs.readFile(memoryPath, "utf-8");
+    expect(memoryAfter.length).toBeGreaterThan(memoryBefore.length);
+    expect(memoryAfter).toContain("Move backups to S3 Glacier.");
+    expect(memoryAfter).toContain("Promoted From Short-Term Memory");
+  });
+
+  it("never ranks .dreams store entries left on disk as promotion candidates (W10 D1)", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
+    const nowIso = new Date(nowMs).toISOString();
+    // Simulate the live defect: a recall store that already contains
+    // dreaming's own session-corpus transcripts alongside a healthy daily
+    // note. The pool is filtered at rank time, never migrated.
+    const dailyKey = "memory:memory/2026-04-03.md:1:1";
+    const corpusKey = "memory:memory/.dreams/session-corpus/2026-04-04.txt:12:12";
+    const storePath = resolveShortTermRecallStorePath(workspaceDir);
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: nowIso,
+          entries: {
+            [dailyKey]: {
+              key: dailyKey,
+              path: "memory/2026-04-03.md",
+              startLine: 1,
+              endLine: 1,
+              source: "memory",
+              snippet: "Move backups to S3 Glacier.",
+              recallCount: 3,
+              dailyCount: 0,
+              groundedCount: 0,
+              totalScore: 2.7,
+              maxScore: 0.95,
+              firstRecalledAt: "2026-04-03T09:00:00.000Z",
+              lastRecalledAt: nowIso,
+              queryHashes: ["1111aaaa2222", "3333bbbb4444"],
+              recallDays: ["2026-04-04", "2026-04-05"],
+              conceptTags: [],
+            },
+            [corpusKey]: {
+              key: corpusKey,
+              path: "memory/.dreams/session-corpus/2026-04-04.txt",
+              startLine: 12,
+              endLine: 12,
+              source: "memory",
+              snippet: "User: prefer the multi-year vendor SLA.",
+              recallCount: 6,
+              dailyCount: 2,
+              groundedCount: 0,
+              totalScore: 5.4,
+              maxScore: 0.9,
+              firstRecalledAt: "2026-04-04T09:00:00.000Z",
+              lastRecalledAt: nowIso,
+              queryHashes: ["5555cccc6666", "7777dddd8888", "9999eeee0000"],
+              recallDays: ["2026-04-04", "2026-04-05"],
+              conceptTags: [],
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const ranked = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs,
+    });
+
+    // Positive control: the probe can see the seeded store at all.
+    expect(ranked.map((candidate) => candidate.path)).toContain("memory/2026-04-03.md");
+    // The D1 pin: nothing under memory/.dreams/ ranks, however strong its
+    // recall signals are.
+    expect(ranked.some((candidate) => candidate.path.includes(".dreams"))).toBe(false);
+
+    // Filtered, not deleted: the contaminated entry stays on disk.
+    const storeRaw = await fs.readFile(storePath, "utf-8");
+    expect(storeRaw).toContain("memory/.dreams/session-corpus/2026-04-04.txt");
+  });
+
   it("ingests slugged daily memory files (YYYY-MM-DD-slug.md) alongside date-only files (#69536)", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await fs.writeFile(
@@ -907,6 +1066,8 @@ describe("memory-core dreaming phases", () => {
       fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
     ).resolves.toBeUndefined();
 
+    // W10 D1: the session corpus file above feeds dream narratives, but
+    // dreaming's own artifacts never enter the short-term promotion pool.
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
@@ -914,12 +1075,10 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
     });
-    expect(ranked.map((candidate) => candidate.path)).toContain(
-      "memory/.dreams/session-corpus/2026-04-05.txt",
-    );
+    expect(ranked.some((candidate) => candidate.path.includes(".dreams"))).toBe(false);
     const snippets = ranked.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
-    expectIncludesSubstring(snippets, "Set retention to 365 days.");
+    expectNotIncludesSubstring(snippets, "Move backups to S3 Glacier.");
+    expectNotIncludesSubstring(snippets, "Set retention to 365 days.");
   });
 
   it("keeps primary session transcripts out of configured subagent workspaces", async () => {
@@ -1877,6 +2036,8 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
+    // W10 D1: session-derived signals no longer enter the promotion pool, so
+    // dedupe is observed on the corpus files below instead of ranked entries.
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
@@ -1884,10 +2045,7 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-06T02:00:00.000Z"),
     });
-    const oldCandidate = ranked.find((candidate) => candidate.snippet.includes(oldMessage));
-    const newCandidate = ranked.find((candidate) => candidate.snippet.includes("retention at 365"));
-    expect(oldCandidate?.dailyCount).toBe(1);
-    expect(newCandidate?.dailyCount).toBe(1);
+    expect(ranked.some((candidate) => candidate.path.includes(".dreams"))).toBe(false);
 
     const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
     const corpusFiles = (await fs.readdir(sessionCorpusDir)).filter((name) =>
@@ -2147,6 +2305,16 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
+    // W10 D1: session ingestion is observed on the corpus files; session
+    // corpus content never enters the short-term promotion pool.
+    const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    const corpusFiles = (await fs.readdir(corpusDir)).filter((name) => name.endsWith(".txt"));
+    let combinedCorpus = "";
+    for (const fileName of corpusFiles) {
+      combinedCorpus += `${await fs.readFile(path.join(corpusDir, fileName), "utf-8")}\n`;
+    }
+    expect(combinedCorpus).toContain("Move backups to S3 Glacier.");
+    expect(combinedCorpus).toContain("Retention policy stays at 365 days.");
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
@@ -2154,9 +2322,7 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-06T02:00:00.000Z"),
     });
-    const snippets = ranked.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
-    expectIncludesSubstring(snippets, "Retention policy stays at 365 days.");
+    expect(ranked.some((candidate) => candidate.path.includes(".dreams"))).toBe(false);
   });
 
   it("ingests sessions when dreaming is enabled even if memorySearch is disabled", async () => {
@@ -2223,6 +2389,13 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
+    // W10 D1: ingestion is observed on the corpus file; session corpus
+    // content never enters the short-term promotion pool.
+    const dayCorpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+      "utf-8",
+    );
+    expect(dayCorpus).toContain("Glacier archive migration is now complete.");
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
@@ -2230,10 +2403,7 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
     });
-    expectIncludesSubstring(
-      ranked.map((candidate) => candidate.snippet),
-      "Glacier archive migration is now complete.",
-    );
+    expect(ranked.some((candidate) => candidate.path.includes(".dreams"))).toBe(false);
   });
 
   it("keeps section context when chunking durable daily notes", async () => {
@@ -2565,11 +2735,14 @@ describe("memory-core dreaming phases", () => {
       nowMs,
       results: [
         {
-          path: "memory/.dreams/session-corpus/2026-04-16.txt",
+          // W10 D1: session-corpus paths can no longer enter the pool, so the
+          // disappeared-source case is pinned on a daily note that was never
+          // written to disk.
+          path: "memory/2026-04-02.md",
           startLine: 2,
           endLine: 2,
           score: 0.88,
-          snippet: "Assistant: Documented Ollama provider setup.",
+          snippet: "Documented Ollama provider setup.",
           source: "memory",
         },
       ],
@@ -2588,8 +2761,8 @@ describe("memory-core dreaming phases", () => {
     );
     const staleKey = requireCandidateKeyByPath(
       baseline,
-      (candidatePath) => candidatePath.includes("session-corpus/2026-04-16.txt"),
-      "stale session corpus",
+      (candidatePath) => candidatePath === "memory/2026-04-02.md",
+      "stale daily note",
     );
 
     await withDreamingTestClock(async () => {

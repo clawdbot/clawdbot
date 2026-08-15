@@ -24,8 +24,13 @@ import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
-const SHORT_TERM_SESSION_CORPUS_RE =
-  /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
+// Dreaming's own artifacts (session-corpus transcripts, dream diaries, phase
+// scratch) live under a dot-dreams directory. Session-corpus files are
+// regenerated on later nights, so a ranked candidate's line range no longer
+// matches the file at apply time, and their snippets quote dreaming prompts
+// back at the ranker. Nothing under a .dreams directory may enter the
+// short-term promotion pool.
+const DOT_DREAMS_PATH_RE = /(?:^|\/)\.dreams\//;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
@@ -235,12 +240,33 @@ type ApplyShortTermPromotionsOptions = {
   maxPromotedSnippetTokens?: number;
 };
 
+export type PromotionSkipReason =
+  | "ineligible-path"
+  | "contaminated-snippet"
+  | "already-promoted"
+  | "below-min-score"
+  | "below-min-signal-count"
+  | "below-min-unique-queries"
+  | "over-max-age"
+  | "over-limit"
+  | "source-missing"
+  | "content-mismatch"
+  | "dreaming-fence";
+
+export type PromotionSkip = { key: string; reason: PromotionSkipReason };
+
 type ApplyShortTermPromotionsResult = {
   memoryPath: string;
   applied: number;
   appended: number;
   reconciledExisting: number;
   appliedCandidates: PromotionCandidate[];
+  /**
+   * Candidates that were passed in but not applied, with the reason each one
+   * was dropped. A run that ranks candidates but applies none is a defect
+   * signal, and callers surface these reasons instead of failing silently.
+   */
+  skipped: PromotionSkip[];
   /** Number of older promotion sections compacted out to honor the budget. */
   compactedSections: number;
   /** Dates of the compacted promotion sections, oldest first. */
@@ -981,10 +1007,10 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
     return false;
   }
-  if (SHORT_TERM_PATH_RE.test(normalized)) {
-    return true;
+  if (DOT_DREAMS_PATH_RE.test(normalized)) {
+    return false;
   }
-  if (SHORT_TERM_SESSION_CORPUS_RE.test(normalized)) {
+  if (SHORT_TERM_PATH_RE.test(normalized)) {
     return true;
   }
   return SHORT_TERM_BASENAME_RE.test(normalized);
@@ -1712,11 +1738,17 @@ function lineRangeOverlapsDreamingFence(
   return false;
 }
 
+type RehydratePromotionCandidateOutcome =
+  | { candidate: PromotionCandidate }
+  | { skipReason: "source-missing" | "content-mismatch" | "dreaming-fence" };
+
 async function rehydratePromotionCandidate(
   workspaceDir: string,
   candidate: PromotionCandidate,
-): Promise<PromotionCandidate | null> {
+): Promise<RehydratePromotionCandidateOutcome> {
   const sourcePaths = resolveShortTermSourcePathCandidates(workspaceDir, candidate.path);
+  let sawContentMismatch = false;
+  let sawDreamingFence = false;
   for (const sourcePath of sourcePaths) {
     let rawSource: string;
     try {
@@ -1731,6 +1763,7 @@ async function rehydratePromotionCandidate(
     const lines = rawSource.split(/\r?\n/);
     const relocated = relocateCandidateRange(lines, candidate);
     if (!relocated) {
+      sawContentMismatch = true;
       continue;
     }
     // Managed dreaming blocks in daily memory files are scratchwork, not durable
@@ -1738,16 +1771,25 @@ async function rehydratePromotionCandidate(
     // because file edits shifted lines between ranking and apply), refuse the
     // candidate so dream artifacts cannot be promoted into MEMORY.md.
     if (lineRangeOverlapsDreamingFence(lines, relocated.startLine, relocated.endLine)) {
+      sawDreamingFence = true;
       continue;
     }
     return {
-      ...candidate,
-      startLine: relocated.startLine,
-      endLine: relocated.endLine,
-      snippet: relocated.snippet,
+      candidate: {
+        ...candidate,
+        startLine: relocated.startLine,
+        endLine: relocated.endLine,
+        snippet: relocated.snippet,
+      },
     };
   }
-  return null;
+  return {
+    skipReason: sawDreamingFence
+      ? "dreaming-fence"
+      : sawContentMismatch
+        ? "content-mismatch"
+        : "source-missing",
+  };
 }
 
 function buildPromotionSection(
@@ -1857,49 +1899,73 @@ export async function applyShortTermPromotions(
 
   return await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
-    const selected = options.candidates
-      .filter((candidate) => {
-        if (isContaminatedDreamingSnippet(candidate.snippet)) {
-          return false;
-        }
-        if (candidate.promotedAt) {
-          return false;
-        }
-        if (candidate.score < minScore) {
-          return false;
-        }
-        const candidateSignalCount = Math.max(
-          0,
-          candidate.signalCount ??
-            totalSignalCountForEntry({
-              recallCount: candidate.recallCount,
-              dailyCount: candidate.dailyCount,
-              groundedCount: candidate.groundedCount,
-            }),
-        );
-        if (candidateSignalCount < minRecallCount) {
-          return false;
-        }
-        if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
-          return false;
-        }
-        if (maxAgeDays >= 0 && candidate.ageDays > maxAgeDays) {
-          return false;
-        }
-        const latest = store.entries[candidate.key];
-        if (latest?.promotedAt) {
-          return false;
-        }
-        return true;
-      })
-      .slice(0, limit);
+    const skipped: PromotionSkip[] = [];
+    const classifyCandidateSkip = (candidate: PromotionCandidate): PromotionSkipReason | null => {
+      if (!isShortTermMemoryPath(candidate.path)) {
+        // Defense in depth for the ranking-side filter: dreaming artifacts
+        // (memory/.dreams/**) and other non-short-term paths must never be
+        // written into MEMORY.md even when a caller hands them in directly.
+        return "ineligible-path";
+      }
+      if (isContaminatedDreamingSnippet(candidate.snippet)) {
+        return "contaminated-snippet";
+      }
+      if (candidate.promotedAt) {
+        return "already-promoted";
+      }
+      if (candidate.score < minScore) {
+        return "below-min-score";
+      }
+      const candidateSignalCount = Math.max(
+        0,
+        candidate.signalCount ??
+          totalSignalCountForEntry({
+            recallCount: candidate.recallCount,
+            dailyCount: candidate.dailyCount,
+            groundedCount: candidate.groundedCount,
+          }),
+      );
+      if (candidateSignalCount < minRecallCount) {
+        return "below-min-signal-count";
+      }
+      if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
+        return "below-min-unique-queries";
+      }
+      if (maxAgeDays >= 0 && candidate.ageDays > maxAgeDays) {
+        return "over-max-age";
+      }
+      const latest = store.entries[candidate.key];
+      if (latest?.promotedAt) {
+        return "already-promoted";
+      }
+      return null;
+    };
+    const selected: PromotionCandidate[] = [];
+    for (const candidate of options.candidates) {
+      const skipReason = classifyCandidateSkip(candidate);
+      if (skipReason) {
+        skipped.push({ key: candidate.key, reason: skipReason });
+        continue;
+      }
+      if (selected.length >= limit) {
+        skipped.push({ key: candidate.key, reason: "over-limit" });
+        continue;
+      }
+      selected.push(candidate);
+    }
 
     const rehydratedSelected: PromotionCandidate[] = [];
     for (const candidate of selected) {
-      const rehydrated = await rehydratePromotionCandidate(workspaceDir, candidate);
-      if (rehydrated && !isContaminatedDreamingSnippet(rehydrated.snippet)) {
-        rehydratedSelected.push(rehydrated);
+      const outcome = await rehydratePromotionCandidate(workspaceDir, candidate);
+      if ("skipReason" in outcome) {
+        skipped.push({ key: candidate.key, reason: outcome.skipReason });
+        continue;
       }
+      if (isContaminatedDreamingSnippet(outcome.candidate.snippet)) {
+        skipped.push({ key: candidate.key, reason: "contaminated-snippet" });
+        continue;
+      }
+      rehydratedSelected.push(outcome.candidate);
     }
 
     if (rehydratedSelected.length === 0) {
@@ -1909,6 +1975,7 @@ export async function applyShortTermPromotions(
         appended: 0,
         reconciledExisting: 0,
         appliedCandidates: [],
+        skipped,
         compactedSections: 0,
         compactedDates: [],
       };
@@ -1987,6 +2054,7 @@ export async function applyShortTermPromotions(
       appended: toAppend.length,
       reconciledExisting: alreadyWritten.length,
       appliedCandidates: rehydratedSelected,
+      skipped,
       compactedSections: compactedDates.length,
       compactedDates,
     };

@@ -2259,6 +2259,53 @@ describe("short-term dreaming trigger", () => {
     expect(memoryText).toBe("");
   });
 
+  it("warns with skip reasons when candidates rank but zero promotions apply", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-zero-apply-");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+    // The ranked candidate's source file disappears between rank and apply —
+    // the silent-drop shape that froze MEMORY.md on the live system (W10 D2).
+    await fs.rm(path.join(workspaceDir, "memory", "2026-04-02.md"));
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    expectLogContains(logger.info, "dreaming promotion complete");
+    expectLogContains(logger.warn, "but applied 0");
+    expectLogContains(logger.warn, "skip reasons: source-missing=1");
+    await expectPathMissing(path.join(workspaceDir, "MEMORY.md"));
+  });
+
   it("ignores non-cron, non-heartbeat triggers", async () => {
     const logger = createLogger();
     const result = await runShortTermDreamingPromotionIfTriggered({

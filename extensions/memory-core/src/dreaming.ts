@@ -551,6 +551,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   let totalCandidates = 0;
   let totalApplied = 0;
   let failedWorkspaces = 0;
+  const skipReasonCounts = new Map<string, number>();
   const pluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
   const detachNarratives = params.trigger === "cron";
   const [
@@ -628,6 +629,9 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         nowMs: sweepNowMs,
       });
       totalApplied += applied.applied;
+      for (const skip of applied.skipped) {
+        skipReasonCounts.set(skip.reason, (skipReasonCounts.get(skip.reason) ?? 0) + 1);
+      }
       reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
       if (params.config.verboseLogging) {
         const appliedSummary =
@@ -689,6 +693,21 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   params.logger.info(
     `memory-core: dreaming promotion complete (workspaces=${workspaces.length}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}).`,
   );
+  if (totalCandidates > 0 && totalApplied === 0) {
+    // Ranking candidates and then applying none of them means every candidate
+    // was silently dropped between rank and apply — the exact failure mode
+    // that froze MEMORY.md for weeks. Name the reasons so the drop is visible.
+    const skipSummary =
+      skipReasonCounts.size > 0
+        ? [...skipReasonCounts.entries()]
+            .toSorted(([, left], [, right]) => right - left)
+            .map(([reason, count]) => `${reason}=${count}`)
+            .join(", ")
+        : "none recorded";
+    params.logger.warn(
+      `memory-core: dreaming promotion ranked ${totalCandidates} candidate(s) but applied 0; skip reasons: ${skipSummary}.`,
+    );
+  }
 
   return { handled: true, reason: "memory-core: short-term dreaming processed" };
 }

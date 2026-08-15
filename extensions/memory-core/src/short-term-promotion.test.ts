@@ -118,7 +118,13 @@ describe("short-term promotion", () => {
   it("detects short-term daily memory paths", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(true);
+    // W10 D1: dreaming artifacts under memory/.dreams/ are regenerated nightly
+    // and quote dreaming prompts back at the ranker; nothing there may become
+    // a promotion candidate.
+    expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(false);
+    expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.md")).toBe(false);
+    expect(isShortTermMemoryPath("memory/.dreams/2026-04-03.md")).toBe(false);
+    expect(isShortTermMemoryPath("memory/.dreams/diaries/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("notes/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("MEMORY.md")).toBe(false);
     expect(isShortTermMemoryPath("memory/network.md")).toBe(false);
