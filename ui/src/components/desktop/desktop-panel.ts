@@ -29,6 +29,7 @@ import type {
   PendingDesktopConnection,
 } from "./desktop-panel-connection.ts";
 import { desktopCredentialRequirement } from "./desktop-panel-credentials.ts";
+import { DesktopPanelEmbeddedController } from "./desktop-panel-embedded-controller.ts";
 import { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
 import { desktopPanelLauncherStyles } from "./desktop-panel-launcher-styles.ts";
 import { type DesktopPanelState, renderDesktopPanelRecovery } from "./desktop-panel-state.ts";
@@ -89,7 +90,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private launchOperationId = 0;
   private controlTakeoverRecoveryUsed = false;
   private documentSourceResolved = false;
-  private embeddedRefreshTimer: number | null = null;
+  private readonly embeddedPanel = new DesktopPanelEmbeddedController(this);
   private readonly mobileKeyboard = new DesktopMobileKeyboard({
     connection: () => this.connection,
     controlling: () => this.controlling,
@@ -128,7 +129,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   override disconnectedCallback(): void {
-    this.clearEmbeddedRefresh();
+    this.embeddedPanel.clearRefresh();
     window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     this.disconnectConnection();
     this.credentials = undefined;
@@ -168,12 +169,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         void this.refreshEnvironments();
       }
     } else if (this.embedded && gatewayAvailabilityChanged) {
-      if (!this.available) {
-        this.clearEmbeddedRefresh();
-        this.returnToPicker();
-      } else {
-        this.scheduleEmbeddedRefresh();
-      }
+      this.embeddedPanel.handleAvailabilityChange();
     } else if (gatewayAvailabilityChanged) {
       if (!this.available && this.dockLayout.open) {
         this.dockLayout.hideWithoutPersisting();
@@ -186,7 +182,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   handleToggleRequest(event: Event): void {
-    this.clearEmbeddedRefresh();
     if (this.documentMode) {
       return;
     }
@@ -194,19 +189,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
         ? (event.detail as DesktopPanelToggleDetail)
         : null;
-    if (this.embedded) {
-      if (detail?.open === false) {
-        this.returnToPicker();
-        return;
-      }
-      if (!this.available) {
-        return;
-      }
-      if (detail?.environmentId) {
-        void this.connectRequestedEnvironment(detail.environmentId);
-      } else {
-        void this.refreshEnvironments();
-      }
+    if (this.embeddedPanel.handleToggle(detail)) {
       return;
     }
     if (detail?.dock === "right" || detail?.dock === "bottom") {
@@ -230,32 +213,12 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
   }
 
-  private scheduleEmbeddedRefresh(): void {
-    if (this.embeddedRefreshTimer !== null) {
-      return;
-    }
-    this.embeddedRefreshTimer = window.setTimeout(() => {
-      this.embeddedRefreshTimer = null;
-      if (this.isConnected && this.embedded && this.available) {
-        void this.refreshEnvironments();
-      }
-    }, 0);
-  }
-
-  private clearEmbeddedRefresh(): void {
-    if (this.embeddedRefreshTimer === null) {
-      return;
-    }
-    window.clearTimeout(this.embeddedRefreshTimer);
-    this.embeddedRefreshTimer = null;
-  }
-
   private closePanel(): void {
     this.returnToPicker();
     this.dockLayout.setOpen(false);
   }
 
-  private returnToPicker(): void {
+  returnToPicker(): void {
     this.disconnectConnection();
     this.clearLaunchState();
     this.state = "picker";
@@ -283,7 +246,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.launchErrorText = null;
   }
 
-  private async refreshEnvironments(expectedOperationId?: number): Promise<boolean> {
+  async refreshEnvironments(expectedOperationId?: number): Promise<boolean> {
     const client = this.client;
     if (!client || !this.available) {
       return false;
@@ -371,7 +334,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     void this.refreshEnvironments();
   }
 
-  private async connectRequestedEnvironment(environmentId: string): Promise<void> {
+  async connectRequestedEnvironment(environmentId: string): Promise<void> {
     this.returnToPicker();
     this.environmentId = environmentId;
     this.state = "connecting";

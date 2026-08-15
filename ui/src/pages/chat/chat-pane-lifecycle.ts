@@ -20,15 +20,6 @@ import {
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
-import {
-  clearSessionPanelToggle,
-  takeSessionPanelToggle,
-  type SessionPanelToggleSlot,
-} from "../../components/session-panel-toggle-buffer.ts";
-import {
-  terminalIntentQueue,
-  terminalToggleIntent,
-} from "../../components/terminal/terminal-pending-actions.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
@@ -48,6 +39,7 @@ import {
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
+import { ChatPaneSessionPanelToggleController } from "./chat-pane-session-panel-toggle.ts";
 import {
   CHAT_AUTOTYPE_EXEMPT_SELECTOR,
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
@@ -62,7 +54,6 @@ import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { invalidateChatMetadataCache, refreshPageChat } from "./chat-state-refresh.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
@@ -78,75 +69,16 @@ const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
-  private handleSessionPanelToggle(
-    slot: SessionPanelToggleSlot,
-    tagName: "openclaw-browser-panel" | "openclaw-desktop-panel" | "openclaw-terminal-panel",
-    event: Event,
-  ): boolean {
-    const state = this.state;
-    if (!state || !this.active || !this.presented) {
-      return false;
-    }
-    clearSessionPanelToggle(slot, event);
-    const detail = event instanceof CustomEvent ? event.detail : null;
-    if (detail?.open === false) {
-      this.pendingPanelToggleRequests.delete(slot);
-      state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
-      return true;
-    }
-    if (slot === "terminal") {
-      const intent = terminalToggleIntent(event, resolveChatAgentId(state));
-      const embeddedTerminal = this.renderRoot.querySelector("openclaw-terminal-panel[embedded]");
-      const terminalConstructor = customElements.get("openclaw-terminal-panel");
-      const embeddedTerminalMounted =
-        embeddedTerminal !== null &&
-        terminalConstructor !== undefined &&
-        embeddedTerminal instanceof terminalConstructor;
-      if (intent) {
-        void terminalIntentQueue.queue(intent, {
-          deferUntilHostChange: !embeddedTerminalMounted,
-        });
-      }
-      state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
-      return true;
-    }
-    this.pendingPanelToggleRequests.set(slot, event);
-    state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
-    void Promise.all([
-      customElements.whenDefined("openclaw-chat-sidebar-region"),
-      customElements.whenDefined(tagName),
-    ])
-      .then(() => this.updateComplete)
-      .then(async () => {
-        if (this.pendingPanelToggleRequests.get(slot) !== event) {
-          return;
-        }
-        const region = this.renderRoot.querySelector<
-          HTMLElementTagNameMap["openclaw-chat-sidebar-region"]
-        >("openclaw-chat-sidebar-region");
-        await region?.updateComplete;
-        region?.deliverPanelEvent(slot, event);
-        this.pendingPanelToggleRequests.delete(slot);
-        this.requestUpdate();
-      });
-    return true;
-  }
-
-  private flushSessionPanelToggles(): void {
-    if (!this.state || !this.active || !this.presented) {
-      return;
-    }
-    for (const [slot, tagName] of [
-      ["terminal", "openclaw-terminal-panel"],
-      ["browser", "openclaw-browser-panel"],
-      ["desktop", "openclaw-desktop-panel"],
-    ] as const) {
-      const event = takeSessionPanelToggle(slot);
-      if (event) {
-        this.handleSessionPanelToggle(slot, tagName, event);
-      }
-    }
-  }
+  private readonly sessionPanelToggles = new ChatPaneSessionPanelToggleController({
+    current: () => {
+      const state = this.state;
+      return state && this.active && this.presented
+        ? { renderRoot: this.renderRoot, state, updateComplete: this.updateComplete }
+        : null;
+    },
+    pending: this.pendingPanelToggleRequests,
+    requestUpdate: () => this.requestUpdate(),
+  });
 
   private chatRouteReadyReported = false;
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
@@ -551,7 +483,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     ] as const;
     const panelToggleCleanups = panelToggleEvents.map(([eventName, slot, tagName]) => {
       const listener = (event: Event) => {
-        this.handleSessionPanelToggle(slot, tagName, event);
+        this.sessionPanelToggles.handle(slot, tagName, event);
       };
       window.addEventListener(eventName, listener);
       return () => window.removeEventListener(eventName, listener);
@@ -711,7 +643,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.syncHistoryObserver();
     const board = this.resolveBoardView();
     this.syncRetainedBoardSession(board);
-    this.flushSessionPanelToggles();
+    this.sessionPanelToggles.flush();
   }
 
   override disconnectedCallback() {
