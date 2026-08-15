@@ -448,6 +448,9 @@ class LazyCuaDriverSession implements CuaDriverSession {
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
     return await (await this.requireRuntime()).callTool(name, args, signal);
   }
+  async callDesktopTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
+    return await (await this.requireRuntime()).callDesktopTool(name, args, signal);
+  }
   async escalateScope(reason: EscalationReason, signal?: AbortSignal) {
     return await (await this.requireRuntime()).escalateScope(reason, signal);
   }

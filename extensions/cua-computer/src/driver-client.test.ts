@@ -128,6 +128,7 @@ describe("CUA Driver direct session", () => {
 
     await driver.getDesktopState();
     await driver.callTool("list_windows", {});
+    await driver.callDesktopTool("get_cursor_position", {});
     const windowOptions = mocks.createTrustedSession.mock.calls.find(([, options]) =>
       options.publicSession.startsWith("openclaw-window-"),
     )?.[1];
@@ -145,6 +146,11 @@ describe("CUA Driver direct session", () => {
     expect(mocks.callTool).toHaveBeenCalledWith(
       "list_windows",
       JSON.stringify({ session: windowOptions.publicSession }),
+      undefined,
+    );
+    expect(mocks.callTool).toHaveBeenCalledWith(
+      "get_cursor_position",
+      JSON.stringify({ session: desktopOptions.publicSession }),
       undefined,
     );
     expect(mocks.escalateSession).not.toHaveBeenCalled();
