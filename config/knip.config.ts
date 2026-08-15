@@ -427,6 +427,9 @@ const config = {
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
+    // hasCliYieldContinuationEvidence is exported for its focused unit tests; buildCliRunResult
+    // (the same file's only production caller) already has it in scope without the export.
+    "src/agents/cli-runner/cli-run-settlement.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
