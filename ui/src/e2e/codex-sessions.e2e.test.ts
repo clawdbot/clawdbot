@@ -971,6 +971,18 @@ suite.define(() => {
       .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
       .filter({ hasText: "prepare release" });
     await catalogPane.getByText("prepare release", { exact: true }).waitFor();
+    expect(
+      (await gateway.getRequests("sessions.catalog.list")).every(
+        (request) => (request.params as { agentId?: string } | undefined)?.agentId === "main",
+      ),
+    ).toBe(true);
+    const read = await gateway.waitForRequest("sessions.catalog.read");
+    expect(read.params).toMatchObject({
+      agentId: "main",
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-1",
+    });
     const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
     await composer.fill("continue with the final checks");
     await gateway.setMethodResponse("sessions.list", {
@@ -998,6 +1010,7 @@ suite.define(() => {
     await composer.press("Enter");
     const continued = await gateway.waitForRequest("sessions.catalog.continue");
     expect(continued.params).toEqual({
+      agentId: "main",
       catalogId: "codex",
       hostId: "gateway:local",
       threadId: "thread-1",

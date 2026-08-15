@@ -11,6 +11,13 @@ describe("resolveSessionAgentIds", () => {
     },
   } as OpenClawConfig;
 
+  it("treats an explicitly undefined agentId as omitted", () => {
+    const config = { agents: { entries: { main: {} } } } as OpenClawConfig;
+    expect(resolveSessionAgentIds({ config, agentId: undefined })).toEqual(
+      resolveSessionAgentIds({ config }),
+    );
+  });
+
   it("requires an owner when sessionKey is missing", () => {
     expect(() => resolveSessionAgentIds({ config: cfg })).toThrow(AgentSelectionRequiredError);
   });

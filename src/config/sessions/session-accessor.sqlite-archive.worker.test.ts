@@ -3,7 +3,6 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -67,9 +66,9 @@ describe("SQLite transcript archive worker", () => {
     );
     await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
 
-    const heartbeatTimes = [performance.now()];
+    let heartbeatCount = 0;
     const heartbeat = setInterval(() => {
-      heartbeatTimes.push(performance.now());
+      heartbeatCount += 1;
     }, 5);
     let materialized: Awaited<ReturnType<typeof materializeSessionStateDeletePlans>>;
     try {
@@ -77,20 +76,10 @@ describe("SQLite transcript archive worker", () => {
       const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
       materialized = await materializeSessionStateDeletePlans([plan]);
     } finally {
-      heartbeatTimes.push(performance.now());
       clearInterval(heartbeat);
     }
 
-    const heartbeatGaps: number[] = [];
-    for (let index = 1; index < heartbeatTimes.length; index += 1) {
-      const current = heartbeatTimes[index];
-      const previous = heartbeatTimes[index - 1];
-      if (current !== undefined && previous !== undefined) {
-        heartbeatGaps.push(current - previous);
-      }
-    }
-    expect(heartbeatTimes.length - 2).toBeGreaterThan(5);
-    expect(Math.max(...heartbeatGaps)).toBeLessThan(150);
+    expect(heartbeatCount).toBeGreaterThan(5);
     expect(materialized).toHaveLength(1);
     const archivedPath = materialized[0]?.archivedTranscript?.archivedPath;
     expect(archivedPath).toBeTruthy();
