@@ -270,7 +270,19 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (modelPatchStarted && pendingModelPatch?.token === modelPatchToken) {
         pendingModelPatches.delete(normalizedKey);
         if (host.connection.isCurrent(scope) && ownsModelOverride()) {
-          setModelOverride(key, completed ? patchParams.model : previousModelOverride);
+          if (completed && !options.deferListRefresh) {
+            // The refreshed row already carries the Gateway-confirmed selection.
+            // Retiring the local override (instead of re-asserting it forever)
+            // lets external model changes — another window, a channel /model,
+            // a fallback rotation — reach this window; a retained entry would
+            // shadow the server row for the connection lifetime. Untouched only
+            // when a newer claim wrote the key while this patch was in flight.
+            if (pendingModelPatch.revision === modelPatchRevision) {
+              setModelOverride(key, undefined);
+            }
+          } else {
+            setModelOverride(key, completed ? patchParams.model : previousModelOverride);
+          }
         } else if (pendingModelPatch.revision === modelPatchRevision) {
           // The shared key now belongs to another agent/connection. Remove only
           // this operation's untouched optimistic value; preserve newer claims.

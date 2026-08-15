@@ -128,6 +128,7 @@ function createParams(
     sessionKey: "main",
   } satisfies FollowupRunnerParams;
   const execution = {
+    commentaryPayloadsEnabled: false,
     execution: {
       runId: "run-1",
       outcome: {

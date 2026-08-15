@@ -43,6 +43,14 @@ data class ChatSwarmGroup(
   val phases: List<ChatSwarmPhase>,
 )
 
+internal data class ChatSwarmSnapshot(
+  val sessionKey: String?,
+  val enabled: Boolean,
+  val groups: List<ChatSwarmGroup>,
+) {
+  fun isAvailableFor(sessionKey: String?): Boolean = enabled && sessionKey != null && this.sessionKey == sessionKey
+}
+
 internal data class ChatSwarmSessionPage(
   val sessions: List<ChatSessionEntry>,
   val totalCount: Int?,

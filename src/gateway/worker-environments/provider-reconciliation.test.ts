@@ -67,6 +67,41 @@ describe("worker environment service", () => {
     expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(1);
   });
 
+  it("reconciles one exact environment without sweeping its siblings", async () => {
+    support.seedReady("worker-target");
+    support.seedReady("worker-sibling");
+    const inspected: string[] = [];
+    const workerService = support.createService(
+      support.createProvider({
+        inspect: async (lease) => {
+          inspected.push(lease.leaseId);
+          return { status: "active" };
+        },
+      }),
+    );
+
+    await workerService.reconcileEnvironment("worker-target");
+
+    expect(inspected).toEqual(["lease:worker-target"]);
+  });
+
+  it("targeted reconciliation revokes a disappeared worker credential", async () => {
+    const environmentId = "worker-revoked";
+    support.seedReady(environmentId);
+    const workerService = support.createService(
+      support.createProvider({ inspect: async () => ({ status: "unknown" }) }),
+    );
+    const admitted = await workerService.admitWorker(support.admissionFor(environmentId));
+    if (!admitted.ok) {
+      throw new Error("fixture worker admission failed");
+    }
+
+    await workerService.reconcileEnvironment(environmentId);
+
+    expect(support.testState.store.get(environmentId)?.state).toBe("orphaned");
+    expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
+  });
+
   it("skips an active lease whose durable receipt matches the lifecycle bundle", async () => {
     support.seedReady("worker-current");
 

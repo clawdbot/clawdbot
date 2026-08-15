@@ -828,7 +828,7 @@ Decision rules:
 
 ## Install hooks
 
-Use `security.installPolicy` for operator-owned allow/block decisions. That
+Use `security.installPolicy` for operator-owned allow/warn/block decisions. That
 policy runs from OpenClaw config, covers CLI install and update paths, and
 fails closed when enabled but unavailable.
 

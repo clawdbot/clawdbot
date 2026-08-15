@@ -71,7 +71,7 @@ export async function getServiceActionPreflightFailure(
 ): Promise<ServiceActionPreflightFailure | null> {
   let snapshot: ConfigFileSnapshot;
   try {
-    snapshot = await readConfigFileSnapshot();
+    snapshot = await readConfigFileSnapshot({ observe: false });
     if (snapshot.exists && !snapshot.valid) {
       const message =
         snapshot.issues.length > 0

@@ -104,9 +104,11 @@ describe("worker tunnel manager", () => {
         toolAuthority: { allowedToolNames: [] },
       },
     });
+    const onDispatchReady = vi.fn();
     await expect(
-      handle.launchTurn({ plan, placementGeneration: 1, timeoutMs: 123 }),
+      handle.launchTurn({ plan, placementGeneration: 1, timeoutMs: 123, onDispatchReady }),
     ).resolves.toEqual(success());
+    expect(onDispatchReady).toHaveBeenCalledOnce();
     const launch = fake.runs.at(-1);
     const remoteLaunchCommand = launch?.argv.at(-1) ?? "";
     expect(remoteLaunchCommand).toContain("'sh' '-c'");

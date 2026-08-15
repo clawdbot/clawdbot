@@ -984,19 +984,24 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   runtime: ProviderAuthContext["runtime"];
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
-  const credential = claudeCliAuth.readClaudeCliCredentialsForSetupNonInteractive();
-  if (!credential) {
-    ctx.runtime.error(
-      [
-        'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
-        `Run ${formatCliCommand("claude auth login")} first.`,
-      ].join("\n"),
-    );
+  const credentialResult = claudeCliAuth.readClaudeCliCredentialsForSetupNonInteractive();
+  if (credentialResult.status !== "available") {
+    const error =
+      credentialResult.status === "unreadable"
+        ? [
+            'Auth choice "anthropic-cli" found Claude CLI credentials on this host, but they could not be read non-interactively.',
+            "Re-run this command without --non-interactive, or use --auth-choice setup-token / --anthropic-api-key <key>.",
+          ]
+        : [
+            'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
+            `Run ${formatCliCommand("claude auth login")} first.`,
+          ];
+    ctx.runtime.error(error.join("\n"));
     ctx.runtime.exit(1);
     return null;
   }
 
-  const result = buildAnthropicCliMigrationResult(ctx.config, credential);
+  const result = buildAnthropicCliMigrationResult(ctx.config, credentialResult.credential);
   const currentDefaults = ctx.config.agents?.defaults;
   const currentModel = currentDefaults?.model;
   const currentFallbacks =

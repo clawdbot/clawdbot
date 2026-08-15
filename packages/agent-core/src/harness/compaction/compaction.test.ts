@@ -12,6 +12,7 @@ import {
   generateSummary,
   getLastAssistantUsage,
   prepareCompaction,
+  shouldCompact,
 } from "./compaction.js";
 import { createFileOps } from "./utils.js";
 
@@ -81,6 +82,21 @@ function createProjectedEntry(
     ? { ...common, type, customType: "test", content, display: true }
     : { ...common, type, fromId: common.parentId ?? common.id, summary: content };
 }
+
+describe("shouldCompact", () => {
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "skips an invalid context window of %s",
+    (contextWindow) => {
+      expect(
+        shouldCompact(1, contextWindow, {
+          enabled: true,
+          reserveTokens: 16_384,
+          keepRecentTokens: 20_000,
+        }),
+      ).toBe(false);
+    },
+  );
+});
 
 describe("calculateContextTokens", () => {
   it("prefers the final-iteration context snapshot over aggregate billing usage", () => {

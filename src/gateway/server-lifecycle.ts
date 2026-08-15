@@ -103,6 +103,7 @@ export async function prepareGatewayLifecycle(params: {
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     bindDeviceNodeControl,
+    workerPlacementRuntime,
   } = runtime;
   const completeControlUiDeviceAuthMigrationForEffectiveOperator = (
     device: EffectiveOperatorDeviceIdentity,
@@ -181,6 +182,9 @@ export async function prepareGatewayLifecycle(params: {
     listRegisteredNodePluginToolCommands: () => pluginRuntime.registry.nodeHostCommands,
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
     nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
+    onRunnerInventoryChanged: (nodeId) => {
+      void workerPlacementRuntime?.scheduleNodeWorkspaceRetention(nodeId);
+    },
     onPairingInvalidated: ({ nodeId, connId }) => {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
       upsertPresence(nodeId, { reason: "disconnect" });

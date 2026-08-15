@@ -37,7 +37,6 @@ import {
   loadGatewaySessionEntryReadOnly,
   listAgentsForGateway,
   resolveSessionModelRef,
-  resolveSessionStoreKey,
 } from "../session-utils.js";
 import { prepareSessionWorkspaceIcon } from "../workspace-icon-http.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
@@ -496,7 +495,10 @@ async function handleChatHistoryRequest({
     chatAbortControllers: context.chatAbortControllers,
     chatRunState: context.chatRunState,
     requestedSessionKey: sessionKey,
-    canonicalSessionKey: resolveSessionStoreKey({ cfg, sessionKey }),
+    // The agent-scoped canonical key from session load: an unscoped re-resolve
+    // falls back to the default agent for alias keys, misses the abort entry's
+    // stored key, and drops the in-flight snapshot for non-default agents.
+    canonicalSessionKey: canonicalKey,
     agentId: activeRunAgentId,
     defaultAgentId: compatibilityOwnerAgentId,
   });

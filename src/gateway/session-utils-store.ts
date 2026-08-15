@@ -39,6 +39,7 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
 import type { GatewayAgentRow } from "./session-utils.types.js";
+import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
@@ -342,14 +343,16 @@ export function listAgentsForGateway(
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
     const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: id });
-    const agentRuntime = resolveModelAgentRuntimeMetadata({
-      cfg,
-      agentId: id,
-      provider: resolvedModel.provider,
-      model: resolvedModel.model,
-      sessionKey,
-      acpRuntime: false,
-    });
+    const agentRuntime = projectWorkerPlacementAgentRuntime(
+      resolveModelAgentRuntimeMetadata({
+        cfg,
+        agentId: id,
+        provider: resolvedModel.provider,
+        model: resolvedModel.model,
+        sessionKey,
+        acpRuntime: false,
+      }),
+    );
     const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
     const thinkingProfile = resolveGatewayModelThinkingProfile({
       cfg,

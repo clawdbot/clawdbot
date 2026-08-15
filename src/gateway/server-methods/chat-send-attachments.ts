@@ -61,6 +61,13 @@ function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolea
   return ref.sizeBytes > MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
 }
 
+// Prepared inbound media has no transcript reference until the user turn
+// persists; abort/routing exits before that point must delete it here or the
+// files are orphaned forever (the inbound sweep is off unless attachments.ttlHours is set).
+export async function discardPreparedChatSendAttachments(refs: OffloadedRef[]): Promise<void> {
+  await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+}
+
 // Stage media before ACK so permanent client errors stay 4xx and retryable
 // staging failures stay 5xx. Managed PDFs retain their host-readable fallback.
 async function prestageMediaPathOffloads(params: {

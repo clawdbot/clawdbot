@@ -165,6 +165,30 @@ describe("checkGatewayHealth", () => {
     expect(message.split("\n")).toHaveLength(2);
   });
 
+  it("reports sanitized exporter diagnostic failures with a retry command", async () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    callGateway
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(
+        new Error(`\u001B[31mexporter probe failed\nAuthorization: Bearer ${token}`),
+      );
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
+
+    const [message, title] = note.mock.calls.at(-1) ?? [];
+    expect(title).toBe("Telemetry exporters");
+    expect(message).toContain("Exporter diagnostics failed: exporter probe failed");
+    expect(message).toContain("Retry: openclaw gateway stability --type telemetry.exporter");
+    expect(message).not.toContain(token);
+    expect(message).not.toContain("\u001B");
+    expect(message.split("\n")).toHaveLength(2);
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
   it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
     callGateway.mockResolvedValueOnce({ runtimeVersion: "2026.4.23" }).mockResolvedValueOnce({});
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };

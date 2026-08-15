@@ -1,14 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
+  INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
+  readInstallPolicyWarningErrorDetails,
   validatePluginsInstallParams,
   validatePluginsListParams,
   validatePluginsRefreshParams,
   validatePluginsSearchParams,
   validatePluginsSetEnabledParams,
   validatePluginsUninstallParams,
+  type InstallPolicyWarningErrorDetails,
 } from "./index.js";
 
 describe("plugin lifecycle protocol validators", () => {
+  it("exports install policy warning details from the package root", () => {
+    const details: InstallPolicyWarningErrorDetails = {
+      installPolicyCode: INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
+      targetName: "memory-plus",
+      targetType: "plugin",
+      requestMode: "install",
+      reason: "review this plugin",
+    };
+
+    expect(readInstallPolicyWarningErrorDetails(details)).toEqual(details);
+  });
+
   it("validates plugin metadata refresh params", () => {
     expect(validatePluginsRefreshParams({})).toBe(true);
     expect(validatePluginsRefreshParams({ unexpected: true })).toBe(false);
@@ -31,9 +46,23 @@ describe("plugin lifecycle protocol validators", () => {
         packageName: "memory-plus",
         version: "2.1.0",
         acknowledgeClawHubRisk: true,
+        acknowledgeInstallPolicyWarning: true,
       }),
     ).toBe(true);
-    expect(validatePluginsInstallParams({ source: "official", pluginId: "workboard" })).toBe(true);
+    expect(
+      validatePluginsInstallParams({
+        source: "official",
+        pluginId: "workboard",
+        acknowledgeInstallPolicyWarning: true,
+      }),
+    ).toBe(true);
+    expect(
+      validatePluginsInstallParams({
+        source: "official",
+        pluginId: "workboard",
+        acknowledgeInstallPolicyWarning: false,
+      }),
+    ).toBe(false);
     expect(
       validatePluginsInstallParams({
         source: "official",

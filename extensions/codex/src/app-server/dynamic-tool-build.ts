@@ -21,7 +21,11 @@ import {
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { runWithCronCreatorAuthorityCapabilityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
-import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
+import {
+  isCodexRemoteExecPlacementSandbox,
+  readCodexPluginConfig,
+  type CodexPluginConfig,
+} from "./config.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   filterCodexDynamicTools,
@@ -636,7 +640,8 @@ export function shouldRequireCodexSandboxExecServerEnvironment(params: {
   sandboxExecServerEnabled: boolean;
 }): boolean {
   return Boolean(
-    params.sandbox?.enabled && params.nativeToolSurfaceEnabled && params.sandboxExecServerEnabled,
+    isCodexRemoteExecPlacementSandbox(params.sandbox) ||
+    (params.sandbox?.enabled && params.nativeToolSurfaceEnabled && params.sandboxExecServerEnabled),
   );
 }
 /** Selects the sandbox exec-server environment passed through the Codex app-server protocol. */

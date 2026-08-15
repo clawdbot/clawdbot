@@ -150,4 +150,5 @@ export type ChatPageHost = ChatHost &
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
     refreshSessionPullRequests?: (options?: { refresh?: boolean }) => Promise<void>;
+    retireSessionCompanion?: (sessionKey: string, agentId?: string | null) => void;
   };

@@ -11,30 +11,48 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
-import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export const DEVICE_WORKER_PROVIDER_ID = "device";
+const DEVICE_WORKER_DORMANCY_MS = 14 * 24 * 60 * 60 * 1_000;
 
 type DeviceWorkerRuntimeOptions = {
   getPairedDevice: (deviceId: string) => Promise<PairedDevice | null>;
+  now?: () => number;
 };
 
 type DeviceWorkerAvailability = (deviceId: string) => Promise<boolean>;
+type DeviceWorkerReconciliation = (deviceId: string) => Promise<readonly string[]>;
 const DEVICE_WORKER_AVAILABILITY = new WeakMap<object, DeviceWorkerAvailability>();
+const DEVICE_WORKER_RECONCILIATION = new WeakMap<object, DeviceWorkerReconciliation>();
 
 export function bindDeviceWorkerAvailability(
-  service: WorkerEnvironmentServiceContract,
+  service: object,
   isAvailable: DeviceWorkerAvailability,
 ): void {
   DEVICE_WORKER_AVAILABILITY.set(service, isAvailable);
 }
 
 export async function isDeviceWorkerAvailable(
-  service: WorkerEnvironmentServiceContract | undefined,
+  service: object | undefined,
   deviceId: string,
 ): Promise<boolean> {
   const isAvailable = service ? DEVICE_WORKER_AVAILABILITY.get(service) : undefined;
   return isAvailable ? await isAvailable(deviceId) : false;
+}
+
+export function bindDeviceWorkerReconciliation(
+  service: object,
+  reconcile: DeviceWorkerReconciliation,
+): void {
+  DEVICE_WORKER_RECONCILIATION.set(service, reconcile);
+}
+
+export async function reconcileDeviceWorker(
+  service: object | undefined,
+  deviceId: string,
+): Promise<readonly string[]> {
+  const reconcile = service ? DEVICE_WORKER_RECONCILIATION.get(service) : undefined;
+  return reconcile ? await reconcile(deviceId) : [];
 }
 
 function requireDeviceId(profile: WorkerProfile): string {
@@ -53,6 +71,13 @@ function hasPairedNodeRole(device: PairedDevice | null): device is PairedDevice 
   return Boolean(device && hasEffectivePairedDeviceRole(device, "node"));
 }
 
+function isWithinDeviceDormancy(device: PairedDevice, nowMs: number): boolean {
+  const disconnectedAtMs = device.nodeSurface?.lastDisconnectedAtMs;
+  // Legacy or crash-interrupted records have no exact disconnect boundary. Keep
+  // them fail-safe dormant until a later connection lifecycle records one.
+  return disconnectedAtMs === undefined || nowMs - disconnectedAtMs < DEVICE_WORKER_DORMANCY_MS;
+}
+
 function deviceLeaseId(deviceId: string, operationId: string): string {
   const deviceHash = createHash("sha256").update(deviceId).digest("hex");
   const operationHash = createHash("sha256").update(operationId).digest("hex");
@@ -61,16 +86,19 @@ function deviceLeaseId(deviceId: string, operationId: string): string {
 
 /** Core runtime for already-paired node hosts; pairing remains the durable trust owner. */
 export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
+  const now = options.now ?? Date.now;
   let nodeTransport: NodeWorkerSupervisorTransport | undefined;
   const launchAdapter = createNodeWorkerLaunchAdapter({ getTransport: () => nodeTransport });
   const findConnectedNode = async (deviceId: string) =>
-    (await nodeTransport?.listCurrentNodes())?.find(
-      (node) => node.nodeId === deviceId && isSessionCapableNode(node),
-    );
+    (await nodeTransport?.listCurrentNodes())?.find((node) => node.nodeId === deviceId);
+  const findAvailableNode = async (deviceId: string) => {
+    const node = await findConnectedNode(deviceId);
+    return node && isSessionCapableNode(node) ? node : undefined;
+  };
   const isAvailable = async (deviceId: string) => {
     const [paired, connected] = await Promise.all([
       options.getPairedDevice(deviceId),
-      findConnectedNode(deviceId),
+      findAvailableNode(deviceId),
     ]);
     return hasPairedNodeRole(paired) && Boolean(connected);
   };
@@ -97,7 +125,10 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
         return { status: "unknown" };
       }
       const connected = await findConnectedNode(deviceId);
-      return connected ? { status: "active", sharedHost: true } : { status: "dormant" };
+      if (connected) {
+        return { status: "active", sharedHost: true };
+      }
+      return isWithinDeviceDormancy(paired, now()) ? { status: "dormant" } : { status: "unknown" };
     },
     destroy: async () => {},
   };
@@ -110,7 +141,7 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
     // Provisioning reads the node-advertised local-install build through the
     // runtime so node lookups keep one owner; absent means not connected or
     // not session-capable, and the caller fails provisioning closed.
-    resolveWorkerBuild: async (deviceId: string) => (await findConnectedNode(deviceId))?.workerRuns,
+    resolveWorkerBuild: async (deviceId: string) => (await findAvailableNode(deviceId))?.workerRuns,
     bindNodeTransport: (transport: NodeWorkerSupervisorTransport) => {
       nodeTransport = transport;
     },

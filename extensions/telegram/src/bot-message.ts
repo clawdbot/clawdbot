@@ -67,6 +67,7 @@ type TelegramMessageProcessorDeps = Omit<
 > & {
   runtime: RuntimeEnv;
   telegramDeps: TelegramBotDeps;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   opts: Pick<
     TelegramBotOptions,
     "token" | "ownerAgentId" | "allowFrom" | "groupAllowFrom" | "replyToMode"
@@ -125,11 +126,15 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     sendChatActionHandler,
     runtime,
     telegramDeps,
+    buildContext,
     opts,
   } = deps;
   const sessionRuntime = {
-    ...(telegramDeps.buildChannelInboundEventContext
-      ? { buildChannelInboundEventContext: telegramDeps.buildChannelInboundEventContext }
+    ...((buildContext ?? telegramDeps.buildChannelInboundEventContext)
+      ? {
+          buildChannelInboundEventContext:
+            buildContext ?? telegramDeps.buildChannelInboundEventContext,
+        }
       : {}),
     ...(telegramDeps.readSessionUpdatedAt
       ? { readSessionUpdatedAt: telegramDeps.readSessionUpdatedAt }
@@ -426,7 +431,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
             },
             onAbandoned: () => {
               if (!adopted) {
-                void settle({ kind: "skipped" }, "terminal");
+                void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
               }
               // Generic reply abandonment is synchronous; Telegram has no
               // owner-local resource teardown gated on core claim release.
