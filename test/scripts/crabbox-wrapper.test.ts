@@ -105,6 +105,7 @@ async function main() {
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "doctor") {
     const provider = optionValue("provider"); const target = optionValue("target"); const windowsMode = optionValue("windows-mode");
+    await wait(Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_DELAY_MS || "0", 10));
     if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET && target !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET) { process.stderr.write("doctor target mismatch: got=" + target + "\n"); process.exit(64); }
     if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE && windowsMode !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE) { process.stderr.write("doctor windows mode mismatch: got=" + windowsMode + "\n"); process.exit(64); }
     const malformed = new Set((process.env.OPENCLAW_FAKE_CRABBOX_MALFORMED_DOCTOR_PROVIDERS || "").split(",").filter(Boolean));
@@ -113,6 +114,8 @@ async function main() {
     if (invalid.has(provider)) { process.stdout.write(JSON.stringify({ ok: true, provider, checks: [{ status: "ok" }] }) + "\n"); return; }
     const mismatched = new Set((process.env.OPENCLAW_FAKE_CRABBOX_MISMATCHED_DOCTOR_PROVIDERS || "").split(",").filter(Boolean));
     if (mismatched.has(provider)) { process.stdout.write(JSON.stringify({ ok: true, provider: "wrong-provider", checks: [{ status: "ok", check: "broker" }] }) + "\n"); return; }
+    const inconsistent = new Set((process.env.OPENCLAW_FAKE_CRABBOX_INCONSISTENT_DOCTOR_PROVIDERS || "").split(",").filter(Boolean));
+    if (inconsistent.has(provider)) { process.stdout.write(JSON.stringify({ ok: true, provider, checks: [{ status: "ok", check: "broker" }] }) + "\n"); process.exit(1); }
     const managed = new Set(["aws", "azure", "daytona"]).has(provider);
     const missingBroker = new Set((process.env.OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS || "").split(",").filter(Boolean));
     const providerUnauthorized = new Set((process.env.OPENCLAW_FAKE_CRABBOX_PROVIDER_UNAUTHORIZED_PROVIDERS || "").split(",").filter(Boolean));
@@ -122,7 +125,7 @@ async function main() {
     const unauthorized = new Set((process.env.OPENCLAW_FAKE_CRABBOX_UNAUTHORIZED_PROVIDERS || "").split(",").filter(Boolean));
     if (unauthorized.has(provider)) { process.stdout.write(JSON.stringify({ ok: false, provider, checks: [{ status: "failed", check: "broker", message: "class=broker_auth hint=crabbox_login unauthorized", details: { class: "broker_auth", hint: "crabbox_login" } }] }) + "\n"); process.exit(1); }
     const unready = new Set((process.env.OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS || "").split(",").filter(Boolean));
-    const ready = !unready.has(provider); const checks = [];
+    const ready = !unready.has(provider) && (!managed || !missingBroker.has(provider)); const checks = [];
     if (managed && !missingBroker.has(provider)) checks.push({ status: "ok", check: "broker", details: { auth: "token" } });
     checks.push({ status: ready ? "ok" : "failed", check: "provider", details: { provider } });
     process.stdout.write(JSON.stringify({ ok: ready, provider, checks }) + "\n");
@@ -1063,7 +1066,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("chain=aws");
   });
 
-  it("runs one doctor per candidate and never calls standalone whoami", () => {
+  it("uses one provider-scoped doctor per candidate and never calls standalone whoami", () => {
     const invocationLog = makeInvocationLog();
     const { output, result } = runSuccessfulBrokerWrapper(
       ["run", "--workload", "desktop", "--", "echo ok"],
@@ -1110,7 +1113,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("login --url https://crabbox.openclaw.ai");
   });
 
-  it("fails closed on legacy doctor broker failure", () => {
+  it("fails closed without auth guidance on a legacy non-auth doctor failure", () => {
     const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
       env: {
         OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.1",
@@ -1120,9 +1123,8 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(
-      "provider=aws requires managed Crabbox broker authentication for OpenClaw proof",
-    );
+    expect(result.stderr).toContain("provider=aws failed readiness for OpenClaw proof");
+    expect(result.stderr).not.toContain("login --url");
   });
 
   it.each([
@@ -1171,6 +1173,7 @@ describe("scripts/crabbox-wrapper", () => {
     ["malformed schema", "OPENCLAW_FAKE_CRABBOX_INVALID_DOCTOR_PROVIDERS"],
     ["provider mismatch", "OPENCLAW_FAKE_CRABBOX_MISMATCHED_DOCTOR_PROVIDERS"],
     ["missing broker check", "OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS"],
+    ["inconsistent exit status", "OPENCLAW_FAKE_CRABBOX_INCONSISTENT_DOCTOR_PROVIDERS"],
   ])("fails closed on %s", (_name, envName) => {
     const result = runBrokerWrapper(["run", "--provider", "aws", "--", "echo ok"], {
       env: { [envName]: "aws" },
@@ -1188,6 +1191,14 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(output.args).toContain("aws");
   });
+
+  it("allows a provider-scoped doctor to use its full dependency timeout", () => {
+    const { output } = runSuccessfulBrokerWrapper(["run", "--provider", "aws", "--", "echo ok"], {
+      env: { OPENCLAW_FAKE_CRABBOX_DOCTOR_DELAY_MS: "5500" },
+    });
+
+    expect(output.args).toContain("aws");
+  }, 10_000);
 
   it("probes native Windows readiness with the requested target context", () => {
     const { output, result } = runSuccessfulBrokerWrapper(
@@ -1273,7 +1284,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("no ready provider for workload=desktop");
-    expect(result.stderr).toContain("provider readiness azure:doctor exited 0");
+    expect(result.stderr).toContain("provider readiness azure:doctor exited 1");
   });
 
   it("does not treat an injected Azure Windows default as direct intent", () => {
@@ -1501,7 +1512,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("no ready provider for workload=interactive");
-    expect(result.stderr).toContain("provider readiness daytona:doctor exited 0");
+    expect(result.stderr).toContain("provider readiness daytona:doctor exited 1");
   });
 
   it("fails closed when no policy provider is ready", () => {
