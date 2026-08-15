@@ -230,7 +230,9 @@ export function renderPanelTabStrip(params: {
       : null;
   // Selection belongs in the key: activating a clipped tab has to scroll it back
   // into view, otherwise it stays cut off at the viewport edge as icon-only.
-  const layoutKey = [params.activeId ?? "", ...params.tabs.map((tab) => tab.id)].join("\u0000");
+  // Serialized rather than joined: a delimiter can appear inside an id, and two
+  // different layouts must never produce the same key.
+  const layoutKey = JSON.stringify([params.activeId, params.tabs.map((tab) => tab.id)]);
   return html`
     <wa-tab-group
       class="tabstrip"

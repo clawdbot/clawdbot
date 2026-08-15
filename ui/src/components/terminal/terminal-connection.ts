@@ -98,13 +98,29 @@ export class TerminalOpenTimeoutError extends Error {
 }
 
 /** A session opened without the fields the protocol guarantees cannot drive a
- *  tab label or uploads. Fail here so the panel reports an unusable gateway
- *  instead of surfacing a downstream TypeError as its only content. */
+ *  tab label, uploads, or a replay. Fail here so the panel reports an unusable
+ *  gateway instead of surfacing a downstream TypeError as its only content. */
 export class TerminalOpenUnusableSessionError extends Error {
   constructor(field: string) {
-    super(`terminal open response is missing ${field}`);
+    super(`terminal session response is missing ${field}`);
     this.name = "TerminalOpenUnusableSessionError";
   }
+}
+
+function nonEmptyStringField(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
+
+/** Names the first protocol-required field the payload failed to deliver.
+ *  `terminal.open`/`terminal.attach` responses reach the panel through a bare
+ *  cast, so every consumer downstream would otherwise trust unchecked data. */
+function missingTerminalSessionField(result: Partial<TerminalAttachResult>): string | null {
+  for (const field of ["sessionId", "agentId", "shell", "cwd"] as const) {
+    if (!nonEmptyStringField(result[field])) {
+      return field;
+    }
+  }
+  return null;
 }
 
 function isTerminalOpenRequestTimeout(error: unknown): boolean {
@@ -226,13 +242,15 @@ export class TerminalConnection {
       }
       throw new TerminalOpenTimeoutError(error);
     }
-    // The request is a bare cast over the wire payload, so the protocol's
-    // required fields are checked once here rather than by every consumer.
-    if (typeof result.sessionId !== "string" || result.sessionId.length === 0) {
-      throw new TerminalOpenUnusableSessionError("sessionId");
-    }
-    if (typeof result.shell !== "string" || result.shell.length === 0) {
-      throw new TerminalOpenUnusableSessionError("shell");
+    const missingField = missingTerminalSessionField(result);
+    if (missingField) {
+      // The gateway already created the session. Without the fields the protocol
+      // guarantees it cannot be driven, so release it here instead of leaving a
+      // live server session that nothing owns and nothing can close.
+      if (nonEmptyStringField(result.sessionId)) {
+        void this.close(result.sessionId);
+      }
+      throw new TerminalOpenUnusableSessionError(missingField);
     }
     const stream = this.setStream(result.sessionId, sink, {
       seqMode: "unknown",
@@ -249,6 +267,13 @@ export class TerminalConnection {
     const result = await this.requestWhileHoldingStream(() =>
       this.client.request<TerminalAttachResult>("terminal.attach", { sessionId }),
     );
+    // Same unchecked cast as open(): a replay without its buffer would throw on
+    // `result.buffer.length` further down instead of reporting a bad response.
+    const missingAttachField =
+      missingTerminalSessionField(result) ?? (typeof result.buffer === "string" ? null : "buffer");
+    if (missingAttachField) {
+      throw new TerminalOpenUnusableSessionError(missingAttachField);
+    }
     const offset =
       typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
     const stream = this.setStream(sessionId, sink, {
