@@ -337,6 +337,19 @@ export type WorkboardMetadata = {
   stale?: WorkboardStaleState;
   lifecycleStatusSourceUpdatedAt?: number;
   failureCount?: number;
+  /** One-claim operator authorization recorded by force-promotion for dependency recovery. */
+  dependencyOverride?: WorkboardDependencyOverride;
+};
+
+export type WorkboardDependencyOverride = {
+  grantedAt: number;
+  /** Canonical parent-id snapshot approved by the operator. */
+  parentIds: string[];
+  /** Scheduled-at value approved by the operator, when one was present. */
+  scheduledAt?: number;
+  /** The operator approved an indefinite scheduled hold with no timestamp. */
+  scheduledWithoutDate?: true;
+  reason?: string;
 };
 
 export type WorkboardCard = {

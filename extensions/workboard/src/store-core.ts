@@ -21,6 +21,7 @@ import {
   cardBoardId,
   cardParentIds,
   compareCards,
+  dependencyOverrideMatchesCard,
   isActiveDependencyTarget,
   isDependencyPromotableStatus,
   lifecycleStatusSourceUpdatedAtFromPatch,
@@ -389,7 +390,11 @@ export class WorkboardCoreStore {
         templateId: normalizeTemplateId(input.templateId),
         ...(childAutomation ? { automation: childAutomation } : {}),
       },
-      { allowDependencyLinks: false, allowArchivedAt: false },
+      {
+        allowDependencyLinks: false,
+        allowDependencyOverride: false,
+        allowArchivedAt: false,
+      },
     );
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
@@ -454,6 +459,7 @@ export class WorkboardCoreStore {
       async () =>
         await this.updateCard(id, patch, {
           allowMetadataDependencyLinks: false,
+          allowMetadataDependencyOverride: false,
           enforceStatusHolds: true,
         }),
     );
@@ -464,6 +470,7 @@ export class WorkboardCoreStore {
     patch: WorkboardCardPatch,
     options: {
       allowMetadataDependencyLinks?: boolean;
+      allowMetadataDependencyOverride?: boolean;
       enforceStatusHolds?: boolean;
       preserveProofId?: string;
     } = {},
@@ -524,6 +531,7 @@ export class WorkboardCoreStore {
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
+      allowDependencyOverride: options.allowMetadataDependencyOverride === true,
       preserveProofId: options.preserveProofId,
     });
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
@@ -606,6 +614,12 @@ export class WorkboardCoreStore {
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
       options,
     );
+    if (next.metadata?.dependencyOverride && !dependencyOverrideMatchesCard(next)) {
+      next.metadata = trimMetadataToBudget(
+        { ...next.metadata, dependencyOverride: undefined },
+        options,
+      );
+    }
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
       await this.assertActiveStatusAllowed(existing, next, now);
@@ -803,11 +817,19 @@ export class WorkboardCoreStore {
     return await this.promoteDependencyReady(nextChild.id);
   }
 
-  private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
+  protected async dependencyTargetStatus(
+    card: WorkboardCard,
+    now: number,
+  ): Promise<WorkboardStatus> {
     const scheduledAt = card.metadata?.automation?.scheduledAt;
     const parents = cardParentIds(card);
     if (card.status === "scheduled" && !scheduledAt) {
       return "scheduled";
+    }
+    // Force promotion authorizes only the exact dependency/schedule snapshot recorded by the
+    // operator. Any later link or schedule mutation invalidates the authorization fail-closed.
+    if (dependencyOverrideMatchesCard(card)) {
+      return "ready";
     }
     if (parents.length === 0) {
       if (scheduledAt && scheduledAt > now && isDependencyPromotableStatus(card.status)) {
@@ -913,15 +935,43 @@ export class WorkboardCoreStore {
   }
 
   protected async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {
-    const card = await this.get(id);
+    let card = await this.get(id);
     if (!card) {
       throw new Error(`card not found: ${id}`);
     }
     if (card.metadata?.archivedAt) {
       return card;
     }
+    if (card.metadata?.dependencyOverride && !dependencyOverrideMatchesCard(card)) {
+      card = await this.updateCard(
+        card.id,
+        {
+          metadata: { ...card.metadata, dependencyOverride: undefined },
+        },
+        { allowMetadataDependencyOverride: true },
+      );
+    }
     const target = await this.dependencyTargetStatus(card, now);
     if (target === card.status) {
+      if (card.metadata?.dependencyOverride) {
+        const parentCards = await Promise.all(
+          cardParentIds(card).map((parentId) => this.get(parentId)),
+        );
+        const scheduledAt = card.metadata.automation?.scheduledAt;
+        if (
+          parentCards.every((parent) => parent?.status === "done") &&
+          !card.metadata.dependencyOverride.scheduledWithoutDate &&
+          !(scheduledAt && scheduledAt > now)
+        ) {
+          return await this.updateCard(
+            card.id,
+            {
+              metadata: { ...card.metadata, dependencyOverride: undefined },
+            },
+            { allowMetadataDependencyOverride: true },
+          );
+        }
+      }
       return card;
     }
     return await this.updateCard(card.id, { status: target });

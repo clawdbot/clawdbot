@@ -277,6 +277,91 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("persists and consumes a snapshot-bound dependency recovery in sqlite", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-recovery-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    try {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const parent = await store.create({ title: "Blocked parent", status: "blocked" });
+      const child = await store.create({ title: "Independent recovery", parents: [parent.id] });
+      await store.promote(child.id, { force: true, reason: "SQLite recovery proof." });
+      await store.dispatch();
+      expect((await store.get(child.id))?.events?.at(-1)).toMatchObject({ kind: "dispatch" });
+      stores.close();
+
+      const reopenedStores = createWorkboardSqliteStores({ dbPath });
+      const reopened = new WorkboardStore(reopenedStores.cards, {
+        boards: reopenedStores.boards,
+        subscriptions: reopenedStores.subscriptions,
+        attachments: reopenedStores.attachments,
+      });
+      await expect(reopened.get(child.id)).resolves.toMatchObject({
+        status: "ready",
+        metadata: {
+          dependencyOverride: {
+            parentIds: [parent.id],
+            reason: "SQLite recovery proof.",
+          },
+        },
+      });
+      const claimed = await reopened.claim(child.id, { ownerId: "sqlite-worker" });
+      expect(claimed.card).toMatchObject({ status: "running", agentId: "sqlite-worker" });
+      expect(claimed.card.metadata).not.toHaveProperty("dependencyOverride");
+      reopenedStores.close();
+
+      const verifiedStores = createWorkboardSqliteStores({ dbPath });
+      const verified = new WorkboardStore(verifiedStores.cards, {
+        boards: verifiedStores.boards,
+        subscriptions: verifiedStores.subscriptions,
+        attachments: verifiedStores.attachments,
+      });
+      await expect(verified.get(child.id)).resolves.toMatchObject({
+        status: "running",
+        agentId: "sqlite-worker",
+      });
+      expect((await verified.get(child.id))?.metadata).not.toHaveProperty("dependencyOverride");
+      verifiedStores.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("adds the dependency recovery column to an existing schema without a version bump", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-recovery-column-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    try {
+      const initialized = createWorkboardSqliteStores({ dbPath });
+      initialized.close();
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec("ALTER TABLE workboard_cards DROP COLUMN dependency_override_json");
+      legacy.close();
+
+      const upgraded = createWorkboardSqliteStores({ dbPath });
+      upgraded.close();
+      const verified = new DatabaseSync(dbPath, { readOnly: true });
+      expect(
+        verified
+          .prepare(
+            "SELECT name FROM pragma_table_info('workboard_cards') WHERE name = 'dependency_override_json'",
+          )
+          .get(),
+      ).toEqual({ name: "dependency_override_json" });
+      expect(
+        verified
+          .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+          .get(),
+      ).toEqual({ found: 1 });
+      verified.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("migrates a version 2 workboard table to STRICT without losing rows", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-strict-migration-"));
     const dbPath = path.join(dir, "workboard.sqlite");
@@ -1600,6 +1685,203 @@ describe("WorkboardStore", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps an explicitly force-promoted dependency child claimable", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Blocked parent", status: "blocked" });
+    const child = await store.create({ title: "Independent recovery child", parents: [parent.id] });
+
+    await expect(store.claim(child.id, { ownerId: "main" })).rejects.toThrow(
+      "card dependencies are not done.",
+    );
+    await store.promote(child.id, {
+      force: true,
+      reason: "Parent is blocked but this lane is explicitly independent.",
+    });
+
+    await expect(store.get(child.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        dependencyOverride: {
+          parentIds: [parent.id],
+          reason: "Parent is blocked but this lane is explicitly independent.",
+        },
+      },
+    });
+    const claimed = await store.claim(child.id, { ownerId: "main" });
+    expect(claimed).toMatchObject({
+      card: { status: "running" },
+    });
+    expect(claimed.card.metadata).not.toHaveProperty("dependencyOverride");
+  });
+
+  it("inherits a dependency override through unrelated card updates", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Blocked parent", status: "blocked" });
+    const child = await store.create({ title: "Independent child", parents: [parent.id] });
+
+    await store.promote(child.id, { force: true, reason: "Independent lane." });
+    const updated = await store.update(child.id, { title: "Renamed independent child" });
+
+    expect(updated).toMatchObject({
+      title: "Renamed independent child",
+      metadata: {
+        dependencyOverride: { parentIds: [parent.id], reason: "Independent lane." },
+      },
+    });
+  });
+
+  it("keeps dependency recovery authorization private to force promotion", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Initially complete parent", status: "done" });
+    const updateChild = await store.create({
+      title: "Generic update target",
+      status: "ready",
+      parents: [parent.id],
+      metadata: {
+        dependencyOverride: { grantedAt: 1, parentIds: [parent.id], reason: "Forged create" },
+      },
+    });
+    const bulkChild = await store.create({
+      title: "Generic bulk target",
+      status: "ready",
+      parents: [parent.id],
+    });
+    expect(updateChild.metadata).not.toHaveProperty("dependencyOverride");
+    await store.update(parent.id, { status: "blocked" });
+
+    const forged = {
+      grantedAt: Date.now(),
+      parentIds: [parent.id],
+      reason: "Forged generic update",
+    };
+    const updated = await store.update(updateChild.id, {
+      metadata: { dependencyOverride: forged },
+    });
+    const bulk = await store.bulkUpdate({
+      ids: [bulkChild.id],
+      patch: { metadata: { dependencyOverride: forged } },
+    });
+
+    expect(updated.metadata).not.toHaveProperty("dependencyOverride");
+    expect(bulk.cards[0]?.metadata).not.toHaveProperty("dependencyOverride");
+    await expect(store.claim(updateChild.id, { ownerId: "worker" })).rejects.toThrow(
+      "card dependencies are not done.",
+    );
+    await expect(store.claim(bulkChild.id, { ownerId: "worker" })).rejects.toThrow(
+      "card dependencies are not done.",
+    );
+  });
+
+  it("invalidates a force promotion when the parent snapshot changes", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const originalParent = await store.create({ title: "Original parent", status: "blocked" });
+    const addedParent = await store.create({ title: "Added parent", status: "todo" });
+    const child = await store.create({ title: "Independent child", parents: [originalParent.id] });
+
+    await store.promote(child.id, { force: true, reason: "Approved original dependency only." });
+    const relinked = await store.linkCards(addedParent.id, child.id);
+
+    expect(relinked).toMatchObject({ status: "todo" });
+    expect(relinked.metadata).not.toHaveProperty("dependencyOverride");
+    await expect(store.claim(child.id, { ownerId: "main" })).rejects.toThrow(
+      "card dependencies are not done.",
+    );
+  });
+
+  it("revokes an active force promotion through ordinary recovery", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Incomplete parent", status: "todo" });
+    const child = await store.create({ title: "Independent child", parents: [parent.id] });
+
+    await store.promote(child.id, { force: true, reason: "Temporary independent lane." });
+    const reconciled = await store.promote(child.id, { reason: "Return to dependency order." });
+
+    expect(reconciled).toMatchObject({ status: "todo" });
+    expect(reconciled.metadata).not.toHaveProperty("dependencyOverride");
+  });
+
+  it("binds a force promotion to the approved schedule snapshot", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({
+        title: "Scheduled recovery",
+        status: "scheduled",
+        scheduledAt: 10_000,
+      });
+
+      const promoted = await store.promote(card.id, { force: true, reason: "Run this lane now." });
+      expect(promoted).toMatchObject({
+        status: "ready",
+        metadata: { dependencyOverride: { parentIds: [], scheduledAt: 10_000 } },
+      });
+      const claimed = await store.claim(card.id, { ownerId: "main" });
+      expect(claimed.card).toMatchObject({ status: "running" });
+      expect(claimed.card.metadata).not.toHaveProperty("dependencyOverride");
+
+      const changed = await store.create({
+        title: "Changed schedule",
+        status: "scheduled",
+        scheduledAt: 20_000,
+      });
+      await store.promote(changed.id, { force: true });
+      const rescheduled = await store.update(changed.id, { scheduledAt: 30_000 });
+      expect(rescheduled.metadata).not.toHaveProperty("dependencyOverride");
+      await expect(store.claim(changed.id, { ownerId: "main" })).rejects.toThrow(
+        "card is scheduled for later.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restores an indefinite schedule when ordinary recovery revokes a force promotion", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Indefinite schedule", status: "scheduled" });
+
+    await store.promote(card.id, { force: true });
+    await store.dispatch();
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        dependencyOverride: { parentIds: [], scheduledWithoutDate: true },
+      },
+    });
+
+    const restored = await store.promote(card.id);
+    expect(restored).toMatchObject({ status: "scheduled" });
+    expect(restored.metadata).not.toHaveProperty("dependencyOverride");
+  });
+
+  it("clears a dependency override when the dependency reaches done", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Pending parent", status: "todo" });
+    const child = await store.create({ title: "Independent child", parents: [parent.id] });
+
+    await store.promote(child.id, { force: true, reason: "Proceed independently." });
+    await store.complete(parent.id, { summary: "Parent finished." });
+    await store.promoteReady();
+
+    await expect(store.get(child.id)).resolves.toMatchObject({ status: "ready" });
+    await expect(store.get(child.id)).resolves.not.toMatchObject({
+      metadata: { dependencyOverride: expect.anything() },
+    });
+  });
+
+  it("does not persist a dependency override for normal promotion", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Incomplete parent", status: "todo" });
+    const child = await store.create({ title: "Dependent child", parents: [parent.id] });
+
+    await expect(store.promote(child.id)).rejects.toThrow("card dependencies are not done.");
+
+    await expect(store.get(child.id)).resolves.toMatchObject({ status: "todo" });
+    await expect(store.get(child.id)).resolves.not.toMatchObject({
+      metadata: { dependencyOverride: expect.anything() },
+    });
   });
 
   it("preserves scheduled and retry-budget errors when a claim is active", async () => {

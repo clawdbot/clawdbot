@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-import { assertCanMutateClaimedCard } from "./store-card-helpers.js";
+import { assertCanMutateClaimedCard, cardParentIds } from "./store-card-helpers.js";
 import { MAX_CARD_COMMENTS } from "./store-constants.js";
 import { WorkboardEnrichmentStore } from "./store-enrichment.js";
 import type { WorkboardMutationScope, WorkboardPromoteInput } from "./store-inputs.js";
@@ -56,24 +56,61 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
         throw new Error(`card not found: ${id}`);
       }
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
+      const now = Date.now();
       const reason = normalizeBoundedString(input.reason, undefined, 1000, "promote reason");
       const comments = reason
         ? [
             ...(existing.metadata?.comments ?? []),
-            { id: randomUUID(), body: reason, createdAt: Date.now() },
+            { id: randomUUID(), body: reason, createdAt: now },
           ].slice(-MAX_CARD_COMMENTS)
         : existing.metadata?.comments;
+      const metadata = {
+        ...clearDiagnostics(existing.metadata, ["stranded_ready", "blocked_too_long"]),
+        comments,
+        stale: undefined,
+      };
+      if (input.force !== true && existing.metadata?.dependencyOverride) {
+        const recoveryStatus = existing.metadata.dependencyOverride.scheduledWithoutDate
+          ? "scheduled"
+          : existing.status;
+        const clearedMetadata = { ...metadata, dependencyOverride: undefined };
+        const status = await this.dependencyTargetStatus(
+          { ...existing, status: recoveryStatus, metadata: clearedMetadata },
+          now,
+        );
+        return await this.updateCard(
+          id,
+          { status, metadata: clearedMetadata },
+          { enforceStatusHolds: false, allowMetadataDependencyOverride: true },
+        );
+      }
+      const parentIds = cardParentIds(existing).toSorted();
+      const scheduledAt = existing.metadata?.automation?.scheduledAt;
+      const scheduledWithoutDate = existing.status === "scheduled" && !scheduledAt;
+      const dependencyOverride =
+        input.force === true &&
+        (parentIds.length > 0 || Boolean(scheduledAt && scheduledAt > now) || scheduledWithoutDate)
+          ? {
+              grantedAt: now,
+              parentIds,
+              ...(scheduledAt ? { scheduledAt } : {}),
+              ...(scheduledWithoutDate ? { scheduledWithoutDate: true as const } : {}),
+              ...(reason ? { reason } : {}),
+            }
+          : undefined;
       return await this.updateCard(
         id,
         {
           status: "ready",
           metadata: {
-            ...clearDiagnostics(existing.metadata, ["stranded_ready", "blocked_too_long"]),
-            comments,
-            stale: null,
+            ...metadata,
+            dependencyOverride,
           },
         },
-        { enforceStatusHolds: input.force !== true },
+        {
+          enforceStatusHolds: input.force !== true,
+          allowMetadataDependencyOverride: true,
+        },
       );
     });
   }

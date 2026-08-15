@@ -134,25 +134,29 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       if (activeClaim) {
         throw new Error(`card already claimed by ${activeClaim.ownerId}.`);
       }
-      const claimable =
-        options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
-          ? await this.updateCard(id, { workspaceAccess: options.adoptWorkspaceAccess })
-          : guarded;
-      const metadata = clearDiagnostics(claimable.metadata, ["stranded_ready"]);
-      const card = await this.updateCard(id, {
-        metadata: {
-          ...metadata,
-          claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+      const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
+      const card = await this.updateCard(
+        id,
+        {
+          ...(options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
+            ? { workspaceAccess: options.adoptWorkspaceAccess }
+            : {}),
+          status:
+            guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
+              ? "running"
+              : guarded.status,
+          agentId: guarded.agentId ?? ownerId,
+          metadata: {
+            ...metadata,
+            // The claim is the one durable use of this recovery authorization. Clearing it in the
+            // same card write prevents a later claimant from inheriting the operator's decision.
+            dependencyOverride: undefined,
+            claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+          },
         },
-      });
-      const next = await this.updateCard(card.id, {
-        status:
-          card.status === "backlog" || card.status === "todo" || card.status === "ready"
-            ? "running"
-            : card.status,
-        agentId: card.agentId ?? ownerId,
-      });
-      return { card: next, token };
+        { allowMetadataDependencyOverride: true },
+      );
+      return { card, token };
     });
   }
 
