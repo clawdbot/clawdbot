@@ -7,6 +7,7 @@ import type {
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { completeWithPreparedSimpleCompletionModel } from "openclaw/plugin-sdk/simple-completion-runtime";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
@@ -118,6 +119,10 @@ export function createCodexAppServerAgentHarness(
   );
   const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
+  const resolveAttemptPluginConfig = (config: OpenClawConfig) =>
+    resolvePluginConfigObject(config, "codex") ??
+    options.resolvePluginConfig?.() ??
+    options.pluginConfig;
   const harness: CodexAppServerAgentHarness = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
@@ -237,7 +242,7 @@ export function createCodexAppServerAgentHarness(
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, {
         bindingStore: options.bindingStore,
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        pluginConfig: resolveAttemptPluginConfig(params.config),
         nativeHookRelay: { enabled: true },
       });
     },
