@@ -24,10 +24,7 @@ import { resolveCronTaskRecordTimestamp } from "../cron/task-run-detail.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  isPluginStateDatabaseOpen,
-  sweepExpiredPluginStateEntries,
-} from "../plugin-state/plugin-state-store.js";
+import { sweepExpiredPluginStateEntries } from "../plugin-state/plugin-state-store.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -562,6 +559,7 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
   }
   const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
     sessionKey,
+    agentId: task.agentId,
     clone: false,
   });
   if (!acpEntry || acpEntry.storeReadFailed || !acpEntry.acp) {
@@ -603,6 +601,7 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
   }
   const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
     sessionKey,
+    agentId: task.agentId,
     clone: false,
   });
   const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
@@ -1109,12 +1108,13 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     }
   }
   await cleanupOrphanedParentOwnedAcpSessions();
-  if (isPluginStateDatabaseOpen()) {
-    try {
-      sweepExpiredPluginStateEntries();
-    } catch (error) {
-      log.warn("Failed to sweep expired plugin state entries", { error });
-    }
+  try {
+    // Task-registry readiness has already opened the shared state database.
+    // Sweep plugin TTL rows even when no plugin namespace was opened this process,
+    // so expired state from removed accounts is reclaimed after restart.
+    sweepExpiredPluginStateEntries();
+  } catch (error) {
+    log.warn("Failed to sweep expired plugin state entries", { error });
   }
   return { reconciled, recovered, cleanupStamped, pruned };
 }

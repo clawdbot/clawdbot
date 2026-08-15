@@ -1,11 +1,11 @@
 // Control UI chat domain owns pure slash command rules.
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
 import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -30,7 +30,9 @@ export type SlashCommandDef = {
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: SlashCommandTier;
   source?: "native" | "plugin" | "skill";
+  skillDisplayName?: string;
   skillModelVisible?: boolean;
+  clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
 
 type LocalArgChoice = string | { value: string; label: string };
@@ -48,7 +50,9 @@ type CommandLike = {
   category?: string;
   tier?: string;
   source?: "native" | "plugin" | "skill";
+  skillDisplayName?: string;
   skillModelVisible?: boolean;
+  clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
 
 const REMOTE_SLASH_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9_-]*$/u;
@@ -259,9 +263,11 @@ function toSlashCommand(
     argOptions: getArgOptions(command),
     tier: source === "local" ? mapTier(command) : "standard",
     ...(resolvedSource ? { source: resolvedSource } : {}),
+    ...(command.skillDisplayName ? { skillDisplayName: command.skillDisplayName } : {}),
     ...(command.skillModelVisible !== undefined
       ? { skillModelVisible: command.skillModelVisible }
       : {}),
+    ...(command.clientPresentation ? { clientPresentation: command.clientPresentation } : {}),
   };
 }
 
@@ -319,6 +325,31 @@ function getArgChoices(arg: Record<string, unknown>): LocalArgChoice[] {
       }
       return typeof choice === "string" ? Boolean(choice) : Boolean(choice.value);
     });
+}
+
+function normalizeClientPresentation(
+  value: unknown,
+): NonNullable<CommandEntry["clientPresentation"]> | undefined {
+  const presentation = asRecord(value);
+  if (
+    !presentation ||
+    Object.keys(presentation).length !== 2 ||
+    !Object.hasOwn(presentation, "when") ||
+    !Object.hasOwn(presentation, "action") ||
+    presentation.when !== "no-arguments"
+  ) {
+    return undefined;
+  }
+  const action = asRecord(presentation.action);
+  if (
+    !action ||
+    Object.keys(action).length !== 1 ||
+    !Object.hasOwn(action, "kind") ||
+    action.kind !== "device-pairing"
+  ) {
+    return undefined;
+  }
+  return { when: "no-arguments", action: { kind: "device-pairing" } };
 }
 
 function buildLocalSlashCommands(): SlashCommandDef[] {
@@ -396,8 +427,14 @@ function normalizeCommandEntry(
       entry.source === "native" || entry.source === "plugin" || entry.source === "skill"
         ? entry.source
         : undefined,
+    skillDisplayName:
+      typeof entry.skillDisplayName === "string"
+        ? clampText(entry.skillDisplayName, MAX_REMOTE_NAME_LENGTH).trim() || undefined
+        : undefined,
     skillModelVisible:
       typeof entry.skillModelVisible === "boolean" ? entry.skillModelVisible : undefined,
+    clientPresentation:
+      entry.source === "plugin" ? normalizeClientPresentation(entry.clientPresentation) : undefined,
   };
 }
 
@@ -515,20 +552,29 @@ export function getSlashCommandCompletions(
   });
 }
 
+export function getSkillDisplayName(command: SlashCommandDef): string {
+  return command.skillDisplayName?.trim() || command.name;
+}
+
 export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
-  const normalized = lower.replace(/-/gu, "_");
+  const normalized = lower.replace(/[\s_]+/gu, "-");
   return SLASH_COMMANDS.filter(
     (command) => command.source === "skill" && command.skillModelVisible === true,
   )
-    .filter(
-      (command) =>
+    .filter((command) => {
+      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command));
+      const displayLookup = displayName.replace(/[\s_]+/gu, "-");
+      const commandLookup = normalizeLowercaseStringOrEmpty(command.name).replace(/[\s_]+/gu, "-");
+      return (
         !lower ||
-        command.name.startsWith(lower) ||
-        command.name.replace(/-/gu, "_").startsWith(normalized) ||
-        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower),
-    )
-    .toSorted((left, right) => left.name.localeCompare(right.name));
+        displayName.includes(lower) ||
+        displayLookup.includes(normalized) ||
+        commandLookup.startsWith(normalized) ||
+        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower)
+      );
+    })
+    .toSorted((left, right) => getSkillDisplayName(left).localeCompare(getSkillDisplayName(right)));
 }
 
 type ParsedSlashCommand = {

@@ -435,8 +435,9 @@ describe("sessions tools", () => {
           path: "/tmp/sessions.json",
           sessions: [
             {
-              key: "main",
+              key: "agent:main:main",
               kind: "direct",
+              classification: "main",
               sessionId: "s-main",
               updatedAt: 10,
               lastChannel: "whatsapp",
@@ -444,8 +445,10 @@ describe("sessions tools", () => {
               lastMessagePreview: "Latest assistant update",
             },
             {
-              key: "discord:group:dev",
+              key: "agent:main:discord:group:dev",
               kind: "group",
+              classification: "group",
+              peerKind: "group",
               sessionId: "s-group",
               updatedAt: 11,
               channel: "discord",
@@ -461,6 +464,7 @@ describe("sessions tools", () => {
             {
               key: "agent:main:dashboard:child",
               kind: "direct",
+              classification: "dashboard",
               sessionId: "s-dashboard-child",
               updatedAt: 12,
               parentSessionKey: "agent:main:main",
@@ -468,18 +472,20 @@ describe("sessions tools", () => {
             {
               key: "agent:main:subagent:worker",
               kind: "direct",
+              classification: "subagent",
               sessionId: "s-subagent-worker",
               updatedAt: 13,
               spawnedBy: "agent:main:main",
             },
             {
-              key: "cron:job-1",
+              key: "agent:main:cron:job-1",
               kind: "direct",
+              classification: "cron",
               sessionId: "s-cron",
               updatedAt: 9,
             },
-            { key: "global", kind: "global" },
-            { key: "unknown", kind: "unknown" },
+            { key: "global", kind: "global", classification: "global", agentId: "main" },
+            { key: "unknown", kind: "unknown", classification: "unknown", agentId: "main" },
           ],
         };
       }
@@ -518,7 +524,8 @@ describe("sessions tools", () => {
         includeGlobal: true,
         includeUnknown: true,
         label: "mailbox",
-        limit: undefined,
+        limit: 200,
+        offset: 0,
         search: "review",
         spawnedBy: undefined,
       },
@@ -537,7 +544,7 @@ describe("sessions tools", () => {
       }>;
     };
     expect(details.sessions).toHaveLength(5);
-    const main = details.sessions?.find((s) => s.key === "main");
+    const main = details.sessions?.find((s) => s.key === "agent:main:main");
     expect(main?.agentId).toBe("main");
     expect(main?.channel).toBe("whatsapp");
     expect(main?.derivedTitle).toBe("Main mailbox");
@@ -545,7 +552,7 @@ describe("sessions tools", () => {
     expect(main?.messages?.length).toBe(1);
     expect(main?.messages?.[0]?.role).toBe("assistant");
 
-    const group = details.sessions?.find((s) => s.key === "discord:group:dev");
+    const group = details.sessions?.find((s) => s.key === "agent:main:discord:group:dev");
     expect(group?.status).toBe("running");
     expect(group?.childSessions).toEqual(["agent:main:subagent:worker"]);
     expect(group?.derivedTitle).toBe("Dev room");
@@ -605,12 +612,14 @@ describe("sessions tools", () => {
               {
                 key: "agent:main:main",
                 kind: "direct",
+                classification: "main",
                 sessionId: "visible",
                 updatedAt: 20,
               },
               {
                 key: "agent:other:main",
                 kind: "direct",
+                classification: "main",
                 sessionId: "hidden",
                 updatedAt: 21,
               },
@@ -641,7 +650,7 @@ describe("sessions tools", () => {
           key: "agent:main:main",
           sessionId: "visible",
           agentId: "main",
-          kind: "other",
+          kind: "main",
           channel: "unknown",
           archived: false,
           pinned: false,
@@ -664,8 +673,9 @@ describe("sessions tools", () => {
           path: "(multiple)",
           sessions: [
             {
-              key: "main",
+              key: "agent:main:main",
               kind: "direct",
+              classification: "main",
               sessionId: "sess-main",
               updatedAt: 12,
             },
@@ -681,7 +691,7 @@ describe("sessions tools", () => {
     const details = result.details as {
       sessions?: Array<Record<string, unknown>>;
     };
-    const main = details.sessions?.find((session) => session.key === "main");
+    const main = details.sessions?.find((session) => session.key === "agent:main:main");
     expect(main).not.toHaveProperty("transcriptPath");
     expect(main).toHaveProperty("sessionId", "sess-main");
   });
@@ -1164,6 +1174,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as GatewayCall;
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: targetSessionKey };
+      }
       if (request.method === "agent") {
         return { runId: "run-scoped", status: "accepted", acceptedAt: 1 };
       }
@@ -1192,11 +1205,7 @@ describe("sessions tools", () => {
         delivery: { status: "skipped", mode: "announce" },
         watched: false,
       });
-      expect(calls.map((call) => call.method)).toEqual([
-        "sessions.list",
-        "sessions.resolve",
-        "agent",
-      ]);
+      expect(calls.map((call) => call.method)).toEqual(["agent"]);
     } finally {
       unregister();
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -2219,6 +2228,7 @@ describe("sessions tools", () => {
           sessions: [
             {
               key: targetKey,
+              agentId: "main",
               deliveryContext: {
                 channel: "whatsapp",
                 to: "123@g.us",

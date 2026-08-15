@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   digestClawPackageRef,
@@ -51,6 +52,7 @@ export async function applyClawPackageUpdate(
     readRefs?: typeof readClawPackageRefs;
     replaceExpected?: typeof replaceClawPackageRefExpected;
     packageDeps?: PackageInstallerDeps;
+    runtime?: RuntimeEnv;
     nowMs?: number;
   },
 ): Promise<ClawPackageUpdateExecution> {

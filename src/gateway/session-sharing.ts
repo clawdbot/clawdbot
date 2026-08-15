@@ -6,12 +6,8 @@ import {
   type SessionSharingRole,
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
-import {
-  isSessionMember,
-  resolveAllAgentSessionStoreTargetsSync,
-  type SessionEntry,
-} from "../config/sessions.js";
-import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
+import { isSessionMember, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { verifyBoardViewTicket } from "./board-view-ticket.js";
@@ -22,11 +18,17 @@ import type {
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { resolveSessionGroupMutationTargetsByName } from "./session-group-mutation-targets.js";
 import {
   invalidateSessionSharingSnapshot,
   loadCachedSessionSharingSnapshot,
   type SessionSharingSnapshot,
 } from "./session-sharing-snapshot-cache.js";
+import {
+  readSessionSharingStringParam as readStringParam,
+  resolveDirectIncognitoTargets,
+  type SessionMutationTarget,
+} from "./session-sharing-target-input.js";
 import type {
   GatewaySessionStoreCache,
   GatewaySessionStoreDiscoveryCache,
@@ -43,11 +45,6 @@ type SessionSharingTarget = {
   storeKey: string;
   storeKeys: string[];
   storePath: string;
-};
-
-type SessionMutationTarget = {
-  sessionKey: string;
-  agentId?: string;
 };
 
 type AuthorizedSessionMutationTarget = SessionMutationTarget & {
@@ -266,36 +263,6 @@ export function authorizeSessionSharingTarget(params: {
       });
 }
 
-function resolveDirectIncognitoTargets(method: string, params: unknown): SessionMutationTarget[] {
-  if (method === "sessions.create" || method === "sessions.list") {
-    return [];
-  }
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return [];
-  }
-  const record = params as Record<string, unknown>;
-  const candidates = [record.key, record.sessionKey];
-  if (Array.isArray(record.keys)) {
-    candidates.push(...record.keys);
-  }
-  if (Array.isArray(record.sessionKeys)) {
-    candidates.push(...record.sessionKeys);
-  }
-  const agentId = normalizeOptionalString(record.agentId);
-  return candidates.flatMap((candidate): SessionMutationTarget[] =>
-    typeof candidate === "string" && isIncognitoSessionKey(candidate)
-      ? [{ sessionKey: candidate, ...(agentId ? { agentId } : {}) }]
-      : [],
-  );
-}
-
-function readStringParam(params: unknown, key: string): string | undefined {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return undefined;
-  }
-  return normalizeOptionalString((params as Record<string, unknown>)[key]);
-}
-
 const SESSION_KEY_PARAM_BY_METHOD = new Map<string, "key" | "sessionKey">([
   ["agent", "sessionKey"],
   ["board.event", "sessionKey"],
@@ -313,6 +280,7 @@ const SESSION_KEY_PARAM_BY_METHOD = new Map<string, "key" | "sessionKey">([
   ["sessions.compaction.branch", "key"],
   ["sessions.compaction.restore", "key"],
   ["sessions.compact", "key"],
+  ["sessions.create", "key"],
   ["sessions.delete", "key"],
   ["sessions.dispatch", "key"],
   ["sessions.files.set", "sessionKey"],
@@ -349,6 +317,7 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "sessions.fork",
   "sessions.groups.delete",
   "sessions.groups.rename",
+  "sessions.groups.update",
   "sessions.patch",
   "sessions.pluginPatch",
   "sessions.reclaim",
@@ -363,17 +332,9 @@ function resolveSessionGroupMutationTargets(params: {
   requestParams: unknown;
 }): SessionMutationTarget[] | undefined {
   const groupName = readStringParam(params.requestParams, "name");
-  if (!groupName) {
-    return undefined;
-  }
-  return resolveAllAgentSessionStoreTargetsSync(params.getCfg()).flatMap((storeTarget) =>
-    listSessionEntriesCore({
-      agentId: storeTarget.agentId,
-      storePath: storeTarget.storePath,
-    }).flatMap(({ sessionKey, entry }) =>
-      entry.category?.trim() === groupName ? [{ sessionKey, agentId: storeTarget.agentId }] : [],
-    ),
-  );
+  return groupName
+    ? (resolveSessionGroupMutationTargetsByName(params.getCfg()).get(groupName) ?? [])
+    : undefined;
 }
 
 function resolveApprovalSessionTarget(
@@ -422,7 +383,11 @@ function resolveSessionMutationTargets(params: {
         })
       : undefined;
   }
-  if (params.method === "sessions.groups.rename" || params.method === "sessions.groups.delete") {
+  if (
+    params.method === "sessions.groups.rename" ||
+    params.method === "sessions.groups.delete" ||
+    params.method === "sessions.groups.update"
+  ) {
     return resolveSessionGroupMutationTargets({
       getCfg: params.getCfg,
       requestParams: params.requestParams,
@@ -499,15 +464,35 @@ export function resolveSessionMutationAuthorization(params: {
     targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
   } => ({ storeCache: new Map(), targetDiscoveryCache: new Map() });
   const lookupCaches = createLookupCaches();
+  const resolveAuthorizedTarget = (
+    targetRef: SessionMutationTarget,
+  ): { target: SessionSharingTarget | null } | { error: ErrorShape } => {
+    try {
+      return {
+        target: resolveSessionSharingTarget({
+          cfg: getCfg(),
+          sessionKey: targetRef.sessionKey,
+          agentId: targetRef.agentId,
+          ...lookupCaches,
+        }),
+      };
+    } catch (error) {
+      if (error instanceof AgentSelectionRequiredError) {
+        return {
+          error: errorShape(ErrorCodes.INVALID_REQUEST, error.message),
+        };
+      }
+      throw error;
+    }
+  };
   // Incognito direct reads and writes share this central participation choke point;
   // hidden keys use the stale-session refusal instead of revealing existence.
   for (const targetRef of resolveDirectIncognitoTargets(params.method, params.requestParams)) {
-    const target = resolveSessionSharingTarget({
-      cfg: getCfg(),
-      sessionKey: targetRef.sessionKey,
-      agentId: targetRef.agentId,
-      ...lookupCaches,
-    });
+    const resolved = resolveAuthorizedTarget(targetRef);
+    if ("error" in resolved) {
+      return { error: resolved.error };
+    }
+    const target = resolved.target;
     const error = authorizeIncognitoSessionTarget({
       client: params.client,
       sessionKey: targetRef.sessionKey,
@@ -533,15 +518,13 @@ export function resolveSessionMutationAuthorization(params: {
     }
     return { error: null };
   }
-  const cfg = getCfg();
   const authorizedTargets: AuthorizedSessionMutationTarget[] = [];
   for (const targetRef of targetRefs) {
-    const target = resolveSessionSharingTarget({
-      cfg,
-      sessionKey: targetRef.sessionKey,
-      agentId: targetRef.agentId,
-      ...lookupCaches,
-    });
+    const resolved = resolveAuthorizedTarget(targetRef);
+    if ("error" in resolved) {
+      return { error: resolved.error };
+    }
+    const target = resolved.target;
     const error =
       (params.method === "sessions.patchMany"
         ? authorizeIncognitoSessionTarget({

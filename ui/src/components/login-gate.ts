@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI component renders the login gate.
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
@@ -11,7 +12,6 @@ import {
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
@@ -23,6 +23,7 @@ type LoginFailureKind =
   | "pairing-required"
   | "insecure-context"
   | "origin-not-allowed"
+  | "build-mismatch"
   | "protocol-mismatch"
   | "network";
 
@@ -122,6 +123,18 @@ function resolveLoginFailureFeedback(
   const rawError = params.lastError;
   const lastErrorCode = params.lastErrorCode ?? null;
   const lower = normalizeLowercaseStringOrEmpty(rawError);
+
+  if (lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
+    return buildFeedback({
+      kind: "build-mismatch",
+      rawError,
+      titleKey: "chat.sidebar.serverUpdatedTitle",
+      summaryKey: "chat.sidebar.serverUpdatedRefresh",
+      refreshAction: { label: t("login.failure.protocol.refresh") },
+      stepKeys: [],
+      docsHref: "https://docs.openclaw.ai/web/control-ui",
+    });
+  }
 
   const pairing = resolvePairingHint(false, rawError, lastErrorCode);
   if (pairing) {

@@ -19,10 +19,13 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
+import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
+import { createGatewayPortalService, type GatewayPortalService } from "./portals/portal-service.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import {
   attachGatewayUpgradeHandler,
@@ -43,7 +46,8 @@ import {
 } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import type { WorkerDesktopTunnels } from "./worker-environments/desktop-tunnel.js";
+import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
+import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
 
 type GatewayPluginRequestHandler = (
   req: IncomingMessage,
@@ -102,6 +106,7 @@ export async function createGatewayHttpTransport(params: {
   getResolvedAuth: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  joinRateLimiter?: AuthRateLimiter;
   gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
@@ -117,8 +122,11 @@ export async function createGatewayHttpTransport(params: {
   getStartup?: StartupChecker;
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
+  handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   workerIngressEnabled?: boolean;
-  workerDesktopTunnels?: WorkerDesktopTunnels;
+  desktopSessionRegistry?: DesktopSessionRegistry;
+  nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   clients: Set<GatewayWsClient>;
 }): Promise<{
   httpServer: HttpServer;
@@ -127,6 +135,7 @@ export async function createGatewayHttpTransport(params: {
   startListening: () => Promise<void>;
   wss: WebSocketServer;
   preauthConnectionBudget: PreauthConnectionBudget;
+  portalService: GatewayPortalService;
   getWorkerIngressEndpoint: () => { host: "127.0.0.1"; port: number } | undefined;
   getMcpAppSandboxPort: () => number | undefined;
   ensureSandboxHostPort: () => Promise<number>;
@@ -262,6 +271,11 @@ export async function createGatewayHttpTransport(params: {
   const httpServers: HttpServer[] = [];
   const gatewayHttpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
+  const portalService = createGatewayPortalService({
+    httpBindHosts,
+    httpServers,
+    ...(params.gatewayTls?.enabled ? { tlsOptions: params.gatewayTls.tlsOptions } : {}),
+  });
   for (const _ of bindHosts) {
     const httpServer = createGatewayHttpServer({
       clients: params.clients,
@@ -282,6 +296,9 @@ export async function createGatewayHttpTransport(params: {
       resolvedAuth: params.resolvedAuth,
       getResolvedAuth: params.getResolvedAuth,
       rateLimiter: params.rateLimiter,
+      joinRateLimiter: params.joinRateLimiter,
+      handleNodeWorkerBundleTransferRequest: params.handleNodeWorkerBundleTransferRequest,
+      handleNodeWorkspaceTransferRequest: params.handleNodeWorkspaceTransferRequest,
       getReadiness: params.getReadiness,
       getStartup: params.getStartup,
       getRuntimeConfig: loadRuntimeConfig,
@@ -301,8 +318,12 @@ export async function createGatewayHttpTransport(params: {
       resolvedAuth: params.resolvedAuth,
       getResolvedAuth: params.getResolvedAuth,
       rateLimiter: params.rateLimiter,
+      publicRateLimiter: params.joinRateLimiter,
+      workerIngressEnabled: params.workerIngressEnabled,
       log: params.log,
-      workerDesktopTunnels: params.workerDesktopTunnels,
+      desktopSessionRegistry: params.desktopSessionRegistry,
+      nodeDesktopStreamBroker: params.nodeDesktopStreamBroker,
+      getGatewayRequestContext: params.getGatewayRequestContext,
     });
     gatewayHttpServers.push(httpServer);
     httpServers.push(httpServer);
@@ -486,6 +507,7 @@ export async function createGatewayHttpTransport(params: {
     startListening,
     wss,
     preauthConnectionBudget,
+    portalService,
     getWorkerIngressEndpoint: () =>
       workerIngressPort === undefined
         ? undefined

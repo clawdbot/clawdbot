@@ -11,6 +11,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
+import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import {
   estimateBase64Size,
   resolveVideoMaxBase64Bytes,
@@ -62,7 +63,6 @@ import {
   resolveRequestedLocalAudioBackend,
 } from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
-import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
 import type {
@@ -1049,7 +1049,7 @@ export async function runCliEntry(params: {
     });
     const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 
-    const templCtx: TemplateContext = {
+    const templCtx: TemplateContext & Record<string, unknown> = {
       ...ctx,
       AttachmentPath: mediaPath,
       AttachmentUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
@@ -1074,7 +1074,7 @@ export async function runCliEntry(params: {
       "MediaTranscribedIndexes",
       "MediaStaged",
     ]) {
-      delete (templCtx as unknown as Record<string, unknown>)[key];
+      delete templCtx[key];
     }
     const argv = [command, ...args].map((part, index) =>
       index === 0 ? part : applyTemplate(part, templCtx),

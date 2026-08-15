@@ -676,7 +676,7 @@ suite.define(() => {
     }
   });
 
-  it("pins a session dropped below an existing row in the Pinned group", async () => {
+  it("pins a session dropped below an existing row in the interleaved sidebar zone", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -723,7 +723,6 @@ suite.define(() => {
       await expect
         .poll(() => trimmedTextContents(pinnedEntry.locator(".sidebar-recent-session__name")))
         .toEqual(["Already pinned"]);
-      await expect.poll(() => page.locator(".sidebar-nav__head--pinned").count()).toBe(1);
       await captureUiProof(page, "sidebar-session-before-pinned-drop.png");
       const pinnedBox = await pinnedEntry.boundingBox();
       if (!pinnedBox) {

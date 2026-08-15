@@ -59,7 +59,7 @@ vi.mock("../health-state.js", () => ({
 }));
 
 vi.mock("../../../state/user-profiles.js", () => ({
-  listProfiles: vi.fn(() => []),
+  hasMultipleSessionSharingIdentities: vi.fn(() => false),
 }));
 
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
@@ -69,6 +69,11 @@ vi.mock("../../control-ui-plugin-tabs.js", () => ({
 
 vi.mock("./connect-auth-security.js", () => ({
   emitGatewayAuthSecurityEvent: emitGatewayAuthSecurityEventMock,
+}));
+
+vi.mock("../../../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../version.js")>()),
+  resolveRuntimeServiceBuildId: () => "build-a",
 }));
 
 import { sendGatewayHello } from "./connect-hello.js";
@@ -182,6 +187,18 @@ describe("sendGatewayHello update detail scope", () => {
         },
       }),
     );
+    expect(helloPayload(context)?.server.buildId).toBe("build-a");
+    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("bundled");
+  });
+
+  it("omits package build identity for independently built configured UI roots", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+    context.configSnapshot = { gateway: { controlUi: { root: "/custom/ui" } } };
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloPayload(context)?.server.buildId).toBeUndefined();
+    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("configured");
   });
 
   it("keeps hello projection and telemetry at effective scopes", async () => {

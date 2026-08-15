@@ -157,6 +157,10 @@ export {
   upsertSessionEntryCore,
 } from "./session-accessor.entry.js";
 export {
+  readSessionIdentityEvidence,
+  type SessionIdentityEvidenceResult,
+} from "./session-accessor.sqlite-entry-availability.js";
+export {
   createSessionEntryWithTranscript,
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
@@ -167,6 +171,10 @@ export {
   updateSessionEntry,
   updateSessionLastRoute,
 } from "./session-accessor.entry-mutation.js";
+export {
+  recoverSessionEntryFromRestartTombstone,
+  type RestartTombstoneRecoveryResult,
+} from "./session-accessor.sqlite-recovery.js";
 export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
@@ -237,7 +245,7 @@ export {
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptActiveLeafEvents,
+  readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,

@@ -1,7 +1,6 @@
 /** Prepares secrets runtime snapshots from config, auth stores, plugins, and env. */
 import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
@@ -80,25 +79,10 @@ const loadRuntimeOwnerAssignmentHelpers = createLazyRuntimeModule(
 );
 
 async function resolveLoadablePluginOrigins(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  plugins: Pick<PluginMetadataSnapshot, "plugins">;
 }): Promise<ReadonlyMap<string, PluginOrigin>> {
-  const workspaceDir = resolveAgentWorkspaceDir(
-    params.config,
-    resolveDefaultAgentId(params.config),
-    params.env,
-  );
-  const { listPluginOriginsFromMetadataSnapshot, loadPluginMetadataSnapshot } =
-    await loadRuntimeManifestHelpers();
-  const snapshot =
-    params.pluginMetadataSnapshot ??
-    loadPluginMetadataSnapshot({
-      config: params.config,
-      workspaceDir,
-      env: params.env,
-    });
-  return listPluginOriginsFromMetadataSnapshot(snapshot);
+  const { listPluginOriginsFromMetadataSnapshot } = await loadRuntimeManifestHelpers();
+  return listPluginOriginsFromMetadataSnapshot(params.plugins);
 }
 
 function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
@@ -255,18 +239,18 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   } = await loadRuntimePrepareHelpers();
   const { listSecretAssignmentOwners, resolveAndApplySecretAssignments } =
     await loadRuntimeOwnerAssignmentHelpers();
-  const manifestRegistry =
-    params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
+  let manifestRegistry = params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
+  if (!manifestRegistry && shouldLoadPluginMetadataForSecrets(sourceConfig)) {
+    const { resolveConfigWidePluginManifestRegistry } = await loadRuntimeManifestHelpers();
+    manifestRegistry = resolveConfigWidePluginManifestRegistry({
+      config: sourceConfig,
+      env: runtimeEnv,
+    });
+  }
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
-    (shouldLoadPluginMetadataForSecrets(sourceConfig)
-      ? await resolveLoadablePluginOrigins({
-          config: sourceConfig,
-          env: runtimeEnv,
-          pluginMetadataSnapshot:
-            params.pluginMetadataSnapshot ??
-            (manifestRegistry ? { plugins: manifestRegistry.plugins } : undefined),
-        })
+    (manifestRegistry
+      ? await resolveLoadablePluginOrigins({ plugins: manifestRegistry })
       : new Map<string, PluginOrigin>());
   const context = createResolverContext({
     sourceConfig,

@@ -10,7 +10,6 @@ import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../../scripts/run-
 const {
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
-  buildVitestArgs,
   buildVitestRunPlans,
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
@@ -48,7 +47,11 @@ describe("test-projects args", () => {
   });
 
   it("keeps watch mode explicit without leaking the sentinel to Vitest", () => {
-    expect(buildVitestArgs(["--watch", "--", "src/foo.test.ts"])).toEqual([
+    const spec = expectDefined(
+      createVitestRunSpecs(["--watch", "--", "src/foo.test.ts"])[0],
+      "watch run spec",
+    );
+    expect(spec.pnpmArgs).toEqual([
       ...VITEST_NODE_PREFIX,
       "--config",
       "test/vitest/vitest.unit.config.ts",
@@ -57,7 +60,8 @@ describe("test-projects args", () => {
   });
 
   it("uses run mode by default", () => {
-    expect(buildVitestArgs(["src/foo.test.ts"])).toEqual([
+    const spec = expectDefined(createVitestRunSpecs(["src/foo.test.ts"])[0], "run spec");
+    expect(spec.pnpmArgs).toEqual([
       ...VITEST_NODE_PREFIX,
       "run",
       "--config",
@@ -553,23 +557,22 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes extension helper targets to importing extension tests", () => {
-    expect(
-      buildVitestRunPlans(["extensions/memory-core/src/memory/test-runtime-mocks.ts"]),
-    ).toEqual([
+  it("routes direct and transitive extension helper importers to the owning config", () => {
+    const helper = "extensions/memory-core/src/memory/test-runtime-mocks.ts";
+    const plans = buildVitestRunPlans([helper]);
+
+    expect(plans).toEqual([
       {
         config: "test/vitest/vitest.extension-memory.config.ts",
         forwardedArgs: [],
-        includePatterns: [
-          "extensions/memory-core/src/memory/index.test.ts",
+        includePatterns: expect.arrayContaining([
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
-          "extensions/memory-core/src/memory/manager.legacy-migration-cleanup.test.ts",
-          "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
-          "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
-        ],
+          "extensions/memory-core/src/memory/manager-session-update-race.test.ts",
+        ]),
         watchMode: false,
       },
     ]);
+    expect(plans[0]?.includePatterns).not.toContain(helper);
   });
 
   it("routes top-level test helpers to importing repo tests", () => {

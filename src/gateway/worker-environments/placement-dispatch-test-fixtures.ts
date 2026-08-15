@@ -33,6 +33,7 @@ export const REQUEST: WorkerDispatchRequest = {
   sessionKey: "agent:main:session-1",
   agentId: "main",
   profileId: "development",
+  executionMode: "worker-turn",
 };
 
 export function seedSyncingPlacement(

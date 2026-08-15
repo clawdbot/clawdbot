@@ -154,9 +154,30 @@ or fully dynamic tool registration.
 | `api.registerCommand(def)`             | Custom command (bypasses the LLM)                                                                                                        |
 | `api.registerNodeHostCommand(command)` | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
 
+Computer Use providers use `registerComputerUseProvider(api, provider)` from
+`openclaw/plugin-sdk/computer-use`. It registers the shared
+`screen.snapshot`/`computer.act` node-host envelope once while the provider
+keeps its driver, frame, availability, and execution lifecycle local.
+
 Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
+
+Commands may also declare a bounded client presentation action for parsed no-argument
+invocations:
+
+```ts
+clientPresentation: {
+  when: "no-arguments",
+  action: { kind: "device-pairing" },
+}
+```
+
+The action union is closed and intentionally does not accept routes, callbacks,
+URLs, or arbitrary client data. Supporting clients handle the action only when
+they can complete it; otherwise the command follows its normal remote path.
+This metadata expresses presentation intent, not authorization: the Gateway
+remains authoritative for every RPC the client flow performs.
 
 Guidance entries may be legacy strings, which apply to every prompt surface, or
 structured entries:
@@ -678,7 +699,7 @@ semantics.
 ### Hook decision semantics
 
 `before_install` is a plugin-runtime lifecycle hook, not the operator install
-policy surface. Use `security.installPolicy` when an allow/block decision must
+policy surface. Use `security.installPolicy` when an allow/warn/block decision must
 cover CLI and Gateway-backed install or update paths.
 
 - `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.

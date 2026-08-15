@@ -16,7 +16,11 @@ import {
   runWithSqliteCoordinator,
   SqliteCoordinatorError,
 } from "../infra/sqlite-coordinator.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+} from "../infra/sqlite-readonly-location.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { resolveOpenClawStateDirForDatabasePath } from "./openclaw-state-db.paths.js";
@@ -241,6 +245,7 @@ function acquireOpenClawStateWriteAccess(options: {
   const resolvedPath = path.resolve(options.databasePath);
   const access = acquireOpenClawStateOwnershipCoordinator(resolvedPath);
   try {
+    quarantineOrphanedSqliteSidecars(resolvedPath);
     assertOwnershipAllowsWrite(
       inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(resolvedPath),
       resolvedPath,
@@ -279,15 +284,46 @@ export function runWithOpenClawStateWriteAccess<T>(
   );
 }
 
+/** Check path-based write admission without retaining the coordinator past this call. */
+export async function assertOpenClawStateWriteAllowedAtPath(options: {
+  databasePath: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const databasePath = path.resolve(options.databasePath);
+  quarantineOrphanedSqliteSidecars(databasePath);
+  if (!existsSync(databasePath)) {
+    return;
+  }
+  const env = options.env ?? process.env;
+  if (isGatewayExternallySupervised(env)) {
+    runWithOpenClawStateWriteAccess(
+      { ...options, databasePath },
+      "shared state write admission",
+      () => undefined,
+    );
+    return;
+  }
+  // Unmarked startup must discover ownership without opening the source writable.
+  // The async private snapshot keeps Windows PowerShell work off the sync startup path.
+  const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+  try {
+    assertOwnershipAllowsWrite(
+      inspectOwnershipThroughConnection(prepared.location, databasePath),
+      databasePath,
+      env,
+    );
+  } finally {
+    prepared.cleanup();
+  }
+}
+
 /** Fence shared-state writes once an external manager has claimed ownership. */
 export function assertOpenClawStateWriteAllowed(options: {
-  database?: DatabaseSync;
+  database: DatabaseSync;
   databasePath: string;
   env?: NodeJS.ProcessEnv;
 }): void {
   const resolvedPath = path.resolve(options.databasePath);
-  const status = options.database
-    ? inspectOpenClawStateOwnershipFromDatabase(options.database, resolvedPath)
-    : inspectOpenClawStateOwnershipAtPath(resolvedPath);
+  const status = inspectOpenClawStateOwnershipFromDatabase(options.database, resolvedPath);
   assertOwnershipAllowsWrite(status, resolvedPath, options.env ?? process.env);
 }

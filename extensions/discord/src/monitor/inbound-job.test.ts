@@ -123,6 +123,7 @@ describe("buildDiscordInboundJob", () => {
     const ingressSettlement = {
       settle: vi.fn(async () => {}),
       abandon: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
     };
     const job = buildDiscordInboundJob(ctx, { ingressSettlement });
     const overrideAbortController = new AbortController();

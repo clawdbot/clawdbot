@@ -14,6 +14,7 @@ import {
   normalizeChatModelProviderId,
   resolvePreferredServerChatModelValue,
 } from "../../lib/chat/model-ref.ts";
+import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -26,6 +27,9 @@ import type { NewSessionPreference } from "./preferences.ts";
 const NEW_SESSION_METADATA_RETRY_WINDOW_MS = 60_000;
 
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+type GatewayAgentRuntime = NonNullable<GatewayAgentRow["agentRuntime"]> & {
+  cloudPlacementSupported?: boolean;
+};
 type NewSessionMetadataStatus = ChatModelCatalogState["status"];
 type NewSessionMetadataState = {
   catalog: ModelCatalogEntry[];
@@ -477,6 +481,13 @@ export class NewSessionModelControl {
     return this.restoringPreference;
   }
 
+  isModelUnavailable(agent: GatewayAgentRow | undefined): boolean {
+    return (
+      this.metadataState.hasSnapshot &&
+      isChatModelUnavailable(this.selected || agent?.model?.primary, undefined, this.catalog)
+    );
+  }
+
   private restorePreference(
     preference: NewSessionPreference | null | undefined,
     agent: GatewayAgentRow | undefined,
@@ -538,33 +549,34 @@ export class NewSessionModelControl {
     return { model: selected, thinkingLevel, repaired: false };
   }
 
-  resolveAgentRuntimeId(options: {
+  resolveAgentRuntime(options: {
     agent?: GatewayAgentRow;
     context: ApplicationContext | undefined;
-  }): string | undefined {
+  }): GatewayAgentRuntime | undefined {
     const defaults = options.context?.sessions.state.result?.defaults;
     const agentDefaultModel = options.agent?.model?.primary;
+    let runtime: GatewayAgentRuntime | undefined;
     if (this.selected) {
       // Agent/default runtime metadata belongs to its default model. An explicit
       // model without per-model metadata is unknown, not an inherited runtime.
-      return resolveDraftModelTarget(
-        this.selected,
-        undefined,
+      runtime = resolveDraftModelTarget(this.selected, undefined, this.catalog)?.entry
+        ?.agentRuntime;
+    } else {
+      const defaultTarget = resolveDraftModelTarget(
+        agentDefaultModel ?? defaults?.model,
+        agentDefaultModel ? undefined : defaults?.modelProvider,
         this.catalog,
-      )?.entry?.agentRuntime?.id.trim();
+      );
+      runtime =
+        defaultTarget?.entry?.agentRuntime ?? options.agent?.agentRuntime ?? defaults?.agentRuntime;
     }
-    const defaultTarget = resolveDraftModelTarget(
-      agentDefaultModel ?? defaults?.model,
-      agentDefaultModel ? undefined : defaults?.modelProvider,
-      this.catalog,
-    );
-    const runtime =
-      defaultTarget?.entry?.agentRuntime?.id.trim() ??
-      options.agent?.agentRuntime?.id.trim() ??
-      defaults?.agentRuntime?.id.trim();
+    const runtimeId = runtime?.id.trim();
     // Default selectors need server-side model/provider policy before they are
     // concrete, so the UI must leave Cloud eligibility to the dispatch gate.
-    return runtime === "auto" || runtime === "default" ? undefined : runtime;
+    if (!runtime || !runtimeId || runtimeId === "auto" || runtimeId === "default") {
+      return undefined;
+    }
+    return runtimeId === runtime.id ? runtime : { ...runtime, id: runtimeId };
   }
 
   render(options: {
@@ -655,6 +667,7 @@ export class NewSessionModelControl {
         this.thinkingLevel = value;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
       },
+      onModelSetup: () => options.context?.navigate("model-setup"),
       onRequestUpdate: this.notify,
     });
   }

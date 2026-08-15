@@ -48,7 +48,10 @@ async function assertWorkspaceDirectory(workspaceDir: string): Promise<string> {
 
 export async function runWorkerDescriptor(
   descriptor: WorkerLaunchDescriptor,
-  options: { signal?: AbortSignal } = {},
+  options: {
+    signal?: AbortSignal;
+    onConnectionFailure?: (cause: string | undefined) => void;
+  } = {},
 ): Promise<WorkerRuntimeResult> {
   const workspaceDir = await assertWorkspaceDirectory(descriptor.assignment.workspaceDir);
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
@@ -63,8 +66,9 @@ export async function runWorkerDescriptor(
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
   const connection = createWorkerConnection({
-    socketPath: descriptor.socketPath,
+    endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
+    onConnectionFailure: (error) => options.onConnectionFailure?.(error?.message),
   });
   const abortFromCaller = () => {
     abortController.abort(options.signal?.reason);
@@ -149,16 +153,10 @@ export async function runWorkerDescriptor(
           },
         },
         live: {
-          emit: async (event) => {
-            await live.emit(descriptor.assignment.runId, event);
-            if (
-              event.kind === "lifecycle" &&
-              (event.payload.phase === "finishing" ||
-                event.payload.phase === "end" ||
-                event.payload.phase === "error")
-            ) {
-              resultFenceAcked = true;
-            }
+          enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
+          emitTerminal: async (event) => {
+            await live.emitTerminal(descriptor.assignment.runId, event);
+            resultFenceAcked = true;
           },
         },
         sessions: connection,

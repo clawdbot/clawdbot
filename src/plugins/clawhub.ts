@@ -52,6 +52,7 @@ import type { RuntimeVersionEnv } from "../version.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
 import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
+import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
   installPluginFromArchive,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -1441,29 +1442,32 @@ export async function installPluginFromClawHub(
     params.logger?.info?.(
       `Downloading ${detail.package?.family === "bundle-plugin" ? "bundle" : "plugin"} ${releaseLabel} from ClawHub…`,
     );
-    const installResult = await installPluginFromArchive({
-      archivePath: archive.archivePath,
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-      trustedSourceLinkedOfficialInstall:
-        officialClawHubPackage || isTrustedSourceLinkedOfficialPackage(detail.package!),
-      config: params.config,
-      logger: params.logger,
-      mode: params.mode,
-      extensionsDir: params.extensionsDir,
-      timeoutMs: params.timeoutMs,
-      dryRun: params.dryRun,
-      expectedPluginId: runtimeIdResolution.expectedPluginId,
-      installPolicyRequest: {
-        kind: "plugin-archive",
-        requestedSpecifier: params.spec,
-        source: {
-          kind: "clawhub",
-          authority: officialClawHubPackage ? "official" : clawhubAuthority,
-          mutable: false,
-          network: true,
+    const installResult = await installPluginFromArchive(
+      copyPluginInstallTransactionRequest(params, {
+        archivePath: archive.archivePath,
+        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.onInstallPolicyWarning,
+        trustedSourceLinkedOfficialInstall:
+          officialClawHubPackage || isTrustedSourceLinkedOfficialPackage(detail.package!),
+        config: params.config,
+        logger: params.logger,
+        mode: params.mode,
+        extensionsDir: params.extensionsDir,
+        timeoutMs: params.timeoutMs,
+        dryRun: params.dryRun,
+        expectedPluginId: runtimeIdResolution.expectedPluginId,
+        installPolicyRequest: {
+          kind: "plugin-archive",
+          requestedSpecifier: params.spec,
+          source: {
+            kind: "clawhub",
+            authority: officialClawHubPackage ? "official" : clawhubAuthority,
+            mutable: false,
+            network: true,
+          },
         },
-      },
-    });
+      }),
+    );
     if (!installResult.ok) {
       return installResult;
     }

@@ -1,5 +1,7 @@
 // Process-local cancellation handles for live cron task runs.
 
+import type { CronActiveJobMarker } from "../active-jobs.js";
+
 const activeCronTaskRunsByRunId = new Map<
   string,
   { controller: AbortController; onCancel?: (reason: string) => void }
@@ -25,17 +27,35 @@ function startActiveCronTaskRunSettlementGrace(promise: Promise<unknown>): void 
 export function registerActiveCronTaskRun(params: {
   runId: string | undefined;
   controller: AbortController;
+  activeJobMarker?: CronActiveJobMarker;
   onCancel?: (reason: string) => void;
 }): (() => void) | undefined {
   const runId = params.runId?.trim();
   if (!runId) {
     return undefined;
   }
-  activeCronTaskRunsByRunId.set(runId, {
+  const handle = {
     controller: params.controller,
     onCancel: params.onCancel,
-  });
+  };
+  activeCronTaskRunsByRunId.set(runId, handle);
+  // A durable remove/disable can land after marker admission but before this
+  // controller exists; consume that exact marker's request before provider work.
+  const cancelJobRun = (reason: string) => {
+    cancelActiveCronTaskRun({ runId, reason });
+  };
+  if (params.activeJobMarker?.cancellation?.kind === "requested") {
+    cancelJobRun(params.activeJobMarker.cancellation.reason);
+  } else if (params.activeJobMarker) {
+    params.activeJobMarker.cancellation = { kind: "bound", cancel: cancelJobRun };
+  }
   return () => {
+    if (
+      params.activeJobMarker?.cancellation?.kind === "bound" &&
+      params.activeJobMarker.cancellation.cancel === cancelJobRun
+    ) {
+      delete params.activeJobMarker.cancellation;
+    }
     if (activeCronTaskRunsByRunId.get(runId)?.controller === params.controller) {
       activeCronTaskRunsByRunId.delete(runId);
     }

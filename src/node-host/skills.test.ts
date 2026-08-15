@@ -68,6 +68,15 @@ describe("scanNodeHostedSkills", () => {
     ]);
   });
 
+  it("treats a missing skills directory as an empty fresh-node inventory", () => {
+    const warn = vi.fn();
+
+    expect(scanNodeHostedSkills({ skillsDir: path.join(createRoot(), "missing"), warn })).toEqual(
+      [],
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("loads descriptors and preserves the full SKILL.md content", () => {
     const root = createRoot();
     const content = writeSkill(root, "release-helper", "Prepare a release", "# Release\nDo it.");

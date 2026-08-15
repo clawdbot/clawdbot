@@ -154,6 +154,8 @@ describe("createGatewayKernel", () => {
         "plugins.metadata.scan",
         "plugins.metadata.freeze",
         "config.snapshot.read.materialize",
+        "plugins.metadata.scan",
+        "plugins.metadata.freeze",
         "config.snapshot.read.observe",
         "config.auth",
         "config.auth.snapshot-validate",

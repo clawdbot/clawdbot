@@ -63,6 +63,7 @@ const BUNDLE_ARTIFACT = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: HANDSHAKE.openclawVersion,
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
+  tarballBytes: 1,
   tarballSha256: Array.from({ length: 64 }, () => "b").join(""),
   tarballPath: "/gateway/cache/worker-bundle.tgz",
 };
@@ -316,8 +317,8 @@ export class ComposedGatewayHarness {
     const epoch = params.epoch ?? this.epoch;
     const credential = params.admissionProof ?? CREDENTIAL;
     return {
-      version: 2,
-      socketPath: this.socketPath,
+      version: 3,
+      connectionEndpoint: { kind: "unix", socketPath: this.socketPath },
       admission: {
         environmentId: ENVIRONMENT_ID,
         credential,
@@ -354,7 +355,7 @@ export class ComposedGatewayHarness {
     const descriptor = this.createDescriptor(params);
     const epoch = descriptor.admission.ownerEpoch;
     const connection = createWorkerConnection({
-      socketPath: this.socketPath,
+      endpoint: { kind: "unix", socketPath: this.socketPath },
       connectParams: buildWorkerConnectParams(descriptor),
       admissionTimeoutMs: 1_000,
       admissionDeadlineMs: 5_000,
@@ -659,6 +660,7 @@ export class ComposedGatewayHarness {
           return result;
         },
       } as workerServer.WorkerConnectionService,
+      ingress: "loopback",
       send: (frame) => this.send(socket, frame),
       close: (code = 1000, reason = "") => socket.close(code, reason),
       isClosed: () => closed || socket.readyState === WebSocket.CLOSED,

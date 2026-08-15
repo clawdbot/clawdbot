@@ -31,11 +31,6 @@ import { executePreparedCliRun } from "./execute.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-vi.mock("../../plugin-sdk/anthropic-cli.js", () => ({
-  CLAUDE_CLI_BACKEND_ID: "claude-cli",
-  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
-}));
-
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));

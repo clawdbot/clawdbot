@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -6,7 +7,6 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { showToast } from "../lib/toast.ts";
 import type {
   SidebarRecentSession,
@@ -34,6 +34,7 @@ export {
   deleteSessionGroup,
   renameSessionGroup,
   reorderSidebarSection,
+  updateSessionGroupDefaults,
 } from "./session-organizer-catalog.ts";
 
 export async function patchSession(
@@ -458,6 +459,9 @@ export async function forkSession(
   const createParams = {
     parentSessionKey: session.key,
     fork: true,
+    ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
+      ? { forkFrom: "last-completed" as const }
+      : {}),
     agentId,
   };
   if (

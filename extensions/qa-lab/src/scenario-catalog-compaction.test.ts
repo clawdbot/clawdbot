@@ -72,6 +72,7 @@ describe("qa compaction scenario catalog", () => {
     const writeTranscriptToolCallIdExpr = readSetExpression("writeTranscriptToolCallId");
     const continuationChainExpr = readSetExpression("continuationChain");
     const compactionSummaryRequestsExpr = readSetExpression("compactionSummaryRequests");
+    const overflowCheckpointsExpr = readSetExpression("overflowCheckpoints");
     const continuationAssertIndex = actionIndex((action) =>
       readFlowAssertExpression(action).includes("continuationChain.valid === true"),
     );
@@ -98,10 +99,12 @@ describe("qa compaction scenario catalog", () => {
     const terminalEvidenceAssertExpr = readAssertExpression(
       "terminalContinuations[0].providerVariant === 'openai'",
     );
-    const compactionSummaryAssertExpr = readAssertExpression(
-      "compactionSummaryRequests.length > 0",
-    );
+    const compactionSummaryAssertExpr = readAssertExpression("compactionSummaryRequests.some");
     const noQualityRetryAssertExpr = readAssertExpression("Previous summary failed quality checks");
+    const compactionSnapshotAssertExpr = readAssertExpression(
+      "Number.isInteger(sessionEntry?.compactionCount)",
+    );
+    const overflowCheckpointAssertExpr = readAssertExpression("overflowCheckpoints.length === 1");
     const knownGap =
       "known-harness-gap compaction-retry-mutating-tool: provider-error recovery does not invoke Codex native compaction; native token-threshold compaction needs a separate scenario.";
 
@@ -280,17 +283,26 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).not.toContain("String(request.toolOutput ?? '').includes(`---");
     expect(flow).not.toContain("String(request.toolOutput ?? '').includes(`+++");
     expect(compactionSummaryRequestsExpr).toContain("request.requestKind === 'compaction-summary'");
-    expect(compactionSummaryAssertExpr).toContain("compactionSummaryRequests.length > 0");
     expect(compactionSummaryAssertExpr).toContain(
-      "request.cursor > overflowRequest.cursor && request.cursor < writeRequest.cursor",
+      "compactionSummaryRequests.some((request) => request.cursor > overflowRequest.cursor && request.cursor < writeRequest.cursor)",
     );
-    expect(compactionSummaryAssertExpr).toContain("request.outcome === 'success'");
-    expect(compactionSummaryAssertExpr).toContain("request.plannedToolName === undefined");
-    expect(compactionSummaryAssertExpr).toContain("request.toolOutputStructuredError !== true");
+    expect(compactionSummaryAssertExpr).toContain(
+      "compactionSummaryRequests.every((request) => request.outcome === 'success' && request.plannedToolName === undefined && request.toolOutputStructuredError !== true)",
+    );
     expect(noQualityRetryAssertExpr).toContain("compactionSummaryRequests.every");
     expect(noQualityRetryAssertExpr).toContain(
       "!String(request.allInputText ?? '').includes('Previous summary failed quality checks')",
     );
+    expect(compactionSnapshotAssertExpr).toContain(
+      "Number.isInteger(sessionEntry?.compactionCount) && sessionEntry.compactionCount >= 1",
+    );
+    expect(compactionSnapshotAssertExpr).toContain(
+      "Number.isFinite(sessionEntry?.totalTokens) && sessionEntry?.totalTokensFresh === true",
+    );
+    expect(compactionSnapshotAssertExpr).not.toContain("compactionCount === 1");
+    expect(flow).not.toContain("sessionEntry?.compactionCount === 1");
+    expect(overflowCheckpointsExpr).toContain("checkpoint.reason === 'overflow-retry'");
+    expect(overflowCheckpointAssertExpr).toContain("overflowCheckpoints.length === 1");
     expect(flow).not.toContain("compactionSummaryRequests.length === 1");
     expect(flow).toContain(
       "writeRequest.rawByteLength < config.overflowThresholdBytes && writeRequest.rawByteLength < overflowRequest.rawByteLength",

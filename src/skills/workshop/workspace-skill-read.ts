@@ -1,6 +1,7 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import {
   buildWorkspaceSkillStatus,
   resolveSkillStatusEntry,
@@ -10,6 +11,7 @@ import {
   assertInsideWorkspace,
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
+import { tryRealpath } from "../loading/symlink-targets.js";
 
 const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 
@@ -22,6 +24,17 @@ export function assertWritableSkillTarget(workspaceDir: string, skill: SkillStat
   if (path.basename(skill.filePath) !== "SKILL.md") {
     throw new Error("Skill Workshop can only update SKILL.md targets.");
   }
+}
+
+export function isWorkspaceOwnedSkillTarget(
+  workspaceDir: string,
+  skill: Pick<SkillStatusEntry, "baseDir">,
+): boolean {
+  const workspaceRealPath = tryRealpath(path.resolve(workspaceDir));
+  const skillRealPath = tryRealpath(path.resolve(skill.baseDir));
+  return Boolean(
+    workspaceRealPath && skillRealPath && isPathInside(workspaceRealPath, skillRealPath),
+  );
 }
 
 type WritableWorkspaceSkillSummary = {

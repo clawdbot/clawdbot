@@ -86,25 +86,13 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["validation", "validation.ts"],
       ["internal/anthropic", path.join("internal", "anthropic.ts")],
       ["internal/openai", path.join("internal", "openai.ts")],
+      [
+        "internal/openai-responses-payload-policy",
+        path.join("internal", "openai-responses-payload-policy.ts"),
+      ],
       ["internal/retry-after", path.join("internal", "retry-after.ts")],
       ["internal/runtime", path.join("internal", "runtime.ts")],
       ["internal/shared", path.join("internal", "shared.ts")],
-    ],
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpaths: [
-      ["", "index.ts"],
-      ["base64", "base64.ts"],
-      ["constants", "constants.ts"],
-      ["content-length", "content-length.ts"],
-      ["file-name", "file-name.ts"],
-      ["inbound-path-policy", "inbound-path-policy.ts"],
-      ["inline-image-data-url", "inline-image-data-url.ts"],
-      ["media-source-url", "media-source-url.ts"],
-      ["mime", "mime.ts"],
-      ["read-byte-stream-with-limit", "read-byte-stream-with-limit.ts"],
     ],
   },
   {
@@ -341,7 +329,7 @@ function listInternalCorePackageNativeAliases(
   }> = [];
   const internalCorePackageAliases = [
     ...INTERNAL_CORE_PACKAGE_ALIASES,
-    ...["normalization-core", "acp-core"].map((packageDir) => ({
+    ...["media-core", "normalization-core", "acp-core"].map((packageDir) => ({
       packageName: `@openclaw/${packageDir}`,
       packageDir,
       subpaths: listWorkspacePackageExportAliasEntries({

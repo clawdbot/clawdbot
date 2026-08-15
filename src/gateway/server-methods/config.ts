@@ -771,10 +771,15 @@ async function commitGatewayConfigWriteOrRespond(
     if (!(error instanceof ConfigMutationConflictError)) {
       throw error;
     }
+    // Non-retryable conflicts (e.g. path ownership) will fail the retry too;
+    // only advise it when a fresh base hash can actually resolve the conflict.
     params.respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `${error.message}; re-run config.get and retry`),
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        error.retryable ? `${error.message}; re-run config.get and retry` : error.message,
+      ),
     );
     return null;
   }
@@ -958,7 +963,11 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid config; fix before patching"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `${summarizeConfigValidationIssues(snapshot.issues)}; fix (openclaw doctor) before patching`,
+          { details: { issues: snapshot.issues } },
+        ),
       );
       return;
     }
@@ -1048,12 +1057,13 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const restoredChangedPaths = diffConfigLeafPaths(snapshot.config, restoredMerge.result);
     if (hashlessPatch && !restoredChangedPaths.every(isHashlessPatchLwwPath)) {
+      const guardedPaths = restoredChangedPaths.filter((path) => !isHashlessPatchLwwPath(path));
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "config base hash required; re-run config.get and retry",
+          `config base hash required for ${guardedPaths.join(", ")}; re-run config.get and retry with baseHash`,
         ),
       );
       return;

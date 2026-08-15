@@ -7,6 +7,7 @@ import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
+import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
 import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
@@ -122,11 +123,11 @@ async function resolveStatusAllLocalDiagnosis(params: {
   }).catch(() => null);
   params.progress.tick();
 
-  const defaultWorkspace =
-    overview.agentStatus.agents.find((a) => a.id === overview.agentStatus.defaultId)
-      ?.workspaceDir ??
-    overview.agentStatus.agents[0]?.workspaceDir ??
-    null;
+  const controlPlaneWorkspace = resolvePluginControlPlaneWorkspace({
+    config: overview.cfg,
+    env: process.env,
+  });
+  const defaultWorkspace = controlPlaneWorkspace.workspaceDir ?? null;
   const skillStatus =
     defaultWorkspace != null
       ? (() => {
@@ -134,7 +135,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
             // Skill eligibility depends on whether the default agent may request node exec.
             const nodeSkills = resolveNodeExecEligibility({
               cfg: overview.cfg,
-              agentId: overview.agentStatus.defaultId,
+              agentId: controlPlaneWorkspace.agentId,
             });
             return buildWorkspaceSkillStatus(defaultWorkspace, {
               config: overview.cfg,

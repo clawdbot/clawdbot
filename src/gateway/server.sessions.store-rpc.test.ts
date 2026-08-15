@@ -20,7 +20,10 @@ import {
   getSessionsHandlers,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, defaultAgentWorkspace, openClient } =
+  setupGatewaySessionsTestHarness();
+
+type SessionPatchResponse = { ok: true; key: string; entry: Record<string, unknown> };
 
 async function seedLinearTranscript(params: {
   contents: string[];
@@ -58,27 +61,15 @@ async function loadTranscriptRows(params: {
   });
 }
 
-test("sessions.patch accepts and discards the retired beta icon field", async () => {
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-      },
-    },
-  });
-
-  const patched = await directSessionHandlerReq<{
-    entry: Record<string, unknown>;
-  }>("sessions.patch", {
+test("sessions.patch validates persistent emoji icons", async () => {
+  const invalid = await directSessionHandlerReq("sessions.patch", {
     key: "agent:main:main",
-    icon: "🧪",
+    icon: "hand",
   });
-
-  expect(patched.ok).toBe(true);
-  expect(patched.payload?.entry).not.toHaveProperty("icon");
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty("icon");
+  expect(invalid).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "icon must be a single emoji" },
+  });
 });
 
 test("lists and patches session store via sessions.* RPC", async () => {
@@ -240,7 +231,6 @@ test("lists and patches session store via sessions.* RPC", async () => {
   }>("sessions.list", { includeGlobal: false, includeUnknown: false });
 
   expect(list1.ok).toBe(true);
-  expect(list1.payload?.path).toBe(storePath);
   expect(list1.payload?.sessions.map((session) => session.key)).not.toContain("global");
   expect(list1.payload?.defaults?.modelProvider).toBe("anthropic");
   const main = list1.payload?.sessions.find((s) => s.key === "agent:main:main");
@@ -313,14 +303,17 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(limited.payload?.sessions).toHaveLength(1);
   expect(limited.payload?.sessions[0]?.key).toBe("global");
 
-  const patched = await directSessionReq<{ ok: true; key: string }>("sessions.patch", {
+  const patched = await directSessionReq<SessionPatchResponse>("sessions.patch", {
     key: "agent:main:main",
     thinkingLevel: "medium",
     verboseLevel: "off",
+    icon: "🦞",
   });
   expect(patched.ok).toBe(true);
   expect(patched.payload?.ok).toBe(true);
   expect(patched.payload?.key).toBe("agent:main:main");
+  expect(patched.payload?.entry.icon).toBe("🦞");
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.icon).toBe("🦞");
 
   const sendPolicyPatched = await directSessionReq<{
     ok: true;
@@ -466,11 +459,14 @@ test("lists and patches session store via sessions.* RPC", async () => {
     isBackground: true,
   });
 
-  const clearedVerbose = await directSessionReq<{ ok: true; key: string }>("sessions.patch", {
+  const clearedVerbose = await directSessionReq<SessionPatchResponse>("sessions.patch", {
     key: "agent:main:main",
     verboseLevel: null,
+    icon: "",
   });
   expect(clearedVerbose.ok).toBe(true);
+  expect(clearedVerbose.payload?.entry).not.toHaveProperty("icon");
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty("icon");
 
   const list3 = await directSessionReq<{
     sessions: Array<{
@@ -807,7 +803,7 @@ test("write-scoped operators manage chat organization but not admin session sett
       label: "Trip planning",
       model: "openai/gpt-test-a",
     });
-    expect(renamed.ok).toBe(true);
+    expect(renamed.ok, JSON.stringify(renamed)).toBe(true);
     expect(renamed.payload?.entry).toMatchObject({
       label: "Trip planning",
       modelOverride: "gpt-test-a",
@@ -853,6 +849,21 @@ test("write-scoped operators manage chat organization but not admin session sett
     expect(reordered.payload?.groups.map((group) => group.name)).toEqual(["Someday", "Travel"]);
     expect(reordered.payload?.sectionOrder).toEqual(["work", "category:Travel", "ungrouped"]);
 
+    const canonicalDefaultAgentWorkspace = await fs.realpath(defaultAgentWorkspace);
+    const defaultsUpdated = await rpcReq<{
+      ok: true;
+      defaults: Array<{ name: string; cwd?: string; worktree?: boolean }>;
+    }>(ws, "sessions.groups.update", {
+      name: "Travel",
+      cwd: defaultAgentWorkspace,
+      worktree: true,
+    });
+    expect(defaultsUpdated.ok).toBe(true);
+    expect(defaultsUpdated.payload?.defaults).toContainEqual({
+      name: "Travel",
+      cwd: canonicalDefaultAgentWorkspace,
+      worktree: true,
+    });
     const renamedGroup = await rpcReq<{
       ok: true;
       sectionOrder: string[];

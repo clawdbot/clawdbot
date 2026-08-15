@@ -3361,7 +3361,7 @@ describe("config cli", () => {
         },
         refsChecked: 0,
         skippedExecRefs: 0,
-        errors: [{ kind: "schema", message }],
+        errors: [{ kind: "schema", message: expect.stringContaining(message) }],
       });
       expectErrorIncludes(message);
     });
@@ -3398,7 +3398,10 @@ describe("config cli", () => {
 
     it("aggregates schema and resolvability failures in --dry-run --json mode", async () => {
       setGatewaySnapshot({ providers: { default: { source: "env" } } });
-      mockResolveSecretRefValue.mockRejectedValue(new Error("missing env var"));
+      const secret = "sk-abcdefghijklmnopqrstuv";
+      const error = new Error(`missing env var: Authorization: Bearer ${secret}`);
+      error.name = "SecretResolutionError";
+      mockResolveSecretRefValue.mockRejectedValue(error);
 
       await expect(
         runConfigCommand([
@@ -3421,6 +3424,8 @@ describe("config cli", () => {
       expect(errorKinds).toContain("resolvability");
       const errorRefs = (payload.errors ?? []).map((entry) => entry.ref ?? "");
       expect(errorRefs).toContain("env:default:DISCORD_BOT_TOKEN");
+      expect(JSON.stringify(payload)).not.toContain(error.name);
+      expect(JSON.stringify(payload)).not.toContain(secret);
     });
 
     it("fails dry-run when provider updates make existing refs unresolvable", async () => {
@@ -4215,6 +4220,35 @@ describe("config cli", () => {
   });
 
   describe("config apply hints - issue #80722", () => {
+    it("prints a no-restart hint for a same-value config set", async () => {
+      setGatewaySnapshot();
+
+      await runConfigSet("gateway.port", "18789", "--strict-json");
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expectLogIncludes("Updated gateway.port. No gateway restart needed.");
+      expectLogExcludes("Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("prints a no-restart hint for a same-value config patch", async () => {
+      setGatewaySnapshot();
+      const pathname = writeTempJson5File("openclaw-config-patch-same-value", {
+        gateway: { port: 18789 },
+      });
+
+      try {
+        await runConfigCommand(["config", "patch", "--file", pathname]);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expectLogIncludes("Applied 1 config update(s). No gateway restart needed.");
+      expectLogExcludes("Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
     it("prints a hot-reload hint for agents.list model changes", async () => {
       const resolved: OpenClawConfig = {
         agents: {
@@ -4429,6 +4463,7 @@ describe("config cli", () => {
       expectLogIncludes("Updated plugins.entries.canvas.enabled");
       expectLogIncludes("Restart the gateway to apply.");
       expectLogExcludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("No gateway restart needed.");
     });
 
     it("keeps the restart hint for mixed hot and restart batch updates", async () => {

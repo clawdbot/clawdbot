@@ -12,6 +12,7 @@ import {
   type SecretRef,
 } from "../config/types.secrets.js";
 import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import {
@@ -155,7 +156,7 @@ export async function collectDryRunResolvabilityErrors(params: {
     } catch (err) {
       failures.push({
         kind: "resolvability",
-        message: String(err),
+        message: formatErrorMessage(err),
         ref: `${ref.source}:${ref.provider}:${ref.id}`,
       });
     }

@@ -311,6 +311,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           cfg,
           sessionKey: requestContext.sessionKey,
           runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
+          runtimePolicyAgentId: requestContext.runtimePolicyAgentId,
           agentId: requestContext.agentId,
           sessionId: requestContext.sessionId,
           runId: requestContext.runId,

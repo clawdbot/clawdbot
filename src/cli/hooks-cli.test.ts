@@ -258,8 +258,43 @@ describe("hooks cli formatting", () => {
 
     expect(runPluginInstallCommandMock).toHaveBeenCalledWith({
       raw: "npm:demo-hooks",
+      allowInstallPolicyWarningPrompt: true,
       opts: expect.objectContaining({ force: true }),
       invalidateRuntimeCache: false,
+    });
+  });
+
+  it("forwards install-policy acknowledgement through the deprecated install alias", async () => {
+    runPluginInstallCommandMock.mockResolvedValueOnce(undefined);
+    const program = new Command().exitOverride();
+    registerHooksCli(program);
+
+    await program.parseAsync(
+      ["hooks", "install", "npm:demo-hooks", "--acknowledge-install-policy-warning"],
+      { from: "user" },
+    );
+
+    expect(runPluginInstallCommandMock).toHaveBeenCalledWith({
+      raw: "npm:demo-hooks",
+      allowInstallPolicyWarningPrompt: true,
+      opts: expect.objectContaining({ acknowledgeInstallPolicyWarning: true }),
+      invalidateRuntimeCache: false,
+    });
+  });
+
+  it("forwards install-policy acknowledgement through the deprecated update alias", async () => {
+    runPluginUpdateCommandMock.mockResolvedValueOnce(undefined);
+    const program = new Command().exitOverride();
+    registerHooksCli(program);
+
+    await program.parseAsync(
+      ["hooks", "update", "demo-hooks", "--acknowledge-install-policy-warning"],
+      { from: "user" },
+    );
+
+    expect(runPluginUpdateCommandMock).toHaveBeenCalledWith({
+      id: "demo-hooks",
+      opts: expect.objectContaining({ acknowledgeInstallPolicyWarning: true }),
     });
   });
 });

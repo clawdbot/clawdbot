@@ -71,8 +71,6 @@ export const automaticDirectReplyConfig = {
 
 export let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 
-export let dispatchFromConfigTesting: typeof import("./dispatch-from-config.test-support.js").testing;
-
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 export let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tryDispatchAcpReplyHook;
@@ -369,7 +367,6 @@ export function messageAuditEvents(): Array<Record<string, unknown>> {
 
 export const globalBeforeAll0 = async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-  ({ testing: dispatchFromConfigTesting } = await import("./dispatch-from-config.test-support.js"));
   await import("./dispatch-acp.js");
   await import("./dispatch-acp-command-bypass.js");
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
@@ -501,12 +498,6 @@ export const describe0BeforeEach0 = () => {
   diagnosticMocks.logMessageProcessed.mockClear();
   diagnosticMocks.logSessionStateChange.mockClear();
   diagnosticMocks.markDiagnosticSessionProgress.mockClear();
-  diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockReset();
-  diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockResolvedValue({
-    status: "skipped",
-    action: "keep_lane",
-    reason: "active_reply_work",
-  });
   diagnosticMocks.logMessageDispatchStarted.mockClear();
   diagnosticMocks.logMessageDispatchCompleted.mockClear();
   hookMocks.runner.hasHooks.mockClear();

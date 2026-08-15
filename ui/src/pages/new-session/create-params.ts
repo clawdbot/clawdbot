@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -40,11 +40,13 @@ export function buildDraftSessionCreateParams(draft: {
   workspace?: string;
   execNode?: string;
   catalogId?: string;
+  category?: string;
 }): Record<string, unknown> {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
   const execNode = normalizeOptionalString(draft.execNode);
   const catalogId = normalizeOptionalString(draft.catalogId);
+  const category = normalizeOptionalString(draft.category);
   const model = normalizeOptionalString(draft.model);
   const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
   const projectId = normalizeOptionalString(draft.projectId);
@@ -57,6 +59,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),
     ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
     ...(catalogId ? { catalogId } : {}),
+    ...(category ? { category } : {}),
     ...(!catalogId && model ? { model } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
     ...(projectId ? { projectId } : {}),

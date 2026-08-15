@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "./identity-avatar.js";
@@ -311,29 +312,46 @@ describe("resolveAgentAvatar", () => {
     }
   });
 
-  it("falls back to ui.assistant.avatar for non-default agents without their own avatar", async () => {
-    const root = await createTempAvatarRoot();
-    const mainWorkspace = path.join(root, "main");
-    const workerWorkspace = path.join(root, "worker");
-    await writeFile(path.join(workerWorkspace, "ui-avatar.png"));
-
-    const cfg: OpenClawConfig = {
-      ui: { assistant: { avatar: "ui-avatar.png" } },
-      agents: {
-        list: [
-          { id: "main", workspace: mainWorkspace },
-          { id: "worker", workspace: workerWorkspace },
-        ],
+  it("scopes ui.assistant.avatar to the sole or retained compatibility owner", () => {
+    const migratedCfg = retainLegacyDefaultAgentId(
+      {
+        ui: { assistant: { avatar: "https://example.com/ui-avatar.png" } },
+        agents: { ownership: "explicit", list: [{ id: "research" }, { id: "ops" }] },
       },
-    };
+      "ops",
+    );
 
-    const workspaceReal = await fs.realpath(workerWorkspace);
-    const resolved = resolveAgentAvatar(cfg, "worker", { includeUiOverride: true });
-    expect(resolved.kind).toBe("local");
-    if (resolved.kind === "local") {
-      const resolvedReal = await fs.realpath(resolved.filePath);
-      expect(path.relative(workspaceReal, resolvedReal)).toBe("ui-avatar.png");
-    }
+    expect(resolveAgentAvatar(migratedCfg, "ops", { includeUiOverride: true })).toMatchObject({
+      kind: "remote",
+      url: "https://example.com/ui-avatar.png",
+    });
+    expect(resolveAgentAvatar(migratedCfg, "research", { includeUiOverride: true })).toEqual({
+      kind: "none",
+      reason: "missing",
+    });
+    expect(
+      resolveAgentAvatar(
+        {
+          ui: { assistant: { avatar: "https://example.com/ui-avatar.png" } },
+          agents: { ownership: "explicit", list: [{ id: "research" }, { id: "ops" }] },
+        },
+        "ops",
+        { includeUiOverride: true },
+      ),
+    ).toEqual({ kind: "none", reason: "missing" });
+
+    const rawLegacyCfg: OpenClawConfig = {
+      ui: { assistant: { avatar: "https://example.com/raw-ui-avatar.png" } },
+      agents: { list: [{ id: "research" }, { id: "ops", default: true }] },
+    };
+    expect(resolveAgentAvatar(rawLegacyCfg, "ops", { includeUiOverride: true })).toMatchObject({
+      kind: "remote",
+      url: "https://example.com/raw-ui-avatar.png",
+    });
+    expect(resolveAgentAvatar(rawLegacyCfg, "research", { includeUiOverride: true })).toEqual({
+      kind: "none",
+      reason: "missing",
+    });
   });
 
   it("ui.assistant.avatar takes priority over IDENTITY.md avatar with includeUiOverride", async () => {

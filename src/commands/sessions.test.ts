@@ -148,6 +148,36 @@ describe("sessionsCommand", () => {
     expect(row).toContain("think:high");
   });
 
+  it("sanitizes persisted identifiers only for terminal output", async () => {
+    const key = "agent:main:\u001B[31mpeer\nrow";
+    const sessionId = "session-\u001B[31mid\r\nforged-id";
+    const model = "model-\u001B]0;session-model\u0007🦞\tvariant";
+    const store = await writeStore({
+      [key]: {
+        sessionId,
+        updatedAt: Date.now() - 60_000,
+        model,
+      },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    const textOutput = logs.join("\n");
+    expect(textOutput).not.toContain("\u001B");
+    expect(textOutput).not.toContain("\nrow");
+    expect(textOutput).toContain("peer\\nrow");
+    expect(textOutput).toContain("\\r\\nforged-id");
+    expect(textOutput).toContain("🦞\\tvariant");
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{ key: string; sessionId?: string; model?: string }>;
+    }>(sessionsCommand, store);
+    cleanupStore(store);
+
+    expect(payload.sessions?.[0]).toMatchObject({ key, sessionId, model });
+  });
+
   it("exports freshness metadata in JSON output", async () => {
     const store = await writeStore({
       "agent:main:main": {
@@ -338,6 +368,49 @@ describe("sessionsCommand", () => {
 
     const main = payload.sessions?.find((row) => row.key === "agent:main:main");
     expect(main?.runtimePolicySessionKey).toBe("agent:main:telegram:default:direct:42");
+  });
+
+  it("projects a bare row with its resolved fixed-store owner", async () => {
+    const store = await writeStore(
+      {
+        global: {
+          sessionId: "telegram-global",
+          updatedAt: Date.now() - 60_000,
+          delivery: normalizeSessionDeliveryState({
+            origin: {
+              provider: "telegram",
+              chatType: "direct",
+              to: "telegram:42",
+              accountId: "default",
+            },
+          }),
+        },
+      },
+      "sessions-runtime-policy-owner",
+      { agentId: "ops" },
+    );
+    setMockSessionsConfig(() => ({
+      session: { scope: "global", store },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: { primary: "test:opus" },
+          models: { "test:opus": {} },
+          contextTokens: 32000,
+          sessionStore: { agentId: "ops" },
+        },
+        entries: { ops: {}, research: {} },
+      },
+    }));
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{ agentId?: string; key: string; runtimePolicySessionKey?: string }>;
+    }>(sessionsCommand, store, { active: "10" });
+
+    expect(payload.sessions?.find((row) => row.key === "global")).toMatchObject({
+      agentId: "ops",
+      runtimePolicySessionKey: "agent:ops:telegram:default:direct:42",
+    });
   });
 
   it("uses a default JSON output limit of 100 sessions", async () => {

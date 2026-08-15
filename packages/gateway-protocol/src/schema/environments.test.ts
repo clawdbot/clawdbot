@@ -82,7 +82,12 @@ describe("worker environment protocol schemas", () => {
   });
 
   it("accepts worker metadata additively across summary and mutation results", () => {
-    const requested = workerSummary("requested");
+    const requested = {
+      ...workerSummary("requested"),
+      platform: "linux",
+      sessionHost: false,
+      trust: "disposable",
+    };
     const destroyedBase = workerSummary("destroyed", "unavailable");
     const destroyed = {
       ...destroyedBase,
@@ -107,6 +112,23 @@ describe("worker environment protocol schemas", () => {
         },
       }),
     ).toBe(true);
+  });
+
+  it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "unavailable",
+      lastConnectedAtMs: 1_000,
+      lastDisconnectedAtMs: 2_000,
+      lastSeenAtMs: 1_500,
+      lastSeenReason: "silent_push",
+    };
+    expect(Value.Check(EnvironmentSummarySchema, node)).toBe(true);
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastDisconnectedAtMs: -1 })).toBe(
+      false,
+    );
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastSeenReason: "" })).toBe(false);
   });
 
   it("keeps desktop app launch requests, results, and projected ids closed", () => {
@@ -140,13 +162,19 @@ describe("worker environment protocol schemas", () => {
     expect(
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
-        profiles: [{ id: "aws", providerId: "crabbox" }],
+        profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
       }),
     ).toBe(true);
     expect(
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
         profiles: [{ id: "aws", providerId: "crabbox", settings: { token: "hidden" } }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [{ id: "aws", providerId: "crabbox", trust: "temporary" }],
       }),
     ).toBe(false);
   });
@@ -178,6 +206,12 @@ describe("worker environment protocol schemas", () => {
       Value.Check(EnvironmentSummarySchema, {
         ...workerSummary("failed"),
         worker: { ...workerSummary("failed").worker, error: "" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...workerSummary("ready", "available"),
+        trust: "temporary",
       }),
     ).toBe(false);
   });

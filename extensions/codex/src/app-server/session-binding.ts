@@ -17,11 +17,7 @@ import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
-import {
-  CODEX_PLUGINS_MARKETPLACE_NAME,
-  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-  normalizeCodexServiceTier,
-} from "./config.js";
+import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN, normalizeCodexServiceTier } from "./config.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
@@ -187,10 +183,7 @@ const pluginAppPolicyEntrySchema = z
   .object({
     source: z.literal("plugin").optional(),
     configKey: z.string(),
-    marketplaceName: z.enum([
-      CODEX_PLUGINS_MARKETPLACE_NAME,
-      CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-    ]),
+    marketplaceName: z.string().regex(CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN),
     pluginName: z.string(),
     allowDestructiveActions: z.boolean(),
     allowOpenWorld: z.boolean().optional(),
@@ -257,6 +250,8 @@ const threadBindingSchema = z
     configuredMcpOwnershipVersion: z.literal(1).optional().catch(undefined),
     ringZeroConfigFingerprint: optionalStringSchema,
     ringZeroClientInstanceId: optionalStringSchema,
+    /** Durable fact preventing a later unrestricted turn from widening this thread. */
+    nativeToolPolicyRestricted: z.literal(true).optional().catch(undefined),
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
     appServerRuntimeFingerprint: optionalStringSchema,
     pluginAppsFingerprint: optionalStringSchema,
@@ -453,9 +448,12 @@ function normalizeLegacyBindingFingerprint(value: unknown): unknown {
   return hashCodexAppServerBindingFingerprint(value);
 }
 
-function normalizeLegacyBindingFingerprints(
-  record: Record<string, unknown>,
-): Record<string, unknown> {
+function normalizeLegacyBindingFingerprints<
+  T extends {
+    dynamicToolsFingerprint?: unknown;
+    userMcpServersFingerprint?: unknown;
+  },
+>(record: T): T {
   // Shipped sidecars can contain unbounded canonical JSON fingerprints. Bound
   // them at the legacy encoder so plugin-state registration cannot reject the row.
   let normalized = record;
@@ -468,7 +466,7 @@ function normalizeLegacyBindingFingerprints(
     if (normalized === record) {
       normalized = { ...record };
     }
-    normalized[key] = next;
+    Object.assign(normalized, { [key]: next });
   }
   return normalized;
 }
@@ -480,9 +478,7 @@ export function normalizeStoredCodexAppServerBindingFingerprints(
   if (!stored || stored.state !== "active") {
     return stored;
   }
-  const binding = normalizeLegacyBindingFingerprints(
-    stored.binding as unknown as Record<string, unknown>,
-  );
+  const binding = normalizeLegacyBindingFingerprints(stored.binding);
   return binding === stored.binding
     ? stored
     : readStoredCodexAppServerBinding({ ...stored, binding });
@@ -1451,8 +1447,8 @@ function readPluginAppPolicyContext(
       "appId" in entry ||
       (entry.source !== undefined && entry.source !== "plugin") ||
       typeof entry.configKey !== "string" ||
-      (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME &&
-        entry.marketplaceName !== CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME) ||
+      typeof entry.marketplaceName !== "string" ||
+      !CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN.test(entry.marketplaceName) ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       (entry.allowOpenWorld !== undefined && typeof entry.allowOpenWorld !== "boolean") ||

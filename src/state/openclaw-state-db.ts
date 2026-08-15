@@ -41,6 +41,7 @@ import { VERSION } from "../version.js";
 import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import { openClawStateDatabaseCache as stateDbCache } from "./openclaw-state-db-cache.js";
+export { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   LAZY_ADDITIVE_STATE_TABLES,
@@ -53,6 +54,8 @@ import {
 import {
   assertOpenClawStateDatabaseForMaintenance,
   assertOpenClawStateDatabaseV5ForMigration,
+  assertOpenClawStateDatabaseV6ForMigration,
+  assertOpenClawStateDatabaseV7ForMigration,
   assertSupportedSchemaVersion,
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
@@ -65,6 +68,8 @@ import {
   detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
   dropLegacyStateTables,
   markCurrentStateSchemaVersion,
+  migrateRetiredCommitmentsSchema,
+  migrateWorkerPlacementExecutionModeSchema,
   repairAgentDatabasesCompositePrimaryKey,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
@@ -77,6 +82,12 @@ import {
 } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+
+const STATE_MIGRATION_ASSERTIONS = {
+  5: assertOpenClawStateDatabaseV5ForMigration,
+  6: assertOpenClawStateDatabaseV6ForMigration,
+  7: assertOpenClawStateDatabaseV7ForMigration,
+} as const;
 
 export {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -169,11 +180,19 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
           assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
           });
+        } else if (previousVersion === 5 || previousVersion === 6 || previousVersion === 7) {
+          STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
         }
         if (rebuiltIndexNames.size === 0) {
           assertSqliteIntegrity(db, pathname);
         }
         dropLegacyStateTables(db);
+        if (migrateRetiredCommitmentsSchema(db, previousVersion)) {
+          applied.push("Retired shared state commitments table and indexes");
+        }
+        if (migrateWorkerPlacementExecutionModeSchema(db, previousVersion)) {
+          applied.push("Migrated cloud worker placements to execution modes");
+        }
         if (repairAgentDatabasesCompositePrimaryKey(db)) {
           applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
         }
@@ -352,10 +371,12 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
           });
           ensureAdditiveStateColumns(db);
           assertCurrentStateRuntimeSchema(db, pathname);
-        } else if (previousVersion === 5) {
-          assertOpenClawStateDatabaseV5ForMigration(db, { pathname });
+        } else if (previousVersion === 5 || previousVersion === 6 || previousVersion === 7) {
+          STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
         }
         dropLegacyStateTables(db);
+        migrateRetiredCommitmentsSchema(db, previousVersion);
+        migrateWorkerPlacementExecutionModeSchema(db, previousVersion);
         ensureAdditiveStateColumns(db);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
@@ -391,13 +412,25 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
               updated_at: now,
             })
             .onConflict((conflict) =>
-              conflict.column("meta_key").doUpdateSet({
-                role: "global",
-                schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
-                agent_id: null,
-                app_version: VERSION,
-                updated_at: now,
-              }),
+              conflict
+                .column("meta_key")
+                .doUpdateSet({
+                  role: "global",
+                  schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+                  agent_id: null,
+                  app_version: VERSION,
+                  updated_at: now,
+                })
+                // updated_at records when schema metadata last changed, not when
+                // the database was last opened; unconditional bumps make every
+                // open dirty the row and defeat no-change backup detection.
+                .where((eb) =>
+                  eb.or([
+                    eb("schema_meta.schema_version", "!=", OPENCLAW_STATE_SCHEMA_VERSION),
+                    eb("schema_meta.app_version", "!=", VERSION),
+                    eb("schema_meta.role", "!=", "global"),
+                  ]),
+                ),
             ),
         );
         assertOpenClawStateDatabaseForMaintenance(db, { pathname });
@@ -564,13 +597,23 @@ export function openOpenClawStateDatabase(
   const pathname = resolveDatabasePath(options);
   // Latched paths are quarantined: the recorder closed any live handle, and
   // every open fails fast here until doctor repairs the file and clears it.
-  stateDbCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
+  try {
+    stateDbCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
+  } catch (error) {
+    stateDbCache.recordOpenClawStateDatabaseLifecycleOpenError(pathname, error);
+    throw error;
+  }
   const cached = stateDbCache.getCachedOpenClawStateDatabase(pathname);
   if (cached?.db.isOpen) {
     assertOpenClawStateWriteAllowed({ database: cached.db, databasePath: pathname, env });
     return cached;
   }
-  assertOpenClawStateDatabaseFreshOpenAllowed(options);
+  try {
+    assertOpenClawStateDatabaseFreshOpenAllowed(options);
+  } catch (error) {
+    stateDbCache.recordOpenClawStateDatabaseLifecycleOpenError(pathname, error);
+    throw error;
+  }
   let unpublished: OpenClawStateDatabase | undefined;
   try {
     unpublished = runWithOpenClawStateWriteAccess(
@@ -585,6 +628,7 @@ export function openOpenClawStateDatabase(
       },
     );
   } catch (error) {
+    stateDbCache.recordOpenClawStateDatabaseLifecycleOpenError(pathname, error);
     if (!unpublished) {
       throw error;
     }
@@ -680,8 +724,10 @@ export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
 }
 
 /** Close all cached shared state database handles. */
-export function closeOpenClawStateDatabase(): void {
-  stateDbCache.closeOpenClawStateDatabase();
+export function closeOpenClawStateDatabase(
+  options?: Parameters<typeof stateDbCache.closeOpenClawStateDatabase>[0],
+): void {
+  stateDbCache.closeOpenClawStateDatabase(options);
 }
 
 /** Test whether any cached shared state database handle is still open. */

@@ -92,6 +92,28 @@ describe("slackOutbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-final" });
   });
 
+  it("forwards forced-media intent through the core outbound adapter", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-media" });
+
+    await slackOutbound.sendMedia!({
+      cfg,
+      to: "C123",
+      text: "original image",
+      mediaUrl: "https://example.com/original.png",
+      forceDocument: true,
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "original image",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/original.png",
+        forceDocument: true,
+      }),
+    );
+  });
+
   it("renders channelData Slack blocks on payload sends", async () => {
     sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
 

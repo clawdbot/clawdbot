@@ -3,6 +3,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   createSessionEventSubscriberRegistry,
@@ -61,6 +62,29 @@ describe("skills event scope guards", () => {
     expect(read.socket.events).toEqual(["skills.changed"]);
     expect(write.socket.events).toEqual(["skills.changed"]);
     expect(admin.socket.events).toEqual(["skills.changed"]);
+  });
+});
+
+describe("device setup event scope guards", () => {
+  it("delivers exact setup completion only to pairing-capable operators", () => {
+    const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
+    const node = makeClient("node", "node", ["operator.read"]);
+    const read = makeClient("read", "operator", ["operator.read"]);
+    const admin = makeClient("admin", "operator", ["operator.admin"]);
+    const clients = new Set([pairing, node, read, admin].map((entry) => entry.client));
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("device.pair.setup.completed", {
+      setupId: "setup-123",
+      deviceId: "device-123",
+      access: "limited",
+      ts: 1,
+    });
+
+    expect(pairing.socket.events).toEqual(["device.pair.setup.completed"]);
+    expect(node.socket.events).toEqual([]);
+    expect(read.socket.events).toEqual([]);
+    expect(admin.socket.events).toEqual(["device.pair.setup.completed"]);
   });
 });
 
@@ -159,7 +183,8 @@ describe("collaboration event scope guards", () => {
     const audience = createSessionObserverAudience({
       subscribers,
       isVisible: () => true,
-      getDefaultAgentId: () => "main",
+      getConfig: () =>
+        ({ agents: { list: [{ id: "main", default: true }, { id: "work" }] } }) as OpenClawConfig,
     });
     const { broadcastToConnIds } = createGatewayBroadcaster({
       clients: new Set([main.client, legacy.client, both.client, work.client, workRaw.client]),
@@ -197,7 +222,8 @@ describe("collaboration event scope guards", () => {
       subscribers,
       sessionEventSubscribers,
       isVisible: () => true,
-      getDefaultAgentId: () => "main",
+      getConfig: () =>
+        ({ agents: { list: [{ id: "main", default: true }, { id: "work" }] } }) as OpenClawConfig,
     });
     const { broadcastToConnIds } = createGatewayBroadcaster({
       clients: new Set([message.client, eventOnly.client, unrelated.client]),

@@ -4,7 +4,12 @@ import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { getCredentialUnavailableDiagnostics } from "../channels/account-snapshot-fields.js";
 import { isChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  type ChannelId,
+  getChannelPlugin,
+  listChannelPlugins,
+  resolveChannelPluginRegistration,
+} from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import {
   applyChannelAccountState,
@@ -32,6 +37,7 @@ import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import { withPluginCommandAccountStartScope } from "../plugins/plugin-command-account-start-scope.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -365,7 +371,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return channelOverride;
     }
 
-    const plugin = getChannelPlugin(channelId);
+    const registration = resolveChannelPluginRegistration(channelId);
+    const plugin = registration?.plugin;
     if (!plugin) {
       return true;
     }
@@ -490,12 +497,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
-  const startChannelInternal = async (
+  const startChannelProcessOwned = async (
     channelId: ChannelId,
     accountId?: string,
     optsValue: StartChannelOptions = {},
   ) => {
-    const plugin = getChannelPlugin(channelId);
+    const registration = resolveChannelPluginRegistration(channelId);
+    const plugin = registration?.plugin;
     const startAccount = plugin?.gateway?.startAccount;
     if (!startAccount) {
       return;
@@ -534,7 +542,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       for (const id of accountIds) {
         setStoppedRuntime(channelId, id, {
           restartPending: false,
-          lastError: "ambient channel credentials suppressed for dev gateway",
+          lastError:
+            "ambient channel credentials suppressed; configure the channel or start the gateway with --ambient-channels",
         });
       }
       return;
@@ -719,7 +728,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
           scopedChannelRuntime = await measureStartup(`channels.${channelId}.runtime`, async () =>
             createTaskScopedChannelRuntime({
-              channelRuntime: await getChannelRuntime(),
+              channelRuntime:
+                registration?.resolveChannelRuntime?.() ?? (await getChannelRuntime()),
             }),
           );
           channelRuntimeForTask = scopedChannelRuntime.channelRuntime;
@@ -1059,6 +1069,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
+  // Channel lifetimes outlive the RPC or timer requesting startup, so their
+  // provider, approval, cleanup, and restart descendants must be process-owned.
+  const startChannelInternal = (...args: Parameters<typeof startChannelProcessOwned>) =>
+    runOutsideGatewayRootWorkAdmission(() => startChannelProcessOwned(...args));
+
   const startChannel = async (
     channelId: ChannelId,
     accountId?: string,
@@ -1122,16 +1137,52 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (plugin?.gateway?.stopAccount) {
             try {
               const account = plugin.config.resolveAccount(cfg, id);
-              await plugin.gateway.stopAccount({
-                cfg,
-                accountId: id,
-                account,
-                runtime,
-                abortSignal: abort?.signal ?? new AbortController().signal,
-                log,
-                getStatus: () => getRuntime(channelId, id),
-                setStatus: (next) => setRuntime(channelId, id, next),
-              });
+              // A plugin stopAccount that never settles must not wedge every
+              // stop-driven flow (health monitor sweeps, thaw recovery, reload).
+              // Bound it like the task teardown below; the timed-out path flows
+              // into the existing recoveryStopTimedOut two-call restart contract.
+              let stopAttemptAbandoned = false;
+              const stopAccountAttempt = plugin.gateway
+                .stopAccount({
+                  cfg,
+                  accountId: id,
+                  account,
+                  runtime,
+                  abortSignal: abort?.signal ?? new AbortController().signal,
+                  log,
+                  getStatus: () => getRuntime(channelId, id),
+                  setStatus: (next) => {
+                    // A stop we abandoned may settle after a replacement started;
+                    // its late writes must not repaint or tear down that account.
+                    setRuntime(
+                      channelId,
+                      id,
+                      stopAttemptAbandoned
+                        ? sanitizeAbortedTaskStatusPatch(next, getRuntime(channelId, id))
+                        : next,
+                    );
+                  },
+                })
+                .catch((error: unknown) => {
+                  if (stopAttemptAbandoned) {
+                    log.warn?.(
+                      `[${id}] abandoned stopAccount failed late: ${formatErrorMessage(error)}`,
+                    );
+                    return;
+                  }
+                  outcome = { status: "rejected", error };
+                  log.warn?.(`[${id}] stopAccount failed: ${formatErrorMessage(error)}`);
+                });
+              const stopAccountSettled = await waitForChannelStopGracefully(
+                stopAccountAttempt,
+                CHANNEL_STOP_ABORT_TIMEOUT_MS,
+              );
+              if (!stopAccountSettled) {
+                stopAttemptAbandoned = true;
+                log.warn?.(
+                  `[${id}] stopAccount exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms; continuing stop`,
+                );
+              }
             } catch (error) {
               outcome = { status: "rejected", error };
               log.warn?.(`[${id}] stopAccount failed: ${formatErrorMessage(error)}`);

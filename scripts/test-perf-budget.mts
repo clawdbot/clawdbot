@@ -1,20 +1,21 @@
 // Runs a Vitest config and enforces wall-time regression budgets.
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { booleanFlag, parseFlagArgs, stringFlag, type FlagSpec } from "./lib/arg-utils.mts";
+import {
+  booleanFlag,
+  isStrictAffirmativeValue,
+  parseFlagArgs,
+  stringFlag,
+  type FlagSpec,
+} from "./lib/arg-utils.mts";
 import {
   budgetFloatFlag,
   parseBudgetNumber,
   readBudgetEnvNumber,
 } from "./lib/budget-number-args.mts";
-import { coerceErrorMessage as formatErrorMessage } from "./lib/error-format.mts";
+import { coerceErrorMessage } from "./lib/error-format.mts";
 import { formatMs } from "./lib/vitest-report-cli-utils.mts";
 import { readJsonFile, runVitestJsonReport } from "./test-report-utils.mts";
-
-function readBooleanEnv(name: string, env = process.env) {
-  const normalized = env[name]?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
 
 type PerfBudgetOptions = {
   baselineWallMs: number | null;
@@ -61,7 +62,7 @@ function parseArgs(argv: readonly string[], env = process.env) {
       maxWallMs: readBudgetEnvNumber("OPENCLAW_TEST_PERF_MAX_WALL_MS", env),
       baselineWallMs: readBudgetEnvNumber("OPENCLAW_TEST_PERF_BASELINE_WALL_MS", env),
       maxRegressionPct: readBudgetEnvNumber("OPENCLAW_TEST_PERF_MAX_REGRESSION_PCT", env) ?? 10,
-      reportOnly: readBooleanEnv("OPENCLAW_TEST_PERF_REPORT_ONLY", env),
+      reportOnly: isStrictAffirmativeValue(env.OPENCLAW_TEST_PERF_REPORT_ONLY),
     },
     [
       stringFlag("--config", "config"),
@@ -85,7 +86,7 @@ function collectPerfReportStats(reportPath: string) {
     report = readJsonFile(reportPath);
   } catch (error) {
     throw new Error(
-      `[test-perf-budget] failed to read Vitest JSON report ${reportPath}: ${formatErrorMessage(
+      `[test-perf-budget] failed to read Vitest JSON report ${reportPath}: ${coerceErrorMessage(
         error,
       )}`,
       { cause: error },
@@ -113,7 +114,7 @@ function main() {
   try {
     opts = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(coerceErrorMessage(error));
     process.exit(1);
   }
 
@@ -128,7 +129,7 @@ function main() {
   try {
     reportStats = collectPerfReportStats(reportPath);
   } catch (error) {
-    console.error(formatErrorMessage(error));
+    console.error(coerceErrorMessage(error));
     process.exit(1);
   }
 
@@ -170,7 +171,6 @@ function main() {
 export const testing = {
   collectPerfReportStats,
   parseArgs,
-  parseBudgetNumber,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

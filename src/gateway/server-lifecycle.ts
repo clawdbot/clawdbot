@@ -100,6 +100,10 @@ export async function prepareGatewayLifecycle(params: {
     defaultWorkspaceDir,
     activeTaskCount,
     residentRegistry,
+    desktopSessionRegistry,
+    nodeDesktopStreamBroker,
+    bindDeviceNodeControl,
+    workerPlacementRuntime,
   } = runtime;
   const completeControlUiDeviceAuthMigrationForEffectiveOperator = (
     device: EffectiveOperatorDeviceIdentity,
@@ -155,9 +159,13 @@ export async function prepareGatewayLifecycle(params: {
   const unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"] =
     (connId, sessionKey) => sessionMessageSubscribers.unsubscribe(connId, sessionKey);
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
+  const nodeDesktopServiceRef: {
+    current?: import("./desktop/node-source.js").NodeDesktopService;
+  } = {};
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
     nodeRegistry,
+    nodeWorkerSupervisorTransport,
     nodePresenceTimers,
     nodeSendToSession,
     nodeSendToAllSubscribed,
@@ -174,12 +182,30 @@ export async function prepareGatewayLifecycle(params: {
     listRegisteredNodePluginToolCommands: () => pluginRuntime.registry.nodeHostCommands,
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
     nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
+    onRunnerInventoryChanged: (nodeId) => {
+      void workerPlacementRuntime?.scheduleNodeWorkspaceRetention(nodeId);
+    },
     onPairingInvalidated: ({ nodeId, connId }) => {
+      void nodeDesktopServiceRef.current?.stopNode(nodeId);
       upsertPresence(nodeId, { reason: "disconnect" });
       broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       removeRemoteNodeInfoForConnection(nodeId, connId);
     },
+    onPairingGenerationChanged: ({ nodeId }) => {
+      void nodeDesktopServiceRef.current?.stopNode(nodeId);
+    },
   });
+  const nodeDesktopService =
+    desktopSessionRegistry && nodeDesktopStreamBroker
+      ? (await import("./desktop/node-source.js")).createNodeDesktopService({
+          getConfig: getRuntimeConfig,
+          nodeRegistry,
+          desktopRegistry: desktopSessionRegistry,
+          streamBroker: nodeDesktopStreamBroker,
+        })
+      : undefined;
+  nodeDesktopServiceRef.current = nodeDesktopService;
+  bindDeviceNodeControl?.(nodeWorkerSupervisorTransport);
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,
@@ -202,7 +228,7 @@ export async function prepareGatewayLifecycle(params: {
         instanceId: session.nodeId,
         reason: "connect",
       });
-      incrementPresenceVersion();
+      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       recordRemoteNodeInfo({
         nodeId: session.nodeId,
         connId: session.connId,
@@ -514,6 +540,7 @@ export async function prepareGatewayLifecycle(params: {
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
       await loadGatewayCloseModule();
     const transport = transportBridge.current();
+    await transport?.portalService.closeAll();
     await createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -633,6 +660,7 @@ export async function prepareGatewayLifecycle(params: {
     unsubscribeSessionMessageEvents,
     restartRecoveryCandidates,
     nodeRegistry,
+    nodeDesktopService,
     nodePresenceTimers,
     nodeSendToSession,
     nodeSendToAllSubscribed,

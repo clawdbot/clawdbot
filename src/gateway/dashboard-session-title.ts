@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Dashboard session titles use the shared utility-model completion path.
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
@@ -31,7 +30,7 @@ type DashboardSessionTitleModelEntry = Pick<
 const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
 const DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS = 1_000;
 const DASHBOARD_SESSION_TITLE_PROMPT =
-  "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message. No emoji. Return only the title.";
+  "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.";
 
 // One title request per session generation. Concurrent triggers cannot race duplicate model
 // calls or metadata writes; late callers receive the in-flight promise so they
@@ -155,8 +154,7 @@ function normalizeDashboardSessionTitle(raw: string): string | null {
   return normalized ? truncateUtf16Safe(normalized, DASHBOARD_SESSION_TITLE_MAX_CHARS) : null;
 }
 
-/** Generates the same short title used by dashboard session rows without persisting it. */
-export async function generateDashboardSessionTitle(params: {
+async function generateDashboardSessionTitle(params: {
   cfg: OpenClawConfig;
   agentId: string;
   entry?: DashboardSessionTitleModelEntry;

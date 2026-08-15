@@ -119,7 +119,7 @@ function buildVoiceTestHarness() {
     });
     resolveConfiguredRealtimeVoiceProviderMock.mockClear();
     resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
-      provider: { id: "openai" },
+      provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     });
     decodeOpusStreamMock.mockReset();
@@ -550,6 +550,7 @@ function buildVoiceTestHarness() {
         route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
         connection: createConnectionMock(),
         player: createAudioPlayerMock(),
+        sessionLifecycle: { status: "active" },
         playbackQueue: Promise.resolve(),
         processingQueue: Promise.resolve(),
         capture: createVoiceCaptureState(),

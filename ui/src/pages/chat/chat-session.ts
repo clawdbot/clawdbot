@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import type { FastMode, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
@@ -20,7 +21,6 @@ import {
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { ChatHistoryResult } from "./chat-history.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 export { getPendingChatPickerPatch };
@@ -43,7 +43,6 @@ type ChatModelSettingsHost = ChatSessionRefreshHost & {
   chatModelCatalog: Parameters<typeof resolveChatModelOverrideValue>[0]["chatModelCatalog"];
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   chatThinkingLevel: string | null;
-  onModelChanged?: () => unknown;
   sessions: SessionCapability;
   sessionsResult?: SessionsListResult | null;
   requestUpdate?: () => void;
@@ -332,7 +331,7 @@ function patchSessionRow(
   host.sessionsResult = {
     ...current,
     sessions: current.sessions.map((row) =>
-      row.key === sessionKey ? Object.assign({}, row, patch) : row,
+      areUiSessionKeysEquivalent(row.key, sessionKey) ? Object.assign({}, row, patch) : row,
     ),
   };
 }
@@ -345,7 +344,9 @@ export function switchChatFastMode(
   if (!host.client || !host.connected) {
     return Promise.resolve(false);
   }
-  const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
+  const activeRow = host.sessionsResult?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, targetSessionKey),
+  );
   const previousFastMode = activeRow?.fastMode;
   const previousEffectiveFastMode = activeRow?.effectiveFastMode;
   const next: FastMode | undefined =
@@ -444,7 +445,6 @@ export async function switchChatModel(
           ...scopedAgentParamsForSession(host, targetSessionKey),
           ownsModelOverride,
           reconcile: async () => {
-            await host.onModelChanged?.();
             await refreshCurrentChatSessionList(host);
           },
         },
@@ -480,7 +480,9 @@ export function switchChatThinkingLevel(
   if (!host.client || !host.connected) {
     return Promise.resolve(false);
   }
-  const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
+  const activeRow = host.sessionsResult?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, targetSessionKey),
+  );
   const previousThinkingLevel = activeRow?.thinkingLevel;
   const normalizedNext =
     (normalizeThinkLevel(nextThinkingLevel) ?? nextThinkingLevel.trim()) || undefined;

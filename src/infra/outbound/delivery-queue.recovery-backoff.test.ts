@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { loadPendingDeliveries } from "./delivery-queue-storage.js";
-import { enqueueDelivery, recoverPendingDeliveries } from "./delivery-queue.js";
+import { enqueueDelivery } from "./delivery-queue-storage.js";
 import {
   asDeliverFn,
   createRecoveryLog,

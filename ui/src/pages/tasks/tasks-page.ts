@@ -5,7 +5,7 @@ import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
@@ -62,6 +62,43 @@ type TaskRefreshEventBuffer = {
   events: TaskRefreshEvent[];
 };
 
+async function loadActiveTaskPages(params: {
+  client: GatewayBrowserClient;
+  agentId: string | undefined;
+  signal: AbortSignal;
+}): Promise<TaskSummary[]> {
+  let tasks: TaskSummary[] = [];
+  let cursor: string | undefined;
+  const seenCursors = new Set<string>();
+  while (true) {
+    const payload = await params.client.request(
+      "tasks.list",
+      {
+        status: ["queued", "running"],
+        limit: 500,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
+      },
+      { signal: params.signal },
+    );
+    const page = normalizeTasksListResult(payload);
+    if (!page) {
+      throw new Error(t("tasksPage.invalidResponse"));
+    }
+    tasks = mergeTaskLists(tasks, page.tasks);
+    if (page.nextCursor === undefined) {
+      return tasks;
+    }
+    // Cursors are opaque, so revisiting any prior token is the only safe
+    // client-side definition of a non-advancing page sequence.
+    if (!page.nextCursor || seenCursors.has(page.nextCursor)) {
+      throw new Error(t("tasksPage.invalidResponse"));
+    }
+    seenCursors.add(page.nextCursor);
+    cursor = page.nextCursor;
+  }
+}
+
 class TasksPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -115,24 +152,15 @@ class TasksPage extends OpenClawLightDomElement {
       };
       this.taskRefreshEvents = buffer;
       const agentId = scopeId ?? undefined;
-      const [activePayload, recentPayload] = await Promise.all([
-        client.request(
-          "tasks.list",
-          {
-            status: ["queued", "running"],
-            limit: 500,
-            ...(agentId ? { agentId } : {}),
-          },
-          { signal },
-        ),
+      const [active, recentPayload] = await Promise.all([
+        loadActiveTaskPages({ client, agentId, signal }),
         client.request("tasks.list", { limit: 200, ...(agentId ? { agentId } : {}) }, { signal }),
       ]);
-      const active = normalizeTasksListResult(activePayload);
       const recent = normalizeTasksListResult(recentPayload);
-      if (!active || !recent) {
+      if (!recent) {
         throw new Error(t("tasksPage.invalidResponse"));
       }
-      return { active, recent, buffer };
+      return { active, recent: recent.tasks, buffer };
     },
     onComplete: ({ active, recent, buffer }) => {
       // The active query is issued first; a same-millisecond recent page
@@ -376,7 +404,8 @@ class TasksPage extends OpenClawLightDomElement {
           hello: this.context.gateway.snapshot.hello,
         }),
         connected: this.gateway.connected,
-        // tasks.cancel needs operator.write; read-only operators get no button.
+        canCopy: hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+        // Task mutations need operator.write; read-only operators get no mutation buttons.
         canCancel: hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
         loading: this.listTask.status === TaskStatus.PENDING,
         error: this.error,

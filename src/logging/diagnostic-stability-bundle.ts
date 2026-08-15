@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import v8 from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type {
@@ -12,7 +13,6 @@ import type {
 } from "../infra/diagnostic-events.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
   getDiagnosticStabilitySnapshot,

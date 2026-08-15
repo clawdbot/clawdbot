@@ -222,6 +222,7 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 function runCandidateProvenance(
   provenanceBlock: ProvenanceBlock,
   params: {
+    branchHeads?: string[];
     candidateVersion?: string;
     mergedPullRequests?: Array<{
       baseRefName?: string;
@@ -234,6 +235,7 @@ function runCandidateProvenance(
     remoteSha?: string;
     signature?: "invalid" | "maintainer" | "missing" | "web-flow";
     targetContextRef?: string;
+    targetRef?: string;
   } = {},
 ) {
   const candidateSha = "a".repeat(40);
@@ -301,7 +303,7 @@ function runCandidateProvenance(
     `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *"api graphql"* ]]; then printf '%s\\n' "$FAKE_METADATA"; exit 0; fi
-if [[ "$*" == *"/branches-where-head"* ]]; then printf '%s\\n' "release/2026.7.1"; exit 0; fi
+if [[ "$*" == *"/branches-where-head"* ]]; then printf '%s\\n' "$FAKE_BRANCH_HEADS"; exit 0; fi
 if [[ "$*" == *"/compare/"* ]]; then printf '%s\\n' "behind"; exit 0; fi
 if [[ "$*" == *"/collaborators/"*"/permission"* ]]; then printf '%s\\n' "$FAKE_PERMISSION"; exit 0; fi
 exit 64
@@ -327,6 +329,7 @@ exit 64
     encoding: "utf8",
     env: {
       ...process.env,
+      FAKE_BRANCH_HEADS: (params.branchHeads ?? ["release/2026.7.1"]).join("\n"),
       FAKE_METADATA: JSON.stringify(metadata),
       FAKE_PERMISSION: JSON.stringify({
         permission: params.permission === "admin" ? "admin" : "write",
@@ -342,7 +345,8 @@ exit 64
       GITHUB_REPOSITORY: "openclaw/openclaw",
       PATH: `${fakeBin}:${process.env.PATH}`,
       TARGET_CONTEXT_REF: targetContextRef,
-      TARGET_REF: targetContextRef ? candidateSha : "refs/heads/release/2026.7.1",
+      TARGET_REF:
+        params.targetRef ?? (targetContextRef ? candidateSha : "refs/heads/release/2026.7.1"),
       TARGET_SHA: candidateSha,
     },
   });
@@ -467,6 +471,99 @@ describe("release Telegram QA workflow", () => {
       { block: "Validate candidate release provenance", status: 0, stderr: "" },
       { block: "Revalidate candidate release provenance", status: 0, stderr: "" },
     ]);
+  });
+
+  it("accepts only strict signed frozen beta branch heads in both provenance blocks", () => {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      const frozen = runCandidateProvenance(provenanceBlock, {
+        branchHeads: ["release/2026.7.1-beta.3-code-frozen-r13"],
+        candidateVersion: "2026.7.1-beta.3",
+        remoteSha: "b".repeat(40),
+        targetContextRef: "release/2026.7.1",
+      });
+      expect(frozen.status, `${provenanceBlock.stepName}: ${frozen.stderr}`).toBe(0);
+      expect(frozen.stdout).toContain(
+        "Telegram candidate trust reason: frozen-release-branch-head",
+      );
+
+      const rejectedCases = [
+        {
+          label: "stale frozen branch",
+          params: {
+            branchHeads: [] as string[],
+          },
+        },
+        {
+          label: "duplicate frozen branches",
+          params: {
+            branchHeads: [
+              "release/2026.7.1-beta.3-code-frozen",
+              "release/2026.7.1-beta.3-code-frozen-r13",
+            ],
+          },
+        },
+        {
+          label: "wrong-version frozen branch",
+          params: {
+            branchHeads: ["release/2026.7.1-beta.2-code-frozen-r13"],
+          },
+        },
+        {
+          label: "non-exact target ref",
+          params: {
+            branchHeads: ["release/2026.7.1-beta.3-code-frozen-r13"],
+            targetRef: "refs/heads/release/2026.7.1-beta.3-code-frozen-r13",
+          },
+        },
+        {
+          label: "missing signature",
+          params: {
+            branchHeads: ["release/2026.7.1-beta.3-code-frozen-r13"],
+            signature: "missing" as const,
+          },
+        },
+        {
+          label: "invalid signature",
+          params: {
+            branchHeads: ["release/2026.7.1-beta.3-code-frozen-r13"],
+            signature: "invalid" as const,
+          },
+        },
+        {
+          label: "web-flow signature",
+          params: {
+            branchHeads: ["release/2026.7.1-beta.3-code-frozen-r13"],
+            signature: "web-flow" as const,
+          },
+        },
+        {
+          label: "low-permission signer",
+          params: {
+            branchHeads: ["release/2026.7.1-beta.3-code-frozen-r13"],
+            permission: "write" as const,
+          },
+        },
+        {
+          label: "same-repository PR head",
+          params: {
+            branchHeads: ["release/2026.7.1-beta.3-code-frozen-r13"],
+            openPr: true,
+          },
+        },
+      ];
+      for (const testCase of rejectedCases) {
+        const rejected = runCandidateProvenance(provenanceBlock, {
+          candidateVersion: "2026.7.1-beta.3",
+          remoteSha: "b".repeat(40),
+          targetContextRef: "release/2026.7.1",
+          ...testCase.params,
+        });
+        expect(
+          rejected.status,
+          `${provenanceBlock.stepName}: ${testCase.label}: ${rejected.stderr}`,
+        ).not.toBe(0);
+      }
+    }
   });
 
   it("attributes web-flow release heads through a unique integration-base merge", () => {
@@ -755,5 +852,43 @@ describe("release Telegram QA workflow", () => {
     expect(createSut).not.toContain(
       'for path in \\\n            "$temp_root/workspace" \\\n            "${OPENCLAW_HOME:?}"',
     );
+  });
+
+  it("lets the SUT create suite locks without exposing the runner-owned config", () => {
+    const createSut = requireRun(
+      "run_telegram",
+      "Create isolated Telegram SUT identity and launcher",
+    );
+
+    expect(createSut).toContain('chown "$RUNNER_UID:$SUT_GID" "$temp_root"');
+    expect(createSut).toContain('chmod 1770 "$temp_root"');
+    expect(createSut).toContain(
+      '"$(stat -c \'%F:%a:%u:%g\' "$temp_root")" == "directory:1770:${RUNNER_UID}:${SUT_GID}"',
+    );
+    expect(createSut).toContain('chown "$RUNNER_UID:$SUT_GID" "$config_path"');
+    expect(createSut).toContain('chmod 0640 "$config_path"');
+    expect(createSut).toContain(
+      '"$(stat -c \'%F:%a:%u:%g\' "$config_path")" == "regular file:640:${RUNNER_UID}:${SUT_GID}"',
+    );
+    expect(createSut).not.toContain('chmod 0711 "$temp_root"');
+    expect(createSut).not.toContain('chmod 1777 "$temp_root"');
+  });
+
+  it("adds an empty PS1 only after attested runtime environment verification", () => {
+    const createSut = requireRun(
+      "run_telegram",
+      "Create isolated Telegram SUT identity and launcher",
+    );
+    const launcher = extractHereDocument(createSut, "LAUNCHER");
+    const verification = '[[ "$actual_env_keys_b64" == "$runtime_expected_env_keys_b64" ]]';
+    const ps1Export = "export PS1=";
+    const candidateExec = 'exec "$runtime_node_bin" "${runtime_node_args[@]}"';
+
+    expect(launcher.match(/export PS1=/gu)).toHaveLength(1);
+    expect(launcher.indexOf(verification)).toBeGreaterThan(-1);
+    expect(launcher.indexOf(ps1Export)).toBeGreaterThan(launcher.indexOf(verification));
+    expect(launcher.indexOf(candidateExec)).toBeGreaterThan(launcher.indexOf(ps1Export));
+    expect(launcher.match(/exec "\$runtime_node_bin"/gu)).toHaveLength(1);
+    expect(launcher).toContain('grep -Ev "^(PWD|SHLVL|_)$"');
   });
 });

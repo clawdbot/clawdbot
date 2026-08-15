@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
@@ -14,7 +13,7 @@ import {
   resolveHeartbeatScratchProposalFromReplyResult,
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
-import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -59,7 +58,7 @@ import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   heartbeatLog,
-  resolveHeartbeatAckMaxChars,
+  resolveAmbientHeartbeatAgentId,
   resolveHeartbeatForWake,
   resolveHeartbeatTimeoutOverrideSeconds,
   shouldUseHeartbeatResponseToolPrompt,
@@ -156,7 +155,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   const forcedSessionAgentId =
     explicitAgentId.length > 0 ? undefined : parseAgentSessionKey(opts.sessionKey)?.agentId;
   const agentId = normalizeAgentId(
-    explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
+    explicitAgentId || forcedSessionAgentId || resolveAmbientHeartbeatAgentId(cfg),
   );
   const wakeSource = opts.source ?? inferHeartbeatWakeSourceFromReason(opts.reason);
   const heartbeat = resolveHeartbeatForWake({
@@ -322,7 +321,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     typeof pendingFinalDeliveryText === "string" &&
     stripHeartbeatToken(pendingFinalDeliveryText, {
       mode: "heartbeat",
-      maxAckChars: resolveHeartbeatAckMaxChars(cfg, heartbeat),
+      maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     }).shouldSkip;
   if (
     recentSessionEntry?.pendingFinalDelivery !== undefined &&
@@ -676,13 +675,17 @@ export async function invokeHeartbeatAgentRun(
     replyOpts,
     cfg,
   );
+  const agentTurnStatus = resolveReplyOperationAgentTurn(replyOperationRunState);
+  if (agentTurnStatus === "superseded") {
+    return { kind: "preempted" } as const;
+  }
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
   const heartbeatTerminalToolFailure: HeartbeatTerminalToolFailure | undefined =
     resolveHeartbeatTerminalToolFailure(replyResult);
   const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
   const replyPayload = selectedReplyPayload;
-  const agentRunFailed = resolveReplyOperationAgentTurn(replyOperationRunState) === "failed";
+  const agentRunFailed = agentTurnStatus === "failed";
   if (
     heartbeatScratchProposal !== undefined &&
     heartbeatToolResponse &&

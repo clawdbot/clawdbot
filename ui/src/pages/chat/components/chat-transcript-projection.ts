@@ -131,7 +131,7 @@ function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown
     return [item.key, ...item.parts];
   }
   if (item.kind === "work-group") {
-    return [item.key, item.durationMs, item.hasError, ...item.groups];
+    return [item.key, item.durationMs, ...item.groups];
   }
   if (item.kind === "activity-run") {
     return [item.key, ...item.groups];
@@ -465,7 +465,7 @@ export function projectChatTranscript(
       });
     }
     if (item.kind === "work-group") {
-      const workExpanded = expandedToolCards.get(item.key) ?? item.hasError;
+      const workExpanded = expandedToolCards.get(item.key) ?? false;
       return html`
         ${renderWorkGroupSummary(item, {
           expanded: workExpanded,
@@ -509,7 +509,14 @@ export function projectChatTranscript(
   // sends show the claw before the run starts, and the recap must never
   // stack under a visible working row.
   const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
-  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
+  // runOutputTokens is the live usage-stream counter for the pane's own run;
+  // its map entry dies at lifecycle end, so the watch captures the max seen.
+  const turnRecap = resolveTurnRecap(
+    props.sessionKey,
+    workingIndicatorVisible,
+    activeSession,
+    props.runOutputTokens ?? null,
+  );
   const transcriptItems = collapsedItems.filter((item, index) => {
     if (item.kind !== "stream-run") {
       return true;

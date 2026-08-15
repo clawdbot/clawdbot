@@ -32,7 +32,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const candidates = buildStartDirs(opts);
   const pkgRoot = await findPackageRoot(candidates);
 
-  let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs);
+  let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs, pkgRoot);
   if (!gitRoot && pkgRoot) {
     const cwdRoot = normalizeDir(opts.cwd);
     if (
@@ -42,9 +42,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     ) {
       gitRoot = resolveUpdateInstallRoot(cwdRoot);
     }
-  }
-  if (gitRoot && pkgRoot && !updateInstallRootsMatch(gitRoot, pkgRoot)) {
-    gitRoot = null;
   }
   if (gitRoot && !pkgRoot) {
     return {
@@ -56,7 +53,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       durationMs: Date.now() - startedAt,
     };
   }
-  if (gitRoot && pkgRoot && updateInstallRootsMatch(gitRoot, pkgRoot)) {
+  if (gitRoot && pkgRoot) {
     return await updateGitCheckout({
       opts,
       gitRoot,

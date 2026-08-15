@@ -14,7 +14,7 @@ export function resolveCronToolCallerScope(
   }
   return {
     kind: "agentTool",
-    agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+    agentId: resolveSessionAgentId({ sessionKey, config: cfg, agentId: opts?.agentId }),
   };
 }
 

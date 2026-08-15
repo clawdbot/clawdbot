@@ -183,12 +183,15 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
                               ? renderSessionOwnerChip(identity, "header")
                               : icons.bot}
                         </span>
-                        <span class="chat-pane__sharing-member-label"
+                        <span
+                          class="chat-pane__sharing-member-label"
+                          title=${disabledReason ? nothing : (identity.label ?? identity.id)}
                           >${identity.label ?? identity.id}</span
                         >
                         ${members.has(identity.id)
                           ? html`<span
                               slot="details"
+                              class="session-menu__check"
                               aria-label=${t("chat.sessionSharing.selected")}
                               >${icons.check}</span
                             >`

@@ -25,8 +25,8 @@ import {
 } from "./redact-patterns.js";
 import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
 
-export type RedactSensitiveMode = "off" | "tools";
-export type RedactPattern = string | RegExp;
+type RedactSensitiveMode = "off" | "tools";
+type RedactPattern = string | RegExp;
 type LoggingConfig = OpenClawConfig["logging"];
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
@@ -127,12 +127,12 @@ const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
   "iu",
 );
 
-export type RedactOptions = {
+type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: RedactPattern[];
 };
 
-export type ResolvedRedactOptions = {
+type ResolvedRedactOptions = {
   mode: RedactSensitiveMode;
   patterns: RegExp[];
   redactFormBodies: boolean;

@@ -1334,6 +1334,7 @@ extension SettingsProTab {
             get: { self.manualGatewayTransport.effectiveTLS },
             set: { enabled in
                 guard !self.manualGatewayTransport.requiresTLS else { return }
+                self.manualGatewayContextPath = nil
                 self.manualGatewayTLS = enabled
             })
     }

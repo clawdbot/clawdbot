@@ -874,32 +874,6 @@ describe("getStatusSummary", () => {
     ]);
   });
 
-  it("aggregates shared file session stores only once", async () => {
-    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "ops" }],
-    });
-    vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/shared-sessions.json");
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
-      toSessionEntrySummaries({
-        main: { sessionId: "shared-session", updatedAt: 1 },
-      }),
-    );
-
-    const summary = await getStatusSummary({ includeChannelSummary: false });
-
-    expect(summary.sessions.count).toBe(1);
-    expect(summary.sessions.byAgent.map((agent) => [agent.agentId, agent.count])).toEqual([
-      ["main", 1],
-      ["ops", 1],
-    ]);
-    expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalledWith({
-      storePath: "/tmp/shared-sessions.json",
-    });
-  });
-
   it("includes configured and selected model labels for pinned sessions", async () => {
     vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
       provider: "zhipu",

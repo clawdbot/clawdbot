@@ -20,7 +20,7 @@ import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { ChannelType, MessageType, type User } from "../internal/discord.js";
 import {
@@ -350,6 +350,8 @@ export async function preflightDiscordMessage(
   const resolvedAccountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
   let commandAuthorized = true;
+  let channelIngress;
+  let resolveChannelIngress;
   if (isDirectMessage) {
     const access = await resolveDiscordDmPreflightAccess({
       preflight: params,
@@ -358,6 +360,7 @@ export async function preflightDiscordMessage(
       dmPolicy,
       resolvedAccountId,
       allowNameMatching,
+      conversationId: messageChannelId,
     });
     if (isPreflightAborted(params.abortSignal)) {
       return null;
@@ -366,6 +369,8 @@ export async function preflightDiscordMessage(
       return null;
     }
     commandAuthorized = access.commandAuthorized;
+    channelIngress = access.channelIngress;
+    resolveChannelIngress = access.resolveChannelIngress;
   }
 
   const botId = params.botUserId;
@@ -631,24 +636,35 @@ export async function preflightDiscordMessage(
   const hasAbortRequest = isAbortRequestText(baseText);
 
   if (!isDirectMessage) {
-    const commandAccess = await resolveDiscordTextCommandAccess({
-      accountId: params.accountId,
-      cfg: params.cfg,
-      ownerAllowFrom: params.allowFrom,
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      },
-      memberAccessConfigured: hasAccessRestrictions,
-      memberAllowed,
-      allowNameMatching,
-      allowTextCommands,
-      hasControlCommand: hasControlCommandInMessage,
-    });
-    commandAuthorized = commandAccess.authorized;
+    const resolveCommandIngress = async (
+      contextBinding?: Parameters<typeof resolveDiscordTextCommandAccess>[0]["contextBinding"],
+      conversation?: { parentId?: string; threadId?: string },
+    ) =>
+      await resolveDiscordTextCommandAccess({
+        accountId: params.accountId,
+        cfg: params.cfg,
+        ownerAllowFrom: params.allowFrom,
+        sender: {
+          id: sender.id,
+          name: sender.name,
+          tag: sender.tag,
+        },
+        memberAccessConfigured: hasAccessRestrictions,
+        memberAllowed,
+        allowNameMatching,
+        allowTextCommands,
+        hasControlCommand: hasControlCommandInMessage,
+        conversationId: messageChannelId,
+        conversationParentId: conversation?.parentId,
+        conversationThreadId: conversation?.threadId,
+        ...(contextBinding ? { contextBinding } : {}),
+      });
+    const commandAccess = await resolveCommandIngress();
+    commandAuthorized = commandAccess.commandAccess.authorized;
+    channelIngress = commandAccess;
+    resolveChannelIngress = resolveCommandIngress;
 
-    if (commandAccess.shouldBlockControlCommand) {
+    if (commandAccess.commandAccess.shouldBlockControlCommand) {
       logInboundDrop({
         log: logVerbose,
         channel: "discord",
@@ -750,8 +766,7 @@ export async function preflightDiscordMessage(
   const systemText = resolveDiscordSystemEvent(message, systemLocation);
   if (systemText) {
     logDebug(`[discord-preflight] drop: system event`);
-    enqueueSystemEvent(systemText, {
-      sessionKey: effectiveRoute.sessionKey,
+    enqueueRoutedSystemEvent(systemText, effectiveRoute, {
       contextKey: `discord:system:${messageChannelId}:${message.id}`,
     });
     return null;
@@ -846,6 +861,8 @@ export async function preflightDiscordMessage(
     isDirectMessage,
     isGroupDm,
     commandAuthorized,
+    channelIngress: channelIngress!,
+    resolveChannelIngress: resolveChannelIngress!,
     baseText,
     messageText,
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),

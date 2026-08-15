@@ -137,7 +137,6 @@ vi.mock("./run.runtime.js", async () => ({
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
   resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
-  resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
   resolveCronStyleNow: resolveCronStyleNowMock,
   DEFAULT_CONTEXT_TOKENS: 128000,
   isCliProvider: isCliProviderMock,

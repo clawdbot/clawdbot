@@ -2,7 +2,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { minimatch } from "minimatch";
 import { parse } from "yaml";
@@ -289,7 +288,8 @@ function latestRun(runs: WorkflowRun[]) {
 }
 
 function runUpdatedAtMs(run: Pick<WorkflowRun, "updated_at"> | undefined) {
-  return parseDateStringTimestampMs(run?.updated_at) ?? null;
+  const value = Date.parse(run?.updated_at ?? "");
+  return Number.isFinite(value) ? value : null;
 }
 
 function isRecentRun(run: WorkflowRun | undefined, nowMs: number) {

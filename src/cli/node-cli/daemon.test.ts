@@ -2,7 +2,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
-import { runNodeDaemonInstall, runNodeDaemonStatus } from "./daemon.js";
+import {
+  runNodeDaemonInstall,
+  runNodeDaemonRestart,
+  runNodeDaemonStart,
+  runNodeDaemonStatus,
+  runNodeDaemonStop,
+  runNodeDaemonUninstall,
+} from "./daemon.js";
 
 const mocks = vi.hoisted(() => {
   const service = {
@@ -31,6 +38,7 @@ const mocks = vi.hoisted(() => {
       environment: {},
       environmentValueSources: {},
     })),
+    failIfNixDaemonInstallMode: vi.fn(() => false),
     loadNodeHostConfig: vi.fn(),
     isSystemdUserServiceAvailable: vi.fn(async () => true),
     resolveSystemdUserServiceAccount: vi.fn(() => "pi"),
@@ -40,6 +48,10 @@ const mocks = vi.hoisted(() => {
         linger: "no",
       }),
     ),
+    runServiceRestart: vi.fn(),
+    runServiceStart: vi.fn(),
+    runServiceStop: vi.fn(),
+    runServiceUninstall: vi.fn(),
   };
 });
 
@@ -57,6 +69,13 @@ vi.mock("../../commands/node-daemon-install-helpers.js", () => ({
 
 vi.mock("../../node-host/config.js", () => ({
   loadNodeHostConfig: mocks.loadNodeHostConfig,
+}));
+
+vi.mock("../daemon-cli/lifecycle-core.js", () => ({
+  runServiceRestart: mocks.runServiceRestart,
+  runServiceStart: mocks.runServiceStart,
+  runServiceStop: mocks.runServiceStop,
+  runServiceUninstall: mocks.runServiceUninstall,
 }));
 
 vi.mock("../../daemon/runtime-hints.js", () => ({
@@ -104,7 +123,7 @@ vi.mock("../daemon-cli/shared.js", async () => {
     }),
     formatRuntimeStatus: (runtime: GatewayServiceRuntime | undefined) => runtime?.status ?? "",
     resolveRuntimeStatusColor: () => "",
-    failIfNixDaemonInstallMode: () => false,
+    failIfNixDaemonInstallMode: mocks.failIfNixDaemonInstallMode,
   };
 });
 
@@ -114,6 +133,7 @@ describe("runNodeDaemonInstall", () => {
     mocks.runtime.error.mockClear();
     mocks.runtime.writeJson.mockClear();
     mocks.runtime.exit.mockClear();
+    mocks.failIfNixDaemonInstallMode.mockReset().mockReturnValue(false);
     mocks.service.install.mockReset().mockResolvedValue(undefined);
     mocks.service.isLoaded.mockReset().mockResolvedValue(false);
     mocks.buildNodeInstallPlan.mockReset().mockResolvedValue({
@@ -203,6 +223,26 @@ describe("runNodeDaemonInstall", () => {
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("--no-tls cannot be combined with --tls-fingerprint"),
     );
+  });
+
+  it.each([
+    ["an invalid explicit port", { port: "abc" }, "Invalid --port"],
+    ["an unsupported runtime", { runtime: "deno" }, 'Invalid --runtime (use "node"'],
+  ])("rejects %s before building an install plan", async (_name, opts, error) => {
+    await runNodeDaemonInstall(opts);
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.service.install).not.toHaveBeenCalled();
+  });
+
+  it("does not build or install a service in Nix daemon mode", async () => {
+    mocks.failIfNixDaemonInstallMode.mockReturnValue(true);
+
+    await runNodeDaemonInstall({});
+
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.service.install).not.toHaveBeenCalled();
   });
 
   it("warns about disabled systemd lingering after a fresh install (text mode)", async () => {
@@ -309,6 +349,59 @@ describe("runNodeDaemonInstall", () => {
   });
 });
 
+describe("node daemon lifecycle adapters", () => {
+  beforeEach(() => {
+    mocks.runServiceRestart.mockReset();
+    mocks.runServiceStart.mockReset();
+    mocks.runServiceStop.mockReset();
+    mocks.runServiceUninstall.mockReset();
+  });
+
+  it.each([
+    {
+      name: "start",
+      action: runNodeDaemonStart,
+      delegate: mocks.runServiceStart,
+      expected: { renderStartHints: expect.any(Function) },
+    },
+    {
+      name: "stop",
+      action: runNodeDaemonStop,
+      delegate: mocks.runServiceStop,
+      expected: {},
+    },
+    {
+      name: "restart",
+      action: runNodeDaemonRestart,
+      delegate: mocks.runServiceRestart,
+      expected: { renderStartHints: expect.any(Function) },
+    },
+    {
+      name: "uninstall",
+      action: runNodeDaemonUninstall,
+      delegate: mocks.runServiceUninstall,
+      expected: {
+        stopBeforeUninstall: false,
+        assertNotLoadedAfterUninstall: false,
+      },
+    },
+  ])(
+    "delegates $name with node-specific service options",
+    async ({ action, delegate, expected }) => {
+      await action({ json: true });
+
+      expect(delegate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serviceNoun: "Node",
+          service: mocks.service,
+          opts: { json: true },
+          ...expected,
+        }),
+      );
+    },
+  );
+});
+
 describe("runNodeDaemonStatus", () => {
   function stdout(): string {
     return mocks.runtime.log.mock.calls.map(([line]) => line).join("\n");
@@ -334,7 +427,7 @@ describe("runNodeDaemonStatus", () => {
     await runNodeDaemonStatus();
 
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Node service check failed: Error: systemd unavailable",
+      "Node service check failed: systemd unavailable",
     );
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
     expect(stdout()).not.toContain("not loaded");
@@ -342,15 +435,35 @@ describe("runNodeDaemonStatus", () => {
   });
 
   it("reports a failed service check as JSON without inventing node status", async () => {
-    mocks.service.isLoaded.mockRejectedValue(new Error("systemd unavailable"));
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const error = new Error(`systemd unavailable: Authorization: Bearer ${secret}`);
+    error.name = "ServiceManagerError";
+    mocks.service.isLoaded.mockRejectedValue(error);
 
     await runNodeDaemonStatus({ json: true });
 
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
-      error: "Node service check failed: Error: systemd unavailable",
+      error: expect.stringContaining("Node service check failed: systemd unavailable"),
     });
+    expect(JSON.stringify(mocks.runtime.writeJson.mock.calls)).not.toContain(error.name);
+    expect(JSON.stringify(mocks.runtime.writeJson.mock.calls)).not.toContain(secret);
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("reports an unknown runtime when runtime inspection fails", async () => {
+    const error = new Error("permission denied");
+    error.name = "RuntimeInspectionError";
+    mocks.service.readRuntime.mockRejectedValue(error);
+
+    await runNodeDaemonStatus({ json: true });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
+      service: expect.objectContaining({
+        runtime: { status: "unknown", detail: "permission denied" },
+      }),
+    });
+    expect(JSON.stringify(mocks.runtime.writeJson.mock.calls)).not.toContain(error.name);
   });
 
   it("keeps missing service-unit status on stderr and prints recovery hints on stdout", async () => {

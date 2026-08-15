@@ -59,6 +59,24 @@ export function parseNonNegativeInt(raw, label) {
 }
 
 /**
+ * Parse a safe non-negative integer written in canonical decimal notation.
+ * @param {unknown} raw
+ * @param {string} label
+ * @returns {number}
+ */
+export function parseStrictNonNegativeDecimal(raw, label) {
+  const text = String(raw).trim();
+  if (!/^(0|[1-9]\d*)$/u.test(text)) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${label} must be a safe integer`);
+  }
+  return value;
+}
+
+/**
  * Parse a finite positive number option.
  * @param {string | number} raw
  * @param {string} label

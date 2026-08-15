@@ -1,17 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  COMPUTER_USE_V2_ACTION_NAMES,
+  parseComputerActParamsJSON,
+  parseScreenSnapshotParamsJSON,
+  type ComputerActParams,
+  type ComputerUseProvider,
+} from "openclaw/plugin-sdk/computer-use";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
-import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createRastermill } from "rastermill";
 import { z } from "zod";
-import {
-  ComputerActParamsSchema,
-  normalizeModifiers,
-  parseKeyChord,
-  scalePoint,
-  type ComputerActParams,
-} from "./actions.js";
+import { normalizeModifiers, parseKeyChord, scalePoint } from "./actions.js";
 import {
   ClickButton,
   ScrollDirection,
@@ -19,7 +19,10 @@ import {
   type CuaDriverSession,
   type CuaToolResult,
 } from "./driver-client.js";
+import { platformActions } from "./driver-result.js";
+import { createLazyCuaExecutionResources } from "./execution-resources.js";
 import {
+  adoptGeneration,
   issueFrame,
   verifyFrame,
   verifyReferenceWidth,
@@ -28,18 +31,22 @@ import {
   type CuaLastFrame,
   type CuaScreenSize,
 } from "./frame.js";
+import { createCuaMcpDriver } from "./mcp-driver-client.js";
+import { closeRecordingExecution } from "./recording-actions.js";
+import { handleV2Act, type CuaComputerActParams } from "./v2-actions.js";
 
 const AVAILABILITY_POLL_MS = 5_000;
+const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 // Rastermill enforces inputPixels before resizing, so this must clear the native
 // capture, not the delivered frame. 8K (7680x4320 = ~33.2M) is a valid primary
 // display; budget above it so full-resolution snapshots reach the downscaler.
 const MAX_IMAGE_PIXELS = 40_000_000;
+const CUA_DRIVER_ENDPOINT_ENV = "OPENCLAW_CUA_DRIVER_ENDPOINT";
 
-const SnapshotParamsSchema = z.strictObject({
-  screenIndex: z.number().int().nonnegative().optional(),
-  maxWidth: z.number().int().positive().optional(),
-  quality: z.number().finite().optional(),
-  format: z.enum(["jpeg", "png"]).optional(),
+const CuaDriverEndpointSchema = z.strictObject({
+  v: z.literal(1),
+  socketPath: z.string(),
+  binaryPath: z.string(),
 });
 
 const DesktopStateSchema = z.object({
@@ -69,7 +76,7 @@ type ImageProcessor = {
   ): Promise<{ data: Buffer; width: number; height: number }>;
 };
 
-type CuaComputerCommandsOptions = {
+type CuaComputerProviderOptions = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   driver?: CuaDriverSession;
@@ -78,6 +85,35 @@ type CuaComputerCommandsOptions = {
   setInterval?: typeof setInterval;
   clearInterval?: typeof clearInterval;
 };
+
+function resolveMacOsMcpEndpoint(
+  env: NodeJS.ProcessEnv,
+): { socketPath: string; binaryPath: string } | undefined {
+  const rawEndpoint = env[CUA_DRIVER_ENDPOINT_ENV];
+  if (!rawEndpoint || Buffer.byteLength(rawEndpoint, "utf8") > 4 * 1024) {
+    return undefined;
+  }
+  try {
+    const rawValue: unknown = JSON.parse(rawEndpoint);
+    const parsed = CuaDriverEndpointSchema.safeParse(rawValue);
+    if (!parsed.success) {
+      return undefined;
+    }
+    const { socketPath, binaryPath } = parsed.data;
+    if (
+      socketPath.includes("\0") ||
+      binaryPath.includes("\0") ||
+      !path.isAbsolute(socketPath) ||
+      !path.isAbsolute(binaryPath)
+    ) {
+      return undefined;
+    }
+    fs.accessSync(binaryPath, fs.constants.X_OK);
+    return { socketPath, binaryPath };
+  } catch {
+    return undefined;
+  }
+}
 
 class PromiseQueue {
   private tail: Promise<void> = Promise.resolve();
@@ -95,22 +131,6 @@ class PromiseQueue {
       release();
     }
   }
-}
-
-function parseParams<T>(schema: z.ZodType<T>, paramsJSON: string | null | undefined): T {
-  let value: unknown;
-  try {
-    value = JSON.parse(paramsJSON ?? "{}");
-  } catch {
-    throw new Error("COMPUTER_INVALID_REQUEST: params must be valid JSON");
-  }
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) {
-    throw new Error(
-      `COMPUTER_INVALID_REQUEST: ${parsed.error.issues[0]?.message ?? "invalid params"}`,
-    );
-  }
-  return parsed.data;
 }
 
 function assertPrimaryDisplay(screenIndex: number | undefined): void {
@@ -215,7 +235,7 @@ function createImageProcessor(env: NodeJS.ProcessEnv): ImageProcessor {
 
 function clickArgs(
   frame: CuaLastFrame,
-  params: ComputerActParams,
+  params: CuaComputerActParams,
   button: ClickButton,
   count: 1 | 2 | 3,
 ) {
@@ -223,7 +243,7 @@ function clickArgs(
   const modifiers = normalizeModifiers(params.modifiers);
   if (modifiers.length > 0) {
     throw new Error(
-      "COMPUTER_UNSUPPORTED_ACTION: modifier-held clicks are unsupported by cua-driver on Linux",
+      "COMPUTER_UNSUPPORTED_ACTION: modifier-held desktop clicks are unsupported by cua-driver",
     );
   }
   return {
@@ -236,7 +256,7 @@ function clickArgs(
 async function currentFrame(
   driver: CuaDriverSession,
   frameState: CuaFrameState,
-  params: ComputerActParams,
+  params: CuaComputerActParams,
   signal?: AbortSignal,
 ): Promise<CuaLastFrame> {
   const current = screenSize(await driver.getScreenSize(signal));
@@ -249,42 +269,46 @@ async function currentFrame(
   return frame;
 }
 
-async function handleAct(
+async function handleDesktopAct(
   driver: CuaDriverSession,
   frameState: CuaFrameState,
   params: ComputerActParams,
   signal?: AbortSignal,
 ): Promise<string> {
-  assertPrimaryDisplay(params.screenIndex);
+  if (!(CUA_WIRE_ACTION_NAMES as readonly string[]).includes(params.action)) {
+    throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${params.action}`);
+  }
+  const v1Params = params as CuaComputerActParams;
+  assertPrimaryDisplay(v1Params.screenIndex);
   // `wait` never reaches the wire: core sleeps locally and the Swift wire enum
   // has no wait case, so accepting it here would fork the computer.act contract.
   if (
-    params.action === "hold_key" ||
-    params.action === "left_mouse_down" ||
-    params.action === "left_mouse_up"
+    v1Params.action === "hold_key" ||
+    v1Params.action === "left_mouse_down" ||
+    v1Params.action === "left_mouse_up"
   ) {
     // Upstream has no desktop keyboard-down API, and its Linux mouse hold tools
     // are window-only, so these actions cannot preserve desktop-scope semantics.
-    throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${params.action}`);
+    throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${v1Params.action}`);
   }
 
   // Every action uses scope:"desktop", a global SendInput/XTest/wayland_desktop
   // injection that is inherently foreground and ignores delivery_mode (that
   // background-vs-foreground contract is window-targeted only). We deliberately
   // never send delivery_mode.
-  switch (params.action) {
+  switch (v1Params.action) {
     case "type": {
-      if (!params.text) {
+      if (!v1Params.text) {
         throw new Error("COMPUTER_INVALID_REQUEST: text is required for type");
       }
-      assertToolSuccess(await driver.typeText(params.text, signal), "type_text");
+      assertToolSuccess(await driver.typeText(v1Params.text, signal), "type_text");
       break;
     }
     case "key": {
       // press_key applies the modifier array on every backend: X11 via XTest,
       // and native Wayland by internally promoting a modifier chord to
       // hotkey_focused. No separate hotkey call is needed for chords.
-      const chord = parseKeyChord(params.keys);
+      const chord = parseKeyChord(v1Params.keys);
       assertToolSuccess(
         await driver.pressKey(
           {
@@ -298,10 +322,10 @@ async function handleAct(
       break;
     }
     case "scroll": {
-      if (!params.scrollDirection) {
+      if (!v1Params.scrollDirection) {
         throw new Error("COMPUTER_INVALID_REQUEST: scrollDirection is required for scroll");
       }
-      if (normalizeModifiers(params.modifiers).length > 0) {
+      if (normalizeModifiers(v1Params.modifiers).length > 0) {
         throw new Error(
           "COMPUTER_UNSUPPORTED_ACTION: modifier-held scroll is unsupported by cua-driver",
         );
@@ -310,20 +334,20 @@ async function handleAct(
       // frame-authorized like clicks. We deliberately do not synthesize a point
       // from get_cursor_position: that mixes cursor and capture coordinate
       // spaces across X11/Wayland/Windows and would scroll an unverified target.
-      const frame = await currentFrame(driver, frameState, params, signal);
-      const point = scalePoint(frame, params.x, params.y, params.action);
+      const frame = await currentFrame(driver, frameState, v1Params, signal);
+      const point = scalePoint(frame, v1Params.x, v1Params.y, v1Params.action);
       const direction = {
         up: ScrollDirection.Up,
         down: ScrollDirection.Down,
         left: ScrollDirection.Left,
         right: ScrollDirection.Right,
-      }[params.scrollDirection];
+      }[v1Params.scrollDirection];
       assertToolSuccess(
         await driver.scroll(
           {
             direction,
             // Schema guarantees a positive amount; cap at the driver's max of 50.
-            amount: BigInt(Math.min(50, params.scrollAmount ?? 3)),
+            amount: BigInt(Math.min(50, v1Params.scrollAmount ?? 3)),
             ...point,
           },
           signal,
@@ -333,49 +357,49 @@ async function handleAct(
       break;
     }
     default: {
-      const frame = await currentFrame(driver, frameState, params, signal);
-      switch (params.action) {
+      const frame = await currentFrame(driver, frameState, v1Params, signal);
+      switch (v1Params.action) {
         case "left_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Left, 1), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Left, 1), signal),
             "click",
           );
           break;
         case "right_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Right, 1), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Right, 1), signal),
             "click",
           );
           break;
         case "middle_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Middle, 1), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Middle, 1), signal),
             "click",
           );
           break;
         case "double_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Left, 2), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Left, 2), signal),
             "click",
           );
           break;
         case "triple_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, params, ClickButton.Left, 3), signal),
+            await driver.click(clickArgs(frame, v1Params, ClickButton.Left, 3), signal),
             "click",
           );
           break;
         case "mouse_move": {
-          const point = scalePoint(frame, params.x, params.y, params.action);
+          const point = scalePoint(frame, v1Params.x, v1Params.y, v1Params.action);
           assertToolSuccess(await driver.moveCursor(point, signal), "move_cursor");
           break;
         }
         case "left_click_drag": {
-          const from = scalePoint(frame, params.fromX, params.fromY, "drag start");
-          const to = scalePoint(frame, params.x, params.y, "drag end");
+          const from = scalePoint(frame, v1Params.fromX, v1Params.fromY, "drag start");
+          const to = scalePoint(frame, v1Params.x, v1Params.y, "drag end");
           // The typed desktop drag API has no modifier field. Refuse instead of
           // silently widening a model request into an unmodified drag.
-          if (normalizeModifiers(params.modifiers).length > 0) {
+          if (normalizeModifiers(v1Params.modifiers).length > 0) {
             throw new Error(
               "COMPUTER_UNSUPPORTED_ACTION: modifier-held drag is unsupported by cua-driver",
             );
@@ -389,9 +413,9 @@ async function handleAct(
                 toY: to.y,
                 // CUA caps desktop drag duration at 10 seconds; clamp rather than
                 // rejecting a valid computer.act request at the SDK boundary.
-                ...(params.durationMs === undefined
+                ...(v1Params.durationMs === undefined
                   ? {}
-                  : { durationMs: BigInt(Math.min(10_000, params.durationMs)) }),
+                  : { durationMs: BigInt(Math.min(10_000, v1Params.durationMs)) }),
               },
               signal,
             ),
@@ -407,44 +431,64 @@ async function handleAct(
   return JSON.stringify({ ok: true });
 }
 
-export function createCuaComputerCommands(
-  options: CuaComputerCommandsOptions = {},
-): OpenClawPluginNodeHostCommand[] {
+export function createCuaComputerProvider(
+  options: CuaComputerProviderOptions = {},
+): ComputerUseProvider {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
-  let ownedDriver: CuaDriverSession | undefined;
+  const macOsEndpoint = platform === "darwin" ? resolveMacOsMcpEndpoint(env) : undefined;
+  let ownedAvailabilityDriver: CuaDriverSession | undefined;
   let stopped = false;
-  // The node host owns one trusted SDK session for this command execution.
-  // It is shared by snapshot/act so a frame can only authorize its paired input.
-  const driver = () => {
+  const createDriver =
+    options.createDriver ??
+    (macOsEndpoint ? () => createCuaMcpDriver({ ...macOsEndpoint, env }) : createCuaDriver);
+  const availabilityDriver = () => {
     if (stopped) {
       throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
     }
-    return options.driver ?? (ownedDriver ??= (options.createDriver ?? createCuaDriver)());
+    return options.driver ?? (ownedAvailabilityDriver ??= createDriver());
   };
-  const disposeOwnedDriver = async () => {
+  const disposeAvailabilityDriver = async () => {
     stopped = true;
-    const current = ownedDriver;
-    ownedDriver = undefined;
+    const current = ownedAvailabilityDriver;
+    ownedAvailabilityDriver = undefined;
     await current?.dispose();
   };
   const imageProcessor = options.imageProcessor ?? createImageProcessor(env);
-  const queue = new PromiseQueue();
-  const frameState: CuaFrameState = { generation: "uninitialized" };
   const interval = options.setInterval ?? setInterval;
   const clear = options.clearInterval ?? clearInterval;
-  const isSupportedPlatform = platform === "linux" || platform === "win32";
-  const isAvailable = () => isSupportedPlatform && driver().isAvailable();
+  const isSupportedPlatform =
+    platform === "linux" || platform === "win32" || macOsEndpoint !== undefined;
+  // The app injects the endpoint only after the host-owned daemon socket is
+  // accepting connections. Node-host manifests are one-shot, so the validated
+  // endpoint is the synchronous macOS readiness lease; invocation still
+  // awaits the MCP initialize handshake and fails visibly if it cannot attach.
+  const isAvailable = () =>
+    macOsEndpoint !== undefined || (isSupportedPlatform && availabilityDriver().isAvailable());
 
-  const snapshot: OpenClawPluginNodeHostCommand = {
-    command: "screen.snapshot",
-    cap: "screen",
-    dangerous: false,
+  return {
+    id: "cua-computer",
+    label: "CUA Computer",
+    capabilities: () => ({
+      contractVersion: 2,
+      provider: {
+        id: "cua-computer",
+        label: "CUA Computer",
+        generation: isSupportedPlatform
+          ? `cua-computer-v2:${availabilityDriver().generation}`
+          : "cua-computer-v2:unsupported",
+      },
+      actions: platformActions(platform),
+      targets: ["screen", "window", "element", "browser"],
+      deliveryModes: ["background", "foreground"],
+      observations: ["image", "accessibility", "browser"],
+      features: { recording: true, agentCursor: false, multiDisplay: false },
+    }),
     isAvailable,
     watchAvailability: (_context, onChange) => {
       let knownAvailable = isAvailable();
       const timer = interval(() => {
-        driver().resetAvailabilityCache();
+        availabilityDriver().resetAvailabilityCache();
         const available = isAvailable();
         if (available !== knownAvailable) {
           knownAvailable = available;
@@ -454,79 +498,133 @@ export function createCuaComputerCommands(
       timer.unref?.();
       return () => {
         clear(timer);
-        void disposeOwnedDriver();
+        void disposeAvailabilityDriver();
       };
     },
-    handle: async (paramsJSON, _io, context) =>
-      await queue.run(async () => {
-        if (!isSupportedPlatform) {
-          throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports Windows and Linux");
+    openExecution: async () => {
+      if (stopped) {
+        throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
+      }
+      const executionDriver = options.driver ?? createDriver();
+      const resources = createLazyCuaExecutionResources();
+      const executionState = { resources, recording: {} };
+      const queue = new PromiseQueue();
+      const frameState: CuaFrameState = { generation: executionDriver.generation };
+      let closing = false;
+      let closePromise: Promise<void> | undefined;
+      const assertOpen = () => {
+        if (closing) {
+          throw new Error("COMPUTER_DRIVER_UNAVAILABLE: provider execution is closing");
         }
-        const params = parseParams(SnapshotParamsSchema, paramsJSON);
-        assertPrimaryDisplay(params.screenIndex);
-        const format = params.format ?? "jpeg";
-        const maxWidth = params.maxWidth ?? (format === "png" ? 900 : 1_600);
-        const quality = Math.min(1, Math.max(0.05, params.quality ?? 0.72));
-        const desktop = await driver().getDesktopState(context?.signal);
-        const geometry = desktopGeometry(desktop);
-        // cua-driver desktop input consumes native get_desktop_state PNG pixels,
-        // and on every supported backend the driver reports screen geometry in
-        // that same physical-pixel space (Windows PMv2, Linux X11/Wayland). If a
-        // capture ever diverges from screen geometry, our screenshot->native
-        // scaling would mis-target input, so refuse rather than click blind.
-        if (
-          geometry.screenWidth !== geometry.screenshotWidth ||
-          geometry.screenHeight !== geometry.screenshotHeight
-        ) {
-          throw new Error(
-            "COMPUTER_UNSUPPORTED_DISPLAY: cua-driver reported capture and screen geometry in different pixel spaces",
-          );
-        }
-        const nativePng = desktopPng(desktop);
-        let encoded = nativePng;
-        let width = geometry.screenshotWidth;
-        let height = geometry.screenshotHeight;
-        if (format === "jpeg" || width > maxWidth) {
-          const result = await imageProcessor.encode(nativePng, {
-            format,
-            ...(format === "jpeg" ? { quality: Math.round(quality * 100) } : {}),
-            ...(width > maxWidth ? { resize: { width: maxWidth, enlarge: false } } : {}),
+      };
+      return {
+        snapshot: async (paramsJSON, signal) =>
+          await queue.run(async () => {
+            assertOpen();
+            if (!isSupportedPlatform) {
+              throw new Error(
+                platform === "darwin"
+                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_ENDPOINT_ENV}`
+                  : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
+              );
+            }
+            const params = parseScreenSnapshotParamsJSON(paramsJSON);
+            assertPrimaryDisplay(params.screenIndex);
+            const format = params.format ?? "jpeg";
+            const maxWidth = params.maxWidth ?? (format === "png" ? 900 : 1_600);
+            const quality = Math.min(1, Math.max(0.05, params.quality ?? 0.72));
+            const desktop = await executionDriver.getDesktopState(signal);
+            const geometry = desktopGeometry(desktop);
+            // Windows and Linux report capture and input geometry in the same
+            // physical-pixel space. macOS intentionally reports logical screen
+            // points plus native Retina pixels; its desktop tools consume the
+            // native screenshot coordinates and undo that scale internally.
+            if (
+              platform !== "darwin" &&
+              (geometry.screenWidth !== geometry.screenshotWidth ||
+                geometry.screenHeight !== geometry.screenshotHeight)
+            ) {
+              throw new Error(
+                "COMPUTER_UNSUPPORTED_DISPLAY: cua-driver reported capture and screen geometry in different pixel spaces",
+              );
+            }
+            const nativePng = desktopPng(desktop);
+            let encoded = nativePng;
+            let width = geometry.screenshotWidth;
+            let height = geometry.screenshotHeight;
+            if (format === "jpeg" || width > maxWidth) {
+              const result = await imageProcessor.encode(nativePng, {
+                format,
+                ...(format === "jpeg" ? { quality: Math.round(quality * 100) } : {}),
+                ...(width > maxWidth ? { resize: { width: maxWidth, enlarge: false } } : {}),
+              });
+              encoded = result.data;
+              width = result.width;
+              height = result.height;
+            }
+            adoptGeneration(frameState, executionDriver.generation);
+            const displayFrameId = issueFrame(frameState, geometry, { width, height });
+            return JSON.stringify({
+              format,
+              base64: encoded.toString("base64"),
+              displayFrameId,
+              screenIndex: 0,
+              width,
+              height,
+            });
+          }),
+        act: async (paramsJSON, signal) =>
+          await queue.run(async () => {
+            assertOpen();
+            if (!isSupportedPlatform) {
+              throw new Error(
+                platform === "darwin"
+                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_ENDPOINT_ENV}`
+                  : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
+              );
+            }
+            return await handleV2Act(
+              platform,
+              executionDriver,
+              frameState,
+              executionState,
+              parseComputerActParamsJSON(paramsJSON),
+              handleDesktopAct,
+              signal,
+            );
+          }),
+        close: async (reason) => {
+          if (closePromise) {
+            return await closePromise;
+          }
+          closing = true;
+          closePromise = queue.run(async () => {
+            let failure: unknown;
+            try {
+              await closeRecordingExecution({
+                driver: executionDriver,
+                state: executionState.recording,
+                resources,
+                reason,
+              });
+            } catch (error) {
+              failure = error;
+            }
+            await resources.dispose(reason !== "completion").catch((error: unknown) => {
+              failure ??= error;
+            });
+            await executionDriver.dispose().catch((error: unknown) => {
+              failure ??= error;
+            });
+            if (failure) {
+              throw failure instanceof Error
+                ? failure
+                : new Error("CUA Computer cleanup failed", { cause: failure });
+            }
           });
-          encoded = result.data;
-          width = result.width;
-          height = result.height;
-        }
-        frameState.generation = driver().generation;
-        const displayFrameId = issueFrame(frameState, geometry, { width, height });
-        return JSON.stringify({
-          format,
-          base64: encoded.toString("base64"),
-          displayFrameId,
-          screenIndex: 0,
-          width,
-          height,
-        });
-      }),
+          return await closePromise;
+        },
+      };
+    },
   };
-
-  const act: OpenClawPluginNodeHostCommand = {
-    command: "computer.act",
-    cap: "computer",
-    dangerous: true,
-    isAvailable,
-    handle: async (paramsJSON, _io, context) =>
-      await queue.run(async () => {
-        if (!isSupportedPlatform) {
-          throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports Windows and Linux");
-        }
-        return await handleAct(
-          driver(),
-          frameState,
-          parseParams(ComputerActParamsSchema, paramsJSON),
-          context?.signal,
-        );
-      }),
-  };
-
-  return [snapshot, act];
 }

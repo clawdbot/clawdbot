@@ -398,6 +398,10 @@ describe("getTelegramSequentialKey", () => {
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toEqual(expected);
   });
+
+  it("keeps malformed message updates on the unknown lane", () => {
+    expect(getTelegramSequentialKey({ message: {} as Message })).toBe("telegram:unknown");
+  });
 });
 
 describe("getTelegramSequentialConstraints", () => {

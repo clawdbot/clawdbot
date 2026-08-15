@@ -111,10 +111,11 @@ function buildMultiAccountMatrixConfig(params: {
   } as OpenClawConfig;
 }
 
-function makeForeignChannelApprovalRequest(params: {
+function makeChannelApprovalRequest(params: {
   id: string;
   sessionKey?: string;
   agentId?: string;
+  turnSourceChannel?: string;
 }): MatrixExecApprovalRequest {
   return {
     id: params.id,
@@ -122,7 +123,7 @@ function makeForeignChannelApprovalRequest(params: {
       command: "echo hi",
       agentId: params.agentId ?? "ops-agent",
       sessionKey: params.sessionKey ?? "agent:ops-agent:missing",
-      turnSourceChannel: "slack",
+      turnSourceChannel: params.turnSourceChannel ?? "slack",
       turnSourceTo: "channel:C123",
     },
     createdAtMs: 0,
@@ -401,7 +402,7 @@ describe("matrix exec approvals", () => {
       },
     });
     const cfg = buildMultiAccountMatrixConfig({ sessionStorePath: storePath });
-    const request = makeForeignChannelApprovalRequest({
+    const request = makeChannelApprovalRequest({
       id: "req-3",
       sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
     });
@@ -413,26 +414,6 @@ describe("matrix exec approvals", () => {
         request,
       }),
     ).toBe(false);
-    expect(
-      shouldHandleMatrixExecApprovalRequest({
-        cfg,
-        accountId: "ops",
-        request,
-      }),
-    ).toBe(true);
-  });
-
-  it("reports each eligible foreign-channel account as a raw route candidate", () => {
-    const cfg = buildMultiAccountMatrixConfig({});
-    const request = makeForeignChannelApprovalRequest({ id: "req-4" });
-
-    expect(
-      shouldHandleMatrixExecApprovalRequest({
-        cfg,
-        accountId: "default",
-        request,
-      }),
-    ).toBe(true);
     expect(
       shouldHandleMatrixExecApprovalRequest({
         cfg,
@@ -457,32 +438,7 @@ describe("matrix exec approvals", () => {
     expect(shouldHandleMatrixExecApprovalRequest({ cfg, accountId: "ops", request })).toBe(true);
   });
 
-  it("allows unbound foreign-channel approvals when only one matrix account can handle them", () => {
-    const cfg = buildMultiAccountMatrixConfig({
-      opsExecApprovals: {
-        enabled: false,
-        approvers: ["@owner:example.org"],
-      },
-    });
-    const request = makeForeignChannelApprovalRequest({ id: "req-5" });
-
-    expect(
-      shouldHandleMatrixExecApprovalRequest({
-        cfg,
-        accountId: "default",
-        request,
-      }),
-    ).toBe(true);
-    expect(
-      shouldHandleMatrixExecApprovalRequest({
-        cfg,
-        accountId: "ops",
-        request,
-      }),
-    ).toBe(false);
-  });
-
-  it("uses request filters when checking foreign-channel matrix ambiguity", () => {
+  it("uses request filters when checking unbound matrix account eligibility", () => {
     const cfg = buildMultiAccountMatrixConfig({
       defaultExecApprovals: {
         enabled: true,
@@ -495,7 +451,10 @@ describe("matrix exec approvals", () => {
         agentFilter: ["other-agent"],
       },
     });
-    const request = makeForeignChannelApprovalRequest({ id: "req-6" });
+    const request = makeChannelApprovalRequest({
+      id: "req-6",
+      turnSourceChannel: "matrix",
+    });
 
     expect(
       shouldHandleMatrixExecApprovalRequest({
@@ -513,11 +472,14 @@ describe("matrix exec approvals", () => {
     ).toBe(false);
   });
 
-  it("ignores disabled matrix accounts when checking foreign-channel ambiguity", () => {
+  it("ignores disabled matrix accounts when checking unbound account eligibility", () => {
     const cfg = buildMultiAccountMatrixConfig({
       opsOverrides: { enabled: false },
     });
-    const request = makeForeignChannelApprovalRequest({ id: "req-7" });
+    const request = makeChannelApprovalRequest({
+      id: "req-7",
+      turnSourceChannel: "matrix",
+    });
 
     expect(
       shouldHandleMatrixExecApprovalRequest({

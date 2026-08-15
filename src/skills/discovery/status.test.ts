@@ -383,6 +383,7 @@ describe("buildWorkspaceSkillStatus", () => {
       }),
       frontmatter: {},
       metadata: {
+        always: true,
         os: [mismatchedOs],
         requires: { bins: ["fakebin"] },
         install: [
@@ -410,7 +411,7 @@ describe("buildWorkspaceSkillStatus", () => {
         primaryEnv: undefined,
         emoji: undefined,
         homepage: undefined,
-        always: false,
+        always: true,
         disabled: false,
         blockedByAllowlist: false,
         blockedByAgentFilter: false,
@@ -428,7 +429,7 @@ describe("buildWorkspaceSkillStatus", () => {
         },
         missing: {
           anyBins: [],
-          bins: ["fakebin"],
+          bins: [],
           config: [],
           env: [],
           os: [mismatchedOs],

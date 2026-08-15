@@ -8,6 +8,18 @@ import { Type } from "typebox";
 import { optionalStringEnum } from "./schema/typebox.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
+const PROCESS_TOOL_ACTIONS = [
+  "list",
+  "poll",
+  "log",
+  "write",
+  "send-keys",
+  "submit",
+  "paste",
+  "kill",
+  "clear",
+  "remove",
+] as const;
 
 /** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
@@ -75,6 +87,7 @@ export const nodeExecSchema = Type.Object({
 /** Parameters accepted by the process-control tool. */
 export const processSchema = Type.Object({
   action: Type.String({
+    enum: [...PROCESS_TOOL_ACTIONS],
     description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",
   }),
   sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),

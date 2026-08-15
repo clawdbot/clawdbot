@@ -10,6 +10,7 @@ import {
   resolveThreadBindingLifecycle as resolveSharedThreadBindingLifecycle,
   type ThreadBindingLifecycleRecord,
 } from "../shared/thread-binding-lifecycle.js";
+import { asBoolean } from "../utils/boolean.js";
 import { getLoadedChannelPlugin } from "./plugins/index.js";
 import { resolveBundledChannelThreadBindingDefaultPlacement } from "./plugins/thread-binding-api.js";
 
@@ -84,13 +85,6 @@ function resolveDefaultTopLevelPlacement(channel: string): "current" | "child" {
   );
 }
 
-function normalizeBoolean(value: unknown): boolean | undefined {
-  if (typeof value !== "boolean") {
-    return undefined;
-  }
-  return value;
-}
-
 function normalizeThreadBindingHours(raw: unknown): number | undefined {
   return asNonNegativeFiniteNumber(raw);
 }
@@ -141,9 +135,7 @@ export function resolveThreadBindingsEnabled(params: {
   channelEnabledRaw: unknown;
   sessionEnabledRaw: unknown;
 }): boolean {
-  return (
-    normalizeBoolean(params.channelEnabledRaw) ?? normalizeBoolean(params.sessionEnabledRaw) ?? true
-  );
+  return asBoolean(params.channelEnabledRaw) ?? asBoolean(params.sessionEnabledRaw) ?? true;
 }
 
 function resolveChannelThreadBindings(params: {
@@ -180,14 +172,14 @@ export function resolveThreadBindingSpawnPolicy(params: {
   const accountId = normalizeAccountId(params.accountId);
   const { root, account } = resolveChannelThreadBindings({ cfg: params.cfg, channel, accountId });
   const enabled =
-    normalizeBoolean(account?.enabled) ??
-    normalizeBoolean(root?.enabled) ??
-    normalizeBoolean(params.cfg.session?.threadBindings?.enabled) ??
+    asBoolean(account?.enabled) ??
+    asBoolean(root?.enabled) ??
+    asBoolean(params.cfg.session?.threadBindings?.enabled) ??
     true;
   const spawnEnabledRaw =
-    normalizeBoolean(account?.spawnSessions) ??
-    normalizeBoolean(root?.spawnSessions) ??
-    normalizeBoolean(params.cfg.session?.threadBindings?.spawnSessions);
+    asBoolean(account?.spawnSessions) ??
+    asBoolean(root?.spawnSessions) ??
+    asBoolean(params.cfg.session?.threadBindings?.spawnSessions);
   const spawnEnabled = spawnEnabledRaw ?? true;
   const defaultSpawnContext =
     normalizeSpawnContext(account?.defaultSpawnContext) ??

@@ -54,6 +54,7 @@ import {
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   assertActiveAgentRuntimeAuthority,
@@ -404,8 +405,24 @@ export const cronHandlers: GatewayRequestHandlers = {
     };
     const sessionKey = p.sessionKey?.trim() || undefined;
     const agentId = p.agentId?.trim() || undefined;
+    const callerScope = readCronCallerScope(client);
+    const requestedOwner = sessionKey
+      ? resolveRequestedSessionAgentId(
+          context.getRuntimeConfig(),
+          sessionKey,
+          agentId ?? callerScope?.agentId,
+        )
+      : undefined;
+    if (requestedOwner && !requestedOwner.ok) {
+      respond(false, undefined, requestedOwner.error);
+      return;
+    }
+    const resolvedAgentId = requestedOwner?.agentId ?? callerScope?.agentId ?? agentId;
     if (sessionKey && isAgentHarnessSessionKey(sessionKey)) {
-      const loaded = loadGatewaySessionEntryReadOnly(sessionKey, agentId ? { agentId } : {});
+      const loaded = loadGatewaySessionEntryReadOnly(
+        sessionKey,
+        resolvedAgentId ? { agentId: resolvedAgentId } : {},
+      );
       const harnessSessionError = loaded.entry
         ? resolveAgentHarnessSessionStoreEntryError(loaded.canonicalKey, loaded.entry)
         : AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE;
@@ -432,7 +449,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     const sessionKeyAgentId = sessionKey
       ? parseAgentSessionKey(sessionKey)?.agentId?.trim().toLowerCase()
       : undefined;
-    const callerScope = readCronCallerScope(client);
     if (callerScope && agentId && normalizeAgentId(agentId) !== callerScope.agentId) {
       respond(
         false,
@@ -474,7 +490,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       mode: p.mode,
       text: p.text,
       ...(sessionKey ? { sessionKey } : {}),
-      ...(callerScope ? { agentId: callerScope.agentId } : agentId ? { agentId } : {}),
+      ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
     });
     respond(true, result, undefined);
   },
@@ -872,6 +888,10 @@ export const cronHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(candidate, validateCronUpdateParams, "cron.update", respond)) {
       return;
     }
+    if (!normalizedPatch) {
+      respondInvalidCronParams(respond, "cron.update", "patch did not normalize");
+      return;
+    }
     const p = candidate as {
       id?: string;
       jobId?: string;
@@ -896,7 +916,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const patch = p.patch as unknown as CronJobPatch;
+    const patch: CronJobPatch = normalizedPatch;
     const cfg = context.getRuntimeConfig();
     const currentJob = await context.cron.readJob(jobId);
     if (
@@ -1192,7 +1212,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       const page = readCronTaskRunHistoryPage({
         storeKey: cronStoreKey(context.cronStorePath),
         ...cronRunLogPageFilters(p),
-        ...(p.agentId ? { jobIds: jobs.map((job) => job.id) } : {}),
+        agentId: p.agentId,
         jobNameById,
       });
       respond(true, page, undefined);

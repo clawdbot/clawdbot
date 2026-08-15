@@ -157,12 +157,9 @@ vi.mock("../config/config.js", () => ({
     }
   },
   ConfigMutationConflictError: class ConfigMutationConflictError extends Error {
-    readonly currentHash: string | null;
-
-    constructor(message: string, params: { currentHash: string | null }) {
+    constructor(message: string) {
       super(message);
       this.name = "ConfigMutationConflictError";
-      this.currentHash = params.currentHash;
     }
   },
   parseConfigJson5: (raw: string) => {
@@ -5601,7 +5598,6 @@ describe("update-cli", () => {
       portableGitUsr,
     ]);
     expect(updateOptions?.env?.NPM_CONFIG_SCRIPT_SHELL).toBeUndefined();
-    expect(updateOptions?.env?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
   });
 
   it.each([

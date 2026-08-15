@@ -108,6 +108,7 @@ export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
   supportsBargeIn: true,
   handlesInputAudioBargeIn: true,
   supportsToolCalls: true,
+  supportsActivationNameGating: true,
   supportsVideoFrames: true,
 };
 export const OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =

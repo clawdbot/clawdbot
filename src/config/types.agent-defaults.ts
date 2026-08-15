@@ -324,6 +324,14 @@ export type AgentDefaultsConfig = {
   systemAgent?: {
     agentId?: string;
   };
+  /** Upgrade-only owner for the inherited credential store until H2-2 relocates credentials. */
+  authInheritance?: {
+    agentId?: string;
+  };
+  /** Upgrade-only owner for retired main-agent rows and legacy fixed session stores. */
+  sessionStore?: {
+    agentId?: string;
+  };
   /** Max concurrent agent runs across all conversations. Default: min(16, max(8, available CPU parallelism)). */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */

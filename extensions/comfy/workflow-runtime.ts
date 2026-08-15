@@ -111,19 +111,6 @@ type ComfyWorkflowResult = {
   outputNodeIds: string[];
 };
 
-let comfyFetchGuard = fetchWithSsrFGuard;
-
-function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
-  comfyFetchGuard = impl ?? fetchWithSsrFGuard;
-}
-
-if (process.env.VITEST === "true") {
-  Reflect.set(globalThis, Symbol.for("openclaw.comfyTestApi"), {
-    getConfig: getComfyConfig,
-    setFetchGuard: setComfyFetchGuardForTesting,
-  });
-}
-
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
   const value = config[key];
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
@@ -327,7 +314,7 @@ async function readJsonResponse<T>(params: {
   auditContext: string;
   errorPrefix: string;
 }): Promise<T> {
-  const { response, release } = await comfyFetchGuard({
+  const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: params.init,
     timeoutMs: params.timeoutMs,
@@ -581,7 +568,7 @@ async function downloadOutputFile(params: {
   const viewPath = params.mode === "cloud" ? "/api/view" : "/view";
   const auditContext = `comfy-${params.capability}-download`;
 
-  const firstResponse = await comfyFetchGuard({
+  const firstResponse = await fetchWithSsrFGuard({
     url: `${params.baseUrl}${viewPath}?${query.toString()}`,
     init: {
       method: "GET",

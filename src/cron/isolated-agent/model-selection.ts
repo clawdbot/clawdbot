@@ -10,7 +10,7 @@ import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
-import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveCronAgentConfig } from "./run-config.js";
 import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
@@ -97,6 +97,7 @@ export async function resolveCronModelSelectionOwner(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    readOnly: true,
     allowGatewaySubagentBinding: true,
   });
   if (
@@ -199,14 +200,10 @@ export async function resolveCronModelSelection(
       ? params.agentConfigOverride
       : resolveAgentConfig(owner.config, ownerAgentId)
     : undefined;
-  const ownerAgentDefaults = buildCronAgentDefaultsConfig({
-    defaults: owner.config.agents?.defaults,
+  const { cfgWithAgentDefaults } = resolveCronAgentConfig({
+    config: owner.config,
     agentConfigOverride: ownerAgentConfigOverride,
   });
-  const cfgWithAgentDefaults: OpenClawConfig = {
-    ...owner.config,
-    agents: Object.assign({}, owner.config.agents, { defaults: ownerAgentDefaults }),
-  };
   const catalog = owner.modelCatalog.entries;
   const resolvedDefault = resolveConfiguredModelRef({
     cfg: cfgWithAgentDefaults,

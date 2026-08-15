@@ -1,6 +1,7 @@
-import { css, html, nothing, svg, type TemplateResult } from "lit";
+import { css, html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { icons } from "./icons.ts";
 import "./web-awesome-tabs.ts";
 
 export type PanelTabStripTab = {
@@ -15,9 +16,6 @@ export type PanelTabStripTab = {
   className?: string;
   closeLabel: string;
 };
-
-const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const PLUS_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>`;
 
 const reconciledTabOrders = new WeakMap<Element, string>();
 const keyboardCloseActivations = new WeakSet<Element>();
@@ -95,14 +93,14 @@ export function renderPanelTabStrip(params: {
   const newButton = (slotted: boolean) => html`
     <button
       slot=${slotted ? "nav" : nothing}
-      class="tabstrip-new"
+      class="rail-header__action tabstrip-new"
       type="button"
       ?disabled=${params.newDisabled}
       title=${params.newLabel}
       aria-label=${params.newLabel}
       @click=${params.onNew}
     >
-      ${PLUS_GLYPH}
+      ${icons.plus}
     </button>
   `;
   if (params.tabs.length === 0) {
@@ -163,7 +161,7 @@ export function renderPanelTabStrip(params: {
             </wa-tab>
             <button
               slot="nav"
-              class="tabstrip-tab__close"
+              class="rail-header__action tabstrip-tab__close"
               type="button"
               title=${tab.closeLabel}
               aria-label=${tab.closeLabel}
@@ -212,7 +210,7 @@ export function renderPanelTabStrip(params: {
                 }
               }}
             >
-              <span class="tabstrip-tab__close-box">${CLOSE_GLYPH}</span>
+              <span class="tabstrip-tab__close-box">${icons.x}</span>
             </button>
           `;
         },
@@ -296,27 +294,14 @@ export const panelTabStripStyles = css`
     padding: 0 5px;
     text-transform: uppercase;
   }
-  /* Each close button sits right after its tab in the nav slot; the pair is
-     styled as one surface (shared hover background, shared active underline)
-     while the X keeps its own inner highlight. */
+  /* Each close button sits right after its tab in the nav slot. The tab keeps
+     the active surface; the action itself follows the bare rail-control contract. */
   .tabstrip-tab__close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    align-self: stretch;
     flex: 0 0 auto;
-    width: 24px;
+    align-self: center;
     margin-right: 1px;
-    padding: 0 4px 0 0;
     opacity: 0;
-    border: none;
-    border-bottom: 2px solid transparent;
-    background: transparent;
-    color: var(--muted, #8a919e);
-    transition:
-      color 0.12s ease,
-      background 0.12s ease,
-      opacity 0.12s ease;
+    transition: opacity 0.12s ease;
   }
   .tabstrip-tab__close-box {
     display: inline-flex;
@@ -331,45 +316,9 @@ export const panelTabStripStyles = css`
   .tabstrip-tab__close:focus-visible {
     opacity: 1;
   }
-  .tabstrip-tab:hover + .tabstrip-tab__close,
-  .tabstrip-tab__close:hover,
-  .tabstrip-tab__close:focus-visible {
-    background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
-  }
-  /* Back-propagate hover from the X to its tab so the pair lights up together. */
-  .tabstrip-tab:has(+ .tabstrip-tab__close:hover)::part(base),
-  .tabstrip-tab:has(+ .tabstrip-tab__close:focus-visible)::part(base) {
-    color: var(--text, #d7dae0);
-    background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
-  }
-  .tabstrip-tab[active] + .tabstrip-tab__close {
-    border-bottom-color: var(--accent, #ff5c5c);
-  }
-  .tabstrip-tab__close:hover,
-  .tabstrip-tab__close:focus-visible {
-    color: var(--text, #d7dae0);
-  }
-  .tabstrip-tab__close:hover .tabstrip-tab__close-box,
-  .tabstrip-tab__close:focus-visible .tabstrip-tab__close-box {
-    background: color-mix(in srgb, var(--text, #d7dae0) 14%, transparent);
-  }
   .tabstrip-new {
-    display: inline-flex;
     flex: none;
-    align-items: center;
-    justify-content: center;
     align-self: center;
-    width: 26px;
-    height: 26px;
-    border: none;
-    background: transparent;
-    color: var(--muted, #8a919e);
-    border-radius: 6px;
-    padding: 0;
-  }
-  .tabstrip-new:hover {
-    background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
-    color: var(--text, #d7dae0);
   }
   @keyframes tabstrip-pulse {
     50% {

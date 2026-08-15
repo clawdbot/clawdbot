@@ -31,6 +31,9 @@ type ExecuteDispatchReadyState = Extract<
   { status: "ready" }
 >["state"];
 
+export const needsTtsFallback = (clean: boolean, visible: string, fallback?: string) =>
+  clean && !visible.trim() && Boolean(fallback?.trim());
+
 export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState) {
   const {
     cfg,
@@ -228,6 +231,19 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
                 { visibleTextAlreadyDelivered: true },
               );
           const finalReply = await state.sendFinalPayload(ttsOnlyPayload, {
+            abortSignal: getDispatchAbortSignal(),
+            skipTts: true,
+          });
+          queuedFinal = finalReply.queuedFinal || queuedFinal;
+          routedFinalCount += finalReply.routedFinalCount;
+        } else if (
+          needsTtsFallback(
+            Boolean(state.cleanBlockTtsDirectiveText),
+            cleanDeferredFinalText(deferredTtsTextPending),
+            ttsSyntheticReply.text,
+          )
+        ) {
+          const finalReply = await state.sendFinalPayload(ttsSyntheticReply, {
             abortSignal: getDispatchAbortSignal(),
             skipTts: true,
           });

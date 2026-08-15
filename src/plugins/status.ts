@@ -1,6 +1,4 @@
 // Builds plugin status snapshots for CLI and diagnostics.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
@@ -14,6 +12,10 @@ import {
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import {
+  appendPluginControlPlaneWorkspaceDiagnostic,
+  resolvePluginControlPlaneWorkspace,
+} from "./control-plane-workspace.js";
 import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
 import {
   buildPluginShapeSummary,
@@ -44,7 +46,10 @@ import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
   workspaceDir?: string;
+  workspaceScope: "selected" | "omitted";
 };
+
+type PluginStatusReportLike = PluginRegistry & { workspaceDir?: string };
 
 export {
   buildPluginRegistrySnapshotReport,
@@ -216,9 +221,12 @@ function buildPluginReport(
   loadModules: boolean,
 ): PluginStatusReport {
   const rawConfig = params?.config ?? getRuntimeConfig();
-  const initialWorkspaceDir =
-    params?.workspaceDir ??
-    resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig), params?.env);
+  const workspace = resolvePluginControlPlaneWorkspace({
+    config: rawConfig,
+    env: params?.env,
+    workspaceDir: params?.workspaceDir,
+  });
+  const initialWorkspaceDir = workspace.workspaceDir;
   const metadataSnapshot =
     params?.metadataSnapshot ??
     loadPluginMetadataSnapshot({
@@ -238,8 +246,7 @@ function buildPluginReport(
     }),
     installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
   };
-  const workspaceDir =
-    baseContext.workspaceDir ?? initialWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = baseContext.workspaceDir ?? initialWorkspaceDir;
   const context =
     workspaceDir === baseContext.workspaceDir
       ? baseContext
@@ -319,7 +326,9 @@ function buildPluginReport(
 
   return projectPluginDependencyHealth({
     workspaceDir,
+    workspaceScope: workspace.workspaceScope,
     ...registry,
+    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(registry.diagnostics, workspace),
     plugins: registry.plugins.map((plugin) =>
       Object.assign({}, plugin, {
         imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
@@ -353,7 +362,7 @@ export function buildPluginInspectReport(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
-  report?: PluginStatusReport;
+  report?: PluginStatusReportLike;
   resolvedConfig?: OpenClawConfig;
 }): PluginInspectReport | null {
   const rawConfig = params.config ?? getRuntimeConfig();
@@ -507,7 +516,7 @@ export function buildAllPluginInspectReports(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
-  report?: PluginStatusReport;
+  report?: PluginStatusReportLike;
 }): PluginInspectReport[] {
   const rawConfig = params?.config ?? getRuntimeConfig();
   const config = resolvePluginRuntimeLoadContext({
@@ -545,7 +554,7 @@ export function buildPluginCompatibilityWarnings(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
-  report?: PluginStatusReport;
+  report?: PluginStatusReportLike;
 }): string[] {
   return buildPluginCompatibilityNotices(params).map(formatPluginCompatibilityNotice);
 }
@@ -555,7 +564,7 @@ export function buildPluginCompatibilityNotices(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
-  report?: PluginStatusReport;
+  report?: PluginStatusReportLike;
 }): PluginCompatibilityNotice[] {
   return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
 }

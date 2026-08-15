@@ -1,5 +1,12 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelInboundEnvelopeBuilder,
+  formatInboundMediaUnavailableText,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   waitUntilAbort,
@@ -55,6 +62,7 @@ import {
   isSummarizationRequest,
   resolveAuthorizedMessageText,
   resolveTlonCommandAuthorizationWithIngress,
+  resolveTlonMessageIngress,
   resolveTlonGroupMentionDecision,
   stripBotMention,
 } from "./utils.js";
@@ -311,6 +319,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     parentId?: string | null;
     isThreadReply?: boolean;
     turnAdoptionLifecycle?: TlonIngressLifecycle;
+    resolveChannelIngress: (
+      contextBinding: ChannelIngressContextBinding,
+    ) => Promise<ResolvedChannelMessageIngress>;
   }) => {
     const {
       messageId,
@@ -324,15 +335,18 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       isThreadReply,
       messageContent,
       turnAdoptionLifecycle,
+      resolveChannelIngress,
     } = params;
     const groupChannel = channelNest; // For compatibility
     let messageText = params.messageText;
 
     // Download any images from the message content
     let attachments: Array<{ path: string; contentType: string }> = [];
+    let unavailableMediaCount = 0;
     if (messageContent) {
       try {
-        attachments = await downloadMessageImages(messageContent);
+        ({ attachments, unavailableCount: unavailableMediaCount } =
+          await downloadMessageImages(messageContent));
         if (attachments.length > 0) {
           runtime.log?.(`[tlon] Downloaded ${attachments.length} image(s) from message`);
         }
@@ -431,6 +445,16 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         id: isGroup ? (groupChannel ?? senderShip) : senderShip,
       },
     });
+    const channelIngress = await resolveChannelIngress({
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId,
+      inboundEventKind: "user_request",
+    });
+    if (!channelIngress.senderAccess.allowed) {
+      runtime.log?.(`[tlon] Authorization changed before dispatch for ${senderShip}`);
+      return;
+    }
 
     if (!isGroup) {
       const sessionKey = route.sessionKey;
@@ -505,6 +529,13 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     });
 
     const commandBody = isGroup ? stripBotMention(messageText, botShipName) : messageText;
+    const bodyForAgent =
+      unavailableMediaCount > 0
+        ? formatInboundMediaUnavailableText({
+            body: commandBody,
+            notice: `[tlon ${unavailableMediaCount > 1 ? `${unavailableMediaCount} attachments` : "attachment"} unavailable]`,
+          })
+        : commandBody;
     const tlonConversationId = isGroup ? (groupChannel ?? channelNest ?? senderShip) : senderShip;
     const ctxPayload = core.channel.inbound.buildContext({
       channel: "tlon",
@@ -535,10 +566,11 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       },
       message: {
         body,
-        bodyForAgent: commandBody,
+        bodyForAgent,
         rawBody: messageText,
         commandBody,
       },
+      channelIngress,
       extra: {
         GroupSubject: undefined,
         SenderRole: senderRole,
@@ -714,6 +746,15 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             messageContent: approval.originalMessage.messageContent,
             isGroup: false,
             timestamp: approval.originalMessage.timestamp,
+            resolveChannelIngress: async (contextBinding) =>
+              await resolveTlonMessageIngress({
+                senderShip: approval.requestingShip,
+                accountId: account.accountId,
+                conversation: { kind: "direct", id: approval.requestingShip },
+                allowFrom: [approval.requestingShip],
+                dmPolicy: "allowlist",
+                contextBinding,
+              }),
           });
           return;
         }
@@ -731,6 +772,15 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             timestamp: approval.originalMessage.timestamp,
             parentId: approval.originalMessage.parentId,
             isThreadReply: approval.originalMessage.isThreadReply,
+            resolveChannelIngress: async (contextBinding) =>
+              await resolveTlonMessageIngress({
+                senderShip: approval.requestingShip,
+                accountId: account.accountId,
+                conversation: { kind: "group", id: approval.channelNest! },
+                allowFrom: [approval.requestingShip],
+                groupPolicy: "allowlist",
+                contextBinding,
+              }),
           });
         }
       },
@@ -827,38 +877,36 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         runtime.log?.(`[tlon] Responding to thread we participated in (no mention): ${parentId}`);
       }
 
+      const { mode, allowedShips } = resolveChannelAuthorization(cfg, nest, currentSettings);
       // Owner is always allowed
       if (isOwner(senderShip)) {
         runtime.log?.(`[tlon] Owner ${senderShip} is always allowed in channels`);
-      } else {
-        const { mode, allowedShips } = resolveChannelAuthorization(cfg, nest, currentSettings);
-        if (mode === "restricted") {
-          const normalizedAllowed = allowedShips.map(normalizeShip);
-          if (!normalizedAllowed.includes(senderShip)) {
-            // If owner is configured, queue approval request
-            if (effectiveOwnerShip) {
-              const approval = createPendingApproval({
-                type: "channel",
-                requestingShip: senderShip,
-                channelNest: nest,
-                messagePreview: sliceUtf16Safe(rawText, 0, 100),
-                originalMessage: {
-                  messageId: messageId ?? "",
-                  messageText: rawText,
-                  messageContent: contentBody,
-                  timestamp: sentAt,
-                  parentId: parentId ?? undefined,
-                  isThreadReply,
-                },
-              });
-              await queueApprovalRequest(approval);
-            } else {
-              runtime.log?.(
-                `[tlon] Access denied: ${senderShip} in ${nest} (allowed: ${allowedShips.join(", ")})`,
-              );
-            }
-            return;
+      } else if (mode === "restricted") {
+        const normalizedAllowed = allowedShips.map(normalizeShip);
+        if (!normalizedAllowed.includes(senderShip)) {
+          // If owner is configured, queue approval request
+          if (effectiveOwnerShip) {
+            const approval = createPendingApproval({
+              type: "channel",
+              requestingShip: senderShip,
+              channelNest: nest,
+              messagePreview: sliceUtf16Safe(rawText, 0, 100),
+              originalMessage: {
+                messageId: messageId ?? "",
+                messageText: rawText,
+                messageContent: contentBody,
+                timestamp: sentAt,
+                parentId: parentId ?? undefined,
+                isThreadReply,
+              },
+            });
+            await queueApprovalRequest(approval);
+          } else {
+            runtime.log?.(
+              `[tlon] Access denied: ${senderShip} in ${nest} (allowed: ${allowedShips.join(", ")})`,
+            );
           }
+          return;
         }
       }
 
@@ -883,6 +931,18 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         parentId,
         isThreadReply,
         turnAdoptionLifecycle,
+        resolveChannelIngress: async (contextBinding) =>
+          await resolveTlonMessageIngress({
+            senderShip,
+            accountId: account.accountId,
+            conversation: { kind: "group", id: nest },
+            allowFrom: [
+              ...allowedShips.map(normalizeShip),
+              ...(effectiveOwnerShip ? [normalizeShip(effectiveOwnerShip)] : []),
+            ],
+            groupPolicy: mode === "restricted" ? "allowlist" : "open",
+            contextBinding,
+          }),
       });
     } catch (error: unknown) {
       runtime.error?.(`[tlon] Error handling channel firehose event: ${formatErrorMessage(error)}`);
@@ -1038,12 +1098,31 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           isGroup: false,
           timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
           turnAdoptionLifecycle,
+          resolveChannelIngress: async (contextBinding) =>
+            await resolveTlonMessageIngress({
+              senderShip,
+              accountId: account.accountId,
+              conversation: { kind: "direct", id: senderShip },
+              allowFrom: [senderShip],
+              dmPolicy: "allowlist",
+              contextBinding,
+            }),
         });
         return;
       }
 
       // For DMs from others, check allowlist
-      if (!(await isDmAllowedWithIngress(senderShip, effectiveDmAllowlist))) {
+      const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
+        await resolveTlonMessageIngress({
+          senderShip,
+          accountId: account.accountId,
+          conversation: { kind: "direct", id: senderShip },
+          allowFrom: effectiveDmAllowlist ?? [],
+          dmPolicy: "allowlist",
+          contextBinding,
+        });
+      const channelIngress = await resolveChannelIngress();
+      if (!channelIngress.senderAccess.allowed) {
         // If owner is configured, queue approval request
         if (effectiveOwnerShip) {
           const approval = createPendingApproval({
@@ -1077,6 +1156,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         isGroup: false,
         timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
         turnAdoptionLifecycle,
+        resolveChannelIngress,
       });
     } catch (error: unknown) {
       runtime.error?.(`[tlon] Error handling chat firehose event: ${formatErrorMessage(error)}`);

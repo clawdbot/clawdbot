@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
@@ -417,6 +418,9 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.visible?.description).toBe(
       "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
     );
+    expect(schema.properties?.cwd?.description).toContain(
+      "outside configured agent workspaces require operator.admin",
+    );
     expect(tool.description).toContain("`visible=true`: persistent sidebar dashboard session");
     expect(tool.description).toContain("when the user asks to create/open a thread");
     expect(tool.description).toContain('no `mode="run"`');
@@ -511,6 +515,120 @@ describe("sessions_spawn tool", () => {
         }),
       );
       expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("explains an out-of-workspace visible cwd denial without suggesting a CLI fallback", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-external-cwd-" }, async (workspace) => {
+      const outside = path.dirname(workspace);
+      const callGateway = vi.fn(async () => {
+        throw new GatewayClientRequestError({
+          code: "FORBIDDEN",
+          message: "permission denied",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+        });
+      });
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: { agents: { list: [{ id: "main", workspace }] } },
+        callGateway: callGateway as never,
+        countActiveRuns: () => 0,
+      });
+
+      const result = await tool.execute("visible-external-cwd", {
+        task: "inspect issue",
+        cwd: outside,
+        visible: true,
+        worktree: true,
+      });
+
+      expect(result.details).toMatchObject({
+        status: "forbidden",
+        error: `Visible session cwd "${outside}" is outside configured agent workspaces and requires operator.admin. Omit cwd to use the target agent workspace, or ask the operator to start the session from a registered project. Do not substitute the synchronous \`openclaw agent\` CLI for a persistent visible session.`,
+      });
+      expect(callGateway).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("preserves matching error text without structured missing-scope details", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("missing scope: operator.admin");
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway: callGateway as never,
+      countActiveRuns: () => 0,
+    });
+
+    await expect(
+      tool.execute("visible-message-only-denial", {
+        task: "inspect issue",
+        cwd: "/srv/external/repo",
+        visible: true,
+      }),
+    ).rejects.toThrow("missing scope: operator.admin");
+  });
+
+  it("preserves inconsistent structured missing-scope details", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new GatewayClientRequestError({
+        code: "FORBIDDEN",
+        message: "permission denied",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.write"],
+        },
+      });
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway: callGateway as never,
+      countActiveRuns: () => 0,
+    });
+
+    await expect(
+      tool.execute("visible-inconsistent-scope-denial", {
+        task: "inspect issue",
+        cwd: "/srv/external/repo",
+        visible: true,
+      }),
+    ).rejects.toThrow("permission denied");
+  });
+
+  it("preserves unrelated visible-session admin denials with an allowed cwd", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-allowed-cwd-" }, async (workspace) => {
+      const callGateway = vi.fn(async () => {
+        throw new GatewayClientRequestError({
+          code: "FORBIDDEN",
+          message: "permission denied",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+        });
+      });
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: { agents: { list: [{ id: "main", workspace }] } },
+        callGateway: callGateway as never,
+        countActiveRuns: () => 0,
+      });
+
+      await expect(
+        tool.execute("visible-admin-denial", {
+          task: "inspect issue",
+          cwd: workspace,
+          visible: true,
+        }),
+      ).rejects.toThrow("permission denied");
     });
   });
 

@@ -48,13 +48,17 @@ normalized_context_ref="${normalized_context_ref#refs/heads/}"
 normalized_context_ref="${normalized_context_ref#refs/tags/}"
 context_release_branch=""
 context_release_tag=""
+frozen_release_branch_pattern=""
 if [[ "$normalized_context_ref" =~ ^release/([0-9]{4}\.[0-9]+\.[0-9]+)$ ]]; then
   release_version="${BASH_REMATCH[1]}"
   release_version_pattern="${release_version//./\.}"
   candidate_version="$(jq -er '.version' "${candidate_root}/package.json")"
-  if [[ "$candidate_version" == "$release_version" ||
-        "$candidate_version" =~ ^${release_version_pattern}-beta\.[0-9]+$ ]]; then
+  if [[ "$candidate_version" == "$release_version" ]]; then
     context_release_branch="$normalized_context_ref"
+  elif [[ "$candidate_version" =~ ^${release_version_pattern}-beta\.[0-9]+$ ]]; then
+    context_release_branch="$normalized_context_ref"
+    candidate_version_pattern="${candidate_version//./\.}"
+    frozen_release_branch_pattern="^release/${candidate_version_pattern}-code-frozen(-r[1-9][0-9]*)?$"
   else
     echo "Telegram candidate version ${candidate_version} does not belong to release ${release_version}." >&2
     exit 1
@@ -113,11 +117,13 @@ if [[ -n "$context_release_branch" ]]; then
   branch_sha="$(
     git -C "$remote_git_dir" ls-remote --exit-code --refs origin \
       "refs/heads/${context_release_branch}" |
-      awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }'
+      awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }' ||
+      true
   )"
-  [[ "$branch_sha" == "$candidate_sha" ]]
-  trusted_reason="release-branch-head"
-  trusted_release_branch="$context_release_branch"
+  if [[ "$branch_sha" == "$candidate_sha" ]]; then
+    trusted_reason="release-branch-head"
+    trusted_release_branch="$context_release_branch"
+  fi
 elif [[ -n "$context_release_tag" ]]; then
   tag_refs="$(
     git -C "$remote_git_dir" ls-remote --exit-code origin \
@@ -172,6 +178,22 @@ else
     fi
   fi
 fi
+
+if [[ -z "$trusted_reason" && -n "$frozen_release_branch_pattern" &&
+      "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
+  matching_frozen_release_branches="$(
+    gh_with_retry api --paginate \
+      "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/branches-where-head" \
+      --jq '.[].name' |
+      awk -v frozen="$frozen_release_branch_pattern" '$0 ~ frozen { print }'
+  )"
+  if [[ "$(wc -l <<<"$matching_frozen_release_branches" | tr -d ' ')" == "1" &&
+        -n "$matching_frozen_release_branches" ]]; then
+    trusted_reason="frozen-release-branch-head"
+    trusted_release_branch="$matching_frozen_release_branches"
+  fi
+fi
+
 if [[ -z "$trusted_reason" ]]; then
   echo "Telegram candidate ${candidate_sha} is not trusted release provenance." >&2
   exit 1
@@ -195,6 +217,11 @@ if [[ "$trusted_reason" != "main-ancestor" ]]; then
     exit 1
   fi
   signer="$(jq -r '.data.repository.object.signature.signer.login // ""' <<<"$candidate_metadata_json")"
+  if [[ "$trusted_reason" == "frozen-release-branch-head" &&
+        ( "$signature_status" != "valid" || "$signer" == "web-flow" ) ]]; then
+    echo "Frozen release candidate ${candidate_sha} requires a valid maintainer signature." >&2
+    exit 1
+  fi
   permission_actor="$signer"
   if [[ "$signature_status" == "missing" || "$signer" == "web-flow" ]]; then
     if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then

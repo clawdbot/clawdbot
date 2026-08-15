@@ -24,6 +24,7 @@ import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { applySessionHints } from "./body.js";
+import { resolveTurnModelOverride } from "./dispatch-from-config.harness-defaults.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   buildExecOverridePromptHint,
@@ -49,7 +50,11 @@ import {
   resolveBareResetBootstrapFileAccess,
   resolveBareSessionResetPromptState,
 } from "./session-reset-prompt.js";
-import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
+import { resolveSessionStableReplyMode } from "./session-stable-reply-mode.js";
+import {
+  isExplicitSourceReplyCommand,
+  isSyntheticSourceReplyTurn,
+} from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -82,7 +87,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     sessionEntryHandle,
     sessionStore,
   } = params;
-  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({ cfg, ctx, sessionKey });
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey });
   const { resolvedElevatedLevel, execOverrides, abortedLastRun } = params;
   let { sessionEntry } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
@@ -107,8 +112,34 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isHeartbeat,
   });
   const inboundEventKind = promptSessionCtx.InboundEventKind;
-  const { sourceReplyDeliveryMode, sessionPromptSourceReplyDeliveryMode } =
-    resolvePromptSourceReplyMode({ promptSessionCtx, opts });
+  const { sourceReplyDeliveryMode, injectedSessionStableMode } = resolvePromptSourceReplyMode({
+    promptSessionCtx,
+    opts,
+  });
+  // Direct resolver callers (heartbeat wakes, system events) skip dispatch's
+  // stable-mode injection; resolve the same session-stable fact here so their
+  // binding facts and messageToolPolicyHash match dispatched chat turns —
+  // otherwise chat<->heartbeat transitions ping-pong the CLI session (#121485).
+  // Synthetic turns must not fall back to their effective turn mode: a
+  // response-tool heartbeat's message_tool_only is per-turn enforcement, not
+  // session policy, and hashing it recreates the ping-pong.
+  const isSyntheticTurn = isSyntheticSourceReplyTurn({
+    inputProvenance: promptSessionCtx.InputProvenance,
+    isHeartbeat,
+  });
+  const sessionPromptSourceReplyDeliveryMode =
+    injectedSessionStableMode ??
+    (isSyntheticTurn && sessionEntry
+      ? resolveSessionStableReplyMode({
+          cfg,
+          ctx: { ...promptSessionCtx, CommandAuthorized: false },
+          sessionEntry,
+          sessionAgentId: agentId,
+          sessionKey,
+          sessionStore,
+          turnModelOverride: resolveTurnModelOverride(opts),
+        })
+      : sourceReplyDeliveryMode);
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,

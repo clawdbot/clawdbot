@@ -133,6 +133,16 @@ test.skipIf(process.platform === "win32").each([
   },
 );
 
+test("rejects malformed direct actions before requiring a session id", async () => {
+  const result = await createProcessTool().execute("invalid-process-action", {
+    action: {},
+  } as never);
+
+  expect(textContent(result)).toContain("Invalid process action");
+  expect(textContent(result)).not.toContain("sessionId is required");
+  expect(result.details).toMatchObject({ status: "failed" });
+});
+
 test.skipIf(process.platform === "win32").each([
   { name: "quiet successful exit", exitCode: 0, output: "", expectsNotification: false },
   { name: "quiet nonzero exit", exitCode: 7, output: "", expectsNotification: true },

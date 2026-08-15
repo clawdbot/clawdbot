@@ -40,7 +40,20 @@ export type TestChatPane = HTMLElement & {
   applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
   connectedCallback: () => void;
   connectionGeneration: number;
+  catalogLoadGeneration: number;
+  continueCatalogSession: (key: CatalogSessionKey) => Promise<void>;
   createSession: () => Promise<boolean>;
+  recoverSession: () => Promise<boolean>;
+  restartRecoveryComposerBanner: () =>
+    | {
+        text: string;
+        actionLabel: string;
+        actionStyle?: "primary";
+        busy?: boolean;
+        busyLabel?: string;
+        onAction: () => void;
+      }
+    | undefined;
   prepareForEviction: () => void;
   restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
   disconnectedCallback: () => void;
@@ -120,7 +133,10 @@ export type TestChatPane = HTMLElement & {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ) => Promise<void>;
+  headerPlacementReclaimingKey: string | null;
+  reclaimHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
+  applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
   renderPaneHeader: (
     workspace: ReturnType<typeof createSessionWorkspaceProps>,
     tasks: ReturnType<typeof createBackgroundTasksProps>,

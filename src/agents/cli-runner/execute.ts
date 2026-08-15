@@ -6,6 +6,7 @@ import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { compareValidSemver } from "../../infra/semver.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
@@ -27,7 +28,6 @@ import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import {
-  buildCliEnvAuthLog,
   buildCliExecLogLine,
   CLAUDE_SELECTED_AUTH_ENV_KEYS,
   CLI_BACKEND_PRESERVE_ENV,
@@ -113,16 +113,6 @@ function assertExactToolAvailabilityRuntimeVersion(params: {
   });
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerExecuteTestApi")] = {
-    buildCliEnvAuthLog,
-    buildCliExecLogLine,
-    setCliRunnerExecuteTestDeps: (overrides: Record<string, unknown>) => {
-      Object.assign(executeDeps, overrides as Partial<typeof executeDeps>);
-    },
-  };
-}
-
 type ExecutePreparedCliRunOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
 };
@@ -164,12 +154,15 @@ export async function executePreparedCliRun(
   const basePrompt = cliSessionIdToUse
     ? params.prompt
     : (context.openClawHistoryPrompt ?? params.prompt);
-  let prompt = applyPluginTextReplacements(
-    appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
-      preserveExactPrompt: context.heartbeatPrompt,
-    }),
-    context.backendResolved.textTransforms?.input,
-  );
+  let prompt =
+    params.controlOperation !== undefined
+      ? basePrompt
+      : applyPluginTextReplacements(
+          appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
+            preserveExactPrompt: context.heartbeatPrompt,
+          }),
+          context.backendResolved.textTransforms?.input,
+        );
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||
@@ -185,12 +178,17 @@ export async function executePreparedCliRun(
         prompt,
         imagePrompt: params.imagePrompt,
         workspaceDir: context.workspaceDir,
+        localRoots: getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId),
         images: params.images,
         imageOrder: params.imageOrder,
         media: params.media,
       });
   prompt = imagePayload.prompt;
-  const { argsPrompt, stdin } = resolvePromptInput({ backend, prompt });
+  const promptInputBackend =
+    params.controlOperation === "compact" && context.backendResolved.manualCompaction
+      ? { ...backend, input: context.backendResolved.manualCompaction.input }
+      : backend;
+  const { argsPrompt, stdin } = resolvePromptInput({ backend: promptInputBackend, prompt });
   const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
@@ -338,12 +336,13 @@ export async function executePreparedCliRun(
       throw createCliAbortError();
     }
     const cliTurnStartedAt = Date.now();
-    const restoreSkillEnv = params.skillsSnapshot
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
-          config: params.config,
-        })
-      : undefined;
+    const restoreSkillEnv =
+      params.skillsSnapshot && !params.controlOperation
+        ? applySkillEnvOverridesFromSnapshot({
+            snapshot: params.skillsSnapshot,
+            config: params.config,
+          })
+        : undefined;
     let cleanupMcpCaptureAttempt: (() => Promise<void>) | undefined;
     let runOutput: CliOutput | undefined;
     let runError: unknown;
@@ -519,6 +518,7 @@ export async function executePreparedCliRun(
       const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
         backend,
         timeoutMs: params.timeoutMs,
+        expectedQuiet: params.controlOperation === "compact",
         runTimeoutOverrideMs,
         useResume,
         trigger: params.trigger,

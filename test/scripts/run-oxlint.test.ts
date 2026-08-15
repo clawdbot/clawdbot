@@ -16,6 +16,7 @@ import {
   resolveOxlintShardConcurrency,
   resolveWindowsExtensionChunkSize,
   runShard,
+  selectCoreOxlintStripe,
   shouldPrepareExtensionPackageBoundaryArtifactsForShards,
   shouldRunOxlintShardsSerial,
 } from "../../scripts/run-oxlint-shards.mts";
@@ -241,7 +242,7 @@ describe("run-oxlint", () => {
     expect(packageJson.scripts.check).toBe("node --import tsx scripts/check.mts");
     expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
     expect(packageJson.scripts["lint:core"]).toBe(
-      "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core",
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core",
     );
     expect(packageJson.scripts.check).not.toContain(
       "node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts",
@@ -521,11 +522,56 @@ describe("run-oxlint", () => {
   });
 
   it("parses shard runner flags without forwarding them to oxlint", () => {
-    const parsed = parseShardRunnerArgs(["--only=core", "--split-core", "--max-warnings", "0"]);
+    const parsed = parseShardRunnerArgs([
+      "--only=core",
+      "--split-core",
+      "--core-stripe=2/3",
+      "--max-warnings",
+      "0",
+    ]);
 
     expect([...parsed.only]).toEqual(["core"]);
+    expect(parsed.coreStripe).toEqual({ index: 2, total: 3 });
     expect(parsed.splitCore).toBe(true);
     expect(parsed.oxlintArgs).toEqual(["--max-warnings", "0"]);
+  });
+
+  it("aggregates split core targets into deterministic disjoint Programs", () => {
+    const shards = createOxlintShards({
+      cwd: "/repo",
+      splitCore: true,
+      readDir: () =>
+        [
+          { name: "alpha", isDirectory: () => true, isFile: () => false },
+          { name: "beta", isDirectory: () => true, isFile: () => false },
+          { name: "gamma", isDirectory: () => true, isFile: () => false },
+        ] as never,
+    }).filter((shard) => shard.name.startsWith("core:"));
+    const stripes = [1, 2, 3].map((index) => selectCoreOxlintStripe(shards, { index, total: 3 }));
+
+    expect(stripes.map((stripe) => stripe.map((shard) => shard.name))).toEqual([
+      ["core:stripe:1"],
+      ["core:stripe:2"],
+      ["core:stripe:3"],
+    ]);
+    const stripeTargets = stripes.flatMap(([stripe]) => stripe?.args.slice(2) ?? []);
+    const sourceTargets = shards.flatMap((shard) => shard.args.slice(2));
+    expect(stripeTargets.toSorted()).toEqual(sourceTargets.toSorted());
+    expect(new Set(stripeTargets)).toHaveProperty("size", sourceTargets.length);
+    expect(selectCoreOxlintStripe(shards, { index: 6, total: 6 })).toEqual([]);
+    expect(() =>
+      selectCoreOxlintStripe(createOxlintShards({ cwd: "/repo" }), { index: 1, total: 2 }),
+    ).toThrow("--core-stripe requires a non-empty core-only shard selection");
+  });
+
+  it.each([
+    ["--core-stripe=0/3"],
+    ["--core-stripe=4/3"],
+    ["--core-stripe=1/0"],
+    ["--core-stripe=wat"],
+    ["--core-stripe", "1/3"],
+  ])("rejects invalid core stripe arguments: %s", (...args) => {
+    expect(() => parseShardRunnerArgs(args)).toThrow(/--core-stripe/u);
   });
 
   it.each([["--only"], ["--only", "--split-core"], ["--only="], ["--only=-h"]])(

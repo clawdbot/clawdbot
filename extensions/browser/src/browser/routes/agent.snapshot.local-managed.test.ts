@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
+const tabLookup = vi.hoisted(() => vi.fn());
+
 const routeState = vi.hoisted(() => ({
   profileCtx: {
     profile: {
@@ -15,12 +17,13 @@ const routeState = vi.hoisted(() => ({
       targetId: "7",
       url: "http://127.0.0.1:8080/admin",
       wsUrl: "ws://127.0.0.1/devtools/page/7",
+      wsLookup: tabLookup,
     })),
   },
 }));
 
 const cdpMocks = vi.hoisted(() => ({
-  getMainFrameDocumentIdentityViaCdp: vi.fn<() => Promise<string | undefined>>(
+  getMainFrameDocumentIdentityViaCdp: vi.fn<(_opts?: unknown) => Promise<string | undefined>>(
     async () => "cdp:test-document",
   ),
   snapshotAria: vi.fn(async () => ({
@@ -122,6 +125,7 @@ describe("local-managed browser snapshot routes", () => {
     cdpMocks.getMainFrameDocumentIdentityViaCdp.mockReset().mockResolvedValue("cdp:test-document");
     cdpMocks.snapshotAria.mockClear();
     cdpMocks.snapshotRoleViaCdp.mockClear();
+    tabLookup.mockClear();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
     navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
   });
@@ -191,6 +195,22 @@ describe("local-managed browser snapshot routes", () => {
     expect(response.body).toEqual({
       error: "Frame changed while its browser snapshot was being captured; retry.",
     });
+  });
+
+  it("uses the tab lookup pin when reading delta document identity via CDP", async () => {
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
+    const handler = getSnapshotGetHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, response.res);
+
+    expect(response.statusCode).toBe(200);
+    expect(cdpMocks.getMainFrameDocumentIdentityViaCdp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wsUrl: "ws://127.0.0.1/devtools/page/7",
+        lookup: tabLookup,
+      }),
+    );
   });
 
   it("disables deltas when no stable document identity is available", async () => {

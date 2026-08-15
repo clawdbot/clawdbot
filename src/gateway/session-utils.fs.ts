@@ -4,6 +4,10 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  estimateStringChars,
+  estimateTokensFromChars,
+} from "@openclaw/normalization-core/cjk-chars";
+import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber as resolvePositiveUsageNumber,
   resolveIntegerOption,
@@ -26,7 +30,6 @@ import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { truncateUtf16Safe } from "../utils.js";
-import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";

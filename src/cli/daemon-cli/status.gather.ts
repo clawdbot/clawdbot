@@ -1,5 +1,6 @@
 // Collects daemon status from service files, config snapshots, ports, probes, and plugin drift.
 import fs from "node:fs/promises";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
@@ -29,6 +30,7 @@ import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-detail
 import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
+import type { HostDesktopStatus } from "../../gateway/desktop/host-source.js";
 import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { resolveGatewayProbeCredentialConfig } from "../../gateway/probe-auth.js";
 import {
@@ -40,7 +42,6 @@ import {
   inspectBestEffortPrimaryTailnetIPv4,
   resolveBestEffortGatewayBindHostForDisplay,
 } from "../../infra/network-discovery-display.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import {
   inspectPortConnections,
@@ -238,6 +239,7 @@ async function readFullStatusConfig(params: {
   const io = createConfigIO({
     env: params.env,
     configPath: params.configPath,
+    observe: false,
     pluginValidation: params.pluginValidation ?? "skip",
     logger: {
       error: () => {},
@@ -312,6 +314,7 @@ export type DaemonStatus = {
     mismatch?: boolean;
   };
   gateway?: GatewayStatusSummary;
+  hostDesktop?: HostDesktopStatus;
   port?: {
     port: number;
     status: PortUsageStatus;
@@ -340,6 +343,7 @@ export type DaemonStatus = {
     };
     server?: {
       version?: string | null;
+      buildId?: string | null;
       connId?: string | null;
     };
     version?: string | null;
@@ -792,6 +796,10 @@ export async function gatherDaemonStatus(
     }
   }
 
+  const hostDesktop = await (
+    await import("../../gateway/desktop/host-source.js")
+  ).inspectHostDesktop({ config: daemonCfg.desktop?.host });
+
   return {
     cli: resolveCliStatusSummary(),
     logFile: resolveConfiguredLogFilePath(cliCfg),
@@ -824,6 +832,7 @@ export async function gatherDaemonStatus(
           }
         : {}),
     },
+    hostDesktop: hostDesktop.status,
     port: portStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
     ...(establishedClients ? { connections: establishedClients } : {}),

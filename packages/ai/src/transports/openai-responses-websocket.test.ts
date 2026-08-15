@@ -64,7 +64,7 @@ import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   createOpenAIResponsesWebSocketStream,
-  supportsNativeOpenAIResponsesWebSocket,
+  supportsNativeOpenAIResponsesEndpoint,
 } from "./openai-responses-websocket.js";
 
 const initialHost = getAiTransportHost();
@@ -139,7 +139,7 @@ describe("native OpenAI Responses WebSocket transport", () => {
 
   it("only enables WebSockets for the official native OpenAI Responses endpoint", () => {
     expect(
-      supportsNativeOpenAIResponsesWebSocket({
+      supportsNativeOpenAIResponsesEndpoint({
         provider: "openai",
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
@@ -156,7 +156,7 @@ describe("native OpenAI Responses WebSocket transport", () => {
     ["different provider", "azure-openai", "https://api.openai.com/v1"],
   ])("rejects %s", (_name, provider, baseUrl) => {
     expect(
-      supportsNativeOpenAIResponsesWebSocket({ provider, api: "openai-responses", baseUrl }),
+      supportsNativeOpenAIResponsesEndpoint({ provider, api: "openai-responses", baseUrl }),
     ).toBe(false);
   });
 

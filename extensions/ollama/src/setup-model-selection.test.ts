@@ -6,7 +6,7 @@ import {
   findAvailableOllamaModelName,
   mergeUniqueModelNames,
   normalizeOllamaModelName,
-  selectAppGuidedOllamaModelId,
+  selectAppGuidedOllamaModelFromDiscovery,
 } from "./setup-model-selection.js";
 
 afterEach(() => {
@@ -73,12 +73,37 @@ describe("Ollama onboarding model selection", () => {
 
   it("selects a deterministic tools-capable model with enough context", () => {
     expect(
-      selectAppGuidedOllamaModelId([
-        { id: "llama3:8b", contextWindow: 32_768, supportsTools: true },
-        { id: "qwen3:0.6b", contextWindow: 40_960, supportsTools: true },
-        { id: "gemma4:e4b", contextWindow: 8_192, supportsTools: true },
+      selectAppGuidedOllamaModelFromDiscovery([
+        { name: "llama3:8b", contextWindow: 32_768, capabilities: ["tools"] },
+        { name: "qwen3:0.6b", contextWindow: 40_960, capabilities: ["tools"] },
+        { name: "gemma4:e4b", contextWindow: 8_192, capabilities: ["tools"] },
       ]),
     ).toBe("qwen3:0.6b");
+  });
+
+  it("prefers the smallest non-reasoning setup model", () => {
+    expect(
+      selectAppGuidedOllamaModelFromDiscovery([
+        {
+          name: "deepseek-r1:8b",
+          contextWindow: 131_072,
+          capabilities: ["tools", "thinking"],
+          size: 1_000,
+        },
+        {
+          name: "orieg/gemma3-tools:12b-ft",
+          contextWindow: 131_072,
+          capabilities: ["tools"],
+          size: 8_000,
+        },
+        {
+          name: "llama3.2:latest",
+          contextWindow: 131_072,
+          capabilities: ["tools"],
+          size: 2_000,
+        },
+      ]),
+    ).toBe("llama3.2:latest");
   });
 
   it("aborts pending model discovery with the setup signal", async () => {

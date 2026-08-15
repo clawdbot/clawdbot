@@ -13,6 +13,7 @@ import {
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
 import type { AgentHarness } from "./harness/types.js";
+import { createEmptyPluginMetadataSnapshot } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 type IsolatedCliRunParams = {
   preparedRunAdmission: PreparedAgentRunAdmission;
@@ -145,7 +146,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.acquireAgentRunPreparedModelRuntime.mockResolvedValue({
     snapshot: {
+      config: {},
+      metadataSnapshot: createEmptyPluginMetadataSnapshot("/tmp/workspace"),
       pluginRegistry: createEmptyPluginRegistry(),
+      workspaceDir: "/tmp/workspace",
       createStores: () => ({ modelRegistry: {} }),
     },
     release: vi.fn(),
@@ -195,6 +199,9 @@ describe("runIsolatedCompletion", () => {
     await expect(runIsolatedCompletion(request())).resolves.toMatchObject({
       text: "native result",
       owner: { kind: "harness", id: "codex" },
+    });
+    expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(expect.any(Object), {
+      catalogMode: "static",
     });
     expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
     expect(runIsolatedCompletionV2).toHaveBeenCalledWith(

@@ -13,7 +13,7 @@ import {
   type NativeHookRelayProcessResponse,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { coerceErrorMessage as formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   normalizeTrimmedStringList,
   readStringField as readString,
@@ -71,7 +71,6 @@ export async function handleCodexAppServerApprovalRequest(params: {
     "allowedEvents" | "generation" | "relayId"
   >;
   autoApprove?: boolean;
-  autoApproveOpenClawToolPolicy?: boolean;
   signal?: AbortSignal;
   onNativeToolFailureDisposition?: (
     itemId: string,
@@ -123,16 +122,6 @@ export async function handleCodexAppServerApprovalRequest(params: {
       return resolvePolicyApproval(policyOutcome.outcome);
     }
     const canAutoApproveConcreteToolCall = CONCRETE_TOOL_AUTO_APPROVAL_METHODS.has(params.method);
-    if (
-      canAutoApproveConcreteToolCall &&
-      params.autoApproveOpenClawToolPolicy === true &&
-      policyOutcome?.outcome === "allowed"
-    ) {
-      return resolvePolicyApproval(
-        "approved-once",
-        "Codex app-server approval accepted by OpenClaw tool policy.",
-      );
-    }
     if (canAutoApproveConcreteToolCall && params.autoApprove === true) {
       return resolvePolicyApproval(
         "approved-session",
@@ -232,7 +221,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
       message: cancelled
         ? "Codex app-server approval cancelled because the run stopped."
         : `Codex app-server approval route failed: ${formatCodexDisplayText(
-            formatErrorMessage(error),
+            coerceErrorMessage(error),
           )}`,
     });
     return buildApprovalResponse(
@@ -585,7 +574,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
       handled: true,
       blocked: true,
       reason: `OpenClaw native hook relay unavailable for Codex app-server approval: ${formatCodexDisplayText(
-        formatErrorMessage(error),
+        coerceErrorMessage(error),
       )}`,
       failureDisposition: "failed",
     };
@@ -1193,7 +1182,7 @@ function approvalKindForMethod(method: string): AgentApprovalEventData["kind"] {
 function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApprovalEventData): void {
   void params.onAgentEvent?.({
     stream: "approval",
-    data: data as unknown as Record<string, unknown>,
+    data: { ...data },
   });
 }
 

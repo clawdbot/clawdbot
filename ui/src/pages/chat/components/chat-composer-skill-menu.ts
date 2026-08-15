@@ -3,6 +3,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   getSkillCommandCompletions,
+  getSkillDisplayName,
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
@@ -175,7 +176,7 @@ export function getActiveSkillMenuOptionLabel(state: ChatComposerState): string 
     return "";
   }
   const command = state.skillMenuItems[state.skillMenuIndex];
-  return command ? `$${command.name} ${getSlashCommandDescription(command)}` : "";
+  return command ? `${getSkillDisplayName(command)} ${getSlashCommandDescription(command)}` : "";
 }
 
 export function scrollActiveSkillMenuOptionIntoView(
@@ -279,7 +280,7 @@ export function renderSkillMenu(
                   >
                     <span class="slash-menu-leading">
                       <span class="slash-menu-icon">${icons.zap}</span>
-                      <span class="slash-menu-name">$${command.name}</span>
+                      <span class="slash-menu-name">${getSkillDisplayName(command)}</span>
                     </span>
                     <span class="slash-menu-trailing">
                       <span class="slash-menu-desc">${getSlashCommandDescription(command)}</span>

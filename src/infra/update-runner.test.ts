@@ -302,6 +302,41 @@ describe("runGatewayUpdate", () => {
     },
   );
 
+  it("skips an unrelated enclosing git root before the OpenClaw checkout", async () => {
+    const versionManagerRoot = path.join(tempDir, "version-manager");
+    const binDir = path.join(versionManagerRoot, "bin");
+    const sourceRoot = path.join(tempDir, "source");
+    await Promise.all([
+      fs.mkdir(binDir, { recursive: true }),
+      fs.mkdir(sourceRoot, { recursive: true }),
+    ]);
+    await fs.writeFile(
+      path.join(sourceRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      "utf8",
+    );
+
+    const { runner, calls } = createRunner({
+      [`git -C ${binDir} rev-parse --show-toplevel`]: { stdout: versionManagerRoot },
+      [`git -C ${sourceRoot} rev-parse --show-toplevel`]: { stdout: sourceRoot },
+    });
+
+    await expect(
+      resolveUpdateInstallSurface({
+        argv1: path.join(binDir, "openclaw"),
+        cwd: sourceRoot,
+        timeoutMs: 1000,
+        runCommand: runner,
+      }),
+    ).resolves.toMatchObject({
+      kind: "git",
+      mode: "git",
+      root: sourceRoot,
+      packageRoot: sourceRoot,
+    });
+    expect(calls).toContain(`git -C ${sourceRoot} rev-parse --show-toplevel`);
+  });
+
   async function setupUiIndex() {
     const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
     await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
@@ -3093,7 +3128,6 @@ describe("runGatewayUpdate", () => {
       portableGitUsr,
     ]);
     expect(installEnv?.NPM_CONFIG_SCRIPT_SHELL).toBeUndefined();
-    expect(installEnv?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
   });
 
   it("reports staged npm swap failures as global install failures", async () => {

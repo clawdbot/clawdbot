@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import { resolveNodeWorkerInstallation } from "../../node-host/node-worker-build.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
@@ -52,6 +53,7 @@ function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBu
     bundleHash: "a".repeat(64),
     openclawVersion: "1.2.3",
     protocolFeatures: [],
+    tarballBytes: 1,
     tarballSha256: "b".repeat(64),
     tarballPath: "/tmp/openclaw-worker.tgz",
     ...overrides,
@@ -82,9 +84,24 @@ describe("worker bundle producer", () => {
         cacheDir: path.join(root, "cache-b"),
         openclawVersion: "1.2.3",
       }).prepare();
+      const nodeBuild = (
+        await resolveNodeWorkerInstallation({
+          packageRoot: packageA,
+          openclawVersion: "1.2.3",
+          protocolFeatures: [],
+        })
+      ).build;
 
       expect(first.bundleHash).toMatch(/^[a-f0-9]{64}$/u);
       expect(second.bundleHash).toBe(first.bundleHash);
+      await expect(fs.stat(first.tarballPath)).resolves.toMatchObject({
+        size: first.tarballBytes,
+      });
+      expect(nodeBuild).toEqual({
+        bundleHash: first.bundleHash,
+        openclawVersion: first.openclawVersion,
+        protocolFeatures: first.protocolFeatures,
+      });
       await expect(listTarball(first.tarballPath)).resolves.toEqual([
         "dist/entry.js",
         "dist/nested/worker.js",
@@ -362,6 +379,104 @@ describe("worker bundle producer", () => {
       expect(second.bundleHash).not.toBe(first.bundleHash);
       await expect(fs.stat(first.tarballPath)).resolves.toBeDefined();
       await expect(fs.stat(second.tarballPath)).resolves.toBeDefined();
+    });
+  });
+
+  it("prunes unreferenced bundles only for an exclusive cache owner", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-prune-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      const cacheDir = path.join(root, "cache");
+      await writeFixture(packageRoot, [["dist/entry.js", "export const value = 1;\n"]]);
+      const previous = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+      await fs.writeFile(
+        path.join(packageRoot, "dist/entry.js"),
+        "export const value = 2;\n",
+        "utf8",
+      );
+      const owner = createWorkerBundleProducer({
+        packageRoot,
+        cacheDir,
+        cacheOwnership: "exclusive",
+      });
+      const current = await owner.prepare();
+
+      await owner.prune([]);
+
+      await expect(fs.stat(previous.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+    });
+  });
+
+  it("retains durable hashes while pruning an exclusive cache", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-retain-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      const cacheDir = path.join(root, "cache");
+      await writeFixture(packageRoot, [["dist/entry.js", "export const value = 1;\n"]]);
+      const previous = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+      await fs.writeFile(
+        path.join(packageRoot, "dist/entry.js"),
+        "export const value = 2;\n",
+        "utf8",
+      );
+      const owner = createWorkerBundleProducer({
+        packageRoot,
+        cacheDir,
+        cacheOwnership: "exclusive",
+      });
+      const current = await owner.prepare();
+
+      await owner.prune([previous.bundleHash]);
+
+      await expect(fs.stat(previous.tarballPath)).resolves.toBeDefined();
+      await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+    });
+  });
+
+  it("reclaims recognized crash artifacts but preserves unknown cache entries", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-crash-cleanup-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      const cacheDir = path.join(root, "cache");
+      await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
+      const owner = createWorkerBundleProducer({
+        packageRoot,
+        cacheDir,
+        cacheOwnership: "exclusive",
+      });
+      const current = await owner.prepare();
+      const staging = path.join(cacheDir, ".staging-stale");
+      const temporary = path.join(
+        cacheDir,
+        `${"b".repeat(64)}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
+      );
+      const unknown = path.join(cacheDir, "keep-me.txt");
+      await fs.mkdir(staging);
+      await fs.writeFile(temporary, "partial", "utf8");
+      await fs.writeFile(unknown, "operator-owned", "utf8");
+
+      await owner.prune([]);
+
+      await expect(fs.stat(staging)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(temporary)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(unknown, "utf8")).resolves.toBe("operator-owned");
+      await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+    });
+  });
+
+  it("keeps custom caches non-destructive and failed preparations non-destructive", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-shared-cache-" }, async (root) => {
+      const cacheDir = path.join(root, "cache");
+      await fs.mkdir(cacheDir);
+      const historical = path.join(cacheDir, `${"c".repeat(64)}.tgz`);
+      await fs.writeFile(historical, "historical", "utf8");
+      const shared = createWorkerBundleProducer({
+        packageRoot: path.join(root, "missing-package"),
+        cacheDir,
+      });
+
+      await expect(shared.prepare()).rejects.toBeDefined();
+      await shared.prune([]);
+
+      await expect(fs.readFile(historical, "utf8")).resolves.toBe("historical");
     });
   });
 

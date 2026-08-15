@@ -361,8 +361,8 @@ function assertLocalFallbackMatchesGatewayRequest(
 function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
   const { tokens, ...rest } = device;
   return {
-    ...(rest as unknown as PairedDevice),
-    tokens: summarizeDeviceTokens(tokens) as DeviceTokenSummary[] | undefined,
+    ...rest,
+    tokens: summarizeDeviceTokens(tokens),
   };
 }
 
@@ -940,6 +940,30 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
   if (!list.pending?.length && !list.paired?.length) {
     defaultRuntime.log(theme.muted("No device pairing entries."));
   }
+}
+
+export async function runDevicesJoinCodeCommand(opts: DevicesRpcOpts): Promise<void> {
+  const result = await callGatewayCli(
+    "device.pair.setupCode",
+    opts,
+    {
+      bootstrapProfile: "node",
+      includeQr: false,
+      joinUrl: true,
+    },
+    { scopes: [ADMIN_SCOPE] },
+  );
+  const joinUrl = normalizeOptionalString((result as { joinUrl?: unknown }).joinUrl);
+  if (!joinUrl) {
+    throw new Error("Gateway did not return a device join URL.");
+  }
+  const command = `npx openclaw connect ${quoteCliArg(joinUrl)}`;
+  if (opts.json) {
+    defaultRuntime.writeJson({ joinUrl, command });
+    return;
+  }
+  defaultRuntime.log(joinUrl);
+  defaultRuntime.log(command);
 }
 
 export async function runDevicesRemoveCommand(

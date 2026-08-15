@@ -1472,8 +1472,10 @@ async function createChatPickerScenario(
     // Advertised Gateway methods gate session actions (see
     // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
     // every session context-menu row disabled, so the harness could not show
-    // the menu operators actually see.
+    // the menu operators actually see. browser.request/terminal.open likewise
+    // gate the chat header's panel toggles, which stayed invisible here.
     featureMethods: [
+      "browser.request",
       "chat.metadata",
       "chat.startup",
       "question.list",
@@ -1492,8 +1494,13 @@ async function createChatPickerScenario(
       "sessions.patchMany",
       "sessions.catalog.list",
       "sessions.catalog.read",
+      "sessions.create",
       "system.info",
+      "terminal.open",
     ],
+    // Terminal has a second gate beyond the advertised method (see
+    // ui/src/lib/terminal-availability.ts).
+    terminalEnabled: true,
     historyMessages: buildScrollableChatHistory(baseTime),
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
@@ -1571,6 +1578,8 @@ async function createChatPickerScenario(
       "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
       // Coding session catalogs so the sidebar's catalog sections (header
       // right-click menu, hide/restore preference) are exercised in the mock.
+      // Ids must match registered plugin catalogs (`claude`, `codex`) or the
+      // sidebar cannot resolve bundled brand marks.
       "sessions.catalog.list": {
         catalogs: [
           {
@@ -1609,7 +1618,7 @@ async function createChatPickerScenario(
             ],
           },
           {
-            id: "claude-code",
+            id: "claude",
             label: "Claude Code",
             capabilities: { continueSession: true, archive: false },
             hosts: [
@@ -1672,7 +1681,7 @@ async function createChatPickerScenario(
           },
           {
             match: {
-              catalogId: "claude-code",
+              catalogId: "claude",
               hostId: "gateway",
               threadId: "claude-thread-1",
             },
@@ -2436,6 +2445,10 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
         res.end(bootstrapBody);
       });
     },
+    // ui/vite.config.ts registers a placeholder bootstrap-config middleware and
+    // config-file plugins load first, so without "pre" its stub answers every
+    // request and the scenario's bootstrap fields never reach the app.
+    enforce: "pre",
     name: "openclaw-control-ui-mock-gateway",
     transformIndexHtml(html) {
       return html.replace(

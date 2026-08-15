@@ -66,7 +66,6 @@ extensions/codex/src/conversation-binding.ts
 extensions/codex/src/migration/provider.test.ts
 extensions/codex/src/migration/session-binding-sidecars.ts
 extensions/codex/src/session-catalog.test.ts
-extensions/codex/src/session-catalog.ts
 extensions/codex/src/supervision-tools.ts
 extensions/comfy/image-generation-provider.test.ts
 extensions/comfy/workflow-runtime.ts
@@ -150,7 +149,6 @@ extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/memory/manager-search.test.ts
 extensions/memory-core/src/memory/manager-search.ts
-extensions/memory-core/src/memory/manager.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
 extensions/memory-core/src/tools.test.ts
@@ -336,7 +334,6 @@ src/agents/btw.ts
 src/agents/cli-auth-epoch.test.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
-src/agents/cli-runner.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
@@ -375,7 +372,6 @@ src/agents/embedded-agent-runner/transcript-file-state.test.ts
 src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
 src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.subscribeembeddedagentsession.test.ts
-src/agents/failover-error.test.ts
 src/agents/failover-error.ts
 src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/selection.test.ts
@@ -408,12 +404,9 @@ src/agents/sessions/package-manager.ts
 src/agents/sessions/resource-loader.ts
 src/agents/sessions/settings-manager.ts
 src/agents/subagents/announce/subagent-announce-delivery.test.ts
-src/agents/subagents/announce/subagent-announce-delivery.ts
 src/agents/subagents/announce/subagent-announce.format.e2e.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
-src/agents/subagents/registry/subagent-control.ts
 src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
-src/agents/subagents/registry/subagent-registry-run-manager.ts
 src/agents/subagents/registry/subagent-registry.steer-restart.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts
 src/agents/subagents/spawn/acp-spawn-parent-stream.test.ts
@@ -528,7 +521,6 @@ src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
 src/commands/auth-choice.test.ts
 src/commands/backup-verify.test.ts
-src/commands/backup-verify.ts
 src/commands/channels.add.test.ts
 src/commands/configure.wizard.ts
 src/commands/daemon-install-helpers.test.ts
@@ -646,7 +638,6 @@ src/gateway/server-close.test.ts
 src/gateway/server-close.ts
 src/gateway/server-cron.test.ts
 src/gateway/server-cron.ts
-src/gateway/server-http.ts
 src/gateway/server-methods/agent.abort-integration.test-utils.ts
 src/gateway/server-methods/agent.base.test-utils.ts
 src/gateway/server-methods/agent.events-and-subagents.test-utils.ts
@@ -686,7 +677,6 @@ src/gateway/server-restart-sentinel.test.ts
 src/gateway/server-startup-config.secrets.test.ts
 src/gateway/server-startup-post-attach.test.ts
 src/gateway/server-startup-post-attach.ts
-src/gateway/server.auth.control-ui.suite.ts
 src/gateway/server.chat.gateway-server-chat-b.test.ts
 src/gateway/server.chat.gateway-server-chat.test.ts
 src/gateway/server.config-patch.test.ts
@@ -712,7 +702,6 @@ src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
 src/gateway/worker-environments/inference-runtime.ts
 src/gateway/worker-environments/store.ts
-src/gateway/worker-environments/worker-turn-launcher.test.ts
 src/hooks/install.ts
 src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts
