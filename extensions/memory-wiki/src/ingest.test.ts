@@ -75,6 +75,71 @@ hello from source
     );
   });
 
+  it("renders ingested Markdown as Markdown and lifts non-owned frontmatter", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-md-");
+    const inputPath = path.join(rootDir, "upstream-repro.md");
+    await fs.writeFile(
+      inputPath,
+      [
+        "---",
+        "tags: [demo]",
+        "url: https://example.invalid/demo",
+        "---",
+        "",
+        "# Demo heading",
+        "",
+        "Body text with `code`.",
+        "",
+        "```bash",
+        "echo hi",
+        "```",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+    });
+
+    const result = await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    expect(result.pageId).toBe("source.upstream-repro");
+    const page = await fs.readFile(
+      path.join(config.vault.path, "sources", "upstream-repro.md"),
+      "utf8",
+    );
+    expect(page).toContain("tags:\n  - demo");
+    expect(page).toContain("url: https://example.invalid/demo");
+    // The source body must render as Markdown, not sit inside a ```text fence.
+    expect(page).not.toContain("```text");
+    expect(page).toContain("## Content\n# Demo heading");
+    expect(page).toContain("Body text with `code`.");
+    expect(page).toContain("```bash\necho hi\n```");
+  });
+
+  it("keeps malformed frontmatter fenced instead of corrupting the page", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-badfm-");
+    const inputPath = path.join(rootDir, "broken.md");
+    await fs.writeFile(inputPath, "---\n- not\n- a\n- mapping\n---\n\n# Body\n", "utf8");
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+    });
+
+    await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    const page = await fs.readFile(path.join(config.vault.path, "sources", "broken.md"), "utf8");
+    expect(page).toContain("```text");
+    expect(page).not.toContain("## Content\n# Body");
+  });
+
   it("queues behind a held vault mutation instead of writing mid-transaction", async () => {
     const rootDir = await createTempDir("memory-wiki-ingest-lock-");
     const inputPath = path.join(rootDir, "meeting-notes.txt");

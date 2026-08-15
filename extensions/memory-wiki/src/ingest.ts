@@ -6,6 +6,7 @@ import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
+  parseWikiMarkdown,
   preserveHumanNotesBlock,
   renderMarkdownFence,
   renderWikiMarkdown,
@@ -50,6 +51,50 @@ function isEmptyExistingSourcePage(error: unknown): boolean {
   );
 }
 
+/** Page-owned frontmatter keys that a source file must never override. */
+const PAGE_OWNED_FRONTMATTER_KEYS = new Set([
+  "pageType",
+  "id",
+  "title",
+  "sourceType",
+  "sourcePath",
+  "ingestedAt",
+  "updatedAt",
+  "status",
+]);
+
+function isMarkdownSourcePath(sourcePath: string): boolean {
+  const extension = path.extname(sourcePath).toLowerCase();
+  return extension === ".md" || extension === ".markdown";
+}
+
+/**
+ * Render an ingested file's body. Markdown sources keep their body as real
+ * Markdown (so headings/tables/links render as such) and may contribute valid
+ * non-owned frontmatter keys (tags, url, date, ...). Non-Markdown inputs and
+ * malformed/non-mapping frontmatter stay fenced as plain text.
+ */
+function renderIngestContent(params: { content: string; sourcePath: string }): {
+  body: string;
+  frontmatter: Record<string, unknown>;
+} {
+  if (!isMarkdownSourcePath(params.sourcePath)) {
+    return { body: renderMarkdownFence(params.content, "text"), frontmatter: {} };
+  }
+  let parsed: ReturnType<typeof parseWikiMarkdown>;
+  try {
+    parsed = parseWikiMarkdown(params.content);
+  } catch {
+    // Malformed or non-mapping frontmatter: keep the whole input fenced so a
+    // broken source cannot corrupt page structure or leak bogus metadata.
+    return { body: renderMarkdownFence(params.content, "text"), frontmatter: {} };
+  }
+  const promoted = Object.fromEntries(
+    Object.entries(parsed.frontmatter).filter(([key]) => !PAGE_OWNED_FRONTMATTER_KEYS.has(key)),
+  );
+  return { body: parsed.body.trim(), frontmatter: promoted };
+}
+
 async function readExistingSourcePage(pagePath: string): Promise<string> {
   let readError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -83,6 +128,7 @@ async function ingestMemoryWikiSourceUnlocked(params: {
   const pagePath = path.join(params.config.vault.path, pageRelativePath);
   const created = !(await pathExists(pagePath));
   const timestamp = resolveMemoryWikiTimestamp(params.nowMs);
+  const rendered = renderIngestContent({ content, sourcePath });
 
   const markdown = renderWikiMarkdown({
     frontmatter: {
@@ -94,6 +140,9 @@ async function ingestMemoryWikiSourceUnlocked(params: {
       ingestedAt: timestamp,
       updatedAt: timestamp,
       status: "active",
+      // Non-owned keys lifted from a Markdown source's own frontmatter
+      // (tags, url, date, ...). Page-owned keys above always win.
+      ...rendered.frontmatter,
     },
     body: [
       `# ${title}`,
@@ -105,7 +154,7 @@ async function ingestMemoryWikiSourceUnlocked(params: {
       `- Updated: ${timestamp}`,
       "",
       "## Content",
-      renderMarkdownFence(content, "text"),
+      rendered.body,
       "",
       "## Notes",
       "<!-- openclaw:human:start -->",
