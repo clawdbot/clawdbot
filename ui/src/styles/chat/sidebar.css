@@ -403,7 +403,7 @@ openclaw-chat-sidebar-region,
 
 .side-panel-empty__icon {
   display: inline-flex;
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .side-panel__header .tabstrip-tab__icon svg,
