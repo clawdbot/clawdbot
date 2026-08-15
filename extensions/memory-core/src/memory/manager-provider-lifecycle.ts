@@ -1,4 +1,5 @@
 // Memory Core plugin module owns embedding provider lifecycle.
+import type { DatabaseSync } from "node:sqlite";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   formatErrorMessage,
@@ -25,6 +26,7 @@ import {
   type EmbeddingProvider,
   type EmbeddingProviderRequest,
   type EmbeddingProviderResult,
+  type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import {
@@ -55,6 +57,10 @@ const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
 
 export function clearMemoryEmbeddingProbeCache(): void {
   EMBEDDING_PROBE_CACHE.clear();
+}
+
+export function clearMemoryEmbeddingProbeCacheEntry(cacheKey: string): void {
+  EMBEDDING_PROBE_CACHE.delete(cacheKey);
 }
 
 export function resolveEffectiveMemorySearchSettings(
@@ -121,9 +127,18 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract managerIdleWaiters: Set<() => void>;
   protected abstract indexIdentityDirty: boolean;
   protected abstract indexIdentityState: MemoryIndexIdentityState;
+  private managerExclusivePromise: Promise<void> | null = null;
   protected abstract syncAdmitted(
     params?: MemorySyncParams,
-    options?: { allowEmbeddingBootstrapFallback?: boolean; queuedSessionOwner?: boolean },
+    options?: {
+      allowEmbeddingBootstrapFallback?: boolean;
+      queuedSessionOwner?: boolean;
+      suppressFallbackActivation?: boolean;
+      providerGeneration?: {
+        provider: EmbeddingProvider;
+        runtime?: EmbeddingProviderRuntime;
+      };
+    },
   ): Promise<void>;
 
   protected applyProviderResult(providerResult: EmbeddingProviderResult): void {
@@ -363,8 +378,17 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     if (provider) {
       this.provider = null;
       this.providerRuntime = undefined;
-      this.providersPendingRetirement.add(provider);
+      return this.retireProvider(provider);
     }
+    return this.drainProviderRetirementQueue();
+  }
+
+  protected retireProvider(provider: EmbeddingProvider): Promise<void> {
+    this.providersPendingRetirement.add(provider);
+    return this.drainProviderRetirementQueue();
+  }
+
+  private drainProviderRetirementQueue(): Promise<void> {
     if (this.providersPendingRetirement.size === 0) {
       return this.providerRetirementPromise;
     }
@@ -446,7 +470,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
   }
 
-  protected refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
+  protected refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean; db?: DatabaseSync }) {
     const provider =
       this.settings.provider === "none"
         ? null
@@ -458,6 +482,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     const state = this.resolveCurrentIndexIdentityState({
       ...(provider !== undefined ? { provider } : {}),
       providerKeyKnown: params?.providerKeyKnown,
+      ...(params?.db
+        ? {
+            meta: this.readMetaFrom(params.db),
+            hasIndexedChunks: this.hasIndexedChunksIn(params.db),
+          }
+        : {}),
     });
     this.indexIdentityState = state;
     this.indexIdentityDirty =
@@ -482,6 +512,10 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected async withManagerOperation<T>(run: () => Promise<T>): Promise<T> {
+    while (this.managerExclusivePromise) {
+      const exclusive = this.managerExclusivePromise;
+      await exclusive;
+    }
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
     }
@@ -496,6 +530,46 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         for (const resolve of waiters) {
           resolve();
         }
+      }
+    }
+  }
+
+  protected async withManagerExclusiveOperation<T>(run: () => Promise<T>): Promise<T> {
+    if (this.closing || this.closed) {
+      throw new Error("Memory index manager is closed");
+    }
+    const previous = this.managerExclusivePromise;
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous ? previous.then(() => current) : current;
+    this.managerExclusivePromise = queued;
+    if (previous) {
+      await previous;
+    }
+    try {
+      await this.awaitManagerIdle();
+      if (this.closing || this.closed) {
+        throw new Error("Memory index manager is closed");
+      }
+      this.activeManagerOperations += 1;
+      try {
+        return await run();
+      } finally {
+        this.activeManagerOperations -= 1;
+        if (this.activeManagerOperations === 0) {
+          const waiters = Array.from(this.managerIdleWaiters);
+          this.managerIdleWaiters.clear();
+          for (const resolve of waiters) {
+            resolve();
+          }
+        }
+      }
+    } finally {
+      release();
+      if (this.managerExclusivePromise === queued) {
+        this.managerExclusivePromise = null;
       }
     }
   }

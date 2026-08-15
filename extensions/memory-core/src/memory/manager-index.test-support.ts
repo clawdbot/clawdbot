@@ -75,6 +75,9 @@ type ProviderControls = {
   providerNullResult: string | null;
   providerCloseGate: Promise<void> | null;
   providerInitGate: Promise<void> | null;
+  providerProbeGate: Promise<void> | null;
+  providerQueryCalls: number;
+  providerQueryTimeoutMs: number | null;
   providerCalls: ProviderCall[];
   forceNoProvider: boolean;
   identityAlias: {
@@ -133,6 +136,9 @@ const providerState = vi.hoisted(() => ({
   providerNullResult: null as string | null,
   providerCloseGate: null as Promise<void> | null,
   providerInitGate: null as Promise<void> | null,
+  providerProbeGate: null as Promise<void> | null,
+  providerQueryCalls: 0,
+  providerQueryTimeoutMs: null as number | null,
   providerCalls: [] as ProviderCall[],
   forceNoProvider: false,
   identityAlias: {
@@ -257,9 +263,22 @@ vi.mock("./embeddings.js", async (importOriginal) => {
               throw providerState.providerCloseFailure;
             }
           },
-          embedQuery: async (text: string) => embedText(text),
-          embedBatch: async (texts: string[]) => {
+          embedQuery: async (text: string, requestOptions?: { signal?: AbortSignal }) => {
+            providerState.providerQueryCalls += 1;
+            await providerState.providerProbeGate;
+            if (requestOptions?.signal?.aborted) {
+              const reason = requestOptions.signal.reason;
+              throw reason instanceof Error ? reason : new Error("embedding aborted");
+            }
+            return embedText(text);
+          },
+          embedBatch: async (texts: string[], requestOptions?: { signal?: AbortSignal }) => {
             providerState.embedBatchCalls += 1;
+            await providerState.providerProbeGate;
+            if (requestOptions?.signal?.aborted) {
+              const reason = requestOptions.signal.reason;
+              throw reason instanceof Error ? reason : new Error("embedding aborted");
+            }
             providerState.embeddedBatchTexts.push(...texts);
             return texts.map(embedText);
           },
@@ -357,6 +376,14 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                   },
                 }
               : {}),
+        ...(providerState.providerQueryTimeoutMs !== null
+          ? {
+              runtime: {
+                id: providerId,
+                inlineQueryTimeoutMs: providerState.providerQueryTimeoutMs,
+              },
+            }
+          : {}),
       };
     },
   };
@@ -564,6 +591,9 @@ export function createManagerIndexFixture(deps: {
     providerState.providerNullResult = null;
     providerState.providerCloseGate = null;
     providerState.providerInitGate = null;
+    providerState.providerProbeGate = null;
+    providerState.providerQueryCalls = 0;
+    providerState.providerQueryTimeoutMs = null;
     providerState.providerCalls = [];
     providerState.forceNoProvider = false;
 

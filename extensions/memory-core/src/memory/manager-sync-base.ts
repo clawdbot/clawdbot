@@ -344,7 +344,11 @@ export abstract class MemoryManagerSyncBase {
   }
 
   protected hasIndexedChunks(): boolean {
-    const row = this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() as
+    return this.hasIndexedChunksIn(this.db);
+  }
+
+  protected hasIndexedChunksIn(db: DatabaseSync): boolean {
+    const row = db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() as
       | { found?: number }
       | undefined;
     return row?.found === 1;
@@ -720,9 +724,13 @@ export abstract class MemoryManagerSyncBase {
   }
 
   protected readMeta(): MemoryIndexMeta | null {
-    const row = this.db
-      .prepare(`SELECT value FROM memory_index_meta WHERE key = ?`)
-      .get(META_KEY) as { value: string } | undefined;
+    return this.readMetaFrom(this.db);
+  }
+
+  protected readMetaFrom(db: DatabaseSync): MemoryIndexMeta | null {
+    const row = db.prepare(`SELECT value FROM memory_index_meta WHERE key = ?`).get(META_KEY) as
+      | { value: string }
+      | undefined;
     if (!row?.value) {
       this.lastMetaSerialized = null;
       return null;

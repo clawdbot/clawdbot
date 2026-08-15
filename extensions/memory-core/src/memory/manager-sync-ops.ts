@@ -73,6 +73,7 @@ const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   private fallbackProviderInitPromise: Promise<boolean> | null = null;
+  protected suppressSyncFallbackActivation = false;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
   protected beginSyncProviderGeneration(_options?: { forceFtsOnly?: boolean }): void {}
@@ -285,8 +286,8 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         },
         shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
         activateFallbackProvider: async (reason) => {
-          this.endSyncProviderGeneration();
-          return await this.activateFallbackProvider(reason);
+          const result = await this.activateFallbackForSync(reason);
+          return result !== "inactive";
         },
       });
       if (targetedSessionSync.handled) {
@@ -346,12 +347,8 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     } catch (err) {
       const reason = formatErrorMessage(err);
       const shouldFallback = this.shouldFallbackOnError(err);
-      if (shouldFallback) {
-        // A failed generation cannot wait on its own sync lease while activating fallback.
-        this.endSyncProviderGeneration();
-      }
-      const activated = shouldFallback && (await this.activateFallbackProvider(reason));
-      if (activated) {
+      const activation = shouldFallback ? await this.activateFallbackForSync(reason) : "inactive";
+      if (activation === "activated") {
         if (needsFullReindex && !hasTargetArchiveFiles) {
           this.beginSyncProviderGeneration();
           await this.runInPlaceReindex({
@@ -360,6 +357,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             progress: progress ?? undefined,
           });
         }
+        return;
+      }
+      if (activation === "suppressed") {
+        // Primary recovery promoted a provider while this sync was in flight;
+        // the stale failure is already resolved, so discard the sync work.
         return;
       }
       if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
@@ -416,6 +418,33 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         this.fallbackProviderInitPromise = null;
       }
     }
+  }
+
+  // A sync runs outside the manager operation gate, so primary recovery can
+  // promote a new provider while the sync's captured generation is still in
+  // flight. Release the generation, then fence activation against the provider
+  // the sync started with: if the manager has since moved to a recovered
+  // primary, the sync's failure is stale and must not retire that primary to
+  // re-install fallback. "activated" installs fallback, "suppressed" means
+  // recovery already resolved the index so the sync returns cleanly, and
+  // "inactive" leaves the caller to throw or degrade on its own.
+  protected async activateFallbackForSync(
+    reason: string,
+  ): Promise<"activated" | "suppressed" | "inactive"> {
+    const generationProvider = this.syncProviderGeneration?.provider ?? null;
+    this.endSyncProviderGeneration();
+    if (this.suppressSyncFallbackActivation) {
+      log.debug("memory embeddings: skipping fallback activation for primary recovery reindex");
+      return "inactive";
+    }
+    if (generationProvider && this.provider !== generationProvider) {
+      log.debug(
+        "memory embeddings: skipping stale sync fallback activation after primary recovery",
+      );
+      return "suppressed";
+    }
+    const activated = await this.activateFallbackProvider(reason);
+    return activated ? "activated" : "inactive";
   }
 
   protected getPendingFallbackProviderInitialization(): Promise<boolean> | null {

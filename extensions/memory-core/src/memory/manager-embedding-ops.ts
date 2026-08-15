@@ -224,7 +224,7 @@ function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: number): T[
   return batches;
 }
 
-function resolveEmbeddingTimeoutMs(params: {
+export function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
   providerId?: string;
   providerRuntime?: Pick<
@@ -271,7 +271,7 @@ function resolveMemoryIndexConcurrency(params: {
   return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
-async function runEmbeddingOperationWithTimeout<T>(params: {
+export async function runEmbeddingOperationWithTimeout<T>(params: {
   timeoutMs: number;
   message: string;
   /** Caller-owned cancellation, merged with the per-call watchdog abort. */
@@ -360,13 +360,24 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  protected override beginSyncProviderGeneration(options?: { forceFtsOnly?: boolean }): void {
+  protected override beginSyncProviderGeneration(options?: {
+    forceFtsOnly?: boolean;
+    providerGeneration?: {
+      provider: EmbeddingProvider;
+      runtime?: MemoryEmbeddingProviderRuntime;
+    };
+  }): void {
     if (this.syncProviderGeneration) {
       this.syncProviderGenerationOwners += 1;
       return;
     }
-    const provider = options?.forceFtsOnly ? null : this.provider;
-    const runtime = provider ? this.providerRuntime : undefined;
+    const generationProvider = options?.providerGeneration?.provider ?? null;
+    const provider = options?.forceFtsOnly ? null : (generationProvider ?? this.provider);
+    const runtime = provider
+      ? generationProvider
+        ? options?.providerGeneration?.runtime
+        : this.providerRuntime
+      : undefined;
     const identities = resolveMemoryIndexProviderIdentities({
       provider,
       cacheKeyData: runtime?.cacheKeyData,
