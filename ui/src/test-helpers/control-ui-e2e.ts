@@ -327,6 +327,11 @@ export type ControlUiMockGatewayScenario = {
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
 
+const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
+const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
+  ((DEFAULT_MOCK_MAX_PAYLOAD_BYTES - 256 * 1024) * 3) / 4,
+);
+
 export type ControlUiE2eServer = {
   baseUrl: string;
   close: () => Promise<void>;
@@ -827,7 +832,7 @@ function normalizeScenario(
       ? basePathWithSlash.slice(0, -1)
       : basePathWithSlash;
   return {
-    attachmentMaxBytes: scenario.attachmentMaxBytes ?? 1_048_576,
+    attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
     agentModel:
       scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
@@ -856,7 +861,7 @@ function normalizeScenario(
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
     omitFeatureMethods: scenario.omitFeatureMethods ?? false,
     historyMessages: scenario.historyMessages ?? [],
-    maxPayload: scenario.maxPayload ?? 1_048_576,
+    maxPayload: scenario.maxPayload ?? DEFAULT_MOCK_MAX_PAYLOAD_BYTES,
     methodResponses: scenario.methodResponses ?? {},
     webSocketPassthroughPrefixes: scenario.webSocketPassthroughPrefixes ?? [],
     inFlightRun: scenario.inFlightRun ?? null,
@@ -1672,7 +1677,7 @@ function installControlUiMockGateway(
             tickIntervalMs: 30_000,
             attachments: {
               maxBytes: scenario.attachmentMaxBytes,
-              maxImageBytes: scenario.attachmentMaxBytes,
+              maxImageBytes: Math.min(scenario.attachmentMaxBytes, 5 * 1024 * 1024),
             },
             allowedSessionVisibilities: scenario.allowedSessionVisibilities,
             hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
