@@ -1,4 +1,3 @@
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 /**
  * Bundled Codex plugin entry: app-server harness, media understanding,
  * migration provider, CLI-session commands, and binding hooks.
@@ -133,11 +132,6 @@ export default definePluginEntry({
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
     });
-    const nodeSessionCatalogControl = sessionCatalogControlFactory.forRequest(
-      resolveSessionAgentIds({
-        config: resolveCurrentConfig() ?? (api.config as OpenClawConfig),
-      }).sessionAgentId,
-    );
     const sessionCatalogEnabled =
       readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
     if (sessionCatalogEnabled) {
@@ -148,10 +142,13 @@ export default definePluginEntry({
         getPluginConfig: resolveCurrentPluginConfig,
         getRuntimeConfig: resolveCurrentConfig,
       });
-      for (const command of createCodexSessionCatalogNodeHostCommands(nodeSessionCatalogControl, {
-        getPluginConfig: resolveCurrentPluginConfig,
-        getRuntimeConfig: resolveCurrentConfig,
-      })) {
+      for (const command of createCodexSessionCatalogNodeHostCommands(
+        sessionCatalogControlFactory,
+        {
+          getPluginConfig: resolveCurrentPluginConfig,
+          getRuntimeConfig: () => resolveCurrentConfig() ?? (api.config as OpenClawConfig),
+        },
+      )) {
         api.registerNodeHostCommand(command);
       }
     }

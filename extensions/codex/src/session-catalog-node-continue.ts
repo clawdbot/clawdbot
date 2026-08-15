@@ -81,6 +81,7 @@ function canContinueCodexOnNode(node: CatalogNode): boolean {
 }
 
 export async function listPairedNode(params: {
+  agentId: string;
   runtime: PluginRuntime;
   node: CatalogNode;
   query: CodexSessionCatalogParams;
@@ -111,6 +112,7 @@ export async function listPairedNode(params: {
         nodeId: params.node.nodeId,
         command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
         params: {
+          agentId: params.agentId,
           cursor: params.query.cursors?.[hostId],
           limit: params.query.limitPerHost,
           searchTerm: params.query.search,
@@ -177,6 +179,7 @@ async function requireNodeForCodexContinue(params: {
 }
 
 async function resolveNodeCodexRecord(params: {
+  agentId: string;
   runtime: PluginRuntime;
   nodeId: string;
   threadId: string;
@@ -188,6 +191,7 @@ async function resolveNodeCodexRecord(params: {
       nodeId: params.nodeId,
       command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
       params: {
+        agentId: params.agentId,
         limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
         ...(cursor ? { cursor } : {}),
       },
@@ -233,6 +237,7 @@ function requireContinuableNodeRecord(record: CodexSessionCatalogSession): void 
 }
 
 async function readNodeCodexHistory(params: {
+  agentId: string;
   runtime: PluginRuntime;
   nodeId: string;
   record: CodexSessionCatalogSession;
@@ -241,6 +246,7 @@ async function readNodeCodexHistory(params: {
     nodeId: params.nodeId,
     command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
     params: {
+      agentId: params.agentId,
       threadId: params.record.threadId,
       limit: MAX_TRANSCRIPT_PAGE_LIMIT,
     },
@@ -279,6 +285,7 @@ async function continueNodeCodexSessionInner(params: {
     hostId: params.hostId,
   });
   const record = await resolveNodeCodexRecord({
+    agentId: params.agentId,
     runtime: params.api.runtime,
     nodeId,
     threadId: params.threadId,
@@ -301,6 +308,7 @@ async function continueNodeCodexSessionInner(params: {
     disposition = "existing";
   } else {
     const history = await readNodeCodexHistory({
+      agentId: params.agentId,
       runtime: params.api.runtime,
       nodeId,
       record,

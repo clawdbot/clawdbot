@@ -662,6 +662,7 @@ async function listCodexSessionCatalog(params: {
   });
   const nodeHosts = nodes.toSorted(compareNodeLabels).map(async (node) => {
     const host = await listPairedNode({
+      agentId,
       runtime: params.runtime,
       node,
       query,
@@ -675,19 +676,42 @@ async function listCodexSessionCatalog(params: {
 
 /** Builds the node-local read-only Codex app-server catalog command. */
 export function createCodexSessionCatalogNodeHostCommands(
-  control: CodexSessionCatalogControl,
+  controlFactory: CodexSessionCatalogControlFactory,
   configSources: CodexTerminalConfigSources,
 ): OpenClawPluginNodeHostCommand[] {
+  // Node commands register before an agent request exists. Bind from the invoke payload so
+  // explicit multi-agent Codex homes never collapse to an ambient default.
+  const bindRequest = (paramsJSON?: string | null) => {
+    const parsed = parseJsonParams(paramsJSON);
+    if (!isRecord(parsed)) {
+      throw new CatalogParamsError("Codex session catalog parameters must be an object");
+    }
+    const requestedAgentId = readBoundedOptionalString(parsed, "agentId", MAX_SESSION_ID_LENGTH);
+    const config = configSources.getRuntimeConfig() ?? {};
+    const agentId = resolveSessionAgentIds({ config, agentId: requestedAgentId }).sessionAgentId;
+    if (!listAgentIds(config).includes(agentId)) {
+      throw new CatalogParamsError(`unknown Codex session catalog agent: ${agentId}`);
+    }
+    const request = { ...parsed };
+    delete request.agentId;
+    return {
+      agentId,
+      control: controlFactory.forRequest(agentId),
+      params: request,
+      paramsJSON: JSON.stringify(request),
+    };
+  };
   return [
     {
       command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
       cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
       dangerous: false,
       handle: async (paramsJSON) => {
-        const pageParams = readPageParams(parseJsonParams(paramsJSON));
+        const request = bindRequest(paramsJSON);
+        const pageParams = readPageParams(request.params);
         try {
           const page = filterCatalogPageByTitle(
-            parseCatalogPage(await control.listPage(pageParams)),
+            parseCatalogPage(await request.control.listPage(pageParams)),
             pageParams.searchTerm,
           );
           return JSON.stringify(page);
@@ -702,11 +726,12 @@ export function createCodexSessionCatalogNodeHostCommands(
       cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
       dangerous: false,
       handle: async (paramsJSON) => {
-        const action = readNodeTranscriptParams(parseJsonParams(paramsJSON));
+        const request = bindRequest(paramsJSON);
+        const action = readNodeTranscriptParams(request.params);
         try {
-          await requireCatalogEligibleThread(control, action.threadId);
+          await requireCatalogEligibleThread(request.control, action.threadId);
           const page = parseTranscriptPage(
-            await control.listTurnPage({
+            await request.control.listTurnPage({
               threadId: action.threadId,
               limit: action.limit,
               sortDirection: "desc",
@@ -723,7 +748,7 @@ export function createCodexSessionCatalogNodeHostCommands(
         }
       },
     },
-    createCodexTerminalNodeHostCommand(control, configSources),
+    createCodexTerminalNodeHostCommand(bindRequest, configSources),
   ];
 }
 
@@ -812,6 +837,7 @@ async function readCodexSessionTranscript(params: {
     nodeId,
     command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
     params: {
+      agentId: params.agentId,
       threadId: params.threadId,
       limit: params.limit,
       ...(params.cursor ? { cursor: params.cursor } : {}),

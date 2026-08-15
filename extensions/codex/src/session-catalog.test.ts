@@ -165,13 +165,16 @@ function registerCodexSessionCatalog(
 }
 
 function createCodexSessionCatalogNodeHostCommands(
-  control: CodexSessionCatalogControl,
+  control:
+    | CodexSessionCatalogControl
+    | CodexSessionCatalogControlFactory
+    | CodexSessionCatalogControlFactoryStub,
   configSources: CodexTerminalConfigSources = {
     getPluginConfig: () => undefined,
     getRuntimeConfig: () => config,
   },
 ) {
-  return createCodexSessionCatalogNodeHostCommandsRuntime(control, configSources);
+  return createCodexSessionCatalogNodeHostCommandsRuntime(asControlFactory(control), configSources);
 }
 
 const commandRpcMocks = vi.hoisted(() => ({
@@ -1668,11 +1671,12 @@ describe("Codex supervision catalog", () => {
       expect.objectContaining({
         nodeId: "devbox",
         command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-        params: expect.not.objectContaining({ archived: expect.anything() }),
+        params: expect.objectContaining({ agentId: "main" }),
         timeoutMs: 65_000,
         scopes: ["operator.write"],
       }),
     );
+    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("archived");
     expect(JSON.stringify(result)).not.toContain("private");
 
     const [nodeCommand] = createCodexSessionCatalogNodeHostCommands(control);
@@ -1864,14 +1868,14 @@ describe("Codex supervision catalog", () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "healthy",
-        params: { cursor: "healthy-page-2", limit: 7, searchTerm: "match" },
+        params: { agentId: "main", cursor: "healthy-page-2", limit: 7, searchTerm: "match" },
         scopes: ["operator.write"],
       }),
     );
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "broken",
-        params: { cursor: "broken-page-2", limit: 7, searchTerm: "match" },
+        params: { agentId: "main", cursor: "broken-page-2", limit: 7, searchTerm: "match" },
         scopes: ["operator.write"],
       }),
     );
@@ -1911,6 +1915,7 @@ describe("Codex supervision catalog", () => {
         async () => await new Promise<never>(() => {}),
       );
       const pending = listPairedNode({
+        agentId: "main",
         runtime: { nodes: { invoke } } as unknown as PluginRuntime,
         node: {
           nodeId: "slow-node",
@@ -1946,6 +1951,7 @@ describe("Codex supervision catalog", () => {
       const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => await invokeResult);
       const onHost = vi.fn();
       const pending = listPairedNode({
+        agentId: "main",
         runtime: { nodes: { invoke } } as unknown as PluginRuntime,
         node: {
           nodeId: "slow-node",
@@ -2020,6 +2026,60 @@ describe("Codex supervision catalog", () => {
     });
   });
 
+  it("binds paired-node catalog commands to the invocation agent after config reload", async () => {
+    let runtimeConfig = { agents: { list: [{ id: "main" }] } } as OpenClawConfig;
+    const alphaListPage = vi.fn(async () => {
+      throw new Error("alpha control must not serve beta");
+    });
+    const betaListPage = vi.fn(async () => ({
+      sessions: [{ threadId: "thread-beta", status: "idle", source: "cli", archived: false }],
+    }));
+    const betaListTurnPage = vi.fn(async () => ({ data: [] }));
+    const alphaControl = createControl({ listPage: alphaListPage });
+    const betaControl = createControl({
+      listPage: betaListPage,
+      listTurnPage: betaListTurnPage,
+    });
+    const forRequest = vi.fn((agentId: string) =>
+      agentId === "beta" ? betaControl : alphaControl,
+    );
+    const commands = createCodexSessionCatalogNodeHostCommands(
+      { forRequest },
+      {
+        getPluginConfig: () => undefined,
+        getRuntimeConfig: () => runtimeConfig,
+      },
+    );
+    runtimeConfig = {
+      agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
+    } as OpenClawConfig;
+    const listCommand = commands.find(
+      (candidate) => candidate.command === CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+    );
+    const transcriptCommand = commands.find(
+      (candidate) => candidate.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+    );
+    if (!listCommand || !transcriptCommand) {
+      throw new Error("Codex node catalog commands were not registered");
+    }
+
+    expect(
+      JSON.parse(await listCommand.handle(JSON.stringify({ agentId: "beta", limit: 25 }))),
+    ).toEqual({
+      sessions: [{ threadId: "thread-beta", status: "idle", source: "cli", archived: false }],
+    });
+    await expect(
+      transcriptCommand.handle(
+        JSON.stringify({ agentId: "beta", threadId: "thread-beta", limit: 25 }),
+      ),
+    ).resolves.toBe(JSON.stringify({ data: [] }));
+    await expect(listCommand.handle(JSON.stringify({ limit: 25 }))).rejects.toThrow(
+      "session agent resolution has no explicit owner",
+    );
+
+    expect(alphaListPage).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed terminal resume thread ids before spawning", async () => {
     const command = createCodexSessionCatalogNodeHostCommands(createEligibleControl()).find(
       (candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND,
@@ -2049,6 +2109,9 @@ describe("Codex supervision catalog", () => {
       await fs.chmod(executable, 0o755);
     }
     process.env.PATH = binDir;
+    const explicitConfig = {
+      agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
+    } as OpenClawConfig;
     const command = createCodexSessionCatalogNodeHostCommands(
       createEligibleControl({
         listPage: vi.fn(async () => ({
@@ -2065,18 +2128,21 @@ describe("Codex supervision catalog", () => {
       }),
       {
         getPluginConfig: () => ({ appServer: { homeScope: "agent" } }),
-        getRuntimeConfig: () => config,
+        getRuntimeConfig: () => explicitConfig,
       },
     ).find((candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND);
     if (!command || command.duplex !== true) {
       throw new Error("Codex terminal command was not registered as duplex");
     }
 
-    await command.handle(JSON.stringify({ threadId, cwd: "/caller/cwd", cols: 80, rows: 24 }), {
-      signal: new AbortController().signal,
-      emitChunk: async () => {},
-      onInput: () => {},
-    });
+    await command.handle(
+      JSON.stringify({ agentId: "beta", threadId, cwd: "/caller/cwd", cols: 80, rows: 24 }),
+      {
+        signal: new AbortController().signal,
+        emitChunk: async () => {},
+        onInput: () => {},
+      },
+    );
 
     expect(command.dangerous).toBe(false);
     expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
@@ -2084,7 +2150,7 @@ describe("Codex supervision catalog", () => {
         file: executable,
         cwd: "/node/catalog/cwd",
         env: {
-          CODEX_HOME: resolveCodexAppServerHomeDir(resolveDefaultAgentDir(config)),
+          CODEX_HOME: resolveCodexAppServerHomeDir(resolveAgentDir(explicitConfig, "beta")),
         },
       }),
       expect.any(Object),
@@ -4276,6 +4342,13 @@ describe("Codex supervision actions", () => {
     expect(alpha).toMatchObject({ conversationBinding: { data: { agentId: "alpha" } } });
     expect(beta).toMatchObject({ conversationBinding: { data: { agentId: "beta" } } });
     expect(createSessionEntry).toHaveBeenCalledTimes(2);
+    expect(
+      new Set(
+        invoke.mock.calls.map(
+          ([request]) => (request.params as { agentId?: string } | undefined)?.agentId,
+        ),
+      ),
+    ).toEqual(new Set(["alpha", "beta"]));
   });
 
   it("rejects paired-node continue without the permitted run command", async () => {
@@ -4731,7 +4804,12 @@ describe("Codex supervision actions", () => {
     expect(invoke).toHaveBeenLastCalledWith({
       nodeId: "devbox",
       command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-      params: { threadId: "thread-remote", cursor: "remote-turns-1", limit: 25 },
+      params: {
+        agentId: "main",
+        threadId: "thread-remote",
+        cursor: "remote-turns-1",
+        limit: 25,
+      },
       timeoutMs: 65_000,
       scopes: ["operator.write"],
     });
