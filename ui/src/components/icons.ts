@@ -10,6 +10,12 @@ export const icons = {
   messageSquare: strokeIcon(svg` <path
     d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
   />`),
+  botMessageSquare: strokeIcon(svg` <path d="M12 6V2H8" />
+    <path d="m8 18-4 4V8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2Z" />
+    <path d="M2 12h2" />
+    <path d="M9 11v2" />
+    <path d="M15 11v2" />
+    <path d="M20 12h2" />`),
   layoutGrid: strokeIcon(svg` <rect width="7" height="7" x="3" y="3" rx="1" />
     <rect width="7" height="7" x="14" y="3" rx="1" />
     <rect width="7" height="7" x="14" y="14" rx="1" />

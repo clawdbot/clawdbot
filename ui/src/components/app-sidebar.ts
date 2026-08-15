@@ -441,8 +441,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {
-    // Pinned sessions live in the navigation zone, not a session list.
-    return renderSessionTree({ host: this, session, listItem: false });
+    // Pinned sessions live in the navigation zone, not a session list, so they
+    // carry a chat glyph to match the icon-led Pages entries beside them.
+    return renderSessionTree({
+      host: this,
+      session,
+      listItem: false,
+      lead: icons.botMessageSquare,
+    });
   }
 
   private renderSessions() {

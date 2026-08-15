@@ -174,6 +174,8 @@ export function renderRecentSession(params: {
   listItem?: boolean;
   /** Project heading this row already sits under, if any. */
   project?: string;
+  /** Glyph shown ahead of the title; set for rows that sit among Pages entries. */
+  lead?: TemplateResult;
 }) {
   const { host, session, display, listItem = true } = params;
   const pinAccess = host.readSessionMutationAccess({
@@ -348,6 +350,9 @@ export function renderRecentSession(params: {
           aria-describedby=${stateId ?? nothing}
           @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
         >
+          ${params.lead
+            ? html`<span class="nav-item__icon" aria-hidden="true">${params.lead}</span>`
+            : nothing}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__title">
               ${origin}
@@ -450,6 +455,7 @@ export function renderSessionTree(params: {
   session: SidebarRecentSession;
   listItem?: boolean;
   project?: string;
+  lead?: TemplateResult;
 }): TemplateResult {
   const { host, session, listItem = true } = params;
   const expanded = host.isSessionChildrenExpanded(session);
@@ -463,7 +469,13 @@ export function renderSessionTree(params: {
     data-session-tree=${session.key}
     role=${ifDefined(listItem ? "listitem" : undefined)}
   >
-    ${renderRecentSession({ host, session, listItem: false, project: params.project })}
+    ${renderRecentSession({
+      host,
+      session,
+      listItem: false,
+      project: params.project,
+      lead: params.lead,
+    })}
     ${expanded
       ? html`<div class="sidebar-session-tree__children">
           ${visibleChildren.length > 0
