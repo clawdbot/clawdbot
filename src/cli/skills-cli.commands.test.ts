@@ -1477,6 +1477,33 @@ describe("skills cli commands", () => {
     expectStatusWorkspaceCall("/tmp/workspace-main");
   });
 
+  it("renders named agent-selection errors without the internal class name", async () => {
+    const error = new Error(
+      "Multiple agents are configured, but this operation has no explicit owner.",
+    );
+    error.name = "AgentSelectionRequiredError";
+    resolveDefaultAgentIdMock.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    await expect(runCommand(["skills", "list"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toStrictEqual([error.message]);
+  });
+
+  it("redacts secrets from rendered skills CLI errors", async () => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    resolveDefaultAgentIdMock.mockImplementationOnce(() => {
+      throw new Error(`Skill lookup failed with token=${secret}`);
+    });
+
+    await expect(runCommand(["skills", "list"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toHaveLength(1);
+    expect(runtimeErrors[0]).toContain("Skill lookup failed");
+    expect(runtimeErrors[0]).not.toContain(secret);
+  });
+
   it("keeps non-JSON skills list output on stdout with human-readable formatting", async () => {
     await runCommand(["skills", "list"]);
 
