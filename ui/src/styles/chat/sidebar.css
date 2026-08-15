@@ -390,7 +390,9 @@ openclaw-chat-sidebar-region,
     color 120ms ease;
 }
 
-.side-panel__header .tabstrip-tab:not([active]):hover::part(base) {
+.side-panel__header
+  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base) {
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
   background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
 }
@@ -441,14 +443,29 @@ openclaw-chat-sidebar-region,
   flex: 0 0 18px;
   align-self: center;
   margin: 0;
-  opacity: 1;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  opacity: 0;
   transition:
     background-color 120ms ease,
-    color 120ms ease;
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close,
+.side-panel__header .tabstrip-tab:hover + .tabstrip-tab__close,
+.side-panel__header .tabstrip-tab__close:hover,
+.side-panel__header .tabstrip-tab__close:focus-visible {
+  opacity: 1;
+}
+
+.side-panel__header .tabstrip-tab:not([active]):hover + .tabstrip-tab__close,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:hover,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:focus-visible {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
 }
 
 .side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close {
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
   background: var(--bg-hover);
 }
 

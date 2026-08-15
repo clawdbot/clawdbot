@@ -368,6 +368,61 @@ suite.define(() => {
             "Side chat",
             "Desktop",
           ]);
+          const filesTab = sidePanel(page).locator("wa-tab").filter({ hasText: "Files" });
+          const filesClose = sidePanel(page).getByRole("button", {
+            name: "Close Files",
+            exact: true,
+          });
+          const desktopTab = sidePanel(page).locator("wa-tab").filter({ hasText: "Desktop" });
+          const desktopClose = sidePanel(page).getByRole("button", {
+            name: "Close Desktop",
+            exact: true,
+          });
+          await expect
+            .poll(() => filesClose.evaluate((button) => getComputedStyle(button).opacity))
+            .toBe("0");
+          await expect
+            .poll(() => desktopClose.evaluate((button) => getComputedStyle(button).opacity))
+            .toBe("1");
+          const filesGeometry = await filesTab.evaluate((tab) => {
+            const close = tab.nextElementSibling as HTMLElement;
+            return { closeWidth: close.offsetWidth, tabWidth: (tab as HTMLElement).offsetWidth };
+          });
+          await filesTab.hover();
+          await expect
+            .poll(() => filesClose.evaluate((button) => getComputedStyle(button).opacity))
+            .toBe("1");
+          await expect
+            .poll(() =>
+              filesTab.evaluate((tab) => {
+                const base = tab.shadowRoot?.querySelector<HTMLElement>('[part~="base"]');
+                const close = tab.nextElementSibling as HTMLElement | null;
+                return base && close
+                  ? getComputedStyle(base).backgroundColor ===
+                      getComputedStyle(close).backgroundColor
+                  : false;
+              }),
+            )
+            .toBe(true);
+          await filesClose.hover();
+          await expect
+            .poll(() =>
+              filesTab.evaluate((tab) => {
+                const base = tab.shadowRoot?.querySelector<HTMLElement>('[part~="base"]');
+                const close = tab.nextElementSibling as HTMLElement | null;
+                return base && close
+                  ? getComputedStyle(base).backgroundColor ===
+                      getComputedStyle(close).backgroundColor
+                  : false;
+              }),
+            )
+            .toBe(true);
+          expect(
+            await filesTab.evaluate((tab) => {
+              const close = tab.nextElementSibling as HTMLElement;
+              return { closeWidth: close.offsetWidth, tabWidth: (tab as HTMLElement).offsetWidth };
+            }),
+          ).toEqual(filesGeometry);
           await expect
             .poll(() =>
               sidePanel(page)
