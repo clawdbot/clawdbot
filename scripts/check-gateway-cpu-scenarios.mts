@@ -49,7 +49,7 @@ const PRIVATE_QA_REQUIRED_DIST_ENTRIES = [
   "dist/plugin-sdk/qa-runtime.js",
 ];
 
-type SpawnSyncResultLike = Pick<SpawnSyncReturns<Buffer>, "error" | "signal" | "status">;
+type SpawnSyncResultLike = Partial<Pick<SpawnSyncReturns<Buffer>, "error" | "signal" | "status">>;
 type SpawnSyncFn = (
   command: string,
   args: string[],
