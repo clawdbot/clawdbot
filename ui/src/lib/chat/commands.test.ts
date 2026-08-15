@@ -328,11 +328,11 @@ describe("parseSlashCommand", () => {
     expect(getSkillCommandCompletions("pro").map((command) => command.name)).toEqual(["prose"]);
   });
 
-  it("normalizes hyphenated skill reference queries", () => {
+  it("matches skill queries against both display titles and command tokens", () => {
     applyRemoteEntries([
       {
         name: "release_notes",
-        skillName: "release-notes",
+        skillDisplayName: "Release Notes",
         textAliases: ["/release_notes"],
         description: "Draft release notes.",
         source: "skill",
@@ -342,11 +342,11 @@ describe("parseSlashCommand", () => {
       },
     ]);
 
-    expect(getSkillCommandCompletions("release-n")).toMatchObject([
-      { name: "release_notes", skillName: "release-notes" },
+    expect(getSkillCommandCompletions("notes")).toMatchObject([
+      { name: "release_notes", skillDisplayName: "Release Notes" },
     ]);
     expect(getSkillCommandCompletions("release_n")).toMatchObject([
-      { name: "release_notes", skillName: "release-notes" },
+      { name: "release_notes", skillDisplayName: "Release Notes" },
     ]);
   });
 

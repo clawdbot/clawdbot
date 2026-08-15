@@ -240,7 +240,10 @@ export function buildCommandsListResult(params: {
       ...mapCommand(cmd, skill ? "skill" : "native", includeArgs, nameSurface, provider),
       ...(skill
         ? {
-            skillName: clampString(skill.skillName, COMMAND_NAME_MAX_LENGTH),
+            skillDisplayName: clampString(
+              skill.displayName ?? skill.skillName,
+              COMMAND_NAME_MAX_LENGTH,
+            ),
             skillModelVisible: skill.modelVisible !== false,
           }
         : {}),

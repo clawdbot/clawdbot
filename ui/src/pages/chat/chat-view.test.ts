@@ -3600,14 +3600,14 @@ describe("chat composer sizing", () => {
 
 describe("chat slash menu accessibility", () => {
   function replaceSkillCommands(
-    ...skills: Array<{ key: string; name?: string; skillName?: string; description: string }>
+    ...skills: Array<{ key: string; name?: string; skillDisplayName?: string; description: string }>
   ) {
     replaceSlashCommands([
       ...buildFallbackSlashCommands(),
-      ...skills.map(({ key, name = key, skillName, description }) => ({
+      ...skills.map(({ key, name = key, skillDisplayName, description }) => ({
         key,
         name,
-        skillName,
+        skillDisplayName,
         description,
         source: "skill" as const,
         skillModelVisible: true,
@@ -3752,7 +3752,7 @@ describe("chat slash menu accessibility", () => {
   it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
     replaceSkillCommands({
       key: "prose_writer",
-      skillName: "prose-writer",
+      skillDisplayName: "Prose Writer",
       description: "Draft polished prose.",
     });
     const onSlashIntent = vi.fn(async () => undefined);
@@ -3765,14 +3765,18 @@ describe("chat slash menu accessibility", () => {
     const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
     const renderedTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
     expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
-    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("$prose-writer");
+    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
     expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
     expect(renderedTextarea?.getAttribute("aria-expanded")).toBe("true");
     expect(onSlashIntent).toHaveBeenCalledOnce();
   });
 
   it("fills a selected $ skill without submitting the surrounding prompt", async () => {
-    replaceSkillCommands({ key: "prose", description: "Draft polished prose." });
+    replaceSkillCommands({
+      key: "prose_writer",
+      skillDisplayName: "Prose Writer",
+      description: "Draft polished prose.",
+    });
     let draft = "";
     const onDraftChange = vi.fn((next: string) => {
       draft = next;
@@ -3783,12 +3787,12 @@ describe("chat slash menu accessibility", () => {
 
     keydownComposer(container, "Enter");
 
-    expect(draft).toBe("Polish this with $prose:");
+    expect(draft).toBe("Polish this with $prose_writer:");
     expect(onSend).not.toHaveBeenCalled();
     expect(container.querySelector(".skill-menu")).toBeNull();
     await Promise.resolve();
     const completed = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(completed?.selectionStart).toBe("Polish this with $prose:".length);
+    expect(completed?.selectionStart).toBe("Polish this with $prose_writer:".length);
   });
 
   it("consumes a trailing hyphen from an incomplete skill query", () => {
@@ -3866,7 +3870,7 @@ describe("chat slash menu accessibility", () => {
     keydownComposer(container, "ArrowDown");
     expect(
       container.querySelector(".skill-menu .slash-menu-item--active .slash-menu-name")?.textContent,
-    ).toBe("$beta");
+    ).toBe("beta");
     keydownComposer(container, "Enter");
 
     expect(draft).toBe("Use $beta ");

@@ -30,7 +30,7 @@ export type SlashCommandDef = {
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: SlashCommandTier;
   source?: "native" | "plugin" | "skill";
-  skillName?: string;
+  skillDisplayName?: string;
   skillModelVisible?: boolean;
   clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
@@ -50,7 +50,7 @@ type CommandLike = {
   category?: string;
   tier?: string;
   source?: "native" | "plugin" | "skill";
-  skillName?: string;
+  skillDisplayName?: string;
   skillModelVisible?: boolean;
   clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
@@ -263,7 +263,7 @@ function toSlashCommand(
     argOptions: getArgOptions(command),
     tier: source === "local" ? mapTier(command) : "standard",
     ...(resolvedSource ? { source: resolvedSource } : {}),
-    ...(command.skillName ? { skillName: command.skillName } : {}),
+    ...(command.skillDisplayName ? { skillDisplayName: command.skillDisplayName } : {}),
     ...(command.skillModelVisible !== undefined
       ? { skillModelVisible: command.skillModelVisible }
       : {}),
@@ -427,9 +427,9 @@ function normalizeCommandEntry(
       entry.source === "native" || entry.source === "plugin" || entry.source === "skill"
         ? entry.source
         : undefined,
-    skillName:
-      typeof entry.skillName === "string"
-        ? clampText(entry.skillName, MAX_REMOTE_NAME_LENGTH).trim() || undefined
+    skillDisplayName:
+      typeof entry.skillDisplayName === "string"
+        ? clampText(entry.skillDisplayName, MAX_REMOTE_NAME_LENGTH).trim() || undefined
         : undefined,
     skillModelVisible:
       typeof entry.skillModelVisible === "boolean" ? entry.skillModelVisible : undefined,
@@ -552,11 +552,8 @@ export function getSlashCommandCompletions(
   });
 }
 
-const SKILL_REFERENCE_NAME_PATTERN = /^[-a-z0-9_:]+$/u;
-
-export function getSkillReferenceName(command: SlashCommandDef): string {
-  const skillName = normalizeLowercaseStringOrEmpty(command.skillName ?? "");
-  return skillName && SKILL_REFERENCE_NAME_PATTERN.test(skillName) ? skillName : command.name;
+export function getSkillDisplayName(command: SlashCommandDef): string {
+  return command.skillDisplayName?.trim() || command.name;
 }
 
 export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
@@ -566,19 +563,18 @@ export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
     (command) => command.source === "skill" && command.skillModelVisible === true,
   )
     .filter((command) => {
-      const referenceName = getSkillReferenceName(command);
+      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command));
+      const displayLookup = displayName.replace(/[\s_]+/gu, "-");
       const commandLookup = normalizeLowercaseStringOrEmpty(command.name).replace(/[\s_]+/gu, "-");
       return (
         !lower ||
-        referenceName.startsWith(lower) ||
-        referenceName.replace(/[\s_]+/gu, "-").startsWith(normalized) ||
+        displayName.includes(lower) ||
+        displayLookup.includes(normalized) ||
         commandLookup.startsWith(normalized) ||
         normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower)
       );
     })
-    .toSorted((left, right) =>
-      getSkillReferenceName(left).localeCompare(getSkillReferenceName(right)),
-    );
+    .toSorted((left, right) => getSkillDisplayName(left).localeCompare(getSkillDisplayName(right)));
 }
 
 type ParsedSlashCommand = {
