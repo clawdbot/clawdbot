@@ -375,38 +375,28 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header .tabstrip-tab__close {
-  width: 0;
-  min-width: 0;
+  width: 16px;
+  min-width: 16px;
   height: 28px;
-  flex: 0 0 0;
+  flex: 0 0 16px;
   align-self: center;
-  overflow: hidden;
   margin: 0;
-  opacity: 0;
-  pointer-events: none;
+  opacity: 1;
 }
 
 .side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close {
-  width: 24px;
-  min-width: 24px;
-  flex-basis: 24px;
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
   background: var(--bg-hover);
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .side-panel__header .tabstrip-tab__close-box {
-  opacity: 0;
-  transition: opacity 120ms ease;
+  width: 16px;
+  height: 16px;
+  opacity: 0.72;
 }
 
-.side-panel__header .tabstrip-tab[active]:hover + .tabstrip-tab__close .tabstrip-tab__close-box,
-.side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close:hover .tabstrip-tab__close-box,
-.side-panel__header
-  .tabstrip-tab[active]
-  + .tabstrip-tab__close:focus-visible
-  .tabstrip-tab__close-box {
+.side-panel__header .tabstrip-tab__close:hover .tabstrip-tab__close-box,
+.side-panel__header .tabstrip-tab__close:focus-visible .tabstrip-tab__close-box {
   opacity: 1;
 }
 
