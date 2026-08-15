@@ -4,7 +4,7 @@ import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 
 const mocks = vi.hoisted(() => ({
-  persistRunSessionUsage: vi.fn(async () => undefined),
+  persistRunSessionUsage: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
 }));
 
@@ -65,7 +65,7 @@ vi.mock("./reply-usage-state.js", () => ({
 
 vi.mock("./session-run-accounting.js", () => ({
   incrementRunCompactionCount: vi.fn(async () => undefined),
-  persistRunSessionUsage: (...args: unknown[]) => mocks.persistRunSessionUsage(...args),
+  persistRunSessionUsage: (params: unknown) => mocks.persistRunSessionUsage(params),
 }));
 
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";

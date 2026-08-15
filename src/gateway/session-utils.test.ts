@@ -1108,7 +1108,7 @@ describe("gateway session utils", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       const row = buildGatewaySessionRow({
         cfg,
@@ -1148,7 +1148,7 @@ describe("gateway session utils", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       const row = buildGatewaySessionRow({
         cfg,
@@ -1184,7 +1184,7 @@ describe("gateway session utils", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const row = buildGatewaySessionRow({
       cfg,
@@ -1250,7 +1250,7 @@ describe("gateway session utils", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const row = buildGatewaySessionRow({
       cfg,
@@ -1315,7 +1315,7 @@ describe("gateway session utils", () => {
               },
             },
           },
-        } as OpenClawConfig;
+        } as unknown as OpenClawConfig;
 
         const row = buildGatewaySessionRow({
           cfg,
@@ -1348,7 +1348,7 @@ describe("gateway session utils", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const row = buildGatewaySessionRow({
       cfg,

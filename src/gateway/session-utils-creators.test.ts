@@ -329,7 +329,9 @@ it("keeps the serialized list response deterministic for the current filter path
     opts: { archived: "all", includeGlobal: true, search: "needle" },
     store: {
       global: {
+        agentHarnessId: "codex",
         contextTokens: 100,
+        contextTokensSource: "runtime",
         createdActor: { type: "system", id: "creator-b" },
         estimatedCostUsd: 0,
         model: "gpt-5.4",
