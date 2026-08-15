@@ -11,18 +11,14 @@ const SESSION_AGENT_STATUS_DEFAULT_TTL_MINUTES = 30;
 export const SESSION_AGENT_STATUS_MAX_TTL_MINUTES = 120;
 
 const ATTENTION_ICON_IDS = new Set<string>(SESSION_AGENT_ATTENTION_ICON_IDS);
-const SESSION_ICON_MAX_UTF16_UNITS = 16;
-const ASCII_VISIBLE_CHARACTER_RE = /^[!-~]$/u;
+// Anchored RGI_Emoji admits exactly one recommended-for-interchange emoji
+// sequence (ZWJ families, flags, keycaps included) and nothing else, keeping
+// letters like "漢" out of the emoji-only icon contract.
+const SESSION_ICON_RE = /^\p{RGI_Emoji}$/v;
 
 export function normalizeSessionIconValue(value: string): string | null {
   const normalized = value.trim();
-  if (!normalized || normalized.length > SESSION_ICON_MAX_UTF16_UNITS) {
-    return null;
-  }
-  const graphemes = [
-    ...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(normalized),
-  ];
-  return graphemes.length === 1 && !ASCII_VISIBLE_CHARACTER_RE.test(normalized) ? normalized : null;
+  return SESSION_ICON_RE.test(normalized) ? normalized : null;
 }
 
 export function isSessionAgentAttentionIconId(
