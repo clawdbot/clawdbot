@@ -51,11 +51,12 @@ function resolveSelectedMemoryProvider(
 function createManagedLocalEmbeddingSetupCheck(
   resolveEmbeddingProviderSetupInspector: MemoryCoreDoctorRegistrationHost["resolveEmbeddingProviderSetupInspector"],
   memoryCoreActive: boolean,
-): HealthCheck {
+): HealthCheck & { readonly defaultEnabled: false } {
   return {
     id: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
     kind: "plugin",
     source: "memory-core",
+    defaultEnabled: false,
     description: "Checks existing semantic indexes for required managed local embedding setup.",
     async detect(ctx) {
       if (!memoryCoreActive) {

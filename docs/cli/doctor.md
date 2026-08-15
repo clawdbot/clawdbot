@@ -121,9 +121,10 @@ openclaw doctor --lint --only memory-core/managed-local-embedding-setup --severi
 ```
 
 The managed local embedding setup check is a scoped, non-mutating pre-cutover gate for existing
-semantic indexes. It reports missing llama.cpp setup and the interactive `models auth login`
-remediation without claiming full Gateway readiness, starting services, downloading models, or
-changing config.
+semantic indexes. It is opt-in through `--only` or `--all`, so plain `doctor --lint` behavior stays
+unchanged. It reports missing llama.cpp setup and the interactive `models auth login` remediation
+without claiming full Gateway readiness, starting services, downloading models, or changing
+config.
 
 Human output is compact:
 

@@ -71,6 +71,10 @@ function context(stateDir: string, provider: string): HealthCheckContext {
 }
 
 describe("managed local embedding setup health check", () => {
+  it("stays opt-in outside an explicit pre-cutover selection", () => {
+    expect(captureCheck()).toMatchObject({ defaultEnabled: false });
+  });
+
   it("reports a structured blocker without mutating config or the semantic index", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-blocked-"));
     roots.add(stateDir);
