@@ -119,16 +119,39 @@ jobs:
             printf '%s\n' "${apk_files[@]}"
             exit 1
           fi
-      
+                
           apk_path="${apk_files[0]}"
           test -s "$apk_path"
-      
+          
           echo "APK found: $apk_path"
           cp "$apk_path" dist/OpenClaw-Android.apk
-      
-          apksigner verify --verbose --print-certs \
+          
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          
+          mapfile -t apksigners < <(
+            find "$sdk_root/build-tools" \
+              -mindepth 2 \
+              -maxdepth 2 \
+              -type f \
+              -name apksigner \
+              -print |
+            sort -V
+          )
+          
+          if [[ "${#apksigners[@]}" -eq 0 ]]; then
+            echo "::error::apksigner not found in $sdk_root/build-tools"
+            exit 1
+          fi
+          
+          apksigner_path="${apksigners[$((${#apksigners[@]} - 1))]}"
+          
+          echo "Using apksigner: $apksigner_path"
+          
+          "$apksigner_path" verify \
+            --verbose \
+            --print-certs \
             dist/OpenClaw-Android.apk
-      
+          
           (
             cd dist
             sha256sum OpenClaw-Android.apk \
