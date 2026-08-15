@@ -16,6 +16,7 @@ import { resolveInstallableChannelPlugin } from "../commands/channel-setup/chann
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { defaultRuntime } from "../runtime.js";
@@ -192,10 +193,11 @@ export function registerDirectoryCli(program: Command) {
     try {
       await action();
     } catch (err) {
+      const message = formatErrorMessage(err);
       if (opts.json) {
-        defaultRuntime.writeJson({ error: String(err) });
+        defaultRuntime.writeJson({ error: message });
       } else {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(danger(message));
       }
       defaultRuntime.exit(1);
     }

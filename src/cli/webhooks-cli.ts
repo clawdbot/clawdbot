@@ -21,6 +21,7 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 
@@ -71,10 +72,11 @@ export function registerWebhooksCli(program: Command) {
         const parsed = parseGmailSetupOptions(opts);
         await runGmailSetup(parsed);
       } catch (err) {
+        const message = formatErrorMessage(err);
         if (opts.json) {
-          defaultRuntime.writeJson({ error: String(err) });
+          defaultRuntime.writeJson({ error: message });
         } else {
-          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.error(danger(message));
         }
         defaultRuntime.exit(1);
       }
@@ -107,7 +109,7 @@ export function registerWebhooksCli(program: Command) {
         const parsed = parseGmailRunOptions(opts);
         await runGmailService(parsed);
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(danger(formatErrorMessage(err)));
         defaultRuntime.exit(1);
       }
     });
