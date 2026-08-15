@@ -2866,6 +2866,56 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
   });
 
+  it("routes the final model selection confirmation through the rich edit funnel when richMessages is enabled", async () => {
+    // Regression for #123886: the picker's provider/model-list edits already went
+    // through the rich funnel when richMessages is enabled, but the final confirmation
+    // stayed HTML-only. Editing a rich-sent message through the legacy text API leaves
+    // the message's prior rich body visible underneath the new plain text instead of
+    // replacing it, so this edit must land on editMessageTextSpy via the rich raw path
+    // (see the harness's `raw.editMessageText` wiring), not the legacy parse_mode HTML
+    // path with no rich_message payload.
+    const storePath = createTelegramTestStorePath("model-rich");
+    const config = makeModelPickerConfig(storePath, {
+      telegram: { dmPolicy: "open", allowFrom: ["*"], richMessages: true },
+    });
+
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({
+      token: "tok",
+      config,
+    });
+    const callbackHandler = getTelegramCallbackHandlerForTests();
+
+    await callbackHandler(
+      createTelegramCallbackContext({
+        id: "cbq-model-rich-1",
+        data: "mdl_sel_openai/gpt-5.4",
+        message: { message_id: 18 },
+      }),
+    );
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    const editCall = mockCall(
+      editMessageTextSpy as unknown as MockCallSource,
+      0,
+      "edit message text",
+    );
+    expect(editCall[0]).toBe(1234);
+    expect(editCall[1]).toBe(18);
+    // Rendered from the harness's rich-block plain-text projection: no HTML entities
+    // (e.g. no `&lt;`/`&gt;`), and the provider/model id renders literally.
+    expect(editCall[2]).toBe(
+      `${CHECK_MARK_EMOJI} Model changed to openai/gpt-5.4\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime <runtime> -s to switch harnesses. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`,
+    );
+    expect(requireRecord(editCall[3], "edit params").parse_mode).toBeUndefined();
+
+    const entry = readOnlySessionEntry(storePath);
+    expect(entry?.providerOverride).toBe("openai");
+    expect(entry?.modelOverride).toBe("gpt-5.4");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-rich-1");
+  });
+
   it("keeps hot-reloaded model pins on the next assembled turn", async () => {
     // Regression: the callback handler used the startup `cfg` snapshot for
     // store path and default-model resolution.  If the config was reloaded
