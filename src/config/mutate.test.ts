@@ -236,7 +236,7 @@ describe("config mutate helpers", () => {
         },
       });
     ioMocks.writeConfigFile
-      .mockRejectedValueOnce(new ConfigMutationConflictError("stale", { currentHash: "hash-2" }))
+      .mockRejectedValueOnce(new ConfigMutationConflictError("stale"))
       .mockResolvedValueOnce(undefined);
 
     const result = await transformConfigFileWithRetry({
@@ -294,9 +294,7 @@ describe("config mutate helpers", () => {
         snapshot: fresh,
         writeOptions: { expectedConfigPath: fresh.path },
       });
-    ioMocks.writeConfigFile.mockRejectedValueOnce(
-      new ConfigMutationConflictError("stale", { currentHash: fresh.hash ?? null }),
-    );
+    ioMocks.writeConfigFile.mockRejectedValueOnce(new ConfigMutationConflictError("stale"));
 
     const transform = vi.fn((config: OpenClawConfig) => ({ nextConfig: config }));
 
@@ -367,7 +365,6 @@ describe("config mutate helpers", () => {
         assertConfigPathForWrite: () => {
           if (activeConfigPath !== snapshot.path) {
             throw new ConfigMutationConflictError("config path changed since last load", {
-              currentHash: null,
               retryable: false,
             });
           }
@@ -1722,7 +1719,6 @@ describe("config mutate helpers", () => {
     const assertConfigPathForWrite = () => {
       if (activeConfigPath !== firstConfigPath) {
         throw new ConfigMutationConflictError("config path changed since last load", {
-          currentHash: null,
           retryable: false,
         });
       }
@@ -1783,7 +1779,6 @@ describe("config mutate helpers", () => {
       }
       if (activeConfigPath !== configPath) {
         throw new ConfigMutationConflictError("config path changed since last load", {
-          currentHash: null,
           retryable: false,
         });
       }
@@ -1836,7 +1831,6 @@ describe("config mutate helpers", () => {
       const assertConfigPathForWrite = () => {
         if (activeConfigPath !== configPath) {
           throw new ConfigMutationConflictError("config path changed since last load", {
-            currentHash: null,
             retryable: false,
           });
         }
