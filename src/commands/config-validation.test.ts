@@ -82,6 +82,17 @@ describe("requireValidConfig", () => {
     expect(readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
   });
 
+  it("can validate config without observing persistent health state", async () => {
+    createValidSnapshot();
+    const runtime = createRuntime();
+
+    await expect(requireValidConfig(runtime, { observe: false })).resolves.toEqual({
+      plugins: {},
+    });
+
+    expect(readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+  });
+
   it("emits a non-blocking compatibility advisory when explicitly requested", async () => {
     createValidSnapshot();
     const runtime = createRuntime();

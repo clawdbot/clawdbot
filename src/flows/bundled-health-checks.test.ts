@@ -6,10 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBundledHealthChecks } from "./bundled-health-checks.js";
 
 const mocks = vi.hoisted(() => ({
+  registerCuaDriverDoctorChecks: vi.fn(),
   registerPolicyDoctorChecks: vi.fn(),
-  loadBundledPluginPublicArtifactModuleSync: vi.fn(() => ({
-    registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks,
-  })),
+  loadBundledPluginPublicArtifactModuleSync: vi.fn(({ dirName }: { dirName: string }) =>
+    dirName === "cua-computer"
+      ? { registerCuaDriverDoctorChecks: mocks.registerCuaDriverDoctorChecks }
+      : { registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks },
+  ),
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => ({
@@ -46,6 +49,21 @@ describe("registerBundledHealthChecks", () => {
       artifactBasename: "api.js",
     });
     expect(mocks.registerPolicyDoctorChecks).toHaveBeenCalledWith({
+      registerHealthCheck: expect.any(Function),
+    });
+  });
+
+  it("loads CUA Driver artifact health when the plugin is enabled", () => {
+    registerBundledHealthChecks({
+      cfg: { plugins: { entries: { "cua-computer": { enabled: true } } } },
+      cwd: workspaceDir,
+    });
+
+    expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+      dirName: "cua-computer",
+      artifactBasename: "api.js",
+    });
+    expect(mocks.registerCuaDriverDoctorChecks).toHaveBeenCalledWith({
       registerHealthCheck: expect.any(Function),
     });
   });

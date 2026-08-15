@@ -77,6 +77,7 @@ export type SidebarRecentSession = {
   visibility?: SessionVisibility;
   draftOwnedBySelf?: boolean;
   category?: string;
+  icon?: string;
   boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
@@ -191,6 +192,7 @@ export type SidebarSessionPatch = {
   pinned?: boolean;
   unread?: boolean;
   label?: string | null;
+  icon?: string | null;
   category?: string | null;
 };
 

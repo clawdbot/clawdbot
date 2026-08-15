@@ -2,7 +2,7 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexServiceTier, JsonValue } from "./protocol.js";
+import type { CodexServiceTier } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
 import type { CodexAppServerAuthProfileLookup } from "./session-binding.js";
 
@@ -104,14 +104,15 @@ export function ensureCodexAppServerClientRuntime(
     if (runtime.context.authMode === "prepared-api-key") {
       throw new Error("ChatGPT token refresh is unavailable for prepared Codex API-key auth.");
     }
-    return (await refreshCodexAppServerAuthTokens({
+    const tokens = await refreshCodexAppServerAuthTokens({
       agentDir: runtime.context.agentDir,
       authProfileId: runtime.context.authProfileId,
       ...(runtime.context.authProfileStore
         ? { authProfileStore: runtime.context.authProfileStore }
         : {}),
       config: runtime.context.config,
-    })) as unknown as JsonValue;
+    });
+    return { ...tokens };
   });
   client.addNotificationHandler((notification) => {
     if (notification.method === "account/rateLimits/updated") {

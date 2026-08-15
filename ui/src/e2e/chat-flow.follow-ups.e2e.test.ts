@@ -761,6 +761,109 @@ suite.define(() => {
     }
   });
 
+  it("dismisses an informational steer notice when the steer request lands", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+      await page.goto(`${suite.server.baseUrl}chat?session=main`);
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const activeRequest = await gateway.waitForRequest("chat.send");
+      const activeRunId = requireString(
+        requireRecord(activeRequest.params).idempotencyKey,
+        "active run idempotency key",
+      );
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const steerText = "route this into the active run";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(steerText);
+      await page.getByRole("button", { name: "Queue message" }).click();
+      const queue = page.locator(".chat-queue");
+      await queue.getByText(steerText).waitFor({ timeout: 10_000 });
+      await queue.getByRole("button", { name: "Steer" }).click();
+
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      const steerParams = requireRecord(sends[1]?.params);
+      expect(steerParams).toMatchObject({
+        expectedRunId: activeRunId,
+        message: steerText,
+        queueMode: "steer",
+      });
+      const steerRunId = requireString(steerParams.idempotencyKey, "steer idempotency key");
+      const row = queue.locator(".chat-queue__item--steered", { hasText: steerText });
+      await row.waitFor({ timeout: 10_000 });
+      const pendingPresentation = await row.evaluate((element) => {
+        const badge = element.querySelector<HTMLElement>(".chat-queue__badge--steered");
+        const icon = element.querySelector(".chat-queue__icon");
+        const probe = document.createElement("span");
+        probe.style.color = "var(--info)";
+        probe.style.background = "var(--info-subtle)";
+        document.body.append(probe);
+        const probeStyle = getComputedStyle(probe);
+        const infoColor = probeStyle.color;
+        const infoSubtle = probeStyle.backgroundColor;
+        probe.remove();
+        return {
+          badgeColor: badge ? getComputedStyle(badge).color : "",
+          backgroundColor: getComputedStyle(element).backgroundColor,
+          iconPoints: icon?.querySelector("polyline")?.getAttribute("points") ?? "",
+          infoColor,
+          infoSubtle,
+        };
+      });
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/steer-pending.png`, fullPage: true });
+      }
+
+      await gateway.emitGatewayEvent("chat", {
+        runId: steerRunId,
+        sessionKey: "main",
+        state: "final",
+      });
+      await page.waitForTimeout(250);
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/steer-landed.png`, fullPage: true });
+      }
+
+      expect(pendingPresentation).toMatchObject({
+        badgeColor: pendingPresentation.infoColor,
+        backgroundColor: pendingPresentation.infoSubtle,
+        iconPoints: "15 10 20 15 15 20",
+      });
+      expect(await row.count()).toBe(0);
+      await page.getByText(steerText, { exact: true }).waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() =>
+          page.locator(".chat-thread-inner").evaluate(
+            (thread, texts) => {
+              const bubbles = Array.from(thread.querySelectorAll(".chat-bubble"));
+              return texts.map((text) =>
+                bubbles.findIndex((bubble) => bubble.textContent?.includes(text)),
+              );
+            },
+            ["keep this run active", steerText],
+          ),
+        )
+        .toEqual([0, 1]);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("steers a restored queued message when only the session row reports the active run", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

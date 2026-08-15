@@ -14,7 +14,7 @@ import { DEVICE_WORKER_PROVIDER_ID } from "../worker-environments/device-provide
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import {
-  isWorkerPlacementSessionRuntimeSupported,
+  resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
 import type { WorkerPlacementDispatchContract } from "../worker-environments/service-contract.js";
@@ -199,10 +199,11 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       agentId: target.target.agentId,
       sessionKey: target.canonicalKey,
     });
-    if (!isWorkerPlacementSessionRuntimeSupported(sessionRuntime)) {
+    const executionMode = resolveWorkerPlacementExecutionMode(sessionRuntime);
+    if (!executionMode) {
       respondInvalidWorkerSession(
         respond,
-        `cloud worker dispatch requires the OpenClaw runtime, not ${sessionRuntime}`,
+        `runtime ${sessionRuntime} lacks cloud placement support`,
       );
       return;
     }
@@ -251,6 +252,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
           sessionId,
           sessionKey: target.canonicalKey,
           agentId: target.target.agentId,
+          executionMode,
           ...dispatchTarget,
         },
         () =>

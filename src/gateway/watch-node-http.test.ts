@@ -767,23 +767,6 @@ describe("watch node HTTP transport", () => {
       expect(connectResponse.status).toBe(200);
       await readJson(connectResponse);
       await completedRuntime.connectHandled;
-      expect(
-        completedRuntime.broadcasts.find((entry) => entry.event === "device.pair.setup.completed")
-          ?.payload,
-      ).toEqual({
-        setupId: completedBootstrap.setupId,
-        deviceId: completedIdentity.deviceId,
-        deviceName: "Test Watch",
-        access: "node",
-        ts: expect.any(Number),
-      });
-      expect(
-        loadDevicePairSetupCompletionRecord(
-          completedBootstrap.setupId,
-          Date.now(),
-          completedBaseDir,
-        ),
-      ).toMatchObject({ deliveryState: "confirmed" });
       await waitForLastConnectedMetadata(completedBaseDir, completedIdentity.deviceId);
       const resetAfterCompletion = await fetch(`${completedRuntime.baseUrl}/challenge`);
       expect(resetAfterCompletion.status).toBe(200);
@@ -853,6 +836,11 @@ describe("watch node HTTP transport", () => {
     expect(response.status).toBe(200);
     await readJson(response);
     await fixture.connectHandled;
+    const completionAfterHandoff = loadDevicePairSetupCompletionRecord(
+      fixture.issued.setupId,
+      Date.now(),
+      fixture.baseDir,
+    );
 
     expect(completionAtHandoff).toMatchObject({
       setupId: fixture.issued.setupId,
@@ -860,6 +848,16 @@ describe("watch node HTTP transport", () => {
       deviceName: "Test Watch",
       access: "node",
       deliveryState: "uncertain",
+    });
+    expect(completionAfterHandoff).toMatchObject({ deliveryState: "confirmed" });
+    expect(
+      fixture.broadcasts.find((entry) => entry.event === "device.pair.setup.completed")?.payload,
+    ).toEqual({
+      setupId: fixture.issued.setupId,
+      deviceId: fixture.identity.deviceId,
+      deviceName: "Test Watch",
+      access: "node",
+      ts: expect.any(Number),
     });
     fixture.runtime.close();
   });
@@ -895,15 +893,6 @@ describe("watch node HTTP transport", () => {
     ]);
     expect(broadcasts.map((entry) => entry.event)).toContain("device.pair.resolved");
     expect(broadcasts.map((entry) => entry.event)).toContain("node.pair.resolved");
-    expect(
-      broadcasts.find((entry) => entry.event === "device.pair.setup.completed")?.payload,
-    ).toEqual({
-      setupId: issued.setupId,
-      deviceId: identity.deviceId,
-      deviceName: "Test Watch",
-      access: "node",
-      ts: expect.any(Number),
-    });
     expect(connectedNodes).toEqual([identity.deviceId]);
 
     const reconnectResponse = await connectWatchNode({

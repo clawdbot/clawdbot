@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
 import {
   parseNodeWorkerWorkspaceExecResult,
@@ -14,10 +14,12 @@ import {
   NODE_WORKSPACE_TRANSFER_ERROR_CODE,
   NodeWorkerWorkspaceTransferError,
 } from "../../worker/node-workspace-transfer-protocol.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { nodeWorkerGatewayNamespace } from "./node-worker-gateway-namespace.js";
 import {
   createNodeWorkerWorkspaceFallback,
   recordNodeSyncPath,
@@ -113,22 +115,9 @@ type NodeTunnelEntry = NodeWorkerTunnelStartRequest & {
   gatewayNamespace: string;
   handle: WorkerTunnelHandle;
   launchTasks: Set<Promise<unknown>>;
+  readiness: Deferred<WorkerTunnelHandle>;
   stopPromise?: Promise<void>;
 };
-
-function exactBuild(
-  actual: WorkerAdmissionHandshake | undefined,
-  expected: WorkerAdmissionHandshake,
-): boolean {
-  return (
-    actual?.bundleHash === expected.bundleHash &&
-    actual.openclawVersion === expected.openclawVersion &&
-    actual.protocolFeatures.length === expected.protocolFeatures.length &&
-    actual.protocolFeatures
-      .toSorted()
-      .every((feature, index) => feature === expected.protocolFeatures.toSorted()[index])
-  );
-}
 
 function spawnResultFromReceipt(receipt: NodeWorkerSupervisorReceipt): SpawnResult {
   if (receipt.state === "completed") {
@@ -196,10 +185,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   const entries = new Map<string, NodeTunnelEntry>();
   const pendingStarts = new Map<string, { ownerEpoch: number; cancelled: boolean }>();
   let resolveWorkspaceBinding: NodeWorkerWorkspaceBindingResolver | undefined;
-  const gatewayNamespace = `gateway-${createHash("sha256")
-    .update(options.gatewayDeviceId)
-    .digest("hex")
-    .slice(0, 32)}`;
+  const gatewayNamespace = nodeWorkerGatewayNamespace(options.gatewayDeviceId);
 
   const hasDurableBinding = (entry: NodeTunnelEntry): boolean => {
     const current = options.getEnvironment(entry.environmentId);
@@ -207,7 +193,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       current &&
       current.ownerEpoch === entry.ownerEpoch &&
       current.bootstrapReceipt?.installKind === "local" &&
-      exactBuild(current.bootstrapReceipt, entry.expectedBuild) &&
+      sameWorkerBuild(current.bootstrapReceipt, entry.expectedBuild) &&
       current.attachedSessionIds.length <= 1 &&
       (current.attachedSessionIds.length === 0 ||
         current.attachedSessionIds[0] === entry.sessionId),
@@ -234,7 +220,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     const node = (await raceWithSignal(transport.listCurrentNodes(), signal)).find(
       (candidate) =>
         candidate.nodeId === entry.deviceId &&
-        exactBuild(candidate.workerRuns, entry.expectedBuild),
+        candidate.workerBuild &&
+        sameWorkerBuild(candidate.workerBuild, entry.expectedBuild),
     );
     if (!node) {
       throw new Error("device worker node is not connected with the expected build");
@@ -321,7 +308,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   };
 
   const createHandle = (
-    entry: Omit<NodeTunnelEntry, "handle">,
+    entry: Omit<NodeTunnelEntry, "handle" | "readiness">,
     restoredWorkspace: NodeWorkerWorkspaceBinding | undefined,
   ): { handle: WorkerTunnelHandle; validateRestoredWorkspace: () => Promise<void> } => {
     let workspaceReady = restoredWorkspace !== undefined;
@@ -442,6 +429,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           manifest: typeof uploaded.current;
           conflictPaths: string[];
         }) => {
+          if (accepted.manifestRef === expectedRemoteRef) {
+            return;
+          }
           const baseSnapshot = options.workspaceTransfer.getSnapshot(
             entry.environmentId,
             request.baseManifestRef,
@@ -626,6 +616,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       return entry.stopPromise;
     }
     entry.abortController.abort(new Error("node worker tunnel owner stopped"));
+    entry.readiness.reject(new Error("node worker tunnel stopped before connecting"));
     entry.stopPromise = Promise.allSettled(entry.launchTasks).then(() => {
       if (entries.get(entry.environmentId) === entry) {
         entries.delete(entry.environmentId);
@@ -640,25 +631,27 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       resolveWorkspaceBinding = resolver;
     },
     async start(request: NodeWorkerTunnelStartRequest): Promise<WorkerTunnelHandle> {
+      const current = entries.get(request.environmentId);
+      if (current) {
+        if (request.ownerEpoch < current.ownerEpoch) {
+          throw new Error("node worker tunnel owner epoch is stale");
+        }
+        if (request.ownerEpoch === current.ownerEpoch) {
+          if (
+            current.abortController.signal.aborted ||
+            current.deviceId !== request.deviceId ||
+            current.sessionId !== request.sessionId ||
+            !sameWorkerBuild(current.expectedBuild, request.expectedBuild)
+          ) {
+            throw new Error("node worker tunnel owner binding changed within one epoch");
+          }
+          return current.readiness.promise; // Share restored-workspace validation without false readiness.
+        }
+      }
       const pending = { ownerEpoch: request.ownerEpoch, cancelled: false };
       pendingStarts.set(request.environmentId, pending);
       try {
-        const current = entries.get(request.environmentId);
         if (current) {
-          if (request.ownerEpoch < current.ownerEpoch) {
-            throw new Error("node worker tunnel owner epoch is stale");
-          }
-          if (request.ownerEpoch === current.ownerEpoch) {
-            if (
-              current.abortController.signal.aborted ||
-              current.deviceId !== request.deviceId ||
-              current.sessionId !== request.sessionId ||
-              !exactBuild(current.expectedBuild, request.expectedBuild)
-            ) {
-              throw new Error("node worker tunnel owner binding changed within one epoch");
-            }
-            return current.handle;
-          }
           await stopEntry(current);
         }
         if (pending.cancelled || pendingStarts.get(request.environmentId) !== pending) {
@@ -678,17 +671,20 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           abortController: new AbortController(),
           launchTasks: new Set<Promise<unknown>>(),
         };
-        const entry = { ...base, handle: undefined as unknown as WorkerTunnelHandle };
-        const created = createHandle(entry, restoredWorkspace);
-        entry.handle = created.handle;
+        const readiness = createDeferredCore<WorkerTunnelHandle>();
+        void readiness.promise.catch(() => undefined);
+        const created = createHandle(base, restoredWorkspace);
+        const entry = Object.assign(base, { readiness, handle: created.handle });
         entries.set(entry.environmentId, entry);
         try {
           await created.validateRestoredWorkspace();
           if (pending.cancelled || pendingStarts.get(request.environmentId) !== pending) {
             throw new Error("node worker tunnel start was cancelled");
           }
+          readiness.resolve(entry.handle);
           return entry.handle;
         } catch (error) {
+          readiness.reject(error);
           await stopEntry(entry);
           throw error;
         }
@@ -717,7 +713,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     },
     status(environmentId: string): WorkerTunnelStatus {
       const entry = entries.get(environmentId);
-      return entry && !entry.abortController.signal.aborted ? "connected" : "stopped";
+      const status = entry && !entry.abortController.signal.aborted ? "connected" : "stopped";
+      return pendingStarts.get(environmentId)?.cancelled === false ? "connecting" : status;
     },
   };
 }

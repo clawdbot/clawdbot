@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  appendReplyMediaFailureWarning,
   readPairingQrReplyChannelData,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
@@ -237,6 +238,7 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
   let strippedTextPayloadCount = 0;
   for (const entry of plan) {
     const payload = entry.payload;
+    let managedMediaPrepareFailed = false;
     const text = sanitizeAssistantDisplayText(payload.text, {
       preserveBoundaries: preserveTextBoundaries,
     });
@@ -277,6 +279,7 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
           allowLocalNonImage: mediaGroup.trustedLocalMedia,
           continueOnPrepareError: true,
           onPrepareError: (error) => {
+            managedMediaPrepareFailed = true;
             params.onManagedMediaPrepareError?.(error.message);
           },
         });
@@ -295,6 +298,9 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
     }
     preparedMedia.sort((left, right) => left.sourceIndex - right.sourceIndex);
     content.push(...preparedMedia.flatMap((preparedEntry) => preparedEntry.blocks));
+    if (managedMediaPrepareFailed) {
+      content.push({ type: "text", text: appendReplyMediaFailureWarning(undefined) });
+    }
   }
 
   if (content.length > 0) {

@@ -13,6 +13,7 @@ import {
   resolveSystemAgentTargetAgentId,
   tryResolveDefaultAgentId,
   tryResolveSoleAgentId,
+  tryResolveSystemAgentTargetAgentId,
 } from "./agent-scope-config.js";
 
 vi.unmock("./agent-scope-config.js");
@@ -55,6 +56,12 @@ describe("agent roster resolution", () => {
     expect(tryResolveDefaultAgentId(duplicateDefaults)).toBeUndefined();
   });
 
+  it("keeps the generic selection hint free of surface-specific assumptions", () => {
+    expect(() => resolveDefaultAgentId({ agents: { entries: { alpha: {}, beta: {} } } })).toThrow(
+      "Multiple agents are configured, but this operation has no explicit owner. Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target.",
+    );
+  });
+
   it("requires an explicit system owner when a roster has multiple agents", () => {
     expect(
       resolveSystemAgentTargetAgentId({
@@ -65,6 +72,18 @@ describe("agent roster resolution", () => {
       }),
     ).toBe("ops");
     expect(resolveSystemAgentTargetAgentId({ agents: { entries: { ops: {} } } })).toBe("ops");
+    expect(
+      tryResolveSystemAgentTargetAgentId({
+        agents: {
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { main: {}, ops: {} },
+        },
+      }),
+    ).toBe("ops");
+    expect(tryResolveSystemAgentTargetAgentId({ agents: { entries: { ops: {} } } })).toBe("ops");
+    expect(
+      tryResolveSystemAgentTargetAgentId({ agents: { entries: { main: {}, ops: {} } } }),
+    ).toBeUndefined();
     expect(() =>
       resolveSystemAgentTargetAgentId({
         agents: { entries: { main: { default: true }, ops: {} } },

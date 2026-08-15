@@ -198,9 +198,7 @@ suite.define(() => {
         const dialog = page.getByRole("dialog", { name: "Pair a device" });
         const qr = page.getByAltText("OpenClaw mobile pairing QR code");
         await dialog.waitFor();
-        expect(await page.getByRole("button", { name: "Create setup code" }).isVisible()).toBe(
-          true,
-        );
+        await page.getByRole("button", { name: "Create setup code" }).waitFor();
         const dialogBox = await page.locator(".device-pair-setup").boundingBox();
         expect(dialogBox?.width).toBeLessThanOrEqual(390);
         await captureUiProof(page, "01-mobile-access-selection.png");

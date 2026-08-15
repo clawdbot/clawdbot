@@ -1,5 +1,6 @@
 // Gateway service status command entrypoint: gathers status, prints it, and handles probe failures.
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { gatherDaemonStatus } from "./status.gather.js";
 import { printDaemonStatus } from "./status.print.js";
@@ -34,7 +35,7 @@ export async function runDaemonStatus(opts: DaemonStatusOptions) {
     });
     printDaemonStatus(status, { json: opts.json, deep: opts.deep === true });
   } catch (err) {
-    failDaemonStatus(opts, `Gateway status failed: ${String(err)}`);
+    failDaemonStatus(opts, `Gateway status failed: ${formatErrorMessage(err)}`);
     return;
   }
 

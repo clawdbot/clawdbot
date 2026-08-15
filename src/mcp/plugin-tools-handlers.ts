@@ -18,6 +18,10 @@ type CallPluginToolParams = {
   arguments?: unknown;
 };
 
+type ToolWithBeforeToolCallHookContext = AnyAgentTool & {
+  [BEFORE_TOOL_CALL_HOOK_CONTEXT]?: unknown;
+};
+
 function toMcpContentBlock(block: unknown): unknown {
   if (!isRecord(block)) {
     return { type: "text", text: coerceChatContentText(block) };
@@ -56,7 +60,7 @@ function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
 }
 
 function resolveBeforeToolCallRunId(tool: AnyAgentTool): string | undefined {
-  const context = (tool as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_HOOK_CONTEXT];
+  const context = (tool as ToolWithBeforeToolCallHookContext)[BEFORE_TOOL_CALL_HOOK_CONTEXT];
   return isRecord(context) && typeof context.runId === "string" ? context.runId : undefined;
 }
 

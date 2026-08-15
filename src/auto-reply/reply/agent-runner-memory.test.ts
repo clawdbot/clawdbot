@@ -10,6 +10,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
+  readSessionTranscriptActiveStats,
   readTranscriptStatsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -3270,15 +3271,33 @@ describe("runMemoryFlushIfNeeded", () => {
     });
   });
 
-  it("leaves an under-limit SQLite Codex session to native token compaction", async () => {
+  it("leaves a reset SQLite Codex session below the byte fuse for native compaction", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     await replaceTranscriptEvents(scope, [
-      { message: { role: "user", content: "small" }, type: "message" },
+      {
+        type: "message",
+        id: "discarded-old",
+        parentId: null,
+        message: { role: "user", content: "x".repeat(20_000) },
+      },
+      {
+        type: "reset",
+        id: "reset-boundary",
+        parentId: "discarded-old",
+        timestamp: "2026-08-15T00:00:00.000Z",
+        reason: "new",
+      },
+      {
+        type: "message",
+        id: "fresh-turn",
+        parentId: "reset-boundary",
+        message: { role: "user", content: "small" },
+      },
     ]);
-    expect(readTranscriptStatsSync(scope).sizeBytes).toBeLessThan(10 * 1024);
+    expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeLessThan(10 * 1024);
 
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -3307,7 +3326,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
       }),
       defaultModel: "gpt-5.5",
-      agentCfgContextTokens: 350_000,
+      agentCfgContextTokens: 1_000_000,
       sessionEntry,
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,

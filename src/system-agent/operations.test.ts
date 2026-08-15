@@ -165,6 +165,7 @@ const mockConfig = vi.hoisted(() => {
   };
 });
 const mockDaemonRestart = vi.hoisted(() => vi.fn(async () => true));
+const runPluginInstallCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const mockScheduleGatewayRestart = vi.hoisted(() =>
   vi.fn(() => ({
     ok: true,
@@ -181,6 +182,9 @@ vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
   runDaemonStart: vi.fn(async () => {}),
   runDaemonStop: vi.fn(async () => {}),
   runDaemonRestart: mockDaemonRestart,
+}));
+vi.mock("../cli/plugins-install-command.js", () => ({
+  runPluginInstallCommand: runPluginInstallCommandMock,
 }));
 vi.mock("../infra/restart.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/restart.js")>()),
@@ -237,6 +241,7 @@ describe("system agent operations", () => {
   beforeEach(() => {
     mockConfig.reset();
     mockDaemonRestart.mockClear();
+    runPluginInstallCommandMock.mockClear();
     mockScheduleGatewayRestart.mockClear();
     stateDirSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -957,36 +962,38 @@ describe("system agent operations", () => {
     const tempDir = opTempDirs.make("openclaw-plugin-install-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const runPluginInstall = vi.fn(async (spec: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`installed ${spec}`);
-    });
 
     const plan = await executeSystemAgentOperation(
       { kind: "plugin-install", spec: "clawhub:openclaw-demo" },
       runtime,
-      { deps: { runPluginInstall } },
     );
     expectRecordFields(plan as unknown as Record<string, unknown>, {
       applied: false,
       message: "Plan: install plugin clawhub:openclaw-demo. Say yes to apply.",
     });
-    expect(runPluginInstall).not.toHaveBeenCalled();
+    expect(runPluginInstallCommandMock).not.toHaveBeenCalled();
 
     const result = await executeSystemAgentOperation(
       { kind: "plugin-install", spec: "clawhub:openclaw-demo" },
       runtime,
       {
         approved: true,
-        deps: { runPluginInstall },
         auditDetails: { rescue: true },
       },
     );
     expect(result.applied).toBe(true);
 
-    const installCall = requireFirstMockCall(runPluginInstall, "runPluginInstall");
-    expect(installCall[0]).toBe("clawhub:openclaw-demo");
-    expectRuntimeArg(installCall[1]);
-    expect(installCall[2]).toEqual({ allowInstallPolicyWarningPrompt: false });
+    const [installParams] = requireFirstMockCall(
+      runPluginInstallCommandMock,
+      "runPluginInstallCommand",
+    );
+    const installRequest = requireRecord(installParams, "plugin install request");
+    expectRecordFields(installRequest, {
+      raw: "clawhub:openclaw-demo",
+      opts: {},
+      allowInstallPolicyWarningPrompt: false,
+    });
+    expectRuntimeArg(installRequest.runtime);
     expect(lines.join("\n")).toContain("[openclaw] done: plugin.install");
     const audit = readLastAuditEntry();
     expectAuditRecord(
@@ -1000,7 +1007,6 @@ describe("system agent operations", () => {
   });
 
   it("rejects an invalid approved plugin spec without exiting inside the executor", async () => {
-    const runPluginInstall = vi.fn();
     mockConfig.readConfigFileSnapshot.mockClear();
     const runtime: RuntimeEnv = {
       log: vi.fn(),
@@ -1012,30 +1018,25 @@ describe("system agent operations", () => {
       executeSystemAgentOperation(
         { kind: "plugin-install", spec: "https://example.test/plugin.tgz" },
         runtime,
-        { approved: true, deps: { runPluginInstall } },
+        { approved: true },
       ),
     ).rejects.toThrow("accepts npm or ClawHub package specs only");
 
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(runPluginInstall).not.toHaveBeenCalled();
+    expect(runPluginInstallCommandMock).not.toHaveBeenCalled();
     expect(mockConfig.readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
   it("rejects arbitrary plugin sources before proposing or installing them", async () => {
     const { runtime } = createSystemAgentTestRuntime();
-    const runPluginInstall = vi.fn();
 
     // Untrusted spec must be rejected on the unapproved path too, so a
     // formatted "plan" never surfaces an arbitrary source for approval.
     await expect(
-      executeSystemAgentOperation(
-        { kind: "plugin-install", spec: "npm:@example/plugin" },
-        runtime,
-        { deps: { runPluginInstall } },
-      ),
+      executeSystemAgentOperation({ kind: "plugin-install", spec: "npm:@example/plugin" }, runtime),
     ).rejects.toThrow("trusted shell");
-    expect(runPluginInstall).not.toHaveBeenCalled();
+    expect(runPluginInstallCommandMock).not.toHaveBeenCalled();
   });
 
   it("uninstalls a non-route plugin only after approval and audits the write", async () => {

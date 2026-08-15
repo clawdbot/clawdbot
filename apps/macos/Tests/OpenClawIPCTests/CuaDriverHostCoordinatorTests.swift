@@ -418,11 +418,13 @@ struct CuaDriverHostCoordinatorTests {
 
         await coordinator.setEnabled(true)
         let originalEndpoint = try #require(coordinator.workerEndpoint)
+        let originalEnvironmentValue = try originalEndpoint.environmentValue()
         permissions.value[.accessibility] = .granted
         notifications.post(name: .openclawPermissionsChanged, object: nil)
         #expect(await self.waitForReadyLaunch(2, launcher: launcher, coordinator: coordinator))
         let replacementEndpoint = try #require(coordinator.workerEndpoint)
         #expect(replacementEndpoint.socketPath != originalEndpoint.socketPath)
+        #expect(try replacementEndpoint.environmentValue() != originalEnvironmentValue)
         #expect(!launcher.processes[0].isRunning)
         await coordinator.setEnabled(false)
     }

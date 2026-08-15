@@ -341,14 +341,6 @@ struct ComputerControlPermissionSnapshot: Equatable, Sendable {
         case missing([Bucket])
         case accessibilityGrantMayBeStale
 
-        var statusText: String {
-            switch self {
-            case .granted: "Granted"
-            case .missing: "Missing permission"
-            case .accessibilityGrantMayBeStale: "Accessibility grant may be stale"
-            }
-        }
-
         var detailText: String {
             switch self {
             case .granted:

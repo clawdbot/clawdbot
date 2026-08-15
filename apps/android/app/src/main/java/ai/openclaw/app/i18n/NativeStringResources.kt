@@ -563,6 +563,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Forget gateway?" to R.string.native_c7b6dfd5c3a183c3,
     "Fork" to R.string.native_8e5b1a73152cf01c,
     "Fork from here" to R.string.native_2147ee396ae75c73,
+    "Fork from last completed message" to R.string.native_daf67d2113148c3c,
     "Forward Notifications" to R.string.native_fa0ddca1671f4d61,
     "Forwarding Mode" to R.string.native_9e9bef85bb320b81,
     "Front camera" to R.string.native_fd301dc5d0e7ccf1,

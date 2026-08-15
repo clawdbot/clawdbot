@@ -167,7 +167,7 @@ type TerminalSessionOpenRequest = {
   cols: number;
   rows: number;
   requiredCwd?: string;
-  resolveCatalogPlan?: () => Promise<SessionCatalogTerminalPlan>;
+  resolveCatalogPlan?: (agentId: string) => Promise<SessionCatalogTerminalPlan>;
   catalogFailureMessage?: string;
   failureHint?: string;
 };
@@ -212,8 +212,12 @@ export async function openTerminalSession(
     | undefined;
   let stageUpload: ((file: TerminalUploadFile) => Promise<TerminalUploadResult>) | undefined;
   if (request.resolveCatalogPlan) {
+    const resolveCatalogPlan = request.resolveCatalogPlan;
     try {
-      catalogPlan = await waitForTerminalOpenDeadline(request.resolveCatalogPlan, deadline);
+      catalogPlan = await waitForTerminalOpenDeadline(
+        () => resolveCatalogPlan(launch.plan.agentId),
+        deadline,
+      );
     } catch (error) {
       if (error instanceof TerminalOpenDeadlineError) {
         respondTerminalOpenTimeout(respond, request.failureHint);
@@ -467,7 +471,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params as TerminalOpenParams;
-    let resolveCatalogPlan: (() => Promise<SessionCatalogTerminalPlan>) | undefined;
+    let resolveCatalogPlan: ((agentId: string) => Promise<SessionCatalogTerminalPlan>) | undefined;
     if (p.catalog) {
       const provider = resolveSessionCatalogProvider(p.catalog.catalogId);
       if (!provider) {
@@ -488,9 +492,10 @@ export const terminalHandlers: GatewayRequestHandlers = {
       }
       const openTerminal = provider.openTerminal;
       const catalog = p.catalog;
-      resolveCatalogPlan = async () =>
+      resolveCatalogPlan = async (agentId) =>
         await openTerminal.call(provider, {
           allowProcessHomeFallback: allowsProcessHomeSessionScan(),
+          agentId,
           hostId: catalog.hostId,
           threadId: catalog.threadId,
         });

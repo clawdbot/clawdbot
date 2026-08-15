@@ -9,7 +9,6 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
-  formatDiagnosticTraceparentForPropagation,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
@@ -244,38 +243,6 @@ describe("diagnostic-events", () => {
       { internal: false, metadataTrusted: true, type: "model.call.started" },
     ]);
     expect(isInternalDiagnosticEventMetadata({ trusted: false })).toBe(false);
-  });
-
-  it("formats traceparent for propagation only from dispatcher-trusted metadata", () => {
-    const trace = createDiagnosticTraceContext({
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-      traceFlags: "01",
-    });
-    const traceparents: Array<string | undefined> = [];
-    onInternalDiagnosticEvent((event, metadata) => {
-      traceparents.push(formatDiagnosticTraceparentForPropagation(event, metadata));
-    });
-
-    emitDiagnosticEvent({
-      type: "message.queued",
-      source: "plugin",
-      trace,
-    });
-    emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      usage: { total: 1 },
-      trace,
-    });
-
-    expect(traceparents).toEqual([undefined, `00-${trace.traceId}-${trace.spanId}-01`]);
-    expect(formatDiagnosticTraceparentForPropagation({ trace }, { trusted: true })).toBeUndefined();
-    expect(
-      formatDiagnosticTraceparentForPropagation(
-        { trace },
-        { trusted: false, trustedTraceContext: true },
-      ),
-    ).toBeUndefined();
   });
 
   it("prepares trusted events synchronously without cloning private data", async () => {

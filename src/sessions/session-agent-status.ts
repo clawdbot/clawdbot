@@ -11,6 +11,15 @@ const SESSION_AGENT_STATUS_DEFAULT_TTL_MINUTES = 30;
 export const SESSION_AGENT_STATUS_MAX_TTL_MINUTES = 120;
 
 const ATTENTION_ICON_IDS = new Set<string>(SESSION_AGENT_ATTENTION_ICON_IDS);
+// Anchored RGI_Emoji admits exactly one recommended-for-interchange emoji
+// sequence (ZWJ families, flags, keycaps included) and nothing else. Construct
+// it dynamically because the repository TypeScript target rejects literal `v` flags.
+const SESSION_ICON_RE = new RegExp("^\\p{RGI_Emoji}$", "v");
+
+export function normalizeSessionIconValue(value: string): string | null {
+  const normalized = value.trim();
+  return SESSION_ICON_RE.test(normalized) ? normalized : null;
+}
 
 export function isSessionAgentAttentionIconId(
   value: unknown,

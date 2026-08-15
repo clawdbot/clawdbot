@@ -110,6 +110,7 @@ type SynologyChannelOutboundContext = {
   mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 type SynologyChannelSendTextContext = SynologyChannelOutboundContext & { text: string };
 type SynologyChannelSendMediaContext = SynologyChannelOutboundContext & { mediaUrl: string };
@@ -305,7 +306,14 @@ async function sendSynologyChatText(
     }
     return `<${url.replace(/\\([()])/g, "$1")}|${label.replace(/\\([[\]])/g, "$1")}>`;
   });
-  const ok = await sendMessage(incomingUrl, text, ctx.to, account.allowInsecureSsl);
+  const dispatch = ctx.onPlatformSendDispatch;
+  const ok = await sendMessage(
+    incomingUrl,
+    text,
+    ctx.to,
+    account.allowInsecureSsl,
+    ...(dispatch ? [dispatch] : []),
+  );
   if (!ok) {
     throw new Error("Failed to send message to Synology Chat");
   }
@@ -327,12 +335,17 @@ async function sendSynologyChatMedia(
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
   });
+  const dispatch = ctx.onPlatformSendDispatch;
   const sendResult = await sendHostedFileUrl(
     incomingUrl,
     prepared.url,
     ctx.to,
     account.allowInsecureSsl,
-  );
+    ...(dispatch ? [dispatch] : []),
+  ).catch(async (error: unknown) => {
+    await Promise.allSettled([prepared.cleanup()]);
+    throw error;
+  });
   if (sendResult.status === "not-dispatched") {
     await prepared.cleanup();
     throw new Error(

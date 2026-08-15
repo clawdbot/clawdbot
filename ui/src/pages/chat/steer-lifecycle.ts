@@ -251,6 +251,50 @@ export function retireSteeredChipsForTerminalRun(
   return firstPersistedSteerIndex;
 }
 
+export function retireSteeredChipsForRequestRun(
+  state: SteerLifecycleHost,
+  runId: string | undefined,
+): number | undefined {
+  if (!runId) {
+    return undefined;
+  }
+  const landed = state.chatQueue.filter(
+    (item) => isAckedSteeredChip(item) && item.sendRunId === runId,
+  );
+  let firstPersistedSteerIndex: number | undefined;
+  for (const item of landed) {
+    // A started active turn can still exist only as an optimistic queue row.
+    // Promote that target before its landed steer so stable transcript history
+    // cannot render the newer steer ahead of the original prompt.
+    const target = state.chatQueue.find(
+      (candidate) => candidate.id !== item.id && candidate.sendRunId === item.pendingRunId,
+    );
+    if (target) {
+      preserveQueuedUserTurn(state, target);
+    }
+    const persistedIndex = findQueuedSendMessageIndex(state.chatMessages, item, true);
+    if (
+      persistedIndex >= 0 &&
+      (firstPersistedSteerIndex === undefined || persistedIndex < firstPersistedSteerIndex)
+    ) {
+      firstPersistedSteerIndex = persistedIndex;
+    }
+    preserveQueuedUserTurn(state, item);
+  }
+  if (landed.length > 0) {
+    const landedIds = new Set(landed.map((item) => item.id));
+    writeChatQueueForScope(
+      state,
+      state.sessionKey,
+      state.chatQueue.filter((item) => !landedIds.has(item.id)),
+    );
+    for (const item of landed) {
+      releaseChatAttachmentPayloads(excludeComposerAttachments(state, item.attachments));
+    }
+  }
+  return firstPersistedSteerIndex;
+}
+
 export function retirePersistedSteeredChips(state: SteerLifecycleHost): void {
   const retired = state.chatQueue.filter(
     (item) =>

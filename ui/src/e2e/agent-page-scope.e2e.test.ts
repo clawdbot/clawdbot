@@ -68,6 +68,136 @@ const multiAgentRoster = [
 ];
 
 suite.define(() => {
+  it("keeps a newer in-flight roster ahead of delayed chat startup", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          defaultAgentId: "main",
+          deferredMethods: ["chat.startup"],
+        });
+
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        await gateway.deferNext("agents.list");
+        await gateway.emitGatewayEvent("config.changed", { path: "agents.entries" });
+        await gateway.waitForRequest("agents.list");
+        await gateway.resolveDeferred("chat.startup", {
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+            agents: [{ id: "main", name: "Stale Main" }],
+          },
+          messages: [],
+          metadata: { models: [] },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        });
+        await gateway.resolveDeferred("agents.list", {
+          defaultId: "research",
+          mainKey: "main",
+          scope: "agent",
+          agents: [{ id: "research", name: "Research" }],
+        });
+
+        const sidebar = page.locator("openclaw-app-sidebar");
+        await expect
+          .poll(async () =>
+            (await sidebar.locator(".sidebar-agent-card__name").textContent())?.trim(),
+          )
+          .toBe("Research");
+      },
+    );
+  });
+
+  it("keeps a refreshed roster ahead of delayed chat startup", async () => {
+    if (captureUiProof) {
+      await mkdir(proofDir, { recursive: true });
+    }
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+        ...(captureUiProof
+          ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          defaultAgentId: "main",
+          deferredMethods: ["chat.startup"],
+          methodResponses: {
+            "agents.list": {
+              defaultId: "research",
+              mainKey: "main",
+              scope: "agent",
+              agents: [
+                { id: "research", name: "Research" },
+                { id: "writer", name: "Writer" },
+              ],
+            },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        await gateway.emitGatewayEvent("config.changed", { path: "agents.entries" });
+        await gateway.waitForRequest("agents.list");
+
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const agentName = sidebar.locator(".sidebar-agent-card__name");
+        await expect.poll(async () => (await agentName.textContent())?.trim()).toBe("Research");
+
+        await gateway.resolveDeferred("chat.startup", {
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+            agents: [{ id: "main", name: "Stale Main" }],
+          },
+          messages: [],
+          metadata: { models: [] },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        });
+
+        await expect.poll(async () => (await agentName.textContent())?.trim()).toBe("Research");
+        await expect
+          .poll(() =>
+            page.locator("openclaw-chat-pane").evaluate((pane) => {
+              const state = (
+                pane as HTMLElement & {
+                  state?: {
+                    agentsList?: { agents?: Array<{ id?: string }>; defaultId?: string };
+                    agentsSelectedId?: string;
+                  };
+                }
+              ).state;
+              return {
+                defaultId: state?.agentsList?.defaultId,
+                ids: state?.agentsList?.agents?.map((agent) => agent.id),
+                selectedId: state?.agentsSelectedId,
+              };
+            }),
+          )
+          .toEqual({
+            defaultId: "research",
+            ids: ["research", "writer"],
+            selectedId: "research",
+          });
+
+        await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+        const agentMenu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
+        await agentMenu.getByText("Research", { exact: true }).waitFor();
+        await agentMenu.getByText("Writer", { exact: true }).waitFor();
+        expect(await agentMenu.getByText("Stale Main", { exact: true }).count()).toBe(0);
+        await screenshot(page, "00-refreshed-roster-wins.png");
+      },
+    );
+  });
+
   it("scopes pages from the chip and keeps Agents settings independent", async () => {
     await suite.withPage(
       {

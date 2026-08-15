@@ -361,10 +361,12 @@ export function excludeComposerAttachments(
 }
 
 export function removeQueuedMessage(host: ChatQueueScopedSessionHost, id: string) {
-  const removed = removeQueuedMessageWithoutReleasing(host, id);
+  const item = readQueuedMessageById(host, id);
+  const removed = item ? removeQueuedMessageWithoutReleasing(host, id) : null;
   if (removed) {
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
   }
+  return removed ? ("removed" as const) : item ? ("rejected" as const) : ("absent" as const);
 }
 
 export function removeDeliveredQueuedChatSendForRun(

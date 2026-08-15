@@ -120,7 +120,6 @@ export type ChatPageHost = ChatHost &
     imageLightboxRequestVersion: number;
     querySelector: (selectors: string) => Element | null;
     renderLifecycle: RenderLifecycle;
-    onModelChanged: () => Promise<void> | void;
     resetToolStream: () => void;
     resetChatScroll: () => void;
     resetChatInputHistoryNavigation: () => void;
@@ -150,4 +149,5 @@ export type ChatPageHost = ChatHost &
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
     refreshSessionPullRequests?: (options?: { refresh?: boolean }) => Promise<void>;
+    retireSessionCompanion?: (sessionKey: string, agentId?: string | null) => void;
   };

@@ -37,6 +37,7 @@ import {
 } from "../auto-reply/thinking.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
@@ -46,6 +47,7 @@ import {
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
 import type { GatewaySessionsDefaults, SessionsPatchResult } from "./session-utils.types.js";
+import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 type ThinkingProviderPolicySource = NonNullable<
   Parameters<typeof resolveThinkingProfile>[0]["providerPolicySource"]
@@ -331,14 +333,16 @@ export function getSessionDefaults(
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-  const agentRuntime = resolveModelAgentRuntimeMetadata({
-    cfg,
-    agentId,
-    provider: resolved.provider,
-    model: resolved.model,
-    sessionKey,
-    acpRuntime: false,
-  });
+  const agentRuntime = projectWorkerPlacementAgentRuntime(
+    resolveModelAgentRuntimeMetadata({
+      cfg,
+      agentId,
+      provider: resolved.provider,
+      model: resolved.model,
+      sessionKey,
+      acpRuntime: false,
+    }),
+  );
   const thinkingProfile = resolveGatewayModelThinkingProfile({
     cfg,
     provider: resolved.provider,
@@ -662,7 +666,9 @@ export async function projectSessionPatchResult(params: {
   });
   return {
     ok: true,
-    path: params.storePath,
+    path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
+      agentId: params.targetAgentId,
+    }).path,
     key: params.canonicalKey,
     entry: params.entry,
     resolved: {

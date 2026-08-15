@@ -13,6 +13,10 @@ import {
   type WorkerLaunchDescriptor,
 } from "../worker/launch-descriptor.js";
 import { parseNodeWorkerConnectionFailureMessage } from "../worker/node-supervisor-protocol.js";
+import type {
+  NodeWorkerWorkspaceRetainInput,
+  NodeWorkerWorkspaceRetainResult,
+} from "../worker/node-workspace-retain-protocol.js";
 import { formatWorkerConnectionFailure } from "../worker/worker-connection-contract.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
 import type { NodeWorkerInstallation } from "./node-worker-build.js";
@@ -37,7 +41,6 @@ import {
   requireNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
-import { NodeWorkerRetention } from "./node-worker-retention.js";
 import {
   nodeWorkerPlanHash,
   type NodeWorkerLaunchInput,
@@ -125,8 +128,7 @@ class NodeWorkerSupervisor {
   private readonly workerEnv: NodeJS.ProcessEnv;
   private readonly localInstallation?: NodeWorkerInstallation;
   private readonly capacity: NodeWorkerCapacity;
-  private readonly workspace?: NodeWorkerWorkspaceRuntime;
-  private retention?: NodeWorkerRetention;
+  private readonly workspace: NodeWorkerWorkspaceRuntime;
   private supervisorIdentity?: NodeWorkerProcessIdentity;
   private initializationPromise?: Promise<void>;
   private closed = false;
@@ -140,19 +142,10 @@ class NodeWorkerSupervisor {
     this.store = new NodeWorkerLaunchStore({ env });
     this.workerEnv = snapshotNodeWorkerEnv(env);
     this.localInstallation = options.localInstallation;
-    this.workspace = options.workspace;
-    this.capacity = new NodeWorkerCapacity(this.store, {
-      ...options,
-      onTerminal: () => void this.retentionOwner().schedule("terminal-transition"),
-    });
-  }
-
-  private retentionOwner(): NodeWorkerRetention {
-    return (this.retention ??= new NodeWorkerRetention(
-      this.store,
-      this.workspace ??
-        new NodeWorkerWorkspaceRuntime({ root: this.bundleRoot, env: this.workerEnv }),
-    ));
+    this.workspace =
+      options.workspace ??
+      new NodeWorkerWorkspaceRuntime({ root: this.bundleRoot, env: this.workerEnv });
+    this.capacity = new NodeWorkerCapacity(this.store, options);
   }
 
   private requireSupervisorIdentity(): NodeWorkerProcessIdentity {
@@ -160,11 +153,9 @@ class NodeWorkerSupervisor {
   }
 
   initialize(): Promise<void> {
-    return (this.initializationPromise ??= this.capacity
-      .initialize(async (receipt) => {
-        await this.recoverRunning(receipt, false);
-      })
-      .then(async () => await this.retentionOwner().schedule("supervisor-start")));
+    return (this.initializationPromise ??= this.capacity.initialize(async (receipt) => {
+      await this.recoverRunning(receipt, false);
+    }));
   }
 
   async launch(
@@ -269,6 +260,18 @@ class NodeWorkerSupervisor {
     }
     const receipt = this.store.get(launchId);
     return receipt?.state === "running" ? await this.recoverRunning(receipt) : receipt;
+  }
+
+  async retainWorkspaces(
+    input: NodeWorkerWorkspaceRetainInput,
+    signal?: AbortSignal,
+  ): Promise<NodeWorkerWorkspaceRetainResult> {
+    await this.initialize();
+    return await this.workspace.applyRetainSnapshot(
+      input,
+      () => this.store.listNonterminal(),
+      signal,
+    );
   }
 
   async cancel(
@@ -386,9 +389,6 @@ class NodeWorkerSupervisor {
         } catch (error) {
           errors.push(error);
         }
-      }
-      if (this.retention) {
-        await this.retention.schedule("supervisor-close");
       }
       if (errors.length === 1) {
         throw errors[0];

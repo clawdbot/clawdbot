@@ -69,6 +69,42 @@ describe("worker environment service", () => {
     });
   });
 
+  it.each([
+    ["stale receipt", { ...support.BOOTSTRAP_RECEIPT, bundleHash: "c".repeat(64) }, undefined],
+    ["unavailable current bundle", support.BOOTSTRAP_RECEIPT, new Error("bundle unavailable")],
+  ] as const)("rejects SSH tunnel startup with %s", async (_name, receipt, prepareError) => {
+    const environmentId = "worker-tunnel-current-bundle";
+    const bootstrapping = support.seedBootstrapping(environmentId, undefined, true);
+    support.testState.store.transition({
+      environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: support.readyPatch(environmentId, receipt),
+    });
+    if (prepareError) {
+      support.testState.prepareInstallation = vi.fn(async () => {
+        throw prepareError;
+      });
+    }
+    const tunnelManager = {
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(support.createProvider(), { tunnelManager });
+
+    await expect(workerService.startTunnel({ environmentId, ownerEpoch: 1 })).rejects.toMatchObject(
+      {
+        code: "invalid_state",
+        message: prepareError
+          ? "Current worker build identity is unavailable"
+          : "Worker must bootstrap the current build before continuing",
+      } satisfies Partial<WorkerEnvironmentServiceError>,
+    );
+    expect(tunnelManager.start).not.toHaveBeenCalled();
+  });
+
   it("starts a local-install node tunnel without entering SSH", async () => {
     const tunnelManager = {
       status: () => "stopped" as const,
@@ -125,6 +161,8 @@ describe("worker environment service", () => {
       ownerEpoch: environment.ownerEpoch,
       sessionId: "session-device",
     });
+    const prepareInstallation = vi.mocked(support.testState.prepareInstallation);
+    const prepareCallsBeforeTunnel = prepareInstallation.mock.calls.length;
 
     await expect(
       workerService.startTunnel({
@@ -133,6 +171,7 @@ describe("worker environment service", () => {
       }),
     ).resolves.toMatchObject({ environmentId: environment.environmentId });
     expect(tunnelManager.start).not.toHaveBeenCalled();
+    expect(prepareInstallation).toHaveBeenCalledTimes(prepareCallsBeforeTunnel);
     expect(nodeTunnelManager.start).toHaveBeenCalledWith(
       expect.objectContaining({
         deviceId: "device-1",

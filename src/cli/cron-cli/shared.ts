@@ -3,6 +3,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
@@ -12,6 +13,7 @@ import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import {
   isOffsetlessIsoDateTime,
@@ -147,7 +149,7 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
 
   // Single job object (has 'state' and 'enabled')
   if ("state" in obj && "enabled" in obj) {
-    return { ...obj, status: computeStatus(obj as unknown as CronJob) };
+    return { ...obj, status: computeStatus(obj) };
   }
 
   // List response (has 'jobs' array)
@@ -162,15 +164,19 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
   return value;
 }
 
-function computeStatus(job: CronJob): string {
+function computeStatus(job: { enabled?: unknown; state?: unknown }): string {
   if (!job.enabled) {
     return "disabled";
   }
-  const state = job.state ?? {};
+  const state = asOptionalRecord(job.state) ?? {};
   if (state.runningAtMs) {
     return "running";
   }
-  return state.lastRunStatus ?? state.lastStatus ?? "idle";
+  return typeof state.lastRunStatus === "string"
+    ? state.lastRunStatus
+    : typeof state.lastStatus === "string"
+      ? state.lastStatus
+      : "idle";
 }
 
 // Human-facing decoration only: enrichCronJsonWithStatus() emits computeStatus()
@@ -196,7 +202,7 @@ function formatCronStatusForDisplay(job: CronJob): string {
 }
 
 export function handleCronCliError(err: unknown) {
-  defaultRuntime.error(danger(String(err)));
+  defaultRuntime.error(danger(formatErrorMessage(err)));
   defaultRuntime.exit(1);
 }
 

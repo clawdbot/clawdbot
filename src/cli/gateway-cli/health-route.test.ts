@@ -80,7 +80,7 @@ describe("runGatewayHealthJsonRoute", () => {
     );
   });
 
-  it("preserves the existing error contract when local config resolution fails", async () => {
+  it("formats local config resolution failures", async () => {
     const runtime = createRuntime();
     const error = new Error("config unavailable");
     const callGateway = vi.fn();
@@ -101,7 +101,7 @@ describe("runGatewayHealthJsonRoute", () => {
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(runtime.writeJson).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(String(error));
+    expect(runtime.error).toHaveBeenCalledWith(error.message);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 

@@ -128,15 +128,12 @@ function projectUpdaterResultOntoSourceConfig(params: {
 }
 
 function assertWriteOptionRecordFresh(params: {
-  currentHash: string | null;
   current?: Record<string, string>;
   expected?: Record<string, string>;
   message: string;
 }): void {
   if (!isDeepStrictEqual(params.current ?? {}, params.expected ?? {})) {
-    throw new ConfigMutationConflictError(params.message, {
-      currentHash: params.currentHash,
-    });
+    throw new ConfigMutationConflictError(params.message);
   }
 }
 
@@ -157,23 +154,18 @@ async function assertRecordsOnlyUpdateConfigFresh(params: {
     writeOptions.expectedConfigPath !== prepared.snapshot.path
   ) {
     throw new ConfigMutationConflictError("config path changed since last load", {
-      currentHash,
       retryable: false,
     });
   }
   if (params.baseHash !== undefined && params.baseHash !== currentHash) {
-    throw new ConfigMutationConflictError("config changed since last load", {
-      currentHash,
-    });
+    throw new ConfigMutationConflictError("config changed since last load");
   }
   assertWriteOptionRecordFresh({
-    currentHash,
     current: prepared.writeOptions.includeFileTargetsForWrite,
     expected: params.writeOptions?.includeFileTargetsForWrite,
     message: "included config target changed since last load",
   });
   assertWriteOptionRecordFresh({
-    currentHash,
     current: prepared.writeOptions.includeFileHashesForWrite,
     expected: params.writeOptions?.includeFileHashesForWrite,
     message: "included config changed since last load",

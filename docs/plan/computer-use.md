@@ -18,15 +18,16 @@ each wave lands (check live PRs to avoid collisions with in-flight maintainer wo
 
 ## Problem
 
-OpenClaw's computer use is foreground-only everywhere: the macOS fulfiller drives
-the shared cursor via embedded Peekaboo + CGEvent primitives, and the `cua-computer`
-plugin uses only CUA's global desktop scope (`scope:"desktop"`, no `delivery_mode`).
-Both CUA and Peekaboo now have real background window-scoped input (no cursor move,
-no focus steal, no Space switch), semantic observation (AX tree + screenshot +
-element refs), and structured verification. None of that reaches the model. The
-current CUA adapter maps 8 of 49 driver tools; Peekaboo's MCP surface (25 tools,
-background-default clicks, `see` frame binding, `verify_state`) is not reachable
-through `computer.act` at all.
+At campaign start, OpenClaw's computer use was foreground-only everywhere: the
+macOS fulfiller drove the shared cursor via embedded Peekaboo + CGEvent primitives,
+and the `cua-computer` plugin used only CUA's global desktop scope
+(`scope:"desktop"`, no `delivery_mode`). Both CUA and Peekaboo already had real
+background window-scoped input (no cursor move, no focus steal, no Space switch),
+semantic observation (AX tree + screenshot + element refs), and structured
+verification. None of that reached the model. The CUA adapter mapped 8 of the
+pinned driver's 58 unique tools across its platform registries; Peekaboo's 26-tool
+MCP surface (background-default clicks, `see` frame binding, `verify_state`) was
+not reachable through `computer.act` at all.
 
 ## Goals
 
@@ -102,48 +103,52 @@ cancellation releases held input. TCC: OpenClaw.app probes and holds
 Accessibility + Screen Recording at startup; app-spawned driver children inherit
 via the macOS responsibility chain — no new permission UX.
 
-Provider capability truth (verified in source, 2026-08-13):
+Provider capability truth (verified in source, 2026-08-14):
 
-- CUA 0.19.3: 49 MCP tools; background delivery per-call with typed refusals
-  (`background_unavailable`, `background_occluded`, `background_uipi_blocked`,
+- CUA 0.19.3: the generated contract manifest contains 23 tools; the installed
+  macOS runtime exposes 53; and the pinned Windows/Linux registries expose 54/57,
+  for 58 unique runtime tool names across platforms. Background delivery is
+  selected per call with typed refusals (`background_unavailable`,
+  `background_occluded`, `background_uipi_blocked`,
   `off_space_or_ax_unresolved`); SkyLight per-pid posting on macOS, synthetic
   pointer injection on Windows, XTest/libei on Linux (Wayland cannot target
   background windows — capability-gated). Embedded host mode, inherited IPC
   (#2410, PR 2545) and the protected-consent adapter (#2411, PR 2578) are all
   contained in v0.13.1+ (verified via tag containment) — the pinned 0.19.3
   needs no bump.
-- Peekaboo v4: 25 MCP tools; background-default clicks (AX-action-first,
-  pid-routed events, window-routed pointer); `see` = screenshot + element map +
-  `reference_id` (maps to observation binding); `verify_state` structured
-  predicates without focus; app/window/menu/dialog/space management; CDP browser
-  tool into user Chrome with explicit connect consent. Missing vs v2: middle/
-  triple click, held input, cursor position, recording.
+- Peekaboo revision `a2fb1676`: 26 MCP tools; background-default clicks
+  (AX-action-first, pid-routed events, window-routed pointer); `see` = screenshot +
+  element map + `reference_id` (maps to observation binding); `verify_state`
+  structured predicates without focus; app/window/menu/dialog/space management;
+  CDP browser tool into user Chrome with explicit connect consent. Missing vs v2:
+  middle/triple click, held input, cursor position, recording.
 
 ## Workstreams and tracker
 
 Waves follow RFC 0025's implementation plan, compressed by the no-compat ruling.
 Status: `todo | in-progress | pr | landed | blocked`.
 
-| ID         | Work                                                                                                                                               | Repo                  | Status | Notes                                                                                                                                                            |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| W0-FIX     | Parity matrix + pinned fixtures: 49 CUA tools + 25 Peekaboo tools classified against the v2 union; recorded tools/list + result fixtures           | openclaw              | landed | landed #123469 (d9646ad): 58 CUA + 26 Peekaboo tools, +1059 test-only LOC                                                                                        |
-| W0-PIN     | Pick + pin CUA release with embedded/inherited-IPC support; dependency bump (needs Dependency Guard approval)                                      | openclaw              | landed | resolved: 0.19.3 already contains #2410+#2411                                                                                                                    |
-| W1-PROTO   | v2 types: action union (+`invoke_menu`), target union, capability descriptor, result envelope, closed error codes; **replaces** v1 params in place | openclaw              | landed | landed #123544 (d19c755)                                                                                                                                         |
-| W1-TOOL    | Built-in computer tool v2: capability-filtered schema, observation refs, result projection, no auto-retry                                          | openclaw              | landed | landed #123544: v1 651 / v2 742 tokens                                                                                                                           |
-| W1-SEAM    | Node-host provider seam: one registration, provider selection, generation, lifecycle close path; absorbs cua-computer's direct registration        | openclaw              | landed | landed #123509 (848a7e3): seam+contract, prod +348/-217                                                                                                          |
-| W2-CUA     | CUA plugin refactor onto seam: full v2 mapping (window/element/background), session-per-execution, deletes desktop-scope-only adapter              | openclaw              | landed | landed #123604 (2af5eca): full v2 adapter, prod +1129/-41                                                                                                        |
-| W2-MAC     | macOS app: bundle + re-sign driver, direct `serve --embedded` spawn, private socket handoff to worker, TCC restart handling                        | openclaw              | landed | landed #123635 (19ace68): app-owned daemon + picker + orphan reaping, live-proven                                                                                |
-| W2-PKB     | Peekaboo adapter on the same seam (macOS): see/click/type/press/set_value/verify_state/app/window/menu mapping                                     | openclaw              | landed | landed #123801 (4a6edc0): native v2, live proof deferred to W3-GATE                                                                                              |
-| W2-PKB-UP  | Peekaboo upstream: middle/triple click, hold_key + mouse down/up in BackgroundInputDriver, get_cursor_position; optional browser-shape alignment   | Peekaboo              | todo   | owner-approved                                                                                                                                                   |
-| W2-UX      | Settings -> Computer Use provider picker + readiness checklist (both apps: macOS now, Tauri Linux later)                                           | openclaw              | todo   | RFC OC-10B slice; owns picker screenshots (W2-MAC shipped without them; app instance lock at `/tmp/openclaw-UID-app-instances` can block a fresh profile launch) |
-| W3-GATE    | Integration gate: live vertical on macOS (both providers) + Linux X11 (CUA): observe window -> background element click -> verify                  | openclaw              | todo   | RFC OC-8                                                                                                                                                         |
-| W3-SKILL   | Version-pinned skill profile: background-first ladder, result precedence, no CLI/daemon instructions                                               | openclaw              | todo   | RFC OC-9D                                                                                                                                                        |
-| W4-BROWSER | CUA browser family (isolated profile first; existing-profile gated on consent adapter)                                                             | openclaw              | todo   | RFC OC-9B; optional family                                                                                                                                       |
-| W4-REC     | CUA recording/resources family with node-owned roots                                                                                               | openclaw              | todo   | RFC OC-9C; optional family                                                                                                                                       |
-| W4-WIN     | Windows companion CUA host PR                                                                                                                      | openclaw-windows-node | todo   | RFC WIN-1; after W1-SEAM/W2-CUA                                                                                                                                  |
-| W4-ART     | Managed artifacts: Win/Linux digest-pinned download, atomic update + rollback                                                                      | openclaw              | todo   | RFC OC-10A                                                                                                                                                       |
-| W5-SEC     | Security closure: high-risk action classification, socket ownership audit, hostile-arg tests                                                       | openclaw              | todo   | RFC OC-10C                                                                                                                                                       |
-| W5-ACC     | Packaged cross-platform acceptance + default-provider rollout                                                                                      | openclaw              | todo   | RFC OC-11/12                                                                                                                                                     |
+| ID         | Work                                                                                                                                                                                | Repo                  | Status | Notes                                                                                                                                                                                                                                  |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| W0-FIX     | Parity matrix + pinned fixtures: CUA 23-tool contract manifest / 58 unique runtime tools + 26 Peekaboo tools classified against the v2 union; recorded tools/list + result fixtures | openclaw              | landed | landed #123469 (d9646ad): 58 CUA + 26 Peekaboo tools, +1059 test-only LOC                                                                                                                                                              |
+| W0-PIN     | Pick + pin CUA release with embedded/inherited-IPC support; dependency bump (needs Dependency Guard approval)                                                                       | openclaw              | landed | resolved: 0.19.3 already contains #2410+#2411                                                                                                                                                                                          |
+| W1-PROTO   | v2 types: action union (+`invoke_menu`), target union, capability descriptor, result envelope, closed error codes; **replaces** v1 params in place                                  | openclaw              | landed | landed #123544 (d19c755)                                                                                                                                                                                                               |
+| W1-TOOL    | Built-in computer tool v2: capability-filtered schema, observation refs, result projection, no auto-retry                                                                           | openclaw              | landed | landed #123544: v1 651 / v2 742 tokens                                                                                                                                                                                                 |
+| W1-SEAM    | Node-host provider seam: one registration, provider selection, generation, lifecycle close path; absorbs cua-computer's direct registration                                         | openclaw              | landed | landed #123509 (848a7e3): seam+contract, prod +348/-217                                                                                                                                                                                |
+| W2-CUA     | CUA plugin refactor onto seam: full v2 mapping (window/element/background), session-per-execution, deletes desktop-scope-only adapter                                               | openclaw              | landed | landed #123604 (2af5eca): full v2 adapter, prod +1129/-41                                                                                                                                                                              |
+| W2-MAC     | macOS app: bundle + re-sign driver, direct `serve --embedded` spawn, private socket handoff to worker, TCC restart handling                                                         | openclaw              | landed | landed #123635 (19ace68): app-owned daemon + picker + orphan reaping, live-proven                                                                                                                                                      |
+| W2-PKB     | Peekaboo adapter on the same seam (macOS): see/click/type/press/set_value/verify_state/app/window/menu mapping                                                                      | openclaw              | landed | landed #123801 (4a6edc0): native v2; live vertical completed by W3-GATE                                                                                                                                                                |
+| W2-PKB-UP  | Peekaboo upstream: middle/triple click, hold_key + mouse down/up in BackgroundInputDriver, get_cursor_position; optional browser-shape alignment                                    | Peekaboo              | todo   | owner-approved                                                                                                                                                                                                                         |
+| W2-UX      | Settings -> Computer Use provider picker + readiness checklist (both apps: macOS now, Tauri Linux later)                                                                            | openclaw              | todo   | RFC OC-10B slice; owns picker screenshots (W2-MAC shipped without them; app instance lock at `/tmp/openclaw-UID-app-instances` can block a fresh profile launch)                                                                       |
+| W3-GATE    | Integration gate: live vertical on macOS (both providers): observe window -> background element click/type -> verify                                                                | openclaw              | landed | live agent-tool -> Gateway -> Mac-node proof: both providers kept frontmost app/cursor unchanged and changed target content; CUA confirmed type readback, Peekaboo confirmed `set_value` after honest unverifiable click/type evidence |
+| W3-LINUX   | Integration gate: live vertical on Linux X11 (CUA): observe window -> background element click -> verify                                                                            | openclaw              | todo   | split from W3-GATE; no Linux proof claimed by the macOS gate                                                                                                                                                                           |
+| W3-SKILL   | Version-pinned skill profile: background-first ladder, result precedence, no CLI/daemon instructions                                                                                | openclaw              | todo   | RFC OC-9D                                                                                                                                                                                                                              |
+| W4-BROWSER | CUA browser family (isolated profile first; existing-profile gated on consent adapter)                                                                                              | openclaw              | todo   | RFC OC-9B; optional family                                                                                                                                                                                                             |
+| W4-REC     | CUA recording/resources family with node-owned roots                                                                                                                                | openclaw              | todo   | RFC OC-9C; optional family                                                                                                                                                                                                             |
+| W4-WIN     | Windows companion CUA host PR                                                                                                                                                       | openclaw-windows-node | todo   | RFC WIN-1; after W1-SEAM/W2-CUA                                                                                                                                                                                                        |
+| W4-ART     | Managed artifacts: Win/Linux digest-pinned download, atomic update + rollback                                                                                                       | openclaw              | todo   | RFC OC-10A                                                                                                                                                                                                                             |
+| W5-SEC     | Security closure: high-risk action classification, socket ownership audit, hostile-arg tests                                                                                        | openclaw              | todo   | RFC OC-10C                                                                                                                                                                                                                             |
+| W5-ACC     | Packaged cross-platform acceptance + default-provider rollout                                                                                                                       | openclaw              | todo   | RFC OC-11/12                                                                                                                                                                                                                           |
 
 Production LOC ledger (updated per landed PR): net target ≤ +1500 for the whole
 campaign excluding tests/fixtures, funded by deleting the v1-only branches, the
@@ -159,6 +164,12 @@ Every wave carries live proof; unit fixtures alone never advance the tracker.
     keeps focus; assert frontmost app unchanged, cursor position unchanged,
     `verify_state`/`effect` confirms the edit. Video via screen recording for
     UX-visible changes.
+  - W3-GATE executed on 2026-08-14 through the real agent tool and paired-node
+    route. Peekaboo preserved Finder as frontmost and its cursor position. CUA
+    preserved VLC and its cursor position. Both changed the background target.
+    CUA returned confirmed accessibility value readback; Peekaboo honestly marked
+    click/type delivery unverifiable and confirmed the follow-up background
+    `set_value` with verified change evidence.
 - **Linux CUA**: Crabbox Xvfb host (recipe proven in PR #117205): node registers
   command pair, real screenshot + frame id, background window action against
   xterm/gtk test app; Wayland smoke on Sway only.

@@ -67,6 +67,8 @@ export type ExplicitSkillSelection = {
 
 export type SkillCommandSpec = {
   name: string;
+  /** Human-readable skill title for display surfaces. */
+  displayName?: string;
   /** Canonical SKILL.md path for file-scoped usage accounting. */
   skillFile?: string;
   skillName: string;

@@ -20,6 +20,7 @@ import {
   type CuaToolResult,
 } from "./driver-client.js";
 import { platformActions } from "./driver-result.js";
+import { createLazyCuaExecutionResources } from "./execution-resources.js";
 import {
   adoptGeneration,
   issueFrame,
@@ -31,6 +32,7 @@ import {
   type CuaScreenSize,
 } from "./frame.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
+import { closeRecordingExecution } from "./recording-actions.js";
 import { handleV2Act, type CuaComputerActParams } from "./v2-actions.js";
 
 const AVAILABILITY_POLL_MS = 5_000;
@@ -39,8 +41,13 @@ const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 // capture, not the delivered frame. 8K (7680x4320 = ~33.2M) is a valid primary
 // display; budget above it so full-resolution snapshots reach the downscaler.
 const MAX_IMAGE_PIXELS = 40_000_000;
-const CUA_DRIVER_SOCKET_PATH_ENV = "CUA_DRIVER_SOCKET_PATH";
-const CUA_DRIVER_BINARY_PATH_ENV = "CUA_DRIVER_BINARY_PATH";
+const CUA_DRIVER_ENDPOINT_ENV = "OPENCLAW_CUA_DRIVER_ENDPOINT";
+
+const CuaDriverEndpointSchema = z.strictObject({
+  v: z.literal(1),
+  socketPath: z.string(),
+  binaryPath: z.string(),
+});
 
 const DesktopStateSchema = z.object({
   platform: z.string().min(1),
@@ -82,25 +89,30 @@ type CuaComputerProviderOptions = {
 function resolveMacOsMcpEndpoint(
   env: NodeJS.ProcessEnv,
 ): { socketPath: string; binaryPath: string } | undefined {
-  const socketPath = env[CUA_DRIVER_SOCKET_PATH_ENV]?.trim();
-  const binaryPath = env[CUA_DRIVER_BINARY_PATH_ENV]?.trim();
-  if (!socketPath || !binaryPath) {
-    return undefined;
-  }
-  if (
-    socketPath.includes("\0") ||
-    binaryPath.includes("\0") ||
-    !path.isAbsolute(socketPath) ||
-    !path.isAbsolute(binaryPath)
-  ) {
+  const rawEndpoint = env[CUA_DRIVER_ENDPOINT_ENV];
+  if (!rawEndpoint || Buffer.byteLength(rawEndpoint, "utf8") > 4 * 1024) {
     return undefined;
   }
   try {
+    const rawValue: unknown = JSON.parse(rawEndpoint);
+    const parsed = CuaDriverEndpointSchema.safeParse(rawValue);
+    if (!parsed.success) {
+      return undefined;
+    }
+    const { socketPath, binaryPath } = parsed.data;
+    if (
+      socketPath.includes("\0") ||
+      binaryPath.includes("\0") ||
+      !path.isAbsolute(socketPath) ||
+      !path.isAbsolute(binaryPath)
+    ) {
+      return undefined;
+    }
     fs.accessSync(binaryPath, fs.constants.X_OK);
+    return { socketPath, binaryPath };
   } catch {
     return undefined;
   }
-  return { socketPath, binaryPath };
 }
 
 class PromiseQueue {
@@ -425,26 +437,21 @@ export function createCuaComputerProvider(
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const macOsEndpoint = platform === "darwin" ? resolveMacOsMcpEndpoint(env) : undefined;
-  let ownedDriver: CuaDriverSession | undefined;
+  let ownedAvailabilityDriver: CuaDriverSession | undefined;
   let stopped = false;
-  // The node host owns one trusted SDK session for this command execution.
-  // It is shared by snapshot/act so a frame can only authorize its paired input.
-  const driver = () => {
+  const createDriver =
+    options.createDriver ??
+    (macOsEndpoint ? () => createCuaMcpDriver({ ...macOsEndpoint, env }) : createCuaDriver);
+  const availabilityDriver = () => {
     if (stopped) {
       throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
     }
-    return (
-      options.driver ??
-      (ownedDriver ??= (
-        options.createDriver ??
-        (macOsEndpoint ? () => createCuaMcpDriver({ ...macOsEndpoint, env }) : createCuaDriver)
-      )())
-    );
+    return options.driver ?? (ownedAvailabilityDriver ??= createDriver());
   };
-  const disposeOwnedDriver = async () => {
+  const disposeAvailabilityDriver = async () => {
     stopped = true;
-    const current = ownedDriver;
-    ownedDriver = undefined;
+    const current = ownedAvailabilityDriver;
+    ownedAvailabilityDriver = undefined;
     await current?.dispose();
   };
   const imageProcessor = options.imageProcessor ?? createImageProcessor(env);
@@ -454,10 +461,10 @@ export function createCuaComputerProvider(
     platform === "linux" || platform === "win32" || macOsEndpoint !== undefined;
   // The app injects the endpoint only after the host-owned daemon socket is
   // accepting connections. Node-host manifests are one-shot, so the validated
-  // endpoint pair is the synchronous macOS readiness lease; invocation still
+  // endpoint is the synchronous macOS readiness lease; invocation still
   // awaits the MCP initialize handshake and fails visibly if it cannot attach.
   const isAvailable = () =>
-    macOsEndpoint !== undefined || (isSupportedPlatform && driver().isAvailable());
+    macOsEndpoint !== undefined || (isSupportedPlatform && availabilityDriver().isAvailable());
 
   return {
     id: "cua-computer",
@@ -468,20 +475,20 @@ export function createCuaComputerProvider(
         id: "cua-computer",
         label: "CUA Computer",
         generation: isSupportedPlatform
-          ? `cua-computer-v2:${driver().generation}`
+          ? `cua-computer-v2:${availabilityDriver().generation}`
           : "cua-computer-v2:unsupported",
       },
       actions: platformActions(platform),
-      targets: ["screen", "window", "element"],
+      targets: ["screen", "window", "element", "browser"],
       deliveryModes: ["background", "foreground"],
-      observations: ["image", "accessibility"],
-      features: { recording: false, agentCursor: false, multiDisplay: false },
+      observations: ["image", "accessibility", "browser"],
+      features: { recording: true, agentCursor: false, multiDisplay: false },
     }),
     isAvailable,
     watchAvailability: (_context, onChange) => {
       let knownAvailable = isAvailable();
       const timer = interval(() => {
-        driver().resetAvailabilityCache();
+        availabilityDriver().resetAvailabilityCache();
         const available = isAvailable();
         if (available !== knownAvailable) {
           knownAvailable = available;
@@ -491,19 +498,33 @@ export function createCuaComputerProvider(
       timer.unref?.();
       return () => {
         clear(timer);
-        void disposeOwnedDriver();
+        void disposeAvailabilityDriver();
       };
     },
     openExecution: async () => {
+      if (stopped) {
+        throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
+      }
+      const executionDriver = options.driver ?? createDriver();
+      const resources = createLazyCuaExecutionResources();
+      const executionState = { resources, recording: {} };
       const queue = new PromiseQueue();
-      const frameState: CuaFrameState = { generation: driver().generation };
+      const frameState: CuaFrameState = { generation: executionDriver.generation };
+      let closing = false;
+      let closePromise: Promise<void> | undefined;
+      const assertOpen = () => {
+        if (closing) {
+          throw new Error("COMPUTER_DRIVER_UNAVAILABLE: provider execution is closing");
+        }
+      };
       return {
         snapshot: async (paramsJSON, signal) =>
           await queue.run(async () => {
+            assertOpen();
             if (!isSupportedPlatform) {
               throw new Error(
                 platform === "darwin"
-                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_SOCKET_PATH_ENV} and ${CUA_DRIVER_BINARY_PATH_ENV}`
+                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_ENDPOINT_ENV}`
                   : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
               );
             }
@@ -512,7 +533,7 @@ export function createCuaComputerProvider(
             const format = params.format ?? "jpeg";
             const maxWidth = params.maxWidth ?? (format === "png" ? 900 : 1_600);
             const quality = Math.min(1, Math.max(0.05, params.quality ?? 0.72));
-            const desktop = await driver().getDesktopState(signal);
+            const desktop = await executionDriver.getDesktopState(signal);
             const geometry = desktopGeometry(desktop);
             // Windows and Linux report capture and input geometry in the same
             // physical-pixel space. macOS intentionally reports logical screen
@@ -541,7 +562,7 @@ export function createCuaComputerProvider(
               width = result.width;
               height = result.height;
             }
-            adoptGeneration(frameState, driver().generation);
+            adoptGeneration(frameState, executionDriver.generation);
             const displayFrameId = issueFrame(frameState, geometry, { width, height });
             return JSON.stringify({
               format,
@@ -554,23 +575,55 @@ export function createCuaComputerProvider(
           }),
         act: async (paramsJSON, signal) =>
           await queue.run(async () => {
+            assertOpen();
             if (!isSupportedPlatform) {
               throw new Error(
                 platform === "darwin"
-                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_SOCKET_PATH_ENV} and ${CUA_DRIVER_BINARY_PATH_ENV}`
+                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_ENDPOINT_ENV}`
                   : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
               );
             }
             return await handleV2Act(
               platform,
-              driver(),
+              executionDriver,
               frameState,
+              executionState,
               parseComputerActParamsJSON(paramsJSON),
               handleDesktopAct,
               signal,
             );
           }),
-        close: async () => await disposeOwnedDriver(),
+        close: async (reason) => {
+          if (closePromise) {
+            return await closePromise;
+          }
+          closing = true;
+          closePromise = queue.run(async () => {
+            let failure: unknown;
+            try {
+              await closeRecordingExecution({
+                driver: executionDriver,
+                state: executionState.recording,
+                resources,
+                reason,
+              });
+            } catch (error) {
+              failure = error;
+            }
+            await resources.dispose(reason !== "completion").catch((error: unknown) => {
+              failure ??= error;
+            });
+            await executionDriver.dispose().catch((error: unknown) => {
+              failure ??= error;
+            });
+            if (failure) {
+              throw failure instanceof Error
+                ? failure
+                : new Error("CUA Computer cleanup failed", { cause: failure });
+            }
+          });
+          return await closePromise;
+        },
       };
     },
   };

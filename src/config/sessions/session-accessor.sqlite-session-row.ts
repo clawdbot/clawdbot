@@ -10,7 +10,6 @@ import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
-  const raw = entry as unknown as Record<string, unknown>;
   const hasLegacyDeliveryFields = [
     "route",
     "deliveryContext",
@@ -20,7 +19,7 @@ export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntr
     "lastTo",
     "lastAccountId",
     "lastThreadId",
-  ].some((key) => key in raw);
+  ].some((key) => key in entry);
   const delivery =
     entry.delivery ?? (hasLegacyDeliveryFields ? undefined : { kind: "none" as const });
   if (typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)) {
@@ -84,9 +83,7 @@ export function bindSessionNode(params: {
   sessionKey: string;
   updatedAt: number;
 }) {
-  const canonicalEntry = projectCanonicalSessionEntryShape(
-    params.entry as unknown as Record<string, unknown>,
-  );
+  const canonicalEntry = projectCanonicalSessionEntryShape({ ...params.entry });
   const actor = params.entry.createdActor;
   const legacyActorId = normalizeText(
     (params.entry as SessionEntry & { createdBy?: { id?: unknown } }).createdBy?.id,
@@ -113,8 +110,7 @@ export function bindSessionNode(params: {
     label: normalizeText(params.entry.label),
     display_name: normalizeText(params.entry.displayName),
     category: normalizeText(params.entry.category),
-    // The retired custom-icon column remains nullable until a future schema-version migration.
-    icon: null,
+    icon: normalizeText(canonicalEntry.icon),
     pinned_at: finiteSqliteNumber(params.entry.pinnedAt),
     archived_at: finiteSqliteNumber(params.entry.archivedAt),
     last_read_at: finiteSqliteNumber(params.entry.lastReadAt),

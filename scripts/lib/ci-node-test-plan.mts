@@ -502,7 +502,7 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-runtime-infra-process", 17],
   ["core-runtime-infra-provider-push", 29],
   ["core-runtime-infra-repo-tooling", 6],
-  ["core-runtime-infra-storage-state", 175],
+  ["core-runtime-infra-storage-state", 235],
   ["core-runtime-infra-system-runtime", 69],
   ["core-runtime-media-ui-1", 97],
   ["core-runtime-media-ui-2", 78],
@@ -551,6 +551,13 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/auto-reply/reply/commands-status.test.ts", 12],
   ["src/auto-reply/reply/commands-system-prompt.test.ts", 8],
   ["src/gateway/dashboard-session-title.test.ts", 23],
+  // Storage-state stripe anchors: CI checkmark walls from compact run
+  // 31814517685; without them the hosted split packs all three fat files
+  // into one stripe (observed 204s vs the ~90s target in run 31856622489).
+  ["src/infra/state-migrations.test.ts", 27],
+  ["src/infra/sqlite-snapshot.test.ts", 24],
+  ["src/infra/session-cost-usage.test.ts", 10],
+  ["src/infra/state-migrations.audit-logs.test.ts", 7],
   ["src/gateway/managed-image-attachments.test.ts", 24],
   ["src/gateway/session-message-events.test.ts", 26],
   ["src/gateway/tool-resolution.test.ts", 43],

@@ -17,10 +17,18 @@ import type { RuntimeEnv } from "../runtime.js";
 /** Read the config file and exit through the runtime when validation fails. */
 export async function requireValidConfigFileSnapshot(
   runtime: RuntimeEnv,
-  opts?: { includeCompatibilityAdvisory?: boolean; skipPluginValidation?: boolean },
+  opts?: {
+    includeCompatibilityAdvisory?: boolean;
+    observe?: boolean;
+    skipPluginValidation?: boolean;
+  },
 ): Promise<ConfigFileSnapshot | null> {
+  const readOptions = {
+    ...(opts?.observe === false ? { observe: false } : {}),
+    ...(opts?.skipPluginValidation ? { skipPluginValidation: true } : {}),
+  };
   const snapshot = await readConfigFileSnapshot(
-    opts?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
+    Object.keys(readOptions).length > 0 ? readOptions : undefined,
   );
   if (snapshot.exists && !snapshot.valid) {
     const issues =
@@ -59,7 +67,11 @@ export async function requireValidConfigFileSnapshot(
 /** Read and return a valid OpenClaw config, or null after reporting validation errors. */
 export async function requireValidConfig(
   runtime: RuntimeEnv,
-  opts?: { includeCompatibilityAdvisory?: boolean; skipPluginValidation?: boolean },
+  opts?: {
+    includeCompatibilityAdvisory?: boolean;
+    observe?: boolean;
+    skipPluginValidation?: boolean;
+  },
 ): Promise<OpenClawConfig | null> {
   return (await requireValidConfigFileSnapshot(runtime, opts))?.config ?? null;
 }

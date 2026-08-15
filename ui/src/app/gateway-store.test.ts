@@ -12,6 +12,14 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
 
+const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
+  scheduleStaleChunkReloadMock: vi.fn(async () => true),
+}));
+
+vi.mock("./stale-chunk-reload.ts", () => ({
+  scheduleStaleChunkReload: scheduleStaleChunkReloadMock,
+}));
+
 vi.mock("../build-info.ts", () => ({
   CONTROL_UI_BUILD_INFO: {
     version: "2026.7.19",
@@ -112,6 +120,7 @@ function createStore(
 
 describe("createApplicationGateway connection phase", () => {
   beforeEach(() => {
+    scheduleStaleChunkReloadMock.mockClear();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -165,18 +174,6 @@ describe("createApplicationGateway connection phase", () => {
 
     current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
     expect(gateway.snapshot.phase).toBe("offline");
-  });
-
-  it("gates same-origin terminal work on exact build identity", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-
-    current().opts.onHello?.({
-      ...HELLO,
-      server: { version: "2026.7.19", buildId: "new-build", connId: "conn-1" },
-    });
-
-    expect(gateway.snapshot.phase).toBe("reconnecting");
   });
 
   it("keeps legacy version fallback on reconnect instead of first admission", () => {

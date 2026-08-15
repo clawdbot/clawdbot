@@ -34,6 +34,7 @@ describe("sessions.dispatch device targets", () => {
       sessionId: dispatchTestSessionId,
       agentId: "main",
       sessionKey: dispatchTestSessionKey,
+      executionMode: "worker-turn",
       state: "active",
       environmentId: "device-environment-1",
       generation: 1,

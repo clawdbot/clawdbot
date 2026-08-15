@@ -119,7 +119,7 @@ function transportWith(
   invoke: NodeWorkerSupervisorTransport["invoke"],
   listCurrentNodes: NodeWorkerSupervisorTransport["listCurrentNodes"] = async () => [nodeProof()],
 ): NodeWorkerSupervisorTransport {
-  return { invoke, listCurrentNodes };
+  return { invoke, isCurrent: () => true, listCurrentNodes };
 }
 
 function launchRequest(input = launchInput()) {

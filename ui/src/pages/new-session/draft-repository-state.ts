@@ -32,6 +32,7 @@ export class DraftRepositoryController {
   private preferredWorktreeRestore = false;
   private preferredBaseRefRestore = "";
   private worktreeSelectedByUser = false;
+  private detailsSelectedByUser = false;
 
   constructor(
     private readonly read: () => DraftRepositorySnapshot,
@@ -58,11 +59,16 @@ export class DraftRepositoryController {
     return !this.preferredWorktreeRestore;
   }
 
+  get hasUserSelection(): boolean {
+    return this.worktreeSelectedByUser || this.detailsSelectedByUser;
+  }
+
   adoptPreference(preference: NewSessionPreference | null) {
     this.preferredWorktreeRestore = preference?.worktree === true;
     this.preferredBaseRefRestore = preference?.baseRef ?? "";
     this.worktreeNameValue = preference?.worktreeName ?? "";
     this.worktreeSelectedByUser = false;
+    this.detailsSelectedByUser = false;
   }
 
   reset() {
@@ -75,6 +81,7 @@ export class DraftRepositoryController {
     this.preferredWorktreeRestore = false;
     this.preferredBaseRefRestore = "";
     this.worktreeSelectedByUser = false;
+    this.detailsSelectedByUser = false;
   }
 
   invalidate() {
@@ -125,6 +132,7 @@ export class DraftRepositoryController {
     this.baseRefEditGeneration += 1;
     this.baseRefValue = baseRef;
     this.preferredBaseRefRestore = "";
+    this.detailsSelectedByUser = true;
     this.callbacks.persistPreference({ baseRef });
     this.callbacks.requestUpdate();
   }
@@ -134,6 +142,7 @@ export class DraftRepositoryController {
       return;
     }
     this.worktreeNameValue = worktreeName;
+    this.detailsSelectedByUser = true;
     this.callbacks.persistPreference({ worktreeName });
     this.callbacks.requestUpdate();
   }

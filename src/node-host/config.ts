@@ -9,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -175,7 +176,7 @@ function configToRow(params: {
 }
 
 function readNodeHostConfigRow(
-  database: ReturnType<typeof openOpenClawStateDatabase>,
+  database: Pick<ReturnType<typeof openOpenClawStateDatabase>, "db">,
 ): NodeHostConfigRuntimeRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     database.db,
@@ -206,6 +207,19 @@ export async function loadNodeHostConfig(
   const database = openOpenClawStateDatabase(databaseOptions(env));
   const row = readNodeHostConfigRow(database);
   return row ? rowToNodeHostConfig(row) : null;
+}
+
+/** Load existing node-host state without creating or joining the writable shared-state lifecycle. */
+export async function loadNodeHostConfigReadOnly(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<NodeHostConfig | null> {
+  assertNodeHostLegacyStateMigrated(env);
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      const row = readNodeHostConfigRow({ db });
+      return row ? rowToNodeHostConfig(row) : null;
+    }, databaseOptions(env)) ?? null
+  );
 }
 
 /**

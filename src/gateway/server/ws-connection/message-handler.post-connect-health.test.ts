@@ -1210,7 +1210,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       isOneShotModelRun: false,
       isRestartRecoveryResumeRun: false,
     });
-    expect(admission).toEqual({ runId: "local-operator-run" });
+    expect(admission).toEqual({
+      runId: "local-operator-run",
+      callerOrigin: { kind: "local" },
+    });
   });
 
   it("does not carry local operator authority for an authenticated remote client", async () => {

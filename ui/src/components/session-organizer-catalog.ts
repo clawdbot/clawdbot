@@ -117,6 +117,37 @@ export async function deleteSessionGroup(
   }
 }
 
+export async function updateSessionGroupDefaults(
+  host: SessionOrganizerControllerHost,
+  group: string,
+  defaults: { cwd: string | null; worktree: boolean },
+  scope: SidebarSessionMutationScope,
+): Promise<SidebarSessionMutationResult> {
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return "stale";
+  }
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.groups.update",
+      requiredScope: "operator.write",
+    })
+  ) {
+    return "failed";
+  }
+  try {
+    const outcome = await scope.sessions.groupsUpdate(group, defaults);
+    return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope)
+      ? "completed"
+      : "stale";
+  } catch (error) {
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return "stale";
+    }
+    host.sessionData.publishSessionMutationError(scope, error);
+    return "failed";
+  }
+}
+
 export async function reorderSidebarSection(
   host: SessionOrganizerControllerHost,
   sourceSectionId: string,

@@ -116,15 +116,15 @@ export class QuestionManager {
       expiresAtMs,
       status: "pending",
     };
+    const expiryTimer = setTimeout(() => this.expire(record.id), timeoutMs);
     const entry: QuestionEntry = {
       record,
-      expiryTimer: null as unknown as ReturnType<typeof setTimeout>,
+      expiryTimer,
       cleanupTimer: null,
       waiters: new Set(),
       onResolved: params.onResolved,
     };
     this.entries.set(record.id, entry);
-    entry.expiryTimer = setTimeout(() => this.expire(record.id), timeoutMs);
     unrefTimer(entry.expiryTimer);
     return record;
   }

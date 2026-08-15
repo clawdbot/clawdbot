@@ -361,12 +361,11 @@ describe("device pairing setup state", () => {
       ts: 1,
     });
 
-    expect(parsed).not.toBeNull();
+    expect(parsed).toEqual({ setupId: "setup-uncertain", access: "limited" });
     expect(markDevicePairSetupDeliveryUncertain(state, parsed!)).toBe(true);
     expect(state.devicePairSetupLifecycle).toEqual({
       phase: "delivery-uncertain",
       access: "limited",
-      deviceName: "Phone",
     });
   });
 

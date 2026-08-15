@@ -1,3 +1,4 @@
+import { readControlUiBuildMismatchId } from "@openclaw/gateway-client/browser";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-contract.js";
 // Control UI module owns the application gateway store: the reactive
 // snapshot around GatewayBrowserClient consumed by the app shell.
@@ -430,6 +431,10 @@ export function createApplicationGateway(
           return;
         }
         stopCanvasSurfaceLease();
+        const mismatchedBuildId = readControlUiBuildMismatchId(error?.details);
+        if (mismatchedBuildId) {
+          void scheduleStaleChunkReload({ buildId: mismatchedBuildId });
+        }
         setSnapshot({
           ...snapshot,
           client: nextClient,
