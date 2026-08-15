@@ -271,6 +271,15 @@ openclaw-chat-sidebar-region,
   background: var(--bg);
 }
 
+:root[data-theme-mode="dark"] .side-panel {
+  --rail-header-background: var(--bg-accent);
+  background: var(--bg-accent);
+}
+
+:root[data-theme-mode="dark"] .sidebar-column__divider {
+  --rail-divider-color: var(--border-strong);
+}
+
 .side-panel--bottom {
   width: 100%;
   min-width: 0;
