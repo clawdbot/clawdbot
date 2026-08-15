@@ -133,7 +133,8 @@ describe("chat sidebar region", () => {
     const reviewItem = Array.from(
       root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
     ).find((item) => Reflect.get(item, "value") === "detail");
-    expect(reviewItem?.hasAttribute("disabled")).toBe(true);
+    expect(reviewItem).toBeUndefined();
+    expect(root(region).querySelector("wa-dropdown-item[disabled]")).toBeNull();
   });
 
   it("opens into a type selector instead of restoring a previous tab", async () => {

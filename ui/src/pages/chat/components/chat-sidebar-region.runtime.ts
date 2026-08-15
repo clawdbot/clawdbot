@@ -163,17 +163,18 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         >
           ${icons.plus}
         </button>
-        ${this.panelTypes().map(
-          (type) => html`
-            <wa-dropdown-item
-              class="side-panel-type-menu__item session-menu__item"
-              .value=${type.slot}
-              ?disabled=${openSlots.has(type.slot)}
-            >
-              ${renderPanelTypeOption(type, true)}
-            </wa-dropdown-item>
-          `,
-        )}
+        ${this.panelTypes()
+          .filter((type) => !openSlots.has(type.slot))
+          .map(
+            (type) => html`
+              <wa-dropdown-item
+                class="side-panel-type-menu__item session-menu__item"
+                .value=${type.slot}
+              >
+                ${renderPanelTypeOption(type, true)}
+              </wa-dropdown-item>
+            `,
+          )}
       </wa-dropdown>
     `;
   }
