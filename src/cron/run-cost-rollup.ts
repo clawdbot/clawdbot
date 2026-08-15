@@ -18,7 +18,12 @@ export type CronRunCostRollup = {
   skipRate: number;
 };
 
-const PRECHECK_SKIP_MARKERS = ["precheck-no-work", "precheck-timeout", "precheck-error"];
+const PRECHECK_SKIP_MARKERS = [
+  "precheck-no-work",
+  "precheck-skipped-error",
+  "precheck-timeout",
+  "precheck-error",
+];
 
 function isPrecheckSkip(entry: CronRunLogEntry): boolean {
   const haystack = `${entry.error ?? ""} ${entry.summary ?? ""}`.toLowerCase();

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PRECHECK_NO_WORK_REASON,
+  PRECHECK_SKIPPED_ERROR_REASON,
   PRECHECK_POLICY_DENIED_REASON,
   authorizeCronJobPrecheckCommand,
   cronRunOutcomeFromPrecheck,
@@ -40,14 +41,17 @@ describe("interpretPrecheckOutput", () => {
     expect(interpretPrecheckOutput({ exitCode: 7, stdout: "", stderr: "boom" }).decision).toBe(
       "error",
     );
-    expect(
-      interpretPrecheckOutput({
-        exitCode: 7,
-        stdout: "",
-        stderr: "boom",
-        onError: "skip",
-      }).decision,
-    ).toBe("skip");
+    const skippedError = interpretPrecheckOutput({
+      exitCode: 7,
+      stdout: "",
+      stderr: "boom",
+      onError: "skip",
+    });
+    expect(skippedError.decision).toBe("skip");
+    if (skippedError.decision === "skip") {
+      expect(skippedError.reason).toBe(PRECHECK_SKIPPED_ERROR_REASON);
+      expect(skippedError.reason).not.toBe(PRECHECK_NO_WORK_REASON);
+    }
   });
 });
 
@@ -63,6 +67,20 @@ describe("cronRunOutcomeFromPrecheck", () => {
     expect(outcome.status).toBe("skipped");
     expect(outcome.error).toBe(PRECHECK_NO_WORK_REASON);
     expect(outcome.diagnostics?.summary).toBe(PRECHECK_NO_WORK_REASON);
+  });
+
+  it("preserves skipped-error reason distinct from no-work (onError=skip)", () => {
+    const outcome = cronRunOutcomeFromPrecheck({
+      decision: "skip",
+      reason: PRECHECK_SKIPPED_ERROR_REASON,
+      exitCode: 7,
+      stdout: "",
+      stderr: "boom",
+    });
+    expect(outcome.status).toBe("skipped");
+    expect(outcome.error).toBe(PRECHECK_SKIPPED_ERROR_REASON);
+    expect(outcome.diagnostics?.summary).toBe(PRECHECK_SKIPPED_ERROR_REASON);
+    expect(outcome.error).not.toBe(PRECHECK_NO_WORK_REASON);
   });
 });
 

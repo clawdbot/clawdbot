@@ -513,6 +513,49 @@ describe("cron service timer seam coverage", () => {
     expect(agent).not.toHaveBeenCalled();
   });
 
+  it("persists precheck-skipped-error through onTimer when onError=skip (distinct from no-work)", async () => {
+    // ClawSweeper P2: failed probes with onError=skip must not look like quiet no-work.
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-08-15T07:00:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const spy = vi.spyOn(jobPrecheck, "runCronJobPrecheck").mockResolvedValue({
+      decision: "skip",
+      reason: "precheck-skipped-error",
+      exitCode: 7,
+      stdout: "",
+      stderr: "boom",
+    } as Awaited<ReturnType<typeof jobPrecheck.runCronJobPrecheck>>);
+    try {
+      const job: CronJob = {
+        ...createDueIsolatedAgentJob({ now }),
+        id: "precheck-skipped-error-persist",
+        precheck: { kind: "exec", command: "exit 7", onError: "skip" },
+      };
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        cronConfig: { triggers: { enabled: true } },
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      await onTimer(state);
+
+      const stored = await loadCronStore(storePath);
+      const persisted = stored.jobs.find((entry) => entry.id === "precheck-skipped-error-persist");
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(persisted?.state.lastStatus).toBe("skipped");
+      expect(persisted?.state.lastError ?? "").toContain("precheck-skipped-error");
+      expect(persisted?.state.lastError ?? "").not.toContain("precheck-no-work");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("persists precheck-no-work through onTimer without an agent turn", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-07-25T12:00:00.000Z");
