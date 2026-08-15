@@ -1,5 +1,6 @@
 // Descriptor-to-lazy-command-group adapters used by core and sub-CLI registration.
 import type { Command } from "commander";
+import type { CommandEffectProfile, CommandExposure } from "../catalog-metadata.js";
 import type { MachineOutputResolver } from "../machine-output-argv.js";
 
 /** Descriptor for one root command placeholder. */
@@ -10,6 +11,8 @@ export type NamedCommandDescriptor = {
   machineOutput?: MachineOutputResolver;
   hidden?: boolean;
   parentDefaultHelp?: boolean;
+  effectProfile?: CommandEffectProfile;
+  commandExposure?: CommandExposure;
 };
 
 /** Group spec that names the placeholders owned by one registrar. */
