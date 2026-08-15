@@ -3113,6 +3113,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 /* "Pages" section head: zone-style label plus the pin-editor affordance. */
 .sidebar-nav__head {
   position: absolute;
+  z-index: 1;
   top: 0;
   right: 0;
   display: flex;
