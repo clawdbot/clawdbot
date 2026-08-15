@@ -117,7 +117,6 @@ export type GatewayWorkerPlacementRuntimeParams = {
   placements: WorkerSessionPlacementStore;
   environments: WorkerEnvironmentService;
   gatewayNamespace: string;
-  admitNewPlacements: boolean;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
   warn: (message: string) => void;
 };
@@ -419,7 +418,6 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
   const admissionProvider = createWorkerSessionTurnPlacementProvider({
     environments: params.environments,
     placements: params.placements,
-    admitNewPlacements: params.admitNewPlacements,
     resolveWorkspacePath,
     recoverPendingWorkspaceResult: async (environmentId) =>
       await dispatchService.reconcileActive(environmentId),

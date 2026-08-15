@@ -1,4 +1,5 @@
 export * from "./clawhub-trust-error-details.js";
+export * from "./install-policy-warning-error-details.js";
 export * from "./system-agent-error-details.js";
 export {
   isMcpAppViewExpiredError,

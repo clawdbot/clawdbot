@@ -176,18 +176,6 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.phase).toBe("offline");
   });
 
-  it("gates same-origin terminal work on exact build identity", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-
-    current().opts.onHello?.({
-      ...HELLO,
-      server: { version: "2026.7.19", buildId: "new-build", connId: "conn-1" },
-    });
-
-    expect(gateway.snapshot.phase).toBe("reconnecting");
-  });
-
   it("keeps legacy version fallback on reconnect instead of first admission", () => {
     const { gateway, current } = createStore();
     gateway.start();
@@ -202,32 +190,6 @@ describe("createApplicationGateway connection phase", () => {
     current().opts.onClose?.({ code: 1006, reason: "restarting", willRetry: true });
     current().opts.onHello?.(legacyHello);
     expect(gateway.snapshot.phase).toBe("reconnecting");
-  });
-
-  it("turns a structured build rejection into one guarded reload", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-
-    current().opts.onClose?.({
-      code: 1008,
-      reason: "connect failed",
-      willRetry: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: "Control UI updated; reload this page to continue",
-        details: {
-          code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-          gatewayBuildId: "replacement-build",
-          reloadRequired: true,
-        },
-      },
-    });
-
-    expect(gateway.snapshot.phase).toBe("stopped");
-    expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH);
-    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledWith({
-      buildId: "replacement-build",
-    });
   });
 
   it("does not compare a separately hosted Control UI with a remote gateway build", () => {

@@ -209,10 +209,10 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
       }
     },
-    abandon: async (_error?: unknown) => {
+    abandon: async (error?: unknown) => {
       if (!handedOff) {
         handedOff = true;
-        await abandonAll();
+        await (error === undefined ? abandonAll() : failAll(error));
       }
     },
     // Source-compatible lifecycles predate onCancelled. Settle each source through

@@ -50,6 +50,7 @@ const RECEIPT = {
 const INSTALLATION: WorkerInstallationArtifact = {
   install: "bundle",
   ...RECEIPT,
+  tarballBytes: 1,
   tarballSha256: "b".repeat(64),
   tarballPath: "/gateway/worker-bundle.tgz",
 };

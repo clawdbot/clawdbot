@@ -25,7 +25,7 @@ advances a milestone.
 | F   | Real-wire session boundary harness                         | landed      | #121212                                                                                                                                                                   |
 | 5   | Public worker ingress path                                 | landed      | #122578, #122643                                                                                                                                                          |
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901 |
-| 7   | Bundle push consent + runner updates                       | not started | —                                                                                                                                                                         |
+| 7   | Bundle push consent + runner updates                       | in progress | #123985                                                                                                                                                                   |
 | 8   | Stop-and-continue moves                                    | not started | —                                                                                                                                                                         |
 | 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | not started | —                                                                                                                                                                         |
 | 10  | Cloud convergence (provisioners run `openclaw connect`)    | not started | —                                                                                                                                                                         |
@@ -316,6 +316,12 @@ it cannot rot into approval fatigue or silent surprise:
   devices page shows the installed runner version; the gateway refuses
   dispatch to stale nodes with a doctor-style hint instead of failing
   silently.
+
+The first milestone 7 slice (#123985) adds the private paired-channel install
+command, one-use Gateway download capability, bounded archive validation,
+script-disabled dependency materialization, and atomic namespaced publication.
+Device provisioning continues to use the local-build claim until the next slice
+cuts it over and removes that temporary path.
 
 ### Projects read model (milestone 4 foundation)
 

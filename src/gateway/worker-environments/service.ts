@@ -20,6 +20,7 @@ import type {
 } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type { WorkerConnectionIdentity } from "./admission.js";
+import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
 import { createWorkerEnvironmentAccess } from "./environment-access.js";
@@ -90,6 +91,7 @@ type WorkerEnvironmentServiceOptions = {
   resolveNodeWorkerBuild?: (deviceId: string) => Promise<WorkerAdmissionHandshake | undefined>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
+  stopNodeWorkerBundleTransfers?: () => void;
   reconcileIntervalMs?: number;
   providerCallTimeoutMs?: number;
   bootstrapCallTimeoutMs?: number;
@@ -198,13 +200,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     );
   };
 
-  const callBootstrap = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+  const callBootstrap = async <T>(
+    installation: WorkerInstallationArtifact,
+    run: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
     const controller = new AbortController();
     const operation = Promise.resolve().then(() => run(controller.signal));
     try {
       return await withTimeout(
         operation,
-        options.bootstrapCallTimeoutMs ?? 35 * 60_000,
+        options.bootstrapCallTimeoutMs ?? workerBootstrapOperationTimeoutMs(installation),
         "Worker bootstrap operation",
       );
     } catch (error) {
@@ -293,6 +298,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const environmentAccess = createWorkerEnvironmentAccess({
     store,
     getConfig: options.getConfig,
+    prepareCurrentBundle: async () => await options.prepareInstallation("bundle"),
     tunnelManager: options.tunnelManager,
     nodeTunnelManager: options.nodeTunnelManager,
     resolveWorkerGateway: options.resolveWorkerGateway,
@@ -383,6 +389,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     await inference.stop();
     credentialBroker.clear();
     options.liveEvents?.clear();
+    options.stopNodeWorkerBundleTransfers?.();
     await environmentAccess.stopAllTunnels();
     const reconciliation = reconcileInFlight;
     if (reconciliation) {

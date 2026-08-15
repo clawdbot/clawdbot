@@ -167,7 +167,10 @@ function primeSkillVerification(overrides: Record<string, unknown> = {}) {
   });
 }
 
-afterEach(() => restoreTty());
+afterEach(() => {
+  restoreTty();
+  vi.unstubAllEnvs();
+});
 
 function mockCall(mock: unknown, index = 0): Array<unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -1377,6 +1380,39 @@ describe("skills cli commands", () => {
   });
 
   it.each([
+    {
+      label: "human",
+      argv: ["skills", "info", "missing-skill"],
+      expected:
+        'Skill "missing-skill" not found. Run `openclaw skills list` to see available skills.\n\nTip: use `openclaw skills search`, `openclaw skills install`, and `openclaw skills update` for ClawHub-backed skills.',
+    },
+    {
+      label: "JSON",
+      argv: ["skills", "info", "missing-skill", "--json"],
+      expected: JSON.stringify({ error: "not found", skill: "missing-skill" }, null, 2),
+    },
+  ])("exits nonzero for missing skill info in $label mode", async ({ argv, expected }) => {
+    vi.stubEnv("OPENCLAW_PROFILE", "");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
+
+    await expect(runCommand(argv)).rejects.toThrow("__exit__:1");
+
+    expect(runtimeStdout).toEqual([expected]);
+    expect(runtimeErrors).toStrictEqual([]);
+    expect(defaultRuntime.exit).toHaveBeenCalledOnce();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps successful human skill info output at exit zero", async () => {
+    await runCommand(["skills", "info", "calendar"]);
+
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(runtimeStdout).toHaveLength(1);
+    expect(runtimeStdout.at(-1)).toContain("📅 calendar ✓ Ready");
+    expect(runtimeStdout.at(-1)).toContain("Calendar helpers");
+  });
+
+  it.each([
     ["list", ["skills", "list", "--json"]],
     ["info", ["skills", "info", "calendar", "--json"]],
     ["check", ["skills", "check", "--json"]],
@@ -1475,6 +1511,33 @@ describe("skills cli commands", () => {
     expect(resolveAgentIdByWorkspacePathMock).toHaveBeenCalledWith({}, "/tmp/unrelated");
     expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith({});
     expectStatusWorkspaceCall("/tmp/workspace-main");
+  });
+
+  it("renders named agent-selection errors without the internal class name", async () => {
+    const error = new Error(
+      "Multiple agents are configured, but this operation has no explicit owner.",
+    );
+    error.name = "AgentSelectionRequiredError";
+    resolveDefaultAgentIdMock.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    await expect(runCommand(["skills", "list"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toStrictEqual([error.message]);
+  });
+
+  it("redacts secrets from rendered skills CLI errors", async () => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    resolveDefaultAgentIdMock.mockImplementationOnce(() => {
+      throw new Error(`Skill lookup failed with token=${secret}`);
+    });
+
+    await expect(runCommand(["skills", "list"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toHaveLength(1);
+    expect(runtimeErrors[0]).toContain("Skill lookup failed");
+    expect(runtimeErrors[0]).not.toContain(secret);
   });
 
   it("keeps non-JSON skills list output on stdout with human-readable formatting", async () => {

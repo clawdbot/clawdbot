@@ -37,15 +37,18 @@ struct MacNodeHostWorkerLaunch: Equatable, Sendable {
     let command: [String]
     let currentDirectoryURL: URL?
     let environment: [String: String]
+    let configurationGeneration: UInt64
 
     init(
         command: [String],
         currentDirectoryURL: URL? = nil,
-        environment: [String: String] = [:])
+        environment: [String: String] = [:],
+        configurationGeneration: UInt64 = 0)
     {
         self.command = command
         self.currentDirectoryURL = currentDirectoryURL
         self.environment = environment
+        self.configurationGeneration = configurationGeneration
     }
 }
 
@@ -88,7 +91,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private let writerQueue = DispatchQueue(label: "ai.openclaw.node-host-worker.writer")
     private let session: GatewayNodeSession
     private let startupTimeout: TimeInterval
-    private let onUnexpectedExit: @Sendable () -> Void
+    private let onUnexpectedExit: @Sendable (UInt64) -> Void
     private var process: ManagedProcess?
     private var processCleanupTask: Task<Void, Never>?
     private var stdinPipe: Pipe?
@@ -115,7 +118,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     init(
         session: GatewayNodeSession,
         startupTimeout: TimeInterval = MacNodeHostWorker.defaultStartupTimeout,
-        onUnexpectedExit: @escaping @Sendable () -> Void = {})
+        onUnexpectedExit: @escaping @Sendable (UInt64) -> Void = { _ in })
     {
         self.session = session
         self.startupTimeout = startupTimeout
@@ -709,6 +712,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         notifyUnexpectedExit: Bool = false) -> Task<Void, Never>?
     {
         let wasReady = self.manifest != nil
+        let stoppedWorker = self.launchedWorker
         self.startTimer?.cancel()
         self.startTimer = nil
         self.launchedWorker = nil
@@ -727,8 +731,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         for (id, continuation) in pending {
             continuation.resume(returning: Self.unavailableResponse(id, "UNAVAILABLE: node-host worker stopped"))
         }
-        if notifyUnexpectedExit, wasReady {
-            self.onUnexpectedExit()
+        if notifyUnexpectedExit, wasReady, let stoppedWorker {
+            self.onUnexpectedExit(stoppedWorker.configurationGeneration)
         }
         guard let process = self.process else {
             return nil

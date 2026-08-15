@@ -63,9 +63,13 @@ describe("worker placement dispatch coordinator", () => {
         },
       }),
     ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
+    const modeConflict = expect(
+      coordinated.dispatch({ ...REQUEST, executionMode: "remote-exec" }),
+    ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
     const retry = coordinated.dispatch(REQUEST);
     releaseDispatch.resolve();
 
+    await modeConflict;
     const [firstResult, retryResult] = await Promise.all([first, retry]);
     expect(retryResult).toBe(firstResult);
     expect(dispatch).toHaveBeenCalledOnce();

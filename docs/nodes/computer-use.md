@@ -19,7 +19,7 @@ Provider selection never falls back per action. Switching providers closes the a
 - **macOS fulfiller:** app setting **Allow Computer Control** enabled. It defaults on; an explicit off choice stays off.
 - **macOS fulfiller:** choose **Peekaboo** (default) or **CUA**. CUA is selectable only when the pinned driver is present in the signed app bundle; development builds without that artifact show **driver not bundled**.
 - **macOS fulfiller:** **Accessibility** and **Screen Recording** granted to OpenClaw. The native Peekaboo path also requires Event Posting access for its CoreGraphics input primitives.
-- **Windows/Linux fulfiller:** bundled `cua-computer` plugin enabled. Its package includes the pinned CUA Driver SDK 0.19.3 runtime; no `cua-driver` executable, daemon, or MCP server is configured.
+- **Windows/Linux fulfiller:** bundled `cua-computer` plugin enabled on Windows x64/ARM64 or glibc-based Linux x64/ARM64. Its package includes the pinned CUA Driver SDK 0.19.3 runtime; no `cua-driver` executable, daemon, or MCP server is configured.
 - The pairing update that includes `computer.act` approved on the gateway.
 - A vision-capable agent model.
 - Tool policy that exposes `computer`. The default `coding` profile does not. Add `computer` to `tools.alsoAllow`; sandboxed agents also need it in `tools.sandbox.tools.alsoAllow`.
@@ -35,6 +35,8 @@ The built-in `computer` tool takes one action per call. Coordinates are non-nega
 - Pacing: `wait` (`duration` seconds).
 
 Providers with the v2 window/element family can additionally expose `list_apps`, `list_windows`, `get_accessibility_tree`, `get_cursor_position`, `get_window_state`, `launch_app`, `kill_app`, `bring_to_front`, `set_value`, `zoom`, `escalate_scope`, and `invoke_menu`. The provider descriptor is authoritative; unavailable actions are omitted rather than emulated through another provider.
+
+The CUA provider also exposes the v2 browser family: `get_browser_state`, `browser_prepare`, `browser_navigate`, `browser_click`, `browser_type`, `browser_dialog`, `browser_set_input_files`, `browser_download`, and `browser_pointer`. Bind a discovered native browser window with `get_browser_state`, then use the returned opaque `browserRef`, `pageRef`, observation, and element references. These references belong to one Computer Use execution and driver generation; navigation invalidates page-element observations, and a driver restart invalidates the complete browser reference set.
 
 Modifier keys ride the `text` field on click and scroll actions (`shift`, `ctrl`, `alt`, `cmd`). After an input action the tool returns a fresh screenshot so the model can observe the result. If more than one computer-capable node is connected, pass `node` explicitly.
 
@@ -52,7 +54,13 @@ The app waits until the private socket accepts connections before advertising CU
 
 The embedded CUA daemon runs in unrestricted mode because bounded CUA grants require exact launch-time resources and cannot represent OpenClaw's runtime-discovered windows and elements. OpenClaw command arming, pairing approval, and tool policy are the authoritative authorization gate, identical to the shipped Peekaboo fulfiller. The app owns the daemon and its macOS TCC identity, and the daemon accepts local connections only through an owner-only socket directory.
 
-The CUA descriptor advertises window and element targets, background and foreground delivery, screenshots, and accessibility observations. Peekaboo remains the default in this release and advertises the existing coordinate-action family; its v2 adapter is separate work.
+The CUA descriptor advertises window, element, and browser targets; background and foreground delivery; and image, accessibility, and browser observations. Peekaboo remains the default in this release and advertises only the action families its native adapter implements.
+
+#### Browser profiles
+
+`browser_prepare` can launch a separate driver-owned Chromium process with a new ephemeral profile or a named isolated profile. It never modifies, copies, terminates, or attaches to the selected browser's existing profile. Existing-profile/CDP attachment remains unavailable because it requires the driver's protected embedding-host consent and revocation path; Gateway approval and `computer.act` arming do not substitute for that local consent.
+
+Browser targets, pages, page elements, and dialogs are opaque capabilities. Retake browser state after navigation, reconnect, or a stale-reference refusal. The adapter never returns provider-native CDP target IDs, tab IDs, or page refs to the model.
 
 ### Windows and Linux (experimental, direct SDK)
 
@@ -64,9 +72,17 @@ The bundled `cua-computer` plugin provides an experimental fulfiller for Windows
    openclaw plugins enable cua-computer
    ```
 
-2. Start `openclaw node run` from the interactive desktop session. The plugin creates its configured SDK runtime lazily, then creates one OpenClaw-owned trusted session for the node-host command execution. It closes that session and shuts down the runtime when the command host stops or restarts.
+2. Verify the node-local SDK package before starting the node:
 
-3. Add `computer.act` to the Gateway allowlist. This plugin registers `computer.act` as a dangerous plugin node command, so enabling the plugin alone is not enough; the operator must opt in explicitly:
+   ```bash
+   openclaw doctor --lint --only cua-computer/driver-artifacts
+   ```
+
+   OpenClaw checks the SDK package version, the selected OS/CPU package version, regular-file identity, and the pinned SHA-256 digest of the native library and Node runtime. A clean check prints `no findings`. If it reports a `COMPUTER_DRIVER_*` error, reinstall or update OpenClaw on this node host and run the check again. Do not download a standalone `cua-driver` executable or add one to `PATH`; Windows and Linux use the npm-installed in-process SDK.
+
+3. Start `openclaw node run` from the interactive desktop session. The plugin repeats the artifact verification at startup before it imports native code, creates its configured SDK runtime lazily, then creates one OpenClaw-owned trusted session for the node-host command execution. It closes that session and shuts down the runtime when the command host stops or restarts.
+
+4. Add `computer.act` to the Gateway allowlist. This plugin registers `computer.act` as a dangerous plugin node command, so enabling the plugin alone is not enough; the operator must opt in explicitly:
 
    ```json5
    {
@@ -84,6 +100,8 @@ The plugin calls `CuaDriver.createConfigured`, never bare `create()`. Its author
 
 On Windows and Linux this is a hard replacement of the former 0.10 daemon/MCP integration: OpenClaw does not spawn a CUA process or proxy an MCP client. macOS deliberately uses the app-owned embedded daemon described above so the driver remains in `OpenClaw.app`'s TCC responsibility chain. Neither path falls back to another provider for an individual action.
 
+The accepted driver record lives with the `cua-computer` package and supplies both the npm native-file digests and the macOS archive digest. Updating OpenClaw updates that record and the SDK packages together. There is no independent Windows/Linux driver updater or rollback directory because there is no separate driver installation on those hosts; roll back by installing the previous known-good OpenClaw package, then rerun the focused doctor check before restarting the node.
+
 ### Troubleshooting
 
 The `cua-computer` fulfiller surfaces typed error codes in the tool result and node logs. Common ones:
@@ -91,8 +109,13 @@ The `cua-computer` fulfiller surfaces typed error codes in the tool result and n
 | Code                                                 | Cause                                                                                                                                                         | Fix                                                                                                                                                                                                      |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `COMPUTER_DRIVER_UNAVAILABLE`                        | The CUA runtime cannot initialize, the macOS app-owned endpoint is absent, or the desktop permissions/session are unavailable.                                | On macOS, verify CUA is selected and the bundled driver is ready; on Windows/Linux, run `openclaw node run` inside the interactive desktop session. Reinstall OpenClaw if the pinned runtime is missing. |
+| `COMPUTER_DRIVER_PACKAGE_MISSING`                    | The pinned SDK package, OS/CPU native package, native library, or Node runtime is absent or unreadable.                                                       | Reinstall OpenClaw on the node host, rerun `openclaw doctor --lint --only cua-computer/driver-artifacts`, then restart the node.                                                                         |
+| `COMPUTER_DRIVER_VERSION_MISMATCH`                   | The SDK package or selected native package does not match the accepted 0.19.3 version.                                                                        | Update or reinstall OpenClaw so both packages come from the same release; rerun the focused doctor check.                                                                                                |
+| `COMPUTER_DRIVER_DIGEST_MISMATCH`                    | A native SDK library or Node runtime is not a regular package file or does not match its pinned SHA-256 digest.                                               | Do not run or replace the file manually. Reinstall OpenClaw, rerun the focused doctor check, then restart the node.                                                                                      |
+| `COMPUTER_DRIVER_PLATFORM_UNSUPPORTED`               | The node host has no published 0.19.3 native SDK package, such as musl Linux or an unsupported CPU architecture.                                              | Use Windows x64/ARM64 or glibc-based Linux x64/ARM64 for this provider.                                                                                                                                  |
 | `COMPUTER_REFUSED_<code>`                            | The driver refused the action with a structured code such as `background_unavailable`, `background_occluded`, or `foreground_unavailable` (KDE/KWin Wayland). | Bring the target window forward, switch to X11, or use a supported compositor. See the compatibility notes above.                                                                                        |
 | `COMPUTER_STALE_FRAME`                               | The coordinates referenced a screenshot that is no longer current (context compaction, a display geometry change, or a reference-width change).               | Take a fresh `screenshot` before the coordinate action.                                                                                                                                                  |
+| `COMPUTER_STALE_OBSERVATION`                         | A window or browser reference belongs to an older observation, navigation, execution, or driver generation.                                                   | Run `get_window_state` or `get_browser_state` again and retry with the new opaque references.                                                                                                            |
 | `COMPUTER_UNSUPPORTED_ACTION`                        | An action this fulfiller cannot faithfully deliver: `hold_key`, `left_mouse_down`, `left_mouse_up`, or modifier-held click/drag/scroll.                       | Use a supported action. The typed CUA Driver desktop contract has no held-input or modifier argument for these calls.                                                                                    |
 | `COMPUTER_UNSUPPORTED_DISPLAY`                       | A non-primary `screenIndex`, a capture/screen geometry mismatch, or a cursor outside the primary display.                                                     | Drive the primary display only.                                                                                                                                                                          |
 | `COMPUTER_UNSUPPORTED_KEY`                           | A `key` value the driver cannot reproduce reliably: a digit or punctuation key whose shift state is layout-dependent, or an unknown key.                      | Send that text through the `type` action instead.                                                                                                                                                        |

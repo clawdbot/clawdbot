@@ -1,4 +1,3 @@
-import { fileURLToPath } from "node:url";
 import {
   ErrorCodes,
   errorShape,
@@ -9,9 +8,6 @@ import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import { getActivePluginHttpRouteRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -60,41 +56,9 @@ import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
+import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 type CoreGatewayHandlerModuleLoader = () => Promise<GatewayRequestHandlers>;
-
-// The install root is process-stable; capture it before an upgrade can replace
-// package metadata, then consult it only after a dynamic import has failed.
-const gatewayInstallRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-
-function staleInstallErrorShape(error: unknown): ErrorShape | null {
-  if (
-    !gatewayInstallRoot ||
-    !(error instanceof Error) ||
-    !hasNodeErrorCode(error, "ERR_MODULE_NOT_FOUND")
-  ) {
-    return null;
-  }
-  const url = (error as Error & { url?: unknown }).url;
-  if (typeof url !== "string") {
-    return null;
-  }
-  let missingPath: string;
-  try {
-    missingPath = fileURLToPath(url);
-  } catch {
-    return null;
-  }
-  if (!isPathInside(gatewayInstallRoot, missingPath)) {
-    return null;
-  }
-  const restartCommand = formatCliCommand("openclaw gateway restart");
-  return errorShape(
-    ErrorCodes.UNAVAILABLE,
-    `The running Gateway can no longer load part of its OpenClaw installation. The installation may have changed while the Gateway was running. Restart it with: ${restartCommand}`,
-    { details: { code: "STALE_INSTALL", restartCommand }, retryable: false },
-  );
-}
 
 const CORE_GATEWAY_HANDLER_MODULES = {
   agent: () => import("./server-methods/agent.js").then((module) => module.agentHandlers),
@@ -550,9 +514,9 @@ export async function runWithGatewayRequestEnvelope<T>(
       if (error instanceof SessionMutationAuthorizationChangedError) {
         return await options.reject(error.error);
       }
-      const staleInstallError = staleInstallErrorShape(error);
-      if (staleInstallError) {
-        return await options.reject(staleInstallError);
+      const staleInstall = classifyGatewayStaleInstall(error);
+      if (staleInstall) {
+        return await options.reject(staleInstall.error);
       }
       throw error;
     }

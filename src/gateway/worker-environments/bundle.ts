@@ -9,6 +9,10 @@ import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-reg
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
+  DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+  readWorkerBundleArchiveManifest,
+} from "../../shared/worker-bundle-archive.js";
+import {
   hashWorkerBundleManifest,
   WORKER_BUNDLE_MANIFEST_VERSION,
 } from "../../shared/worker-bundle-hash.js";
@@ -34,6 +38,7 @@ type WorkerInstallationArtifactBase = {
 
 type WorkerBundleArtifact = WorkerInstallationArtifactBase & {
   install: "bundle";
+  tarballBytes: number;
   tarballSha256: string;
   tarballPath: string;
 };
@@ -306,63 +311,6 @@ function manifestsMatch(
   );
 }
 
-async function readTarballManifest(tarballPath: string): Promise<WorkerBundleManifestEntry[]> {
-  const pending: Array<{
-    path: string;
-    mode: number | undefined;
-    headerSize: number;
-    actualSize: number;
-    type: string;
-    sha256?: string;
-    error?: Error;
-  }> = [];
-  await tar.list({
-    file: tarballPath,
-    strict: true,
-    onReadEntry(entry) {
-      const hash = createHash("sha256");
-      const item = {
-        path: entry.path,
-        mode: entry.mode,
-        headerSize: entry.size,
-        actualSize: 0,
-        type: entry.type,
-      } as (typeof pending)[number];
-      pending.push(item);
-      entry.on("data", (chunk: Buffer) => {
-        item.actualSize += chunk.byteLength;
-        hash.update(chunk);
-      });
-      entry.on("end", () => {
-        item.sha256 = hash.digest("hex");
-      });
-      entry.on("error", (error) => {
-        item.error = error instanceof Error ? error : new Error(String(error));
-      });
-    },
-  });
-  const entries = pending.map((entry): WorkerBundleManifestEntry => {
-    if (entry.error) {
-      throw entry.error;
-    }
-    if (
-      entry.type !== "File" ||
-      entry.mode === undefined ||
-      entry.actualSize !== entry.headerSize ||
-      entry.sha256 === undefined
-    ) {
-      throw new Error(`Invalid worker bundle tar entry: ${entry.path}`);
-    }
-    return {
-      path: entry.path,
-      mode: entry.mode,
-      size: entry.actualSize,
-      sha256: entry.sha256,
-    };
-  });
-  return entries.toSorted((left, right) => comparePaths(left.path, right.path));
-}
-
 async function isCachedTarball(filePath: string): Promise<boolean> {
   try {
     const stats = await fs.lstat(filePath);
@@ -386,7 +334,10 @@ async function cachedTarballMatches(
     return false;
   }
   try {
-    return manifestsMatch(await readTarballManifest(tarballPath), manifest);
+    return manifestsMatch(
+      await readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS),
+      manifest,
+    );
   } catch {
     return false;
   }
@@ -511,6 +462,7 @@ async function prepareWorkerBundle(
       bundleHash,
       openclawVersion,
       protocolFeatures,
+      tarballBytes: (await fs.stat(tarballPath)).size,
       tarballSha256: await hashWorkerBundleTarball(tarballPath),
       tarballPath,
     };

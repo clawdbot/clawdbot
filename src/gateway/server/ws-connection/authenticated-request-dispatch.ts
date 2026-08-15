@@ -15,6 +15,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
+import { classifyGatewayStaleInstall } from "../../stale-install.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
@@ -211,10 +212,11 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       } catch (err) {
         // Failure diagnostics and responses belong to the same request trace as the handler.
         logGateway.error(`request handler failed: ${formatForLog(err)}`);
+        const staleInstall = classifyGatewayStaleInstall(err);
         respondWithAuthority(
           false,
           undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+          staleInstall?.error ?? errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
         );
       } finally {
         if (requestController) {

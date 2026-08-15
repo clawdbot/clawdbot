@@ -56,7 +56,7 @@ export async function activateCodexAttemptTurn(
     sandboxSessionKey,
     effectiveCwd,
   } = connection;
-  const { dynamicToolParams, computerContextEpoch, toolBridge } = attemptTools;
+  const { dynamicToolParams, compactionPlanState, computerContextEpoch, toolBridge } = attemptTools;
   const { state, userInputBridgeRef, steeringQueueRef, turnWatches, completeTurn, interruptTurn } =
     turnRuntime;
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
@@ -116,10 +116,24 @@ export async function activateCodexAttemptTurn(
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
       ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
       upstreamUserText: turnState.codexTurnPromptText,
-      onContextCompacted: () => {
+      onContextCompacted: async () => {
         computerContextEpoch.value += 1;
         delete computerContextEpoch.frameToolCallId;
         delete computerContextEpoch.frameImageIdentity;
+        try {
+          await compactionPlanState.restore({
+            client: resourceState.client,
+            threadId: resourceState.thread.threadId,
+            timeoutMs: connection.appServer.requestTimeoutMs,
+            signal: runAbortController.signal,
+          });
+        } catch (error) {
+          embeddedAgentLog.warn("failed to restore Codex plan state after compaction", {
+            runId: params.runId,
+            threadId: resourceState.thread.threadId,
+            error: formatErrorMessage(error),
+          });
+        }
       },
     },
   );

@@ -120,7 +120,7 @@ suite.define(() => {
       await gateway.waitForRequest("connect");
       await gateway.rejectDeferred("connect", {
         code: "INVALID_REQUEST",
-        message: "protocol mismatch",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
         details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
       });
 
@@ -129,6 +129,7 @@ suite.define(() => {
       expect((await failure.textContent())?.toLowerCase()).toContain(
         "supported connection protocol",
       );
+      expect(await page.locator(".login-gate__failure-refresh").isVisible()).toBe(true);
       await page.clock.runFor(1_600);
       expect(await gateway.getRequests("connect")).toHaveLength(1);
     } finally {

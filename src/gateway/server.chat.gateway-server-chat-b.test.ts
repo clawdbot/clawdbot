@@ -30,6 +30,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
+import { getMediaDir } from "../media/store.js";
 import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { rebasePluginMetadataSnapshotManifestRegistry } from "../plugins/plugin-metadata-snapshot.js";
@@ -2137,6 +2138,8 @@ describe("gateway server chat", () => {
         getRuntimeConfig: () => ({}),
       });
 
+      const inboundDir = path.join(getMediaDir(), "inbound");
+      const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
       const params = makeChatSendParams({
@@ -2148,6 +2151,14 @@ describe("gateway server chat", () => {
             mimeType: "image/png",
             fileName: "dot.png",
             content: pngB64,
+          },
+          {
+            // Non-image attachments always offload into the inbound media
+            // store during preparation; the aborted send must discard them.
+            type: "file",
+            mimeType: "text/plain",
+            fileName: "notes.txt",
+            content: Buffer.from("offloaded inbound media").toString("base64"),
           },
         ],
       });
@@ -2246,6 +2257,13 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(context.addChatRun).not.toHaveBeenCalled();
       expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      // Prepared inbound media has no transcript reference on this exit; the
+      // handler must discard it or the file is orphaned forever (the inbound
+      // sweep is disabled unless attachments.ttlHours is set).
+      await waitForFast(async () => {
+        const remaining = await fs.readdir(inboundDir).catch(() => []);
+        expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
+      }, FAST_WAIT_OPTS);
     } finally {
       firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
       resetDirectChatSession();

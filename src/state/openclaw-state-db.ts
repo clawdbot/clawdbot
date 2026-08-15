@@ -724,8 +724,10 @@ export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
 }
 
 /** Close all cached shared state database handles. */
-export function closeOpenClawStateDatabase(): void {
-  stateDbCache.closeOpenClawStateDatabase();
+export function closeOpenClawStateDatabase(
+  options?: Parameters<typeof stateDbCache.closeOpenClawStateDatabase>[0],
+): void {
+  stateDbCache.closeOpenClawStateDatabase(options);
 }
 
 /** Test whether any cached shared state database handle is still open. */
