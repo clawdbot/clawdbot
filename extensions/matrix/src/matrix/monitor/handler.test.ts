@@ -2732,59 +2732,6 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     expectRuntimeErrorContaining(runtime.error, "matrix handler failed");
   });
 
-  it("posts a visible notice when a tombstoned main-session recovery blocks admission", async () => {
-    // Regression: a tombstoned main-session recovery cycle never self-resolves on
-    // retry, so silently logging and dropping the message (the pre-fix behavior)
-    // left a real room completely unresponsive with zero visible sign anything was
-    // wrong. The admission layer marks this specific, non-transient case so the
-    // channel can surface it instead of treating it like an ordinary transient race.
-    const commit = vi.fn(async () => true);
-    const release = vi.fn();
-    const inboundDeduper = {
-      claim: vi.fn(async () => ({
-        kind: "claimed" as const,
-        handle: { keys: ["test"] as const, commit, release },
-      })),
-    };
-    const runtime = {
-      error: vi.fn(),
-    };
-    const sendNotice = vi.fn(async () => "$notice");
-    const blockedError = new Error(
-      'Session "agent:main:main" is blocked: automatic recovery exhausted',
-    ) as Error & { mainSessionRecoveryBlocked?: boolean };
-    blockedError.mainSessionRecoveryBlocked = true;
-    const { handler } = createMatrixHandlerTestHarness({
-      inboundDeduper,
-      runtime: runtime as never,
-      client: {
-        sendMessage: sendNotice,
-      },
-      recordInboundSession: vi.fn(async () => {
-        throw blockedError;
-      }),
-      dispatchInboundMessage: vi.fn(async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      })),
-    });
-
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$main-session-blocked",
-        body: "hello",
-      }),
-    );
-
-    expect(release).toHaveBeenCalledOnce();
-    expectRuntimeErrorContaining(runtime.error, "matrix handler failed");
-    expect(callArg(sendNotice, 0, 0, "send notice")).toBe("!room:example.org");
-    const notice = requireRecord(callArg(sendNotice, 0, 1, "notice content"), "notice content");
-    expect(notice.msgtype).toBe("m.notice");
-    expect(String(notice.body)).toContain("automatic recovery exhausted");
-  });
-
   it("keeps replay committed when queued final delivery fails after a generic error", async () => {
     const commit = vi.fn(async () => true);
     const release = vi.fn();

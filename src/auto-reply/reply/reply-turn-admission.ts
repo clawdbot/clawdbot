@@ -87,30 +87,11 @@ export async function runWithReplyOperationLifecycleAdmission<T>(
   return admission ? await admission.run(run) : await run();
 }
 
-function rejectLifecycleInvalidatedWork(params: {
-  kind: ReplyTurnKind;
-  message: string;
-  /**
-   * Set when a tombstoned main-session recovery cycle — not a transient admission
-   * race — caused the rejection. This condition never self-resolves on retry, so
-   * channel handlers can check this duck-typed marker (no shared type import needed
-   * across the plugin boundary) to surface a visible notice instead of silently
-   * retrying forever.
-   */
-  mainSessionRecoveryBlocked?: boolean;
-}): never {
+function rejectLifecycleInvalidatedWork(params: { kind: ReplyTurnKind; message: string }): never {
   if (params.kind === "queued_followup") {
-    const err = new QueuedFollowupLifecycleInvalidatedError(params.message);
-    if (params.mainSessionRecoveryBlocked) {
-      (err as Error & { mainSessionRecoveryBlocked?: boolean }).mainSessionRecoveryBlocked = true;
-    }
-    throw err;
+    throw new QueuedFollowupLifecycleInvalidatedError(params.message);
   }
-  const err = new Error(params.message);
-  if (params.mainSessionRecoveryBlocked) {
-    (err as Error & { mainSessionRecoveryBlocked?: boolean }).mainSessionRecoveryBlocked = true;
-  }
-  throw err;
+  throw new Error(params.message);
 }
 
 function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
@@ -341,7 +322,6 @@ async function admitReplyTurnWithWaitSignal(
               message: tombstoneReason
                 ? `Session "${params.sessionKey}" is blocked: ${tombstoneReason}`
                 : `Session "${params.sessionKey}" changed while starting work. Retry.`,
-              mainSessionRecoveryBlocked: tombstoneReason !== undefined,
             });
           }
           recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;
