@@ -10,7 +10,6 @@ import {
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
 import { exportChatMarkdown } from "../export.ts";
-import { scrollActiveMenuOptionIntoView } from "./chat-composer-dom.ts";
 import { commitComposerDraft, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -258,13 +257,6 @@ export function getActiveSlashMenuOptionLabel(state: ChatComposerState): string 
   }
   const command = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`;
   return `${command} ${getSlashCommandDescription(cmd)}`;
-}
-
-export function scrollActiveSlashMenuOptionIntoView(
-  state: ChatComposerState,
-  paneId: string,
-): void {
-  scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(state, paneId));
 }
 
 function renderSlashIcon(name: string) {

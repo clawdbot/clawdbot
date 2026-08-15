@@ -7,7 +7,6 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import { scrollActiveMenuOptionIntoView } from "./chat-composer-dom.ts";
 import { paneDomId } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -178,13 +177,6 @@ export function getActiveSkillMenuOptionLabel(state: ChatComposerState): string 
   }
   const command = state.skillMenuItems[state.skillMenuIndex];
   return command ? `${getSkillDisplayName(command)} ${getSlashCommandDescription(command)}` : "";
-}
-
-export function scrollActiveSkillMenuOptionIntoView(
-  state: ChatComposerState,
-  paneId: string,
-): void {
-  scrollActiveMenuOptionIntoView(getActiveSkillMenuOptionId(state, paneId));
 }
 
 export function selectSkillMention(
