@@ -42,6 +42,16 @@ describe("transcribeSonioxAudio", () => {
     });
     expect(result).toEqual({ text: "Hello world", model: "stt-async-v5" });
     expect(fetchFn).toHaveBeenCalledTimes(4);
+    const uploadCall = fetchFn.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith("/files") && (init as RequestInit | undefined)?.method === "POST",
+    );
+    const uploadInit = uploadCall?.[1] as RequestInit | undefined;
+    expect(uploadInit?.headers).toMatchObject({
+      Authorization: "Bearer test-key",
+      "User-Agent": "OpenClaw",
+    });
+    expect(uploadInit?.body).toBeInstanceOf(FormData);
   });
 
   it("honors language and model overrides in the job body", async () => {
