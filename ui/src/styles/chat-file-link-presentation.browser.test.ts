@@ -74,9 +74,31 @@ function fixtureDocument(themeMode: "dark" | "light"): string {
 // reference near the line edge. The second chip carries a label the parser could
 // not shorten to a basename, which is the case that has to stay inside the column.
 const LONG_CHIP_PATH = "packages/gateway-protocol/src/session-transport-envelope.ts";
+
+// Separation cases for the glyph-attachment probe below. `unbroken` has no `/`,
+// `-`, or `_` for the line breaker to use as a natural break point, so it can
+// only wrap via the inherited `overflow-wrap: anywhere` — the exact condition
+// that starves the glyph's own line of a break opportunity (#123310 P2).
+const SEPARATION_CASES = [
+  { filePath: "src/app.ts", id: "sep-short", label: "app.ts", line: undefined },
+  {
+    filePath: "superlongfilenamewithoutanyslashesordashesorspacesatalljustonebigword.ts",
+    id: "sep-unbroken",
+    label: "superlongfilenamewithoutanyslashesordashesorspacesatalljustonebigword.ts",
+    line: undefined,
+  },
+  { filePath: LONG_CHIP_PATH, id: "sep-path-with-line", label: LONG_CHIP_PATH, line: 182 },
+] as const;
+
 function wrapFixtureDocument(themeMode: "dark" | "light"): string {
   const themeAttributes =
     themeMode === "light" ? `data-theme="light" data-theme-mode="light"` : `data-theme="dark"`;
+  const separationLinks = SEPARATION_CASES.map(({ filePath, id, label, line }) => {
+    const lineAttribute = line === undefined ? "" : ` data-file-line="${line}"`;
+    const linkLabel = line === undefined ? label : `${label}:${line}`;
+    return `<p><a id="${id}" class="markdown-file-link" data-file-kind="code"
+        data-file-path="${filePath}"${lineAttribute}>${linkLabel}</a></p>`;
+  }).join("\n");
   return `<!doctype html><html ${themeAttributes}><head><style>${readChatCss()}</style></head><body>
     <div class="chat-text" id="column">
       <ol><li>Reproduce the failing run, then read the harness entry point
@@ -85,9 +107,22 @@ function wrapFixtureDocument(themeMode: "dark" | "light"): string {
         before landing the fix.</li></ol>
       <p><a id="long-chip" class="markdown-file-link" data-file-kind="code"
         data-file-path="${LONG_CHIP_PATH}">${LONG_CHIP_PATH}</a></p>
+      ${separationLinks}
     </div>
   </body></html>`;
 }
+
+type SeparationSample = {
+  readonly caseId: (typeof SEPARATION_CASES)[number]["id"];
+  readonly columnWidth: number;
+  // Positive when the glyph's line (the chip's own top) and the label's first
+  // character land on different lines — i.e. the glyph is stranded above a
+  // label that wrapped away from it, invisible to an inline-block chip's own
+  // getClientRects() (see chipLineCount below, always 1 for an atomic box).
+  readonly glyphToLabelGapPx: number;
+  readonly lineHeightPx: number;
+  readonly wrapped: boolean;
+};
 
 type WrapSample = {
   readonly chipLineCount: number;
@@ -100,38 +135,79 @@ type WrapSample = {
 // Sweeping the column instead of hand-picking one width: the chip has to be
 // atomic at every position it can land in, and a single tuned width would stop
 // exercising the boundary as soon as the prose or the font metrics move.
-async function probeWrap(themeMode: "dark" | "light"): Promise<readonly WrapSample[]> {
+async function probeWrap(themeMode: "dark" | "light"): Promise<{
+  readonly samples: readonly WrapSample[];
+  readonly separation: readonly SeparationSample[];
+}> {
   const fixtureFile = path.join(fixtureDirectory, `${themeMode}-wrap.html`);
   fs.writeFileSync(fixtureFile, wrapFixtureDocument(themeMode), "utf8");
   const page = await browser.newPage();
   try {
     await page.goto(`file://${fixtureFile}`);
-    return await page.evaluate<readonly WrapSample[]>(() => {
-      const resolve = (selector: string) => {
-        const element = document.querySelector(selector);
-        if (!(element instanceof HTMLElement)) {
-          throw new Error(`Missing wrap fixture element for ${selector}`);
+    return await page.evaluate<{
+      samples: readonly WrapSample[];
+      separation: readonly SeparationSample[];
+    }>(
+      (caseIds) => {
+        const resolve = (selector: string) => {
+          const element = document.querySelector(selector);
+          if (!(element instanceof HTMLElement)) {
+            throw new Error(`Missing wrap fixture element for ${selector}`);
+          }
+          return element;
+        };
+        const column = resolve("#column");
+        const chip = resolve("#wrap-chip");
+        const longChip = resolve("#long-chip");
+        const separationChips = caseIds.map((caseId) => ({
+          caseId,
+          element: resolve(`#${caseId}`),
+        }));
+        const samples: WrapSample[] = [];
+        const separation: SeparationSample[] = [];
+        for (let columnWidth = 220; columnWidth <= 900; columnWidth += 4) {
+          column.style.width = `${columnWidth}px`;
+          samples.push({
+            // One client rect per line fragment: a chip split between its glyph and
+            // its label reports two, an atomic chip always reports one.
+            chipLineCount: chip.getClientRects().length,
+            chipTop: chip.getBoundingClientRect().top,
+            columnWidth,
+            longChipLineCount: longChip.getClientRects().length,
+            longChipWidth: longChip.getBoundingClientRect().width,
+          });
         }
-        return element;
-      };
-      const column = resolve("#column");
-      const chip = resolve("#wrap-chip");
-      const longChip = resolve("#long-chip");
-      const samples: WrapSample[] = [];
-      for (let columnWidth = 220; columnWidth <= 900; columnWidth += 4) {
-        column.style.width = `${columnWidth}px`;
-        samples.push({
-          // One client rect per line fragment: a chip split between its glyph and
-          // its label reports two, an atomic chip always reports one.
-          chipLineCount: chip.getClientRects().length,
-          chipTop: chip.getBoundingClientRect().top,
-          columnWidth,
-          longChipLineCount: longChip.getClientRects().length,
-          longChipWidth: longChip.getBoundingClientRect().width,
-        });
-      }
-      return samples;
-    });
+        // Narrower, dedicated sweep for the glyph-attachment probe: a short
+        // basename like "app.ts" never wraps inside a realistic 220-900px chat
+        // column, so reusing that range here would make the case's vacuity guard
+        // unsatisfiable. The failure this guards is about the *tight* space
+        // directly beside the glyph, not the column at large.
+        for (let columnWidth = 40; columnWidth <= 320; columnWidth += 4) {
+          column.style.width = `${columnWidth}px`;
+          for (const { caseId, element } of separationChips) {
+            const elementTop = element.getBoundingClientRect().top;
+            const labelTextNode = element.firstChild;
+            if (!labelTextNode) {
+              throw new Error(`Separation fixture ${caseId} has no label text node`);
+            }
+            const firstCharacterRange = document.createRange();
+            firstCharacterRange.setStart(labelTextNode, 0);
+            firstCharacterRange.setEnd(labelTextNode, 1);
+            const firstCharacterTop = firstCharacterRange.getBoundingClientRect().top;
+            const lineHeightPx = Number.parseFloat(getComputedStyle(element).lineHeight);
+            separation.push({
+              caseId,
+              columnWidth,
+              glyphToLabelGapPx: firstCharacterTop - elementTop,
+              lineHeightPx,
+              wrapped: element.getBoundingClientRect().height > lineHeightPx * 1.3,
+            });
+          }
+        }
+        return { samples, separation };
+      },
+      SEPARATION_CASES.map((testCase) => testCase.id),
+    );
   } finally {
     await page.close();
   }
@@ -248,7 +324,7 @@ describeFileLinkPresentation("chat file link presentation", () => {
   it.each(["light", "dark"] as const)(
     "wraps a file link as one unit at every column width in %s",
     async (themeMode) => {
-      const samples = await probeWrap(themeMode);
+      const { samples } = await probeWrap(themeMode);
       // Vacuity guard: the chip must actually change lines across the sweep, or
       // the assertion below would pass on a fixture that never wraps at all.
       expect(new Set(samples.map((sample) => Math.round(sample.chipTop))).size).toBeGreaterThan(1);
@@ -260,7 +336,7 @@ describeFileLinkPresentation("chat file link presentation", () => {
   it.each(["light", "dark"] as const)(
     "keeps an unshortened file label inside the column in %s",
     async (themeMode) => {
-      const samples = await probeWrap(themeMode);
+      const { samples } = await probeWrap(themeMode);
       // A label wider than the column wraps inside the chip rather than spilling
       // past it; chat scroll containers set overflow-x: hidden, so an overflowing
       // chip would be clipped away instead of merely looking wide.
@@ -269,6 +345,36 @@ describeFileLinkPresentation("chat file link presentation", () => {
       );
       expect(overflowing).toEqual([]);
       expect(samples.every((sample) => sample.longChipLineCount === 1)).toBe(true);
+    },
+  );
+
+  // A file-link chip is `display: inline-block`, so it always reports exactly
+  // one client rect from the *outside* — the two tests above stay green even
+  // when the glyph splits from its label internally, because that split lives
+  // inside the chip's own atomic box. This closes that gap by comparing the
+  // chip's own top (where the glyph paints, since it is the first thing in the
+  // box) against the label's first character: on the same line the gap is only
+  // font-ascent noise; stranded on the next internal line it is a full
+  // line-height. Table-driven across a short basename (never has to wrap), an
+  // unbroken long basename (no `/`/`-`/`_` break points — only
+  // `overflow-wrap: anywhere` can wrap it, which is exactly what starves the
+  // glyph of a break opportunity), and a path carrying a `:line` suffix.
+  it.each(["light", "dark"] as const)(
+    "keeps the glyph attached to the label's first character in %s",
+    async (themeMode) => {
+      const { separation } = await probeWrap(themeMode);
+      for (const testCase of SEPARATION_CASES) {
+        const caseSamples = separation.filter((sample) => sample.caseId === testCase.id);
+        expect(caseSamples.length).toBeGreaterThan(0);
+        // Vacuity guard: each case must actually wrap somewhere in the sweep, or
+        // the no-separation assertion below would pass on a chip that never
+        // reflows at all.
+        expect(caseSamples.some((sample) => sample.wrapped)).toBe(true);
+        const separated = caseSamples.filter(
+          (sample) => sample.glyphToLabelGapPx > sample.lineHeightPx / 2,
+        );
+        expect(separated).toEqual([]);
+      }
     },
   );
 });

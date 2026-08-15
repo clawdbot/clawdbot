@@ -366,19 +366,28 @@
    keeps it on the link color in every theme. Sized in em so it tracks
    --chat-text-size and the user's text-scale setting. The default glyph is the
    generic document; kinds below match components/file-kind.ts, whose icons are
-   the same Lucide set the file preview modal renders as SVG. */
+   the same Lucide set the file preview modal renders as SVG.
+   display stays `inline` rather than `inline-block`: an inline-block (or any
+   other atomic/replaced box) carries its own contingent line-break opportunity,
+   so when the label can't fit next to it, the UA pushes the *whole* label onto
+   the next line instead of letting overflow-wrap continue the run — stranding
+   the glyph alone on the line above (the bug the parent rule's max-width fix
+   left open). A non-atomic inline has no such boundary: the glyph and the
+   label's first character stay one unbreakable run, and overflow-wrap:anywhere
+   (inherited from .chat-text) still wraps the rest of a long label normally.
+   Sized via padding-inline-start + an explicit mask size instead of
+   width/height + contain, since non-replaced inline boxes ignore width/height. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link::before {
   --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z'/%3E%3Cpolyline points='14 2 14 8 20 8'/%3E%3Cline x1='16' x2='8' y1='13' y2='13'/%3E%3Cline x1='16' x2='8' y1='17' y2='17'/%3E%3Cline x1='10' x2='8' y1='9' y2='9'/%3E%3C/svg%3E");
 
   content: "";
-  display: inline-block;
-  width: 1em;
-  height: 1em;
+  display: inline;
+  padding-inline-start: 1em;
   margin-inline-end: 0.28em;
   vertical-align: -0.14em;
   background: currentColor;
-  mask: var(--file-glyph) center / contain no-repeat;
-  -webkit-mask: var(--file-glyph) center / contain no-repeat;
+  mask: var(--file-glyph) left center / 1em 1em no-repeat;
+  -webkit-mask: var(--file-glyph) left center / 1em 1em no-repeat;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="code"]::before {
