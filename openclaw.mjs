@@ -94,6 +94,17 @@ const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE 
 const isNodeCompileCacheRequested = () =>
   Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
 const isNativeHookRelayInvocation = (argv) => argv[2] === "hooks" && argv[3] === "relay";
+const isReadOnlyDoctorLintInvocation = (argv) => {
+  const args = argv.slice(2);
+  const doctorIndex = args.indexOf("doctor");
+  const terminatorIndex = args.indexOf("--");
+  const commandEnd = terminatorIndex === -1 ? args.length : terminatorIndex;
+  return (
+    doctorIndex >= 0 &&
+    doctorIndex < commandEnd &&
+    args.slice(doctorIndex + 1, commandEnd).includes("--lint")
+  );
+};
 const sanitizeCompileCachePathSegment = (value) => {
   const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return normalized.length > 0 ? normalized : "unknown";
@@ -308,7 +319,8 @@ if (
   !waitingForCompileCacheRespawn &&
   module.enableCompileCache &&
   !isNodeCompileCacheDisabled() &&
-  !isSourceCheckoutLauncher()
+  !isSourceCheckoutLauncher() &&
+  !isReadOnlyDoctorLintInvocation(process.argv)
 ) {
   try {
     module.enableCompileCache(resolvePackagedCompileCacheDirectory());

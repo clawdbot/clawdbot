@@ -42,6 +42,18 @@ function isNodeCompileCacheRequested(env: NodeJS.ProcessEnv | undefined): boolea
   return env?.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled(env);
 }
 
+function isReadOnlyDoctorLintInvocation(argv: string[] | undefined): boolean {
+  const args = (argv ?? process.argv).slice(2);
+  const doctorIndex = args.indexOf("doctor");
+  const terminatorIndex = args.indexOf("--");
+  const commandEnd = terminatorIndex === -1 ? args.length : terminatorIndex;
+  return (
+    doctorIndex >= 0 &&
+    doctorIndex < commandEnd &&
+    args.slice(doctorIndex + 1, commandEnd).includes("--lint")
+  );
+}
+
 function isNodeVersionAffectedByCompileCacheDeadlock(nodeVersion: string | undefined): boolean {
   if (!nodeVersion) {
     return false;
@@ -59,12 +71,13 @@ function isNodeVersionAffectedByCompileCacheDeadlock(nodeVersion: string | undef
 }
 
 function shouldEnableOpenClawCompileCache(params: {
+  argv?: string[];
   env?: NodeJS.ProcessEnv;
   installRoot: string;
   nodeVersion?: string;
   platform?: NodeJS.Platform;
 }): boolean {
-  if (isNodeCompileCacheDisabled(params.env)) {
+  if (isNodeCompileCacheDisabled(params.env) || isReadOnlyDoctorLintInvocation(params.argv)) {
     return false;
   }
   if (
@@ -234,6 +247,7 @@ function runOpenClawCompileCacheRespawnPlan(
 }
 
 export function enableOpenClawCompileCache(params: {
+  argv?: string[];
   env?: NodeJS.ProcessEnv;
   installRoot: string;
 }): void {

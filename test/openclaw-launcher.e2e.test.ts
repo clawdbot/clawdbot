@@ -994,4 +994,28 @@ describe("openclaw launcher", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("cache:enabled;respawn:0");
   });
+
+  it("keeps packaged doctor lint from creating the default compile cache", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const tmpRoot = makeTempDir(fixtureRoots, "openclaw-launcher-doctor-lint-tmp-");
+    await addCompileCacheProbe(fixtureRoot);
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), "doctor", "--lint", "--json"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv({
+          TMP: tmpRoot,
+          TEMP: tmpRoot,
+          TMPDIR: tmpRoot,
+        }),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("cache:disabled;respawn:0");
+    await expect(fs.readdir(tmpRoot)).resolves.toEqual([]);
+  });
 });

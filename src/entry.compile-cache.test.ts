@@ -72,6 +72,26 @@ describe("entry compile cache", () => {
     ).toBe(false);
   });
 
+  it("disables compile cache only for read-only doctor lint invocations", () => {
+    const root = tempDirs.make("openclaw-compile-cache-doctor-lint-");
+    const entryFile = path.join(root, "dist", "entry.js");
+
+    expect(
+      shouldEnableOpenClawCompileCache({
+        argv: ["/usr/bin/node", entryFile, "doctor", "--lint", "--json"],
+        env: {},
+        installRoot: root,
+      }),
+    ).toBe(false);
+    expect(
+      shouldEnableOpenClawCompileCache({
+        argv: ["/usr/bin/node", entryFile, "doctor", "--fix", "--non-interactive"],
+        env: {},
+        installRoot: root,
+      }),
+    ).toBe(true);
+  });
+
   it("scopes packaged compile cache by package install metadata", async () => {
     const root = tempDirs.make("openclaw-compile-cache-package-key-");
     const packageJsonPath = path.join(root, "package.json");

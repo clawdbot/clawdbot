@@ -3,6 +3,7 @@ import type { RespawnChildRuntime } from "./process/respawn-child-runner.js";
 import "./entry.compile-cache.js";
 
 type CompileCacheParams = {
+  argv?: string[];
   env?: NodeJS.ProcessEnv;
   installRoot: string;
   nodeVersion?: string;
