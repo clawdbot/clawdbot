@@ -202,7 +202,6 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     // replaces it in place instead of appending below the newer user turn.
     applyLiveSessionMessage(state, payload, event.hasActiveRun ?? undefined);
     retirePersistedSteeredChips(state);
-    void loadChatBranches(state);
   }
   if (matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
@@ -262,6 +261,11 @@ function replayPendingSessionMessageReload(
   void loadChatHistory(state).finally(() => state.requestUpdate?.());
 }
 
+// Branch topology only changes on structural mutations; the producer records
+// the reason, so reload branches only for those instead of on every
+// sessions.changed (each cache miss rescans the full transcript on the gateway).
+const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
+
 function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
@@ -280,7 +284,11 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     // only proof that its old live and pending transcript no longer exists.
     reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
   }
-  if (matchesChat) {
+  if (
+    matchesChat &&
+    typeof source?.reason === "string" &&
+    BRANCH_TOPOLOGY_REASONS.has(source.reason)
+  ) {
     void loadChatBranches(state);
   }
   if (event && matchesChat && event.archived !== null) {

@@ -311,7 +311,6 @@ export type ChatState = {
   chatBranches?: SessionBranch[];
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;
-  chatBranchesLoading?: boolean;
   requestUpdate?: () => void;
 };
 
@@ -1388,7 +1387,6 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
   const version = ++requests.branchVersion;
   const connectionEpoch = state.connectionEpoch;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
-  state.chatBranchesLoading = true;
   try {
     const branches = await sessions.listBranches(sessionKey, agentParams);
     if (
@@ -1404,19 +1402,11 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
     state.chatBranchesSessionKey = sessionKey;
     state.chatBranchesConnectionEpoch = connectionEpoch;
   } catch {
-    if (
-      requests.branchVersion === version &&
-      state.client === client &&
-      state.connectionEpoch === connectionEpoch &&
-      visibleSessionMatches(state, sessionKey, agentParams.agentId)
-    ) {
-      state.chatBranches = [];
-      state.chatBranchesSessionKey = sessionKey;
-      state.chatBranchesConnectionEpoch = connectionEpoch;
-    }
+    // Leave chatBranchesSessionKey unset so the next history load retries;
+    // recording success here latched transient failures into a permanently
+    // hidden branch dropdown with no visible outcome.
   } finally {
     if (requests.branchVersion === version) {
-      state.chatBranchesLoading = false;
       state.requestUpdate?.();
     }
   }
@@ -1452,7 +1442,7 @@ export async function loadChatHistory(
   }
   if (
     opts.deferBranches !== true &&
-    (state.chatBranchesSessionKey !== sessionKey ||
+    (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, sessionKey) ||
       state.chatBranchesConnectionEpoch !== connectionEpoch)
   ) {
     void loadChatBranches(state);
@@ -1662,7 +1652,7 @@ async function loadChatHistoryUncached(
       },
     );
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
-      state.chatDisplayedLeafEntryId = res.sessionInfo?.activeLeafEntryId?.trim() || null;
+      state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
     retirePersistedSteeredChips(state);
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;

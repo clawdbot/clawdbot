@@ -22,6 +22,7 @@ import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
+  areUiSessionKeysEquivalent,
   canArchiveSessionRow,
   canDeleteSessionRows,
   resolveUiConfiguredMainKey,
@@ -367,7 +368,8 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       parentSession: resolveChatPaneParentSession(row, this.state?.sessionsResult?.sessions ?? []),
       branch,
       branches:
-        this.state && this.state.chatBranchesSessionKey === this.state.sessionKey
+        this.state &&
+        areUiSessionKeysEquivalent(this.state.chatBranchesSessionKey, this.state.sessionKey)
           ? (this.state.chatBranches ?? [])
           : [],
       branchSwitchDisabledReason,
