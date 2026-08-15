@@ -33,6 +33,8 @@ import {
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
 
+const CODEX_META_KEY = "__openclaw";
+
 function isRestrictivePromptToolsAllow(toolsAllow: string[] | undefined): boolean {
   return toolsAllow !== undefined && !toolsAllow.some((name) => name.trim() === "*");
 }
@@ -327,8 +329,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       if (message.role !== "user" && message.role !== "assistant") {
         return false;
       }
-      const record = message as unknown as Record<string, unknown>;
-      const meta = record["__openclaw"];
+      const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
       const mirrorIdentity =
         meta && typeof meta === "object" && !Array.isArray(meta)
           ? (meta as Record<string, unknown>).mirrorIdentity
@@ -345,8 +346,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             : Number.NaN;
       return (
         !(
-          typeof record.idempotencyKey === "string" &&
-          record.idempotencyKey.startsWith("codex-app-server:")
+          "idempotencyKey" in message &&
+          typeof message.idempotencyKey === "string" &&
+          message.idempotencyKey.startsWith("codex-app-server:")
         ) &&
         mirrorOrigin !== "codex-app-server" &&
         !(typeof mirrorIdentity === "string" && mirrorIdentity.startsWith("codex-app-server:")) &&
@@ -423,7 +425,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
     const previousThreadId = binding.threadId;
     const hadInactiveThreadBootstrapBinding = isInactiveThreadBootstrapBinding(binding);
-    mutable.startupBinding = await rotateOversizedCodexAppServerStartupBinding({
+    const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
       binding,
       bindingStore,
       identity: bindingIdentity,
@@ -437,6 +439,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         developerInstructions: buildRenderedCodexDeveloperInstructions(),
       }),
     });
+    mutable.startupBinding = startupBindingResolution.binding;
+    mutable.startupContextTokens = startupBindingResolution.startupContextTokens;
     if (mutable.startupBinding?.threadId) {
       return;
     }

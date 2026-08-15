@@ -31,7 +31,7 @@ const repoRoot = process.cwd();
 const commonScript = join(repoRoot, "scripts/pr-lib/common.sh");
 const lockScript = join(repoRoot, "scripts/pr-lib/operation-lock.sh");
 const processGroupRunner = join(repoRoot, "scripts/pr-lib/process-group-runner.mjs");
-const managedChildUrl = pathToFileURL(join(repoRoot, "scripts/lib/managed-child-process.mjs")).href;
+const managedChildUrl = pathToFileURL(join(repoRoot, "scripts/lib/managed-child-process.mts")).href;
 const worktreeScript = join(repoRoot, "scripts/pr-lib/worktree.sh");
 const lockRef = "refs/openclaw/pr-operation-locks/42";
 const detachedChildren = new WeakSet<ChildProcess>();
@@ -173,9 +173,11 @@ function installPrCliFixture(repoDir: string) {
   const files = [
     "scripts/pr",
     "scripts/watch-pr-ci.mjs",
+    "scripts/watch-pr-ci.mts",
     "scripts/lib/plain-gh.sh",
     "scripts/lib/plain-gh.mjs",
     "scripts/lib/direct-run.mjs",
+    "scripts/lib/tsx-cli-shim.mjs",
     "scripts/pr-lib/worktree.sh",
     "scripts/pr-lib/operation-lock.sh",
     "scripts/pr-lib/process-group-runner.mjs",

@@ -5,7 +5,6 @@ import { findCapabilityProviderById } from "../../../packages/media-generation-c
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveImageGenerationMaxInputImages } from "../../image-generation/capabilities.js";
-import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
 import {
   generateImage,
   listRuntimeImageGenerationProviders,
@@ -25,6 +24,7 @@ import type {
 } from "../../image-generation/types.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseImageGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveCapabilityModelCandidates } from "../../media-generation/runtime-shared.js";
 import {
   resolveConfiguredMediaMaxBytes,
@@ -39,7 +39,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { resolveUserPath } from "../../utils.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   formatGeneratedAttachmentLines,
@@ -56,17 +56,9 @@ import {
   ToolInputError,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
-import {
-  completeImageGenerationTaskRun,
-  createImageGenerationTaskRun,
-  failImageGenerationTaskRun,
-  imageGenerationTaskLifecycle,
-  recordImageGenerationTaskProgress,
-  type ImageGenerationTaskHandle,
-} from "./image-generate-background.js";
 import {
   createImageGenerateDuplicateGuardResult,
   createImageGenerateListActionResult,
@@ -82,6 +74,14 @@ import {
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
+import {
+  completeImageGenerationTaskRun,
+  createImageGenerationTaskRun,
+  failImageGenerationTaskRun,
+  imageGenerationTaskLifecycle,
+  recordImageGenerationTaskProgress,
+  type ImageGenerationTaskHandle,
+} from "./media-generate-background.js";
 import {
   applyImageGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
@@ -398,15 +398,15 @@ function readRecordParam(params: Record<string, unknown>, key: string): Record<s
 
 function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationOpenAIOptions {
   const raw = readRecordParam(args, "openai");
-  const background = normalizeOpenAIBackground(readStringParam(raw, "background"));
-  const moderation = normalizeOpenAIModeration(readStringParam(raw, "moderation"));
+  const background = normalizeOpenAIBackground(readToolStringParam(raw, "background"));
+  const moderation = normalizeOpenAIModeration(readToolStringParam(raw, "moderation"));
   if (readSnakeCaseParamRaw(raw, "outputCompression") === null) {
     throw new ToolInputError("openai.outputCompression must be between 0 and 100");
   }
   const outputCompression = readNonNegativeIntegerParam(raw, "outputCompression", {
     message: "openai.outputCompression must be between 0 and 100",
   });
-  const user = readStringParam(raw, "user");
+  const user = readToolStringParam(raw, "user");
   if (outputCompression !== undefined && (outputCompression < 0 || outputCompression > 100)) {
     throw new ToolInputError("openai.outputCompression must be between 0 and 100");
   }
@@ -422,7 +422,7 @@ function normalizeProviderOptions(
   args: Record<string, unknown>,
 ): ImageGenerationProviderOptions | undefined {
   const falRaw = readRecordParam(args, "fal");
-  const falCreativity = normalizeFalCreativity(readStringParam(falRaw, "creativity"));
+  const falCreativity = normalizeFalCreativity(readToolStringParam(falRaw, "creativity"));
   const openai = normalizeOpenAIOptions(args);
   const fal = falCreativity ? { creativity: falCreativity } : undefined;
   return fal || Object.keys(openai).length > 0
@@ -869,6 +869,7 @@ export function createImageGenerateTool(options?: {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -924,10 +925,13 @@ export function createImageGenerateTool(options?: {
         });
       }
       if (action === "status") {
-        return createImageGenerateStatusActionResult(options?.agentSessionKey);
+        return createImageGenerateStatusActionResult(
+          options?.agentSessionKey,
+          options?.requesterAgentId,
+        );
       }
 
-      const model = readStringParam(params, "model");
+      const model = readToolStringParam(params, "model");
       const configuredImageGenerationModelConfig = coerceToolModelConfig(
         cfg.agents?.defaults?.mediaModels?.image,
       );
@@ -945,25 +949,25 @@ export function createImageGenerateTool(options?: {
       const effectiveCfg =
         applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
-      const prompt = readStringParam(params, "prompt", { required: true });
+      const prompt = readToolStringParam(params, "prompt", { required: true });
 
       const activeDuplicateGuardResult = createImageGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { prompt },
+        { prompt, agentId: options?.requesterAgentId },
       );
       if (activeDuplicateGuardResult) {
         return activeDuplicateGuardResult;
       }
 
       const imageInputs = normalizeReferenceImages(params);
-      const filename = readStringParam(params, "filename");
-      const size = readStringParam(params, "size");
-      const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
-      const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
+      const filename = readToolStringParam(params, "filename");
+      const size = readToolStringParam(params, "size");
+      const aspectRatio = normalizeAspectRatio(readToolStringParam(params, "aspectRatio"));
+      const explicitResolution = normalizeResolution(readToolStringParam(params, "resolution"));
       const timeoutMs = readGenerationTimeoutMs(params) ?? imageGenerationModelConfig.timeoutMs;
-      const quality = normalizeQuality(readStringParam(params, "quality"));
-      const outputFormat = normalizeOutputFormat(readStringParam(params, "outputFormat"));
-      const background = normalizeBackground(readStringParam(params, "background"));
+      const quality = normalizeQuality(readToolStringParam(params, "quality"));
+      const outputFormat = normalizeOutputFormat(readToolStringParam(params, "outputFormat"));
+      const background = normalizeBackground(readToolStringParam(params, "background"));
       const providerOptions = normalizeProviderOptions(params);
       const imageGenerationProviders =
         preparedProviders ?? listRuntimeImageGenerationProviders({ config: effectiveCfg });
@@ -1018,7 +1022,7 @@ export function createImageGenerateTool(options?: {
       });
       const duplicateGuardResult = createImageGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { prompt, requestKey },
+        { prompt, requestKey, agentId: options?.requesterAgentId },
       );
       if (duplicateGuardResult) {
         return duplicateGuardResult;
@@ -1073,17 +1077,20 @@ export function createImageGenerateTool(options?: {
       signal?.throwIfAborted();
       const taskHandle = createImageGenerationTaskRun({
         sessionKey: options?.agentSessionKey,
+        requesterAgentId: options?.requesterAgentId,
         requesterOrigin: options?.requesterOrigin,
         prompt,
         providerId: selectedProvider?.id,
       });
       const shouldDetach = Boolean(
-        taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
+        taskHandle &&
+        shouldDetachMediaGenerationTask(options?.agentSessionKey, options?.requesterAgentId),
       );
 
       if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({
           sessionKey: options?.agentSessionKey,
+          agentId: options?.requesterAgentId,
           taskKind: "image_generation",
           sourcePrefix: "image_generate",
           taskId: taskHandle.taskId,

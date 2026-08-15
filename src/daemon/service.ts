@@ -8,6 +8,7 @@ import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
   installLaunchAgent,
+  isLaunchAgentEnabled,
   isLaunchAgentLoaded,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
@@ -45,6 +46,7 @@ import type {
   GatewayServiceState,
 } from "./service-types.js";
 import {
+  findInstalledSystemdGatewayScope,
   installSystemdService,
   isSystemdServiceEnabled,
   readSystemdServiceExecStart,
@@ -82,6 +84,8 @@ export type GatewayService = {
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (
     env: GatewayServiceEnv,
@@ -337,6 +341,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stop: stopLaunchAgent,
     restart: restartLaunchAgent,
     isLoaded: isLaunchAgentLoaded,
+    isEnabled: isLaunchAgentEnabled,
     readCommand: readLaunchAgentProgramArguments,
     readRuntime: readLaunchAgentRuntime,
   },
@@ -351,6 +356,8 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stop: stopSystemdService,
     restart: restartSystemdService,
     isLoaded: isSystemdServiceEnabled,
+    hasInstalledDefinition: async ({ env }) =>
+      (await findInstalledSystemdGatewayScope(env ?? process.env)) !== null,
     readCommand: readSystemdServiceExecStart,
     readRuntime: readSystemdServiceRuntime,
   },

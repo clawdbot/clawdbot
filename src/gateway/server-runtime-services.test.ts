@@ -19,9 +19,9 @@ function waitForFast<T>(
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
 type DrainPendingDeliveries =
-  typeof import("../infra/outbound/delivery-queue.js").drainPendingDeliveries;
+  typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
-  typeof import("../infra/outbound/delivery-queue.js").recoverPendingDeliveries;
+  typeof import("../infra/outbound/delivery-queue-recovery.js").recoverPendingDeliveries;
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -70,19 +70,14 @@ vi.mock("../sessions/session-upstream-monitor.js", () => ({
   startSessionUpstreamMonitor: hoisted.startSessionUpstreamMonitor,
 }));
 
-vi.mock("../infra/env.js", () => ({
-  isTruthyEnvValue: (value?: string) =>
-    ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? ""),
-}));
-
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: hoisted.deliverOutboundPayloads,
   deliverOutboundPayloadsInternal: hoisted.deliverOutboundPayloads,
 }));
 
-vi.mock("../infra/outbound/delivery-queue.js", () => ({
+vi.mock("../infra/outbound/delivery-queue-recovery.js", () => ({
   recoverPendingDeliveries: hoisted.recoverPendingDeliveries,
-  drainPendingDeliveries: hoisted.drainPendingDeliveries,
+  drainPendingDeliveriesCore: hoisted.drainPendingDeliveries,
 }));
 
 vi.mock("../infra/session-delivery-queue-runtime.js", () => ({

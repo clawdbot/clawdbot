@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -77,8 +78,19 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
 
-      const startButton = page.getByRole("button", { name: "Start in worktree" });
+      const startButton = page.getByRole("button", { name: "Start with worktree" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
+      const moreActions = page.getByRole("button", { name: "More ways to start this task" });
+      expect(await moreActions.count()).toBe(1);
+      await moreActions.click();
+      await page
+        .getByText("Copy prompt", { exact: true })
+        .waitFor({ state: "visible", timeout: 10_000 });
+      expect(await page.getByText("Start locally", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Fix in this session", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Send to cloud", { exact: true }).count()).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.getByText("Show instructions", { exact: true }).click();
       await page
         .getByText("/projects/example", { exact: true })
         .waitFor({ state: "visible", timeout: 10_000 });
@@ -96,6 +108,59 @@ suite.define(() => {
     }
   });
 
+  it("fixes a model-suggested follow-up in the source session", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const suggestion = {
+      id: "task_session",
+      title: "Repair the active flow",
+      prompt: "Fix the active flow and keep this transcript selected.",
+      tldr: "The follow-up belongs in this session.",
+      cwd: "/projects/example",
+      sessionKey: "main",
+      agentId: "main",
+      createdAt: Date.now(),
+    };
+    const gateway = await installMockGateway(page, {
+      featureCapabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "environments.list",
+        "taskSuggestions.list",
+        "taskSuggestions.accept",
+      ],
+      methodResponses: {
+        "environments.list": { environments: [], profiles: [] },
+        "taskSuggestions.list": { suggestions: [suggestion] },
+        "taskSuggestions.accept": { taskId: suggestion.id, key: suggestion.sessionKey },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const card = page.locator(`.task-suggestion[data-task-id="${suggestion.id}"]`);
+      await card.waitFor({ state: "visible", timeout: 10_000 });
+      await gateway.waitForRequest("environments.list");
+      const routeBeforeAccept = page.url();
+      await card.getByRole("button", { name: "More ways to start this task" }).click();
+      const sessionItem = card.locator('wa-dropdown-item[value="session"]');
+      await sessionItem.waitFor({ state: "visible", timeout: 10_000 });
+      await sessionItem.click();
+
+      const acceptRequest = await gateway.waitForRequest("taskSuggestions.accept");
+      expect(acceptRequest.params).toEqual({ taskId: suggestion.id, mode: "session" });
+      await expect.poll(() => card.count()).toBe(0);
+      expect(page.url()).toBe(routeBeforeAccept);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("clears model-suggested follow-ups while switching sessions", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -104,7 +169,13 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "taskSuggestions.list",
+        "taskSuggestions.accept",
+        "taskSuggestions.dismiss",
+      ],
       methodResponses: {
         "sessions.list": chatSessionListResponse(),
         "taskSuggestions.list": {
@@ -127,7 +198,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const startButton = page.getByRole("button", { name: "Start in worktree" });
+      const startButton = page.getByRole("button", { name: "Start with worktree" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.deferNext("taskSuggestions.list");
       await page
@@ -144,6 +215,65 @@ suite.define(() => {
     }
   });
 
+  it("keeps copy available when only listing is advertised", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+      methodResponses: {
+        "taskSuggestions.list": {
+          suggestions: [
+            {
+              id: "task_list_only",
+              title: "Read-only follow-up",
+              prompt: "Copy this suggestion without mutating it.",
+              tldr: "Listing alone still exposes the client-local copy action.",
+              cwd: "/projects/example",
+              sessionKey: "main",
+              agentId: "main",
+              createdAt: Date.now(),
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("taskSuggestions.list");
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (pane) =>
+                (pane as HTMLElement & { taskSuggestions?: unknown[] }).taskSuggestions?.length ??
+                0,
+            ),
+        )
+        .toBe(1);
+
+      await page
+        .locator(".agent-chat__composer-shell")
+        .waitFor({ state: "visible", timeout: 10_000 });
+      const card = page.locator('.task-suggestion[data-task-id="task_list_only"]');
+      await card.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await card.getByRole("button", { name: "Start with worktree" }).isDisabled()).toBe(
+        true,
+      );
+      await card.getByRole("button", { name: "More ways to start this task" }).click();
+      await card
+        .getByText("Copy prompt", { exact: true })
+        .waitFor({ state: "visible", timeout: 10_000 });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps the composer visible when follow-up suggestions overflow", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -152,7 +282,13 @@ suite.define(() => {
     });
     const page = await context.newPage();
     await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "taskSuggestions.list",
+        "taskSuggestions.accept",
+        "taskSuggestions.dismiss",
+      ],
       methodResponses: {
         "taskSuggestions.list": {
           suggestions: Array.from({ length: 12 }, (_, index) => ({
@@ -198,6 +334,14 @@ suite.define(() => {
       defaultAgentId: "ops",
       deferredMethods: ["chat.startup"],
       historyMessages: [],
+      models: [
+        {
+          available: true,
+          id: "startup-model",
+          name: "Startup Model",
+          provider: "openai",
+        },
+      ],
       sessionKey: "global",
     });
 
@@ -339,9 +483,40 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      const originalPrompt = "keep this run active";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(originalPrompt);
       await page.getByRole("button", { name: "Send message" }).click();
-      await gateway.waitForRequest("chat.send");
+      const initialSend = await gateway.waitForRequest("chat.send");
+      const activeRunId = requireString(
+        requireRecord(initialSend.params).idempotencyKey,
+        "active chat run id",
+      );
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [activeRunId],
+        clientRunId: activeRunId,
+        hasActiveRun: true,
+        message: {
+          __openclaw: {
+            id: "persisted-original-user",
+            idempotencyKey: `${activeRunId}:user`,
+            seq: 1,
+          },
+          content: [{ text: originalPrompt, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        messageId: "persisted-original-user",
+        messageSeq: 1,
+        session: {
+          activeRunIds: [activeRunId],
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
       const followUp = "tighten the active plan";
@@ -349,11 +524,13 @@ suite.define(() => {
       await page.getByRole("button", { name: "Steer into the active run" }).click();
 
       const sends = await waitForRequests(gateway, "chat.send", 2);
-      expect(requireRecord(sends[1]?.params)).toMatchObject({
+      const steerParams = requireRecord(sends[1]?.params);
+      expect(steerParams).toMatchObject({
         deliver: false,
         message: followUp,
         sessionKey: "main",
       });
+      const steerRunId = requireString(steerParams.idempotencyKey, "steer run id");
       const queue = page.locator(".chat-queue");
       await queue.locator(".chat-queue__badge--steered", { hasText: "Steering" }).waitFor({
         timeout: 10_000,
@@ -361,7 +538,57 @@ suite.define(() => {
       await queue.getByText(followUp).waitFor({ timeout: 10_000 });
       if (artifactDir) {
         await page.screenshot({
-          path: `${artifactDir}/steer-default.png`,
+          path: `${artifactDir}/steer-before-persistence.png`,
+          fullPage: true,
+        });
+      }
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [activeRunId],
+        clientRunId: activeRunId,
+        hasActiveRun: true,
+        message: {
+          __openclaw: {
+            id: "persisted-steer-user",
+            idempotencyKey: `${steerRunId}:user`,
+            seq: 2,
+          },
+          content: [{ text: followUp, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        messageId: "persisted-steer-user",
+        messageSeq: 2,
+        session: {
+          activeRunIds: [activeRunId],
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+
+      await queue.getByText(followUp).waitFor({ state: "detached", timeout: 10_000 });
+      await expect
+        .poll(() => page.locator(".chat-thread .chat-group.user", { hasText: followUp }).count())
+        .toBe(1);
+      await expect
+        .poll(() =>
+          page.locator(".chat-thread-inner").evaluate(
+            (thread, texts) => {
+              const bubbles = Array.from(thread.querySelectorAll(".chat-bubble"));
+              return texts.map((text) =>
+                bubbles.findIndex((bubble) => bubble.textContent?.includes(text)),
+              );
+            },
+            [originalPrompt, followUp],
+          ),
+        )
+        .toEqual([0, 1]);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/steer-after-persistence.png`,
           fullPage: true,
         });
       }
@@ -529,6 +756,109 @@ suite.define(() => {
         queueMode: "interrupt",
         sessionKey,
       });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("dismisses an informational steer notice when the steer request lands", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+      await page.goto(`${suite.server.baseUrl}chat?session=main`);
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const activeRequest = await gateway.waitForRequest("chat.send");
+      const activeRunId = requireString(
+        requireRecord(activeRequest.params).idempotencyKey,
+        "active run idempotency key",
+      );
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const steerText = "route this into the active run";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(steerText);
+      await page.getByRole("button", { name: "Queue message" }).click();
+      const queue = page.locator(".chat-queue");
+      await queue.getByText(steerText).waitFor({ timeout: 10_000 });
+      await queue.getByRole("button", { name: "Steer" }).click();
+
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      const steerParams = requireRecord(sends[1]?.params);
+      expect(steerParams).toMatchObject({
+        expectedRunId: activeRunId,
+        message: steerText,
+        queueMode: "steer",
+      });
+      const steerRunId = requireString(steerParams.idempotencyKey, "steer idempotency key");
+      const row = queue.locator(".chat-queue__item--steered", { hasText: steerText });
+      await row.waitFor({ timeout: 10_000 });
+      const pendingPresentation = await row.evaluate((element) => {
+        const badge = element.querySelector<HTMLElement>(".chat-queue__badge--steered");
+        const icon = element.querySelector(".chat-queue__icon");
+        const probe = document.createElement("span");
+        probe.style.color = "var(--info)";
+        probe.style.background = "var(--info-subtle)";
+        document.body.append(probe);
+        const probeStyle = getComputedStyle(probe);
+        const infoColor = probeStyle.color;
+        const infoSubtle = probeStyle.backgroundColor;
+        probe.remove();
+        return {
+          badgeColor: badge ? getComputedStyle(badge).color : "",
+          backgroundColor: getComputedStyle(element).backgroundColor,
+          iconPoints: icon?.querySelector("polyline")?.getAttribute("points") ?? "",
+          infoColor,
+          infoSubtle,
+        };
+      });
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/steer-pending.png`, fullPage: true });
+      }
+
+      await gateway.emitGatewayEvent("chat", {
+        runId: steerRunId,
+        sessionKey: "main",
+        state: "final",
+      });
+      await page.waitForTimeout(250);
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/steer-landed.png`, fullPage: true });
+      }
+
+      expect(pendingPresentation).toMatchObject({
+        badgeColor: pendingPresentation.infoColor,
+        backgroundColor: pendingPresentation.infoSubtle,
+        iconPoints: "15 10 20 15 15 20",
+      });
+      expect(await row.count()).toBe(0);
+      await page.getByText(steerText, { exact: true }).waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() =>
+          page.locator(".chat-thread-inner").evaluate(
+            (thread, texts) => {
+              const bubbles = Array.from(thread.querySelectorAll(".chat-bubble"));
+              return texts.map((text) =>
+                bubbles.findIndex((bubble) => bubble.textContent?.includes(text)),
+              );
+            },
+            ["keep this run active", steerText],
+          ),
+        )
+        .toEqual([0, 1]);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
     } finally {
       await suite.closeBrowserContext(context);
     }

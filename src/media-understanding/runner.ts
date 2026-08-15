@@ -11,6 +11,10 @@ import {
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import {
+  normalizeMediaExecutionProviderId,
+  normalizeMediaProviderId,
+} from "../../packages/media-understanding-common/src/provider-id.js";
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import {
@@ -34,6 +38,7 @@ import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { normalizeMediaFacts } from "../media/media-facts.js";
+import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { matchesMediaEntryCapability } from "./entry-capabilities.js";
@@ -42,7 +47,6 @@ import {
   inspectLocalAudioSelection,
 } from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
-import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -60,6 +64,7 @@ import {
 } from "./runner.entries.js";
 import type {
   MediaAttachment,
+  MediaAttachmentDisposition,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
   MediaUnderstandingModelDecision,
@@ -565,23 +570,15 @@ async function resolveAutoEntries(params: {
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
+  nativeVisionActive: boolean;
 }): Promise<MediaUnderstandingModelConfig[]> {
-  if (params.capability === "image") {
-    const activeSupportsVision = await activeModelSupportsNativeVision({
+  if (params.capability === "image" && !params.nativeVisionActive) {
+    const imageModelEntries = resolveImageModelFromAgentDefaults({
       cfg: params.cfg,
       agentId: params.agentId,
-      activeModel: params.activeModel,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
     });
-    if (!activeSupportsVision) {
-      const imageModelEntries = resolveImageModelFromAgentDefaults({
-        cfg: params.cfg,
-        agentId: params.agentId,
-      });
-      if (imageModelEntries.length > 0) {
-        return imageModelEntries;
-      }
+    if (imageModelEntries.length > 0) {
+      return imageModelEntries;
     }
   }
   const activeEntry = await resolveActiveModelEntry(params);
@@ -840,6 +837,13 @@ function hasFailedMediaAttempt(attachments: MediaUnderstandingDecision["attachme
   );
 }
 
+function createAttachmentDispositions(
+  indexes: readonly number[],
+  disposition: MediaAttachmentDisposition,
+): Record<number, MediaAttachmentDisposition> {
+  return Object.fromEntries(indexes.map((index) => [index, disposition]));
+}
+
 export async function runCapability(params: {
   capability: MediaUnderstandingCapability;
   cfg: OpenClawConfig;
@@ -855,23 +859,81 @@ export async function runCapability(params: {
 }): Promise<RunCapabilityResult> {
   const { capability, cfg, ctx } = params;
   const config: MediaUnderstandingConfig = params.config ?? cfg.tools?.media?.[capability] ?? {};
+  const selection = selectAttachments({
+    capability,
+    attachments: params.media,
+    policy: config.attachments,
+  });
+  const selectedAttachmentIndexes = selection.selected.map((attachment) => attachment.index);
+  const activeProvider = params.activeModel?.provider?.trim();
+  // One memoized owner for the native-vision fact. Probed lazily — only when
+  // the skip branch must decide, or an image decision carries a renderable
+  // disposition — so explicit image models never pay a catalog lookup. A probe
+  // failure yields "unknown" and never alters a decision outcome; unknown
+  // suppresses image markers because a false skip claim beside a natively
+  // delivered image is worse than silence (#122101).
+  let nativeVisionProbe: Promise<boolean | undefined> | undefined;
+  const resolveNativeVisionFlag = (): Promise<boolean | undefined> => {
+    nativeVisionProbe ??= activeModelSupportsNativeVision({
+      cfg,
+      agentId: params.agentId,
+      activeModel: params.activeModel,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    }).catch((err: unknown) => {
+      if (shouldLogVerbose()) {
+        logVerbose(`native vision support probe failed: ${String(err)}`);
+      }
+      return undefined;
+    });
+    return nativeVisionProbe;
+  };
+  const buildDispositions = (
+    selectedDisposition: MediaAttachmentDisposition,
+    droppedDisposition = selectedDisposition,
+  ) => ({
+    ...createAttachmentDispositions(selectedAttachmentIndexes, selectedDisposition),
+    ...createAttachmentDispositions(selection.droppedAttachmentIndexes, droppedDisposition),
+  });
+  const rendersMarker = (dispositions: Record<number, MediaAttachmentDisposition>) =>
+    Object.values(dispositions).some(
+      (d) => d.kind !== "handled" && d.kind !== "handed-to-native-vision",
+    );
+  const buildDecision = async (
+    outcome: MediaUnderstandingDecision["outcome"],
+    attachments: MediaUnderstandingDecision["attachments"],
+    attachmentDispositions: Record<number, MediaAttachmentDisposition>,
+  ): Promise<MediaUnderstandingDecision> => {
+    // Record the fact whenever it is known (probe already ran) or needed
+    // (a marker could render); never fire the probe for marker-free decisions.
+    const nativeVisionActive =
+      capability === "image" &&
+      (nativeVisionProbe !== undefined || rendersMarker(attachmentDispositions))
+        ? await resolveNativeVisionFlag()
+        : undefined;
+    return {
+      capability,
+      outcome,
+      attachments,
+      attachmentDispositions,
+      ...(nativeVisionActive !== undefined ? { nativeVisionActive } : {}),
+    };
+  };
   if (config?.enabled === false) {
     return {
       outputs: [],
-      decision: { capability, outcome: "disabled", attachments: [] },
+      decision: await buildDecision(
+        "disabled",
+        [],
+        buildDispositions({ kind: "capability-disabled" }),
+      ),
     };
   }
 
-  const attachmentPolicy = config?.attachments;
-  const selected = selectAttachments({
-    capability,
-    attachments: params.media,
-    policy: attachmentPolicy,
-  });
-  if (selected.length === 0) {
+  if (selection.selected.length === 0) {
     return {
       outputs: [],
-      decision: { capability, outcome: "no-attachment", attachments: [] },
+      decision: await buildDecision("no-attachment", [], {}),
     };
   }
 
@@ -882,61 +944,66 @@ export async function runCapability(params: {
     }
     return {
       outputs: [],
-      decision: {
-        capability,
-        outcome: "scope-deny",
-        attachments: selected.map((item) => ({ attachmentIndex: item.index, attempts: [] })),
-      },
+      decision: await buildDecision(
+        "scope-deny",
+        selection.selected.map((item) => ({
+          attachmentIndex: item.index,
+          attempts: [],
+        })),
+        buildDispositions({ kind: "scope-denied" }),
+      ),
     };
   }
 
   // Skip image understanding when the primary model supports vision natively.
   // The image will be injected directly into the model context instead.
-  const activeProvider = params.activeModel?.provider?.trim();
   if (
     capability === "image" &&
     activeProvider &&
-    !hasExplicitImageUnderstandingConfig({
-      cfg,
-      providerRegistry: params.providerRegistry,
-    })
+    !hasExplicitImageUnderstandingConfig({ cfg, providerRegistry: params.providerRegistry }) &&
+    (await resolveNativeVisionFlag()) === true
   ) {
-    if (
-      await activeModelSupportsNativeVision({
-        cfg,
-        agentId: params.agentId,
-        activeModel: params.activeModel,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-      })
-    ) {
-      if (shouldLogVerbose()) {
-        logVerbose("Skipping image understanding: primary model supports vision natively");
-      }
-      const model = params.activeModel?.model?.trim();
-      const reason = "primary model supports vision natively";
-      return {
-        outputs: [],
-        decision: {
-          capability,
-          outcome: "skipped",
-          attachments: selected.map((item) => {
-            const attempt = {
-              type: "provider" as const,
-              provider: activeProvider,
-              model: model || undefined,
-              outcome: "skipped" as const,
-              reason,
-            };
-            return {
-              attachmentIndex: item.index,
-              attempts: [attempt],
-              chosen: attempt,
-            };
-          }),
-        },
-      };
+    if (shouldLogVerbose()) {
+      logVerbose("Skipping image understanding: primary model supports vision natively");
     }
+    const model = params.activeModel?.model?.trim();
+    const reason = "primary model supports vision natively";
+    // Native hydration resolves local paths and media-store refs only; a
+    // remote-URL-only image is never delivered that way, so claiming the
+    // handoff would suppress its marker while it silently vanishes.
+    const nativeDeliverable = (item: MediaAttachment) =>
+      Boolean(item.path) ||
+      (Boolean(item.url) && classifyMediaReferenceSource(item.url ?? "").isMediaStoreUrl);
+    return {
+      outputs: [],
+      decision: await buildDecision(
+        "skipped",
+        selection.selected.map((item) => {
+          if (!nativeDeliverable(item)) {
+            return { attachmentIndex: item.index, attempts: [] };
+          }
+          const attempt = {
+            type: "provider" as const,
+            provider: activeProvider,
+            model: model || undefined,
+            outcome: "skipped" as const,
+            reason,
+          };
+          return {
+            attachmentIndex: item.index,
+            attempts: [attempt],
+            chosen: attempt,
+          };
+        }),
+        {
+          ...buildDispositions({ kind: "handed-to-native-vision" }),
+          ...createAttachmentDispositions(
+            selection.selected.filter((item) => !nativeDeliverable(item)).map((item) => item.index),
+            { kind: "failed", reason: "remote-url image is not natively deliverable" },
+          ),
+        },
+      ),
+    };
   }
 
   const entries = resolveModelEntries({
@@ -956,23 +1023,28 @@ export async function runCapability(params: {
         providerRegistry: params.providerRegistry,
         capability,
         activeModel: params.activeModel,
+        nativeVisionActive: capability === "image" && (await resolveNativeVisionFlag()) === true,
       })
     ).map((entry) => ({ entry }));
   }
   if (resolvedEntries.length === 0) {
     return {
       outputs: [],
-      decision: {
-        capability,
-        outcome: "skipped",
-        attachments: selected.map((item) => ({ attachmentIndex: item.index, attempts: [] })),
-      },
+      decision: await buildDecision(
+        "skipped",
+        selection.selected.map((item) => ({
+          attachmentIndex: item.index,
+          attempts: [],
+        })),
+        buildDispositions({ kind: "no-model" }, { kind: "not-selected" }),
+      ),
     };
   }
 
   const outputs: MediaUnderstandingOutput[] = [];
   const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [];
-  for (const attachment of selected) {
+  const attachmentDispositions = buildDispositions({ kind: "failed" }, { kind: "not-selected" });
+  for (const attachment of selection.selected) {
     const { output, attempts } = await runAttachmentEntries({
       capability,
       cfg,
@@ -989,22 +1061,22 @@ export async function runCapability(params: {
     if (output) {
       outputs.push(output);
     }
+    attachmentDispositions[attachment.index] = output ? { kind: "handled" } : { kind: "failed" };
     attachmentDecisions.push({
       attachmentIndex: attachment.index,
       attempts,
       chosen: attempts.find((attempt) => attempt.outcome === "success"),
     });
   }
-  const decision: MediaUnderstandingDecision = {
-    capability,
-    outcome:
-      outputs.length > 0
-        ? "success"
-        : hasFailedMediaAttempt(attachmentDecisions)
-          ? "failed"
-          : "skipped",
-    attachments: attachmentDecisions,
-  };
+  const decision = await buildDecision(
+    outputs.length > 0
+      ? "success"
+      : hasFailedMediaAttempt(attachmentDecisions)
+        ? "failed"
+        : "skipped",
+    attachmentDecisions,
+    attachmentDispositions,
+  );
   if (decision.outcome === "failed") {
     logWarn(`media-understanding: ${formatDecisionSummary(decision)}`);
   } else if (shouldLogVerbose()) {

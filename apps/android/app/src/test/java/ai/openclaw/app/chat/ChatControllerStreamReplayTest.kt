@@ -300,6 +300,49 @@ class ChatControllerStreamReplayTest {
     }
 
   @Test
+  fun liveEditDiffCreatesAndUpdatesPendingToolUntilResult() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondChatSend(status = "started")
+      val controller = newController(gateway)
+      controller.handleGatewayEvent("health", null)
+      assertTrue(controller.sendMessageAwaitAcceptance("edit the file", "off", emptyList()))
+      val runId = requireNotNull(gateway.lastRunId)
+
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"$runId","ts":10,"stream":"tool","data":{"phase":"input_delta","name":"edit","toolCallId":"tool-1","diff":{"added":4,"removed":1}}}""",
+      )
+      assertEquals(
+        ChatDiffStat(added = 4, removed = 1),
+        controller.pendingToolCalls.value
+          .single()
+          .liveDiff,
+      )
+
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"$runId","ts":11,"stream":"tool","data":{"phase":"input_delta","name":"edit","toolCallId":"tool-1","diff":{"added":8,"removed":2}}}""",
+      )
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"$runId","ts":12,"stream":"tool","data":{"phase":"start","name":"edit","toolCallId":"tool-1","args":{"path":"a.kt"}}}""",
+      )
+      assertEquals(
+        ChatDiffStat(added = 8, removed = 2),
+        controller.pendingToolCalls.value
+          .single()
+          .liveDiff,
+      )
+
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"$runId","ts":13,"stream":"tool","data":{"phase":"result","name":"edit","toolCallId":"tool-1"}}""",
+      )
+      assertTrue(controller.pendingToolCalls.value.isEmpty())
+    }
+
+  @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun staleHistoryResponseIsDroppedByGenerationTracking() =
     runTest {

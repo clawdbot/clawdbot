@@ -34,6 +34,7 @@ struct MobileBackgroundTask: Decodable, Identifiable, Equatable {
     let updatedAt: Timestamp?
     let startedAt: Timestamp?
     let endedAt: Timestamp?
+    let lastActivity: String?
     let progressSummary: String?
     let terminalSummary: String?
     let error: String?
@@ -70,9 +71,9 @@ struct MobileBackgroundTask: Decodable, Identifiable, Equatable {
 
     var output: String? {
         let candidates = if self.status == "failed" || self.status == "timed_out" {
-            [self.error, self.terminalSummary, self.progressSummary]
+            [self.error, self.terminalSummary, self.lastActivity, self.progressSummary]
         } else {
-            [self.terminalSummary, self.error, self.progressSummary]
+            [self.terminalSummary, self.error, self.lastActivity, self.progressSummary]
         }
         return candidates.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty }.first
     }

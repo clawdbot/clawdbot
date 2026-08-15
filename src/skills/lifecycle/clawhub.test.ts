@@ -28,19 +28,27 @@ const digestClawHubSkillTreeMock = vi.fn(async () => `sha256:${"a".repeat(64)}`)
 const markClawPackageIndependentlyOwnedMock = vi.fn();
 const tempDirs = createTrackedTempDirs();
 
-vi.mock("../../infra/clawhub.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/clawhub.js")>()),
+vi.mock("../../infra/clawhub-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/clawhub-skills.js")>()),
   fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
   fetchClawHubSkillInstallResolution: fetchClawHubSkillInstallResolutionMock,
   fetchClawHubSkillVerification: fetchClawHubSkillVerificationMock,
   fetchClawHubSkillSecurityVerdicts: fetchClawHubSkillSecurityVerdictsMock,
+  reportClawHubSkillInstallTelemetry: reportClawHubSkillInstallTelemetryMock,
+  searchClawHubSkills: searchClawHubSkillsMock,
+}));
+
+vi.mock("../../infra/clawhub-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/clawhub-artifacts.js")>()),
   downloadClawHubSkillArchive: downloadClawHubSkillArchiveMock,
   downloadClawHubSkillArchiveUrl: downloadClawHubSkillArchiveUrlMock,
   downloadClawHubGitHubSkillArchive: downloadClawHubGitHubSkillArchiveMock,
-  reportClawHubSkillInstallTelemetry: reportClawHubSkillInstallTelemetryMock,
+}));
+
+vi.mock("../../infra/clawhub-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/clawhub-client.js")>()),
   isDefaultClawHubBaseUrl: isDefaultClawHubBaseUrlMock,
   resolveClawHubBaseUrl: resolveClawHubBaseUrlMock,
-  searchClawHubSkills: searchClawHubSkillsMock,
 }));
 
 vi.mock("../../infra/install-flow.js", () => ({

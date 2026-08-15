@@ -265,9 +265,17 @@ struct ChatSessionSidebar: View {
                 systemImage: session.pinned == true ? "pin.slash" : "pin")
         }
         Button {
-            Task { await self.viewModel.forkSession(key: session.key) }
+            Task {
+                await self.viewModel.forkSession(
+                    key: session.key,
+                    fromLastCompleted: session.hasActiveRun == true)
+            }
         } label: {
-            self.actionLabel(String(localized: "Fork"), systemImage: "arrow.triangle.branch")
+            self.actionLabel(
+                session.hasActiveRun == true
+                    ? String(localized: "Fork from last completed message")
+                    : String(localized: "Fork"),
+                systemImage: "arrow.triangle.branch")
         }
         Button {
             self.viewModel.setSessionUnread(key: session.key, unread: session.unread != true)
@@ -276,12 +284,12 @@ struct ChatSessionSidebar: View {
                 session.unread == true ? String(localized: "Mark Read") : String(localized: "Mark Unread"),
                 systemImage: session.unread == true ? "envelope.open" : "envelope.badge")
         }
-        if session.isArchived || ChatSessionSidebarModel.canArchiveSession(
+        if ChatSessionSidebarModel.canArchiveSession(
             session,
             mainSessionKey: self.viewModel.resolvedMainSessionKey)
         {
             Button {
-                self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
+                self.viewModel.setSessionArchived(session, archived: !session.isArchived)
             } label: {
                 self.actionLabel(
                     session.isArchived ? String(localized: "Restore") : String(localized: "Archive"),

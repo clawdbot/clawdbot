@@ -15,6 +15,7 @@ import {
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BLOCKED_TOO_LONG_MS,
@@ -27,7 +28,6 @@ import type { WorkboardMutationScope } from "./store-inputs.js";
 import {
   metadataIsEmpty,
   normalizeEvents,
-  normalizeOptionalString,
   normalizeTimestamp,
   removeUndefinedMetadataFields,
 } from "./store-normalizers.js";

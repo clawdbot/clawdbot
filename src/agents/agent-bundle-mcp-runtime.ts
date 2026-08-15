@@ -13,6 +13,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -50,6 +51,7 @@ import type {
   McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
+  RequesterMcpConnect,
   SessionMcpRequesterScope,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
@@ -58,7 +60,6 @@ import {
   normalizeMcpCodexToolAnnotations,
   resolveMcpCodexToolApprovalMode,
 } from "./mcp-codex-tool-approval.js";
-import { isMcpConfigRecord } from "./mcp-config-shared.js";
 import {
   applyMcpConnectionOverride,
   type McpServerConnectionResolved,
@@ -153,7 +154,7 @@ async function connectWithTimeout(
       }),
     ]);
   } catch (error) {
-    if (deadlineExpired || (isMcpConfigRecord(error) && error.code === ErrorCode.RequestTimeout)) {
+    if (deadlineExpired || (isRecord(error) && error.code === ErrorCode.RequestTimeout)) {
       if (transport instanceof OpenClawStdioClientTransport) {
         await transport.forceClose();
       }
@@ -199,7 +200,7 @@ async function listAllTools(client: Client, timeoutMs: number, signal: AbortSign
 }
 
 function isMcpMethodNotFoundError(error: unknown): boolean {
-  if (isMcpConfigRecord(error) && error.code === ErrorCode.MethodNotFound) {
+  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
     return true;
   }
   const message = String(error);
@@ -297,7 +298,7 @@ function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"> | und
 }
 
 function getMcpToolSelection(rawServer: unknown): McpToolSelection {
-  if (!isMcpConfigRecord(rawServer) || !isMcpConfigRecord(rawServer.toolFilter)) {
+  if (!isRecord(rawServer) || !isRecord(rawServer.toolFilter)) {
     return {};
   }
   return {
@@ -400,6 +401,7 @@ export function createSessionMcpRuntime(params: {
   connectionOverrides?: ReadonlyMap<string, McpServerConnectionResolved>;
   redactConnectionServerNames?: ReadonlySet<string>;
   requesterScope?: SessionMcpRequesterScope;
+  requesterConnect?: RequesterMcpConnect;
   configFingerprint?: string;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): SessionMcpRuntime {
@@ -695,6 +697,7 @@ export function createSessionMcpRuntime(params: {
             cfg: params.cfg,
             agentDir: params.agentDir,
             prepareDataDir: dataDirOwnership?.dataDir,
+            requesterScope: params.requesterScope,
           });
           if (!resolved) {
             continue;
@@ -1047,6 +1050,7 @@ export function createSessionMcpRuntime(params: {
     agentDir: params.agentDir,
     configFingerprint,
     ...(params.requesterScope ? { requesterScope: params.requesterScope } : {}),
+    ...(params.requesterConnect ? { requesterConnect: params.requesterConnect } : {}),
     // A runtime partition hosts either only static or only requester-scoped servers.
     isRequesterScopedServer: () => params.requesterScope !== undefined,
     mcpAppsEnabled,
@@ -1074,6 +1078,10 @@ export function createSessionMcpRuntime(params: {
     peekCatalog() {
       return catalog;
     },
+    /** Session-owned timeout that survives catalog invalidation. */
+    getServerRequestTimeoutMs(serverName: string) {
+      return sessions.get(serverName)?.requestTimeoutMs;
+    },
     markUsed() {
       lastUsedAt = Date.now();
     },
@@ -1089,7 +1097,7 @@ export function createSessionMcpRuntime(params: {
             session.client.callTool(
               {
                 name: toolName,
-                arguments: isMcpConfigRecord(input) ? input : {},
+                arguments: isRecord(input) ? input : {},
               },
               undefined,
               { timeout: session.requestTimeoutMs, signal },

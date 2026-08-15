@@ -3,12 +3,19 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 // user-visible sections for owners, tools, safety, skills, and subagents.
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { CHANNEL_IDS } from "../channels/ids.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
 import { buildSkillWorkshopPromptSection } from "./skill-workshop-prompt.js";
-import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
+import { buildSubagentSystemPrompt } from "./subagents/spawn/subagent-system-prompt.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
@@ -1116,7 +1123,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(section).toEqual([
       "## Skill Workshop",
       "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
-      "Generated = pending proposal. Apply/reject/quarantine only explicit user ask.",
+      "Used skill proved wrong or incomplete: call `skill_workshop` read, then patch it now; the configured autonomous mode disables repair, leaves it pending, or applies it immediately. Capture only durable, evidenced procedure changes—never task artifacts, transient failures, or unresolved guesses.",
+      "Other generated work = pending proposal. Apply/reject/quarantine only explicit user ask.",
       "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
       "",
     ]);
@@ -1135,7 +1143,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(withTool).toContain("- skill_workshop: Manage reusable-skill proposals");
     expect(withTool).toContain("## Skill Workshop");
     expect(withTool).toContain("Durable reusable skill/playbook/workflow work");
-    expect(withTool).toContain("Generated = pending proposal");
+    expect(withTool).toContain("Used skill proved wrong or incomplete");
+    expect(withTool).toContain("Other generated work = pending proposal");
   });
 
   it("appends available skills when provided", () => {
@@ -1263,6 +1272,31 @@ describe("buildAgentSystemPrompt", () => {
       `No source default: proactive send needs \`channel\`; ids: ${channelOptions}.`,
     );
     expect(prompt).toContain(`final ONLY ${SILENT_REPLY_TOKEN}`);
+  });
+
+  it("keeps model-visible channel ids stable across external registration order", () => {
+    const activeRegistry = captureActivePluginRegistrySnapshot();
+    const registrations = ["zeta-channel", "alpha-channel"].map((id) => ({
+      pluginId: id,
+      source: "test" as const,
+      plugin: { id },
+    }));
+    const buildPrompt = () =>
+      buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames: ["message"] });
+
+    try {
+      setActivePluginRegistry(createTestRegistry(registrations));
+      const firstPrompt = buildPrompt();
+      setActivePluginRegistry(createTestRegistry(registrations.toReversed()));
+      const secondPrompt = buildPrompt();
+
+      expect(firstPrompt).toBe(secondPrompt);
+      expect(firstPrompt).toContain(
+        `ids: ${[...CHANNEL_IDS, "alpha-channel", "zeta-channel"].join("|")}.`,
+      );
+    } finally {
+      restoreActivePluginRegistrySnapshot(activeRegistry);
+    }
   });
 
   it("keeps channel choice guidance lean when message sends have a source channel", () => {

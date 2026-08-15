@@ -34,6 +34,18 @@ by LM Studio:
 - Brand guidelines:
   https://lmstudio.ai/brand
 
+## LongCat icon
+
+`ProviderIcon-longcat.svg` is a metadata-cleaned copy of the official LongCat
+brand mark used across the LongCat API Platform (favicon and docs branding),
+contributed by the LongCat team at Meituan with permission to use it here:
+
+- Source: https://s3plus.meituan.net/aigc-media-resources/longcat/yeqian-logo.svg
+  (the favicon of https://longcat.chat/platform/docs/)
+- The white background plate was removed and the inner glyph recolored to
+  `currentColor` so the mark renders on both light and dark themes; the
+  geometry otherwise matches the cited source.
+
 ## llama.cpp icon
 
 `ProviderIcon-llamacpp.svg` is a metadata-cleaned copy of

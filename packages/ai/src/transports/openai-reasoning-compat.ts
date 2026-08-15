@@ -3,6 +3,7 @@
  *
  * Keeps provider metadata and built-in model exceptions on one path before request payloads are built.
  */
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** Minimal model fields needed to resolve OpenAI reasoning effort compatibility. */
@@ -19,11 +20,8 @@ const OPENAI_MEDIUM_ONLY_REASONING_MODEL_IDS = new Set(["gpt-5.1-codex-mini"]);
 // Provider metadata can remap reasoning effort names. Keep only string pairs so
 // malformed compat data cannot poison request parameters.
 function readCompatReasoningEffortMap(compat: unknown): Record<string, string> {
-  if (!compat || typeof compat !== "object") {
-    return {};
-  }
-  const rawMap = (compat as { reasoningEffortMap?: unknown }).reasoningEffortMap;
-  if (!rawMap || typeof rawMap !== "object") {
+  const rawMap = asOptionalObjectRecord(asOptionalObjectRecord(compat)?.reasoningEffortMap);
+  if (!rawMap) {
     return {};
   }
   return Object.fromEntries(

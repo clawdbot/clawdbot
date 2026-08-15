@@ -40,6 +40,7 @@ import {
   rememberColdNativeActivity,
   type SessionTabInteractionIdentity as InteractionIdentity,
   type VolatileSessionTab as VolatileTab,
+  volatileTabCleanupByTarget,
   volatileTabsBySession,
 } from "./session-tab-process-state.js";
 import {
@@ -619,28 +620,48 @@ async function performVolatileCleanup(
   if (cleanupKind === "sweep" && !sameVolatileTab(tab, candidate)) {
     return 0;
   }
-  try {
-    if (params.closeTab) {
-      await params.closeTab({
-        targetId: tab.targetId,
-        ...(tab.baseUrl ? { baseUrl: tab.baseUrl } : {}),
-        ...(tab.profile ? { profile: tab.profile } : {}),
-      });
-    } else {
-      await browserCloseTabByRawTargetId(tab.baseUrl, tab.targetId, {
-        profile: tab.profile,
-      });
-    }
-  } catch (error) {
-    if (isIgnorableTabCloseError(error)) {
-      deleteVolatileTarget(tab);
-      return 0;
-    }
-    params.onWarn?.(`failed to close tracked browser tab ${tab.targetId}: ${String(error)}`);
+  const inFlight = volatileTabCleanupByTarget();
+  const targetKey = volatileId(tab);
+  const existing = inFlight.get(targetKey);
+  if (existing) {
+    await existing;
     return 0;
   }
-  deleteVolatileTarget(tab);
-  return 1;
+
+  // Promise callbacks start in a microtask, so ownership is published before
+  // the close callback can issue the irreversible provider operation.
+  const cleanup = Promise.resolve().then(async () => {
+    try {
+      if (params.closeTab) {
+        await params.closeTab({
+          targetId: tab.targetId,
+          ...(tab.baseUrl ? { baseUrl: tab.baseUrl } : {}),
+          ...(tab.profile ? { profile: tab.profile } : {}),
+        });
+      } else {
+        await browserCloseTabByRawTargetId(tab.baseUrl, tab.targetId, {
+          profile: tab.profile,
+        });
+      }
+    } catch (error) {
+      if (isIgnorableTabCloseError(error)) {
+        deleteVolatileTarget(tab);
+        return 0;
+      }
+      params.onWarn?.(`failed to close tracked browser tab ${tab.targetId}: ${String(error)}`);
+      return 0;
+    }
+    deleteVolatileTarget(tab);
+    return 1;
+  });
+  inFlight.set(targetKey, cleanup);
+  try {
+    return await cleanup;
+  } finally {
+    if (inFlight.get(targetKey) === cleanup) {
+      inFlight.delete(targetKey);
+    }
+  }
 }
 
 async function closeTrackedTabs(

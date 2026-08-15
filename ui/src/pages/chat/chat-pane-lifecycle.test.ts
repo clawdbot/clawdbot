@@ -8,8 +8,10 @@ import type {
   SessionSuggestion,
   SessionSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -20,21 +22,11 @@ import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
 } from "./components/chat-message.ts";
-import * as chatThread from "./components/chat-thread.ts";
+import * as chatThread from "./components/chat-thread-interactions.ts";
 import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  return { promise, reject, resolve };
-}
 
 describe("chat pane composer prefill attention", () => {
   function createComposerAttentionFixture() {
@@ -120,6 +112,7 @@ describe("chat pane first-turn attachment lifecycle", () => {
       agentSelection: { state: { selectedId: "main" } },
       agents: { state: { agentsList: null } },
       initialUserMessage: createInitialUserMessageHandoff(),
+      chatAttachmentHandoff: createChatAttachmentHandoff(),
       sessions: {},
     } as unknown as ApplicationContext;
     prepareInitialUserMessageHandoff(
@@ -127,6 +120,7 @@ describe("chat pane first-turn attachment lifecycle", () => {
       targetSessionKey,
       { attachments: [], createdAt: 1, text: "keep the first prompt visible" },
       client,
+      { runId: "initial-run" },
     );
     pane.sessionKey = targetSessionKey;
     pane.chatMessagesBySession = new Map();
@@ -715,7 +709,7 @@ afterEach(() => {
     owner.remove();
   }
   confirmationOwners.clear();
-  chatThread.resetChatThreadPresentationState();
+  chatThread.resetThreadPresentation();
   window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
   vi.unstubAllGlobals();
 });
@@ -773,55 +767,6 @@ describe("chat pane presentation teardown", () => {
       captureKeydownListeners[1],
       true,
     );
-  });
-
-  it("dismisses the previous session confirmation before switching in place", () => {
-    const frameCallbacks: FrameRequestCallback[] = [];
-    vi.stubGlobal(
-      "requestAnimationFrame",
-      vi.fn((callback: FrameRequestCallback) => {
-        frameCallbacks.push(callback);
-        return frameCallbacks.length;
-      }),
-    );
-    const addDocumentListener = vi.spyOn(document, "addEventListener");
-    const removeDocumentListener = vi.spyOn(document, "removeEventListener");
-    const addWindowListener = vi.spyOn(window, "addEventListener");
-    const removeWindowListener = vi.spyOn(window, "removeEventListener");
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
-    });
-    window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
-    const confirmation = createConfirmationOwner();
-
-    try {
-      for (const callback of frameCallbacks.splice(0)) {
-        callback(0);
-      }
-      const captureClickListener = addDocumentListener.mock.calls.find(
-        ([type, listener, options]) => type === "click" && options === true && listener,
-      )?.[1];
-      const captureKeydownListener = addWindowListener.mock.calls.find(
-        ([type, listener, options]) => type === "keydown" && options === true && listener,
-      )?.[1];
-      expect(captureClickListener).toBeDefined();
-      expect(captureKeydownListener).toBeDefined();
-      pane.appendChild(confirmation.owner);
-
-      const stopAfterReset = new Error("stop after thread presentation reset");
-      vi.spyOn(pane, "cancelHeaderRename").mockImplementation(() => {
-        throw stopAfterReset;
-      });
-
-      expect(() => pane.switchPaneSession("agent:main:next")).toThrow(stopAfterReset);
-      expect(confirmation.popover.isConnected).toBe(false);
-      expect(removeDocumentListener).toHaveBeenCalledWith("click", captureClickListener, true);
-      expect(removeWindowListener).toHaveBeenCalledWith("keydown", captureKeydownListener, true);
-    } finally {
-      dismissConfirmedActionPopovers(confirmation.owner);
-      confirmation.owner.remove();
-    }
   });
 });
 

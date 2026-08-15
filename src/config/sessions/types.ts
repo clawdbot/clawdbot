@@ -5,19 +5,27 @@ import type {
   SessionAcpIdentity,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
+import type {
+  CronScheduledToolCallerOrigin,
+  CronScheduledToolPolicy,
+} from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
+import type {
+  PendingDeliveryNoticeState,
+  PendingFinalDeliveryState,
+} from "./pending-final-delivery-types.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
@@ -61,12 +69,6 @@ export type SessionDeliveryState =
       context: DeliveryContext;
       origin: SessionOrigin;
     };
-
-type PendingFinalDeliveryState = {
-  createdAt: number;
-  context?: DeliveryContext;
-  intentId?: string;
-} & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
 
 /**
  * Durable transcript-repair record: an assistant final that was delivered to
@@ -261,7 +263,10 @@ export interface QuotaSuspension {
   summary?: string;
   /** Opaque pointer to an external snapshot blob (path/key); not the briefing text itself. */
   snapshotRef?: string;
-  /** Lane that was set to concurrency=0 when this suspension was issued. */
+  /**
+   * @deprecated Lane suspension was removed; nothing writes this anymore. Kept only to
+   * hold the shipped SDK surface stable; drop at the next surface window.
+   */
   laneId?: string;
   expectedResumeBy?: number; // Reaper TTL (e.g. 30min)
   state: LaneExecutionState; // State machine check for hot-path
@@ -344,8 +349,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archivedBy?: SessionCreatedActor;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
-    /** Custom sidebar icon in the format accepted by the gateway protocol session-icon helper. */
-    icon?: string;
     /** Timestamp (ms) when an operator client last marked the session read. */
     lastReadAt?: number;
     /** Agent-declared sidebar presence; projection drops it after expiresAt. */
@@ -371,8 +374,12 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * creation and cleared together when a plain New Chat detaches the checkout.
      */
     worktree?: { id: string; branch: string; repoRoot: string };
+    /** Project registry id selected when this logical session node was created. */
+    projectId?: string;
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
+    /** Exact parent incarnation captured when this child was created. */
+    parentSessionId?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
@@ -455,6 +462,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
       toolsAllowIsDefault?: boolean;
       /** Exact server-stamped authority provenance copied from the owning cron job. */
       scheduledToolPolicy?: CronScheduledToolPolicy;
+      /** Store-private origin paired with an account scheduled-tool policy. */
+      scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
       cliSessionBindingFacts?: {
         extraSystemPromptStatic?: string;
         sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -524,6 +533,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     outputTokens?: number;
     totalTokens?: number;
     pendingFinalDelivery?: PendingFinalDeliveryState;
+    pendingDeliveryNotice?: PendingDeliveryNoticeState;
     /**
      * Ordered durable backlog of delivered assistant finals that failed to
      * reach the canonical transcript. Session admission restores each item
@@ -567,6 +577,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     acpSessionBinding?: AcpSessionBinding;
     claudeCliSessionId?: string;
     label?: string;
+    /** Persistent operator/agent-set sidebar emoji icon (single grapheme). */
+    icon?: string;
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
     category?: string;
     /** Preferred Control UI face when a caller opens this session without explicit face intent. */
@@ -596,6 +608,8 @@ export interface SessionEntry extends SessionEntryCore {}
 export type InternalSessionEntryCore = SessionEntryCore & {
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
+  activeWriterRunId?: string;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 
@@ -761,6 +775,9 @@ function mergeSessionEntryWithPolicy(
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;
   }
+  if (existing.projectId !== undefined) {
+    next.projectId = existing.projectId;
+  }
   if (existing.forkSource !== undefined) {
     next.forkSource = existing.forkSource;
   }
@@ -801,11 +818,7 @@ export function mergeSessionEntryPreserveActivity(
 }
 
 export function resolveSessionTotalTokens(entry?: Pick<SessionEntry, "totalTokens"> | null) {
-  const total = entry?.totalTokens;
-  if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
-    return undefined;
-  }
-  return total;
+  return asNonNegativeFiniteNumber(entry?.totalTokens);
 }
 
 export function resolveFreshSessionTotalTokens(

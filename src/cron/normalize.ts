@@ -13,8 +13,12 @@ import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import { normalizeCronRuntimeAuthority } from "./runtime-authority.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
-import { normalizeCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
+import {
+  normalizeCronScheduledToolCallerOrigin,
+  normalizeCronScheduledToolPolicy,
+} from "./scheduled-tool-policy.js";
 import { inferCronJobName } from "./service/normalize.js";
 import {
   assertSafeCronSessionTargetId,
@@ -405,10 +409,25 @@ export function normalizeCronJobInput(
       next.toolsAllowProvenance = {
         version: 1,
         source: "final-executable-surface",
+        callerOrigin: normalizeCronScheduledToolCallerOrigin(provenance.callerOrigin),
       };
     } else {
       delete next.toolsAllowProvenance;
     }
+  }
+
+  if ("runtimeAuthority" in base) {
+    const runtimeAuthority = normalizeCronRuntimeAuthority(base.runtimeAuthority);
+    if (runtimeAuthority) {
+      next.runtimeAuthority = runtimeAuthority;
+    } else {
+      delete next.runtimeAuthority;
+    }
+  }
+  if (base.runtimeAuthorityRecoveryRequired === true) {
+    next.runtimeAuthorityRecoveryRequired = true;
+  } else {
+    delete next.runtimeAuthorityRecoveryRequired;
   }
 
   if ("agentId" in base) {

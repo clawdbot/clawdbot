@@ -419,7 +419,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       applyReplyToMode: (payload) => payload,
       normalizeMediaPaths: async (payload) => ({
         ...payload,
-        text: "⚠️ Media failed.",
+        text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
         mediaUrl: absPath,
         mediaUrls: [absPath],
       }),

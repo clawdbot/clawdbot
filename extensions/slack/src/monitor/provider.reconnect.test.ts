@@ -231,17 +231,6 @@ describe("slack socket reconnect helpers", () => {
     await expect(waiter).resolves.toEqual({ event: "disconnect" });
   });
 
-  it("resolves disconnect waiter on socket error event", async () => {
-    const client = new FakeEmitter();
-    const app = { receiver: { client } };
-    const err = new Error("dns down");
-
-    const waiter = waitForSlackSocketDisconnect(app as never);
-    client.emit("error", err);
-
-    await expect(waiter).resolves.toEqual({ event: "error", error: err });
-  });
-
   it("installs the disconnect waiter before socket start completes", async () => {
     const client = new FakeEmitter();
     const app = {

@@ -220,44 +220,6 @@ describe("ChatAudioPlayer", () => {
     ).not.toContain("playback=1");
   });
 
-  it("does not retain an errored source when a refreshed rendition is unavailable", async () => {
-    let resolveFirstRefresh: ((response: Response) => void) | undefined;
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 200 }))
-      .mockImplementationOnce(
-        async () =>
-          await new Promise<Response>((resolve) => {
-            resolveFirstRefresh = resolve;
-          }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 500 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const player = document.createElement("openclaw-chat-audio-player");
-    player.src = "/__openclaw__/assistant-media?source=voice.caf&mediaTicket=old";
-    player.sourceIdentity = "/tmp/voice.caf";
-    player.label = "voice.caf";
-    player.playback = "transcode";
-    document.body.append(player);
-    await vi.waitFor(() =>
-      expect(player.querySelector("audio")?.getAttribute("src")).toContain("mediaTicket=old"),
-    );
-
-    player.querySelector("audio")?.dispatchEvent(new Event("error"));
-    await player.updateComplete;
-    player.src = "/__openclaw__/assistant-media?source=voice.caf&mediaTicket=refresh-1";
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    player.src = "/__openclaw__/assistant-media?source=voice.caf&mediaTicket=refresh-2";
-
-    await vi.waitFor(() =>
-      expect(
-        player.querySelector(".chat-assistant-attachment-card__reason")?.textContent,
-      ).toContain("Can't play this format — download instead."),
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    resolveFirstRefresh?.(new Response(null, { status: 200 }));
-  });
-
   it("reuses the waveform fetch as the audio element Blob source", async () => {
     const samples = new Float32Array([0, 0.5, -1, 0.25]);
     const decodeAudioData = vi.fn(async () => ({
@@ -339,28 +301,6 @@ describe("ChatAudioPlayer", () => {
     vi.spyOn(refreshedMedia, "play").mockResolvedValue(undefined);
     refreshed.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    resolveFetch?.(new Response(null, { status: 500 }));
-  });
-
-  it("shows preparation while the initial rendition HEAD is pending", async () => {
-    let resolveFetch: ((response: Response) => void) | undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(
-        async () =>
-          await new Promise<Response>((resolve) => {
-            resolveFetch = resolve;
-          }),
-      ),
-    );
-    const player = document.createElement("openclaw-chat-audio-player");
-    player.src = "/__openclaw__/assistant-media?source=voice.caf&mediaTicket=ticket";
-    player.sourceIdentity = "/tmp/voice.caf";
-    player.label = "voice.caf";
-    player.playback = "transcode";
-    document.body.append(player);
-
-    await vi.waitFor(() => expect(player.textContent).toContain("Preparing playback…"));
     resolveFetch?.(new Response(null, { status: 500 }));
   });
 
@@ -520,28 +460,6 @@ describe("ChatAudioPlayer", () => {
     expect(media.getAttribute("src")).toBe("blob:context-fallback");
   });
 
-  it("restarts transcode readiness after disconnecting during preparation", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const player = document.createElement("openclaw-chat-audio-player");
-    player.src = "/__openclaw__/assistant-media?source=voice.caf&mediaTicket=ticket";
-    player.sourceIdentity = "/tmp/voice.caf";
-    player.label = "voice.caf";
-    player.playback = "transcode";
-    document.body.append(player);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-
-    player.remove();
-    document.body.append(player);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() =>
-      expect(player.querySelector("audio")?.getAttribute("src")).toContain("playback=1"),
-    );
-  });
-
   it("cancels the old source when identity changes during rendition preparation", async () => {
     let resolveFetch: ((response: Response) => void) | undefined;
     vi.stubGlobal(
@@ -576,32 +494,6 @@ describe("ChatAudioPlayer", () => {
     await vi.waitFor(() => expect(media.getAttribute("src")).toContain("playback=1"));
     media.dispatchEvent(new Event("loadedmetadata"));
     expect(play).not.toHaveBeenCalled();
-  });
-
-  it("clears a failed rendition after reconnect succeeds", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 500 }))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const player = document.createElement("openclaw-chat-audio-player");
-    player.src = "/__openclaw__/assistant-media?source=voice.caf&mediaTicket=ticket";
-    player.sourceIdentity = "/tmp/retry-voice.caf";
-    player.label = "voice.caf";
-    player.playback = "transcode";
-    document.body.append(player);
-    await vi.waitFor(() =>
-      expect(
-        player.querySelector(".chat-assistant-attachment-card__reason")?.textContent,
-      ).toContain("Can't play this format"),
-    );
-
-    player.remove();
-    document.body.append(player);
-    await vi.waitFor(() =>
-      expect(player.querySelector("audio")?.getAttribute("src")).toContain("playback=1"),
-    );
-    expect(player.textContent).not.toContain("Can't play this format — download instead.");
   });
 
   it("does not auto-resume a refreshed source after disconnecting before metadata", async () => {

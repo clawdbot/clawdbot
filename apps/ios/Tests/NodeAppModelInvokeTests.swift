@@ -5377,18 +5377,28 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(reply == "Update sent")
     }
 
-    @Test func `watch chat preview reads responses output text`() throws {
-        let rawMessages = try [
-            makeWatchChatRawMessage(
-                role: "assistant",
-                text: "Responses reply",
-                type: "output_text",
-                timestamp: 1000),
-        ]
+    @Test func `watch chat uses shared responses text projection`() throws {
+        for type in ["input_text", "output_text"] {
+            let runID = "watch-\(type)"
+            let rawMessages = try [
+                makeWatchChatRawMessage(
+                    role: "assistant",
+                    text: "Responses \(type)",
+                    type: type,
+                    timestamp: 1000,
+                    idempotencyKey: runID),
+            ]
 
-        let items = WatchChatPresentation.makeItems(from: rawMessages)
+            let items = WatchChatPresentation.makeItems(from: rawMessages)
+            let reply = WatchChatPresentation.replyText(
+                from: rawMessages,
+                runID: runID,
+                submittedText: "Question",
+                submittedAtMs: 500)
 
-        #expect(items.map(\.text) == ["Responses reply"])
+            #expect(items.map(\.text) == ["Responses \(type)"])
+            #expect(reply == "Responses \(type)")
+        }
     }
 
     @Test func `watch voice reply matches direct run instead of newest assistant`() throws {
@@ -5457,30 +5467,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             submittedAtMs: 2500)
 
         #expect(reply == "Collected reply")
-    }
-
-    @Test func `watch voice reply accepts terminal message tool mirror`() throws {
-        let rawMessages = try [
-            makeWatchChatRawMessage(
-                role: "user",
-                text: "Send the update",
-                timestamp: 3000,
-                idempotencyKey: "watch-run:user"),
-            makeProjectedWatchChatRawMessage(
-                role: "assistant",
-                text: "Update sent",
-                timestamp: 4000,
-                serverId: "tool-result-1",
-                isMessageToolMirror: true),
-        ]
-
-        let reply = WatchChatPresentation.replyText(
-            from: rawMessages,
-            runID: "watch-run",
-            submittedText: "Send the update",
-            submittedAtMs: 2500)
-
-        #expect(reply == "Update sent")
     }
 
     @Test func `watch chat completion bounds reply text`() {

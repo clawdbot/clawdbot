@@ -15,11 +15,11 @@ import {
   deliverSubagentAnnouncement,
   isInternalAnnounceRequesterSession,
   loadRequesterSessionEntry,
-} from "../agents/subagent-announce-delivery.js";
+} from "../agents/subagents/announce/subagent-announce-delivery.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
-} from "../agents/subagent-announce-origin.js";
+} from "../agents/subagents/announce/subagent-announce-origin.js";
 import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,

@@ -278,7 +278,7 @@ To make Qwen the default video provider:
 {
   agents: {
     defaults: {
-      videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+      mediaModels: { video: { primary: "qwen/wan2.6-t2v" } },
     },
   },
 }

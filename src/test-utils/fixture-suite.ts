@@ -1,25 +1,23 @@
 // Loads fixture suites from disk for parametrized tests.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
 /** Creates a temp fixture root with deterministic per-case subdirectories. */
 export function createFixtureSuite(rootPrefix: string) {
   let fixtureRoot = "";
   let fixtureCount = 0;
+  const fixtureRoots = new Set<string>();
 
   return {
     async setup(): Promise<void> {
-      // Canonicalize: macOS tmpdir sits behind a symlink (/var -> /private/var)
-      // and production realpaths state/session paths, so symlinked roots break
-      // path-equality assertions.
-      fixtureRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), rootPrefix)));
+      fixtureRoot = makeTempDir(fixtureRoots, rootPrefix);
     },
     async cleanup(): Promise<void> {
       if (!fixtureRoot) {
         return;
       }
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
+      cleanupTempDirs(fixtureRoots);
       fixtureRoot = "";
     },
     async createCaseDir(prefix: string): Promise<string> {

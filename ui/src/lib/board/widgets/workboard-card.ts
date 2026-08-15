@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../../i18n/index.ts";
 import type { WorkboardStatus } from "../../workboard/types.ts";
-import type { BoardViewWidget } from "../view-types.ts";
+import type { BoardWidget } from "../types.ts";
 import type { PluginBoardWidgetRenderer } from "./index.ts";
 import { WorkboardWidgetElement } from "./workboard-widget.ts";
 
@@ -97,7 +97,7 @@ export const renderWorkboardCardWidget: PluginBoardWidgetRenderer = ({
   canMutate,
   requestUpdate,
 }: {
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   sessionKey: string;
   active: boolean;
   canMutate: boolean;

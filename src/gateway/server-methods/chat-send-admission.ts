@@ -8,18 +8,15 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
-import {
-  readSessionTranscriptActiveLeafEvents,
-  resolveSessionTranscriptActiveLeafEntryId,
-} from "../../config/sessions/session-accessor.js";
+import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
 import {
   buildAbortedChatSendPayload,
   readPreRegisteredRun,
@@ -34,9 +31,7 @@ import {
 } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
-  ACTIVE_RUN_CHANGED_ERROR_REASON,
   respondChatActiveLeafChanged,
-  respondChatActiveRunChanged,
   respondChatSessionRoutingChanged,
 } from "./chat-send-pre-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -112,9 +107,7 @@ export async function admitChatSend(params: {
       status: "accepted" as const,
       sessionKey,
       ...(rawSessionKey === sessionKey ? {} : { sessionKeyAliases: [rawSessionKey] }),
-      ...(sessionKey === "global" && selectedAgent.agentId
-        ? { agentId: selectedAgent.agentId }
-        : {}),
+      ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
       ownerConnId: normalizeOptionalChatText(client?.connId),
       ownerDeviceId: normalizeOptionalChatText(client?.connect?.device?.id),
       expiresAtMs: pendingExpiresAtMs,
@@ -217,28 +210,39 @@ export async function admitChatSend(params: {
     if (commitOutcome && resolvedInjectionTarget) {
       messageInjectionTarget = resolvedInjectionTarget;
     }
-    if (commitOutcome && p.queueMode === "steer" && !resolvedInjectionTarget) {
-      throw new Error(
-        expectedRunId ? ACTIVE_RUN_CHANGED_ERROR_REASON : ACTIVE_LEAF_CHANGED_ERROR_REASON,
-      );
+    if (
+      commitOutcome &&
+      p.queueMode === "steer" &&
+      expectedRunId === undefined &&
+      !resolvedInjectionTarget
+    ) {
+      throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
     }
     if (commitOutcome && expectedLeafEntryId !== undefined && !resolvedInjectionTarget) {
       // Runtime session identity resolves through the canonical SQLite accessor;
       // legacy/reset-archive files are read-only history fallbacks, never send targets.
-      const currentLeafEntryId = latestEntry?.sessionId
-        ? resolveSessionTranscriptActiveLeafEntryId(
-            readSessionTranscriptActiveLeafEvents({
+      const activePathRelation = latestEntry?.sessionId
+        ? readSessionTranscriptActivePathEntryRelation(
+            {
               agentId,
               sessionId: latestEntry.sessionId,
               sessionKey: latestSession.canonicalKey,
               sessionEntry: latestEntry,
               storePath: latestSession.storePath,
-            }),
+            },
+            expectedLeafEntryId,
           )
-        : undefined;
-      // The lifecycle admission fence also blocks branch switching. Check the canonical
-      // transcript under that fence so a stale pane cannot dispatch onto another branch.
-      if ((currentLeafEntryId ?? null) !== expectedLeafEntryId) {
+        : expectedLeafEntryId === null
+          ? "exact"
+          : "off-path";
+      // Branch switches preserve entry ids while rotating session ids. A supplied session id
+      // must fence exact and ancestor matches; omission remains legacy exact-only compatibility.
+      const matchesRequestedSession =
+        requestedSessionId === undefined || requestedSessionId === latestEntry?.sessionId;
+      const matchesActivePath =
+        activePathRelation === "exact" ||
+        (activePathRelation === "ancestor" && requestedSessionId !== undefined);
+      if (!matchesRequestedSession || !matchesActivePath) {
         throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
       }
     }
@@ -338,10 +342,6 @@ export async function admitChatSend(params: {
     }
     if (err instanceof Error && err.message === ACTIVE_LEAF_CHANGED_ERROR_REASON) {
       respondChatActiveLeafChanged(respond);
-      return { ok: false as const };
-    }
-    if (err instanceof Error && err.message === ACTIVE_RUN_CHANGED_ERROR_REASON) {
-      respondChatActiveRunChanged(respond);
       return { ok: false as const };
     }
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
@@ -460,11 +460,19 @@ export async function admitChatSend(params: {
     };
   };
   let releaseGatewayRootContinuation: (() => void) | undefined;
+  // Prepared inbound media has no transcript reference until the user turn
+  // persists; every abandonment exit funnels through cleanupAdmittedRun, so
+  // the armed discard here is the single custody owner for that window. The
+  // handler disarms it once the media becomes referenced (durable admission
+  // or ACK handing ownership to dispatch, which persists on all paths).
+  let discardAbandonedPreparedMedia: (() => void) | undefined;
   const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
     activeRunAbort.cleanup(options);
     releaseInitialGatewayWorkAdmission();
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
+    discardAbandonedPreparedMedia?.();
+    discardAbandonedPreparedMedia = undefined;
   };
   const rejectActiveLeafChanged = async () => {
     if (
@@ -525,6 +533,9 @@ export async function admitChatSend(params: {
       rejectSessionRoutingChanged,
       retainGatewayWorkAdmission,
       restartSafeAdmission,
+      setDiscardAbandonedPreparedMedia: (discard: (() => void) | undefined) => {
+        discardAbandonedPreparedMedia = discard;
+      },
       setReleaseGatewayRootContinuation: (release: (() => void) | undefined) => {
         releaseGatewayRootContinuation = release;
       },

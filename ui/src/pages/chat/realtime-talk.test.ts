@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as gatewayRelayTransport from "./realtime-talk-gateway-relay.ts";
 import * as googleLiveTransport from "./realtime-talk-google-live.ts";
 import type {
@@ -46,14 +47,6 @@ function transportContext(transport: object | undefined): RealtimeTalkTransportC
     throw new Error("Expected realtime transport instance");
   }
   return (transport as { ctx: RealtimeTalkTransportContext }).ctx;
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 describe("RealtimeTalkSession", () => {

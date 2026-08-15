@@ -6,6 +6,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   readMissingScopeError,
   type MissingScopeErrorDetails,
@@ -13,7 +14,7 @@ import {
 import { loadDeviceAuthToken, loadOriginDeviceToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
-import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
@@ -46,6 +47,7 @@ export type GatewayProbeAuthSummary = {
 
 export type GatewayProbeServerSummary = {
   version: string | null;
+  buildId?: string;
   connId: string | null;
 };
 
@@ -68,8 +70,6 @@ export type GatewayProbeResult = {
 type GatewayProbeDetailLevel = "none" | "presence" | "config" | "full";
 
 const MIN_PROBE_TIMEOUT_MS = 250;
-export const MAX_TIMER_DELAY_MS = MAX_SAFE_TIMEOUT_DELAY_MS;
-const PAIRING_REQUIRED_PATTERN = /\bpairing required\b/i;
 const OPERATOR_READ_SCOPE = "operator.read";
 const OPERATOR_WRITE_SCOPE = "operator.write";
 const OPERATOR_ADMIN_SCOPE = "operator.admin";
@@ -188,6 +188,7 @@ function resolveProbeAuthSummary(params: {
   role?: string | null;
   scopes?: string[];
   authMetadataPresent?: boolean;
+  connectErrorDetails?: unknown;
   error?: string | null;
   close?: GatewayProbeClose | null;
   verifiedRead?: boolean;
@@ -200,6 +201,7 @@ function resolveProbeAuthSummary(params: {
     capability: resolveGatewayProbeCapability({
       auth: { scopes },
       authMetadataPresent: params.authMetadataPresent,
+      connectErrorDetails: params.connectErrorDetails,
       error: params.error,
       close: params.close,
       verifiedRead: params.verifiedRead,
@@ -208,22 +210,22 @@ function resolveProbeAuthSummary(params: {
   };
 }
 
-function isPairingPendingProbeFailure(params: {
-  error?: string | null;
-  close?: GatewayProbeClose | null;
-}): boolean {
-  return PAIRING_REQUIRED_PATTERN.test(params.close?.reason ?? params.error ?? "");
-}
-
 function resolveGatewayProbeCapability(params: {
   auth?: Pick<GatewayProbeAuthSummary, "scopes"> | null;
   authMetadataPresent?: boolean;
+  connectErrorDetails?: unknown;
   error?: string | null;
   close?: GatewayProbeClose | null;
   verifiedRead?: boolean;
   connectLatencyMs?: number | null;
 }): GatewayProbeCapability {
-  if (isPairingPendingProbeFailure(params)) {
+  if (
+    classifyGatewayConnectFailure({
+      details: params.connectErrorDetails,
+      reason: params.close?.reason,
+      message: params.error,
+    }).kind === "pairing-required"
+  ) {
     return "pairing_pending";
   }
   const scopes = Array.isArray(params.auth?.scopes) ? params.auth.scopes : [];
@@ -383,6 +385,7 @@ export async function probeGateway(opts: {
           role: auth.role,
           scopes: auth.scopes,
           authMetadataPresent,
+          connectErrorDetails,
           error: params.error,
           close,
           verifiedRead: params.verifiedRead,
@@ -438,6 +441,9 @@ export async function probeGateway(opts: {
           authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
           server = {
             version: typeof hello?.server?.version === "string" ? hello.server.version : null,
+            ...(typeof hello?.server?.buildId === "string"
+              ? { buildId: hello.server.buildId }
+              : {}),
             connId: typeof hello?.server?.connId === "string" ? hello.server.connId : null,
           };
           auth = resolveProbeAuthSummary({

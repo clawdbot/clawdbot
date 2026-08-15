@@ -22,6 +22,173 @@ class ChatControllerTerminalAckTest {
   private val json = chatControllerTestJson
 
   @Test
+  fun finalAssistantEventPublishesVerifiedRoutingOwnerOnce() =
+    runTest {
+      val finalized = mutableListOf<Triple<ChatComposerOwner, String, String>>()
+      val controller =
+        createChatController(
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+          currentDefaultAgentId = { "main" },
+          onAssistantReplyFinalized = { owner, runId, text ->
+            finalized += Triple(owner, runId, text)
+          },
+        ) { method, _ ->
+          if (method == "chat.send") {
+            """{"runId":"run-notify","status":"started"}"""
+          } else {
+            "{}"
+          }
+        }
+      controller.prepareMainSessionKey("agent:main:main")
+      controller.handleGatewayEvent("health", null)
+      assertTrue(controller.sendMessageAwaitAcceptance("status", "off", emptyList()))
+      val terminal = chatTerminalPayload("agent:main:main", "run-notify", seq = 2, assistantText = "Done")
+
+      controller.handleGatewayEvent("chat", terminal)
+      controller.handleGatewayEvent("chat", terminal)
+      controller.handleGatewayEvent(
+        "chat",
+        chatTerminalPayload("agent:main:main", "run-error", seq = 3, state = "error", assistantText = "Partial"),
+      )
+
+      assertEquals(
+        listOf(
+          Triple(
+            ChatComposerOwner(
+              gatewayStableId = "gateway-a",
+              agentId = "main",
+              sessionKey = "agent:main:main",
+            ),
+            "run-notify",
+            "Done",
+          ),
+        ),
+        finalized,
+      )
+    }
+
+  @Test
+  fun finalAssistantEventPublishesOriginalOwnerAfterSessionSwitch() =
+    runTest {
+      val finalized = mutableListOf<Triple<ChatComposerOwner, String, String>>()
+      val controller =
+        createChatController(
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+          currentDefaultAgentId = { "main" },
+          onAssistantReplyFinalized = { owner, runId, text ->
+            finalized += Triple(owner, runId, text)
+          },
+        ) { method, _ ->
+          if (method == "chat.send") {
+            """{"runId":"run-session-a","status":"started"}"""
+          } else {
+            "{}"
+          }
+        }
+      controller.prepareMainSessionKey("agent:main:session-a")
+      controller.handleGatewayEvent("health", null)
+      assertTrue(controller.sendMessageAwaitAcceptance("status", "off", emptyList()))
+
+      controller.switchSession("agent:other:session-b")
+      assertEquals("agent:other:session-b", controller.sessionKey.value)
+      val terminal =
+        chatTerminalPayload(
+          "agent:main:session-a",
+          "run-session-a",
+          seq = 2,
+          assistantText = "Session A done",
+        )
+
+      controller.handleGatewayEvent("chat", terminal)
+      controller.handleGatewayEvent("chat", terminal)
+
+      assertEquals("agent:other:session-b", controller.sessionKey.value)
+      assertEquals(
+        listOf(
+          Triple(
+            ChatComposerOwner(
+              gatewayStableId = "gateway-a",
+              agentId = "main",
+              sessionKey = "agent:main:session-a",
+            ),
+            "run-session-a",
+            "Session A done",
+          ),
+        ),
+        finalized,
+      )
+    }
+
+  @Test
+  fun finalAssistantEventPublishesVerifiedInactiveSessionWithoutLocalRun() =
+    runTest {
+      val finalized = mutableListOf<Triple<ChatComposerOwner, String, String>>()
+      val controller =
+        createChatController(
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+          currentDefaultAgentId = { "main" },
+          onAssistantReplyFinalized = { owner, runId, text ->
+            finalized += Triple(owner, runId, text)
+          },
+        ) { _, _ -> "{}" }
+      controller.prepareMainSessionKey("agent:main:session-b")
+      controller.handleGatewayEvent("health", null)
+
+      controller.handleGatewayEvent(
+        "chat",
+        chatTerminalPayload("agent:other:session-a", "external-run", seq = 1, assistantText = "External done"),
+      )
+
+      assertEquals(
+        listOf(
+          Triple(
+            ChatComposerOwner("gateway-a", "other", "agent:other:session-a"),
+            "external-run",
+            "External done",
+          ),
+        ),
+        finalized,
+      )
+    }
+
+  @Test
+  fun finalAssistantEventDoesNotRebindProjectedRunAcrossGateways() =
+    runTest {
+      val finalized = mutableListOf<Triple<ChatComposerOwner, String, String>>()
+      var gatewayId = "gateway-a"
+      val controller =
+        createChatController(
+          cacheScope = { ChatCacheScope(gatewayId = gatewayId, connectionGeneration = 1) },
+          currentDefaultAgentId = { "main" },
+          onAssistantReplyFinalized = { owner, runId, text ->
+            finalized += Triple(owner, runId, text)
+          },
+        ) { method, _ ->
+          if (method == "chat.send") {
+            """{"runId":"run-gateway-a","status":"started"}"""
+          } else {
+            "{}"
+          }
+        }
+      controller.prepareMainSessionKey("agent:main:session-a")
+      controller.handleGatewayEvent("health", null)
+      assertTrue(controller.sendMessageAwaitAcceptance("status", "off", emptyList()))
+
+      gatewayId = "gateway-b"
+      controller.handleGatewayEvent(
+        "chat",
+        chatTerminalPayload(
+          "agent:main:session-a",
+          "run-gateway-a",
+          seq = 2,
+          assistantText = "Wrong gateway",
+        ),
+      )
+
+      assertTrue(finalized.isEmpty())
+    }
+
+  @Test
   fun composerOwnerMustMatchBeforeSendAdmission() =
     runTest {
       val requestedMethods = mutableListOf<String>()

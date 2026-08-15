@@ -2,6 +2,25 @@ import { describe, expect, it } from "vitest";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 describe("slack doctor contract", () => {
+  it("removes the retired Enterprise Grid setting from root and account config", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        channels: {
+          slack: {
+            enterpriseOrgInstall: true,
+            accounts: { work: { enterpriseOrgInstall: false } },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.slack).toEqual({ accounts: { work: {} } });
+    expect(result.changes).toEqual([
+      "Removed retired channels.slack.enterpriseOrgInstall; Slack detects org-wide installations automatically.",
+      "Removed retired channels.slack.accounts.work.enterpriseOrgInstall; Slack detects org-wide installations automatically.",
+    ]);
+  });
+
   it("removes retired interactive reply capabilities from root and account config", () => {
     const result = normalizeCompatibilityConfig({
       cfg: {

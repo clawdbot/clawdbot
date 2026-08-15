@@ -689,4 +689,46 @@ describe("discord doctor", () => {
 
     expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([]);
   });
+
+  it("warns when Discord transcript auto-start cannot choose between voice accounts", async () => {
+    const cfg = {
+      transcripts: {
+        autoStart: [
+          {
+            providerId: "discord-voice",
+            guildId: "guild-1",
+            channelId: "channel-1",
+          },
+          {
+            providerId: "discord-voice",
+            accountId: "alpha",
+            guildId: "guild-1",
+            channelId: "channel-2",
+          },
+          { providerId: "meeting", meetingUrl: "https://meet.example.test/standup" },
+        ],
+      },
+      channels: {
+        discord: {
+          accounts: {
+            alpha: { token: "alpha-token", voice: { enabled: true } },
+            bravo: { token: "bravo-token", voice: { enabled: true } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const warnings =
+      (await discordDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+        env: {},
+      })) ?? [];
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("transcripts.autoStart[0]");
+    expect(warnings[0]).toContain("Multiple Discord accounts are enabled for voice");
+    expect(warnings[0]).toContain("transcripts.autoStart[0].accountId");
+    expect(warnings[0]).toContain("channels.discord.defaultAccount");
+  });
 });

@@ -25,7 +25,7 @@
     },
     "build": {
       "openclawVersion": "2026.8.1",
-      "bundledDist": false
+      "bundledDist": true
     },
     "release": {
       "publishToClawHub": true,

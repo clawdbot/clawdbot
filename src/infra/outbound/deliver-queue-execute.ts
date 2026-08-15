@@ -34,7 +34,7 @@ import {
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   markDeliveryPlatformSendDispatched,
-} from "./delivery-queue.js";
+} from "./delivery-queue-storage.js";
 import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
   completedOutboundAuditTerminals,
@@ -210,7 +210,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     },
     onPlatformSendDispatch: async () => {
       params.abortSignal?.throwIfAborted();
-      if (platformQueueId && queuedPreSendState !== "acked") {
+      // Once any payload returns an identity, unknown-after-send protects the whole batch.
+      // A later payload dispatch must not regress that durable evidence to attempt-started.
+      if (platformQueueId && queuedPreSendState !== "acked" && queuedPostSendState === undefined) {
         try {
           if (producerClaimId) {
             await markDeliveryPlatformSendDispatched(
@@ -301,9 +303,13 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     if (!queueId) {
       if (params.deliveryCompletion) {
         if (results.length > 0) {
-          completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
+          await completeDurableDelivery(
+            params.deliveryCompletion,
+            results.at(-1)!,
+            platformQueueStateDir,
+          );
         } else {
-          suppressDurableDelivery(params.deliveryCompletion);
+          await suppressDurableDelivery(params.deliveryCompletion, platformQueueStateDir);
         }
       }
       if (!params.deferCommitHooks) {
@@ -361,9 +367,13 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       } else {
         if (params.deliveryCompletion) {
           if (results.length > 0) {
-            completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
+            await completeDurableDelivery(
+              params.deliveryCompletion,
+              results.at(-1)!,
+              platformQueueStateDir,
+            );
           } else {
-            suppressDurableDelivery(params.deliveryCompletion);
+            await suppressDurableDelivery(params.deliveryCompletion, platformQueueStateDir);
           }
         }
         const postSendState =
@@ -560,7 +570,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                 terminalRejectionHandled = true;
               } else {
                 if (params.deliveryCompletion) {
-                  rejectDurableDelivery(params.deliveryCompletion, permanentRejection.message);
+                  await rejectDurableDelivery(
+                    params.deliveryCompletion,
+                    permanentRejection.message,
+                    platformQueueStateDir,
+                  );
                   ownerRejected = true;
                 }
                 await (producerClaimId

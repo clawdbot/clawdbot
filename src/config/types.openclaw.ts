@@ -12,6 +12,7 @@ import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CloudWorkersConfig } from "./types.cloud-workers.js";
 import type { CronConfig } from "./types.cron.js";
+import type { DesktopConfig } from "./types.desktop.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type { McpConfig } from "./types.mcp.js";
@@ -227,6 +228,8 @@ export type OpenClawConfig = {
   gateway?: GatewayConfig;
   /** Opt-in cloud-worker provider profiles. */
   cloudWorkers?: CloudWorkersConfig;
+  /** Experimental desktop sources owned by the gateway host. */
+  desktop?: DesktopConfig;
   /** Memory indexing/search configuration. */
   memory?: MemoryConfig;
   /** MCP client/server and Codex MCP approval configuration. */
@@ -282,6 +285,7 @@ export type ConfigFileSnapshot = {
   includeProvenance?: readonly ConfigIncludeOwnership[];
   /** Temporary roster-only projection retained until write preparation uses generic ownership. */
   agentRosterIncludeOwned?: boolean;
+  bindingsIncludeOwned?: boolean;
   /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */

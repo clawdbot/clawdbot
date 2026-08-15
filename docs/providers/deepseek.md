@@ -135,7 +135,7 @@ preserve the replay payload DeepSeek requires.
 
 ```json5
 {
-  env: { DEEPSEEK_API_KEY: "sk-..." },
+  env: { vars: { DEEPSEEK_API_KEY: "sk-..." } },
   agents: {
     defaults: {
       model: { primary: "deepseek/deepseek-v4-pro" },

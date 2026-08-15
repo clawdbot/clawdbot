@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 
 /** Supported secret reference backing stores. */
-type SecretRefSource = "env" | "file" | "exec";
+type SecretRefSource = "env" | "file" | "exec" | "store";
 
 /** Canonical secret reference shape used after gateway resolution. */
 type SecretRef = {
@@ -19,7 +19,7 @@ const DEFAULT_SECRET_PROVIDER_ALIAS = "default";
 const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 const LEGACY_SECRETREF_ENV_MARKER_PREFIX = "secretref-env:";
 const ENV_SECRET_TEMPLATE_RE = /^\$\{([A-Z][A-Z0-9_]{0,127})\}$/;
-const SECRET_REF_SOURCES = new Set<SecretRefSource>(["env", "file", "exec"]);
+const SECRET_REF_SOURCES = new Set<SecretRefSource>(["env", "file", "exec", "store"]);
 
 /** Narrow a string to a supported SecretRef source. */
 function hasSecretRefSource(value: unknown): value is SecretRefSource {

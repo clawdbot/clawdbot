@@ -1,6 +1,7 @@
 // Control UI tests cover workboard behavior.
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
@@ -13,6 +14,7 @@ import type {
   WorkboardStatus,
 } from "../../lib/workboard/index.ts";
 import {
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   type MockGatewayControls,
   type MockGatewayRequest,
@@ -52,12 +54,7 @@ type ProofArtifacts = {
   videos: string[];
 };
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
@@ -79,12 +76,12 @@ type UpdatingElement = HTMLElement & {
 };
 
 async function waitForWorkboardRender(page: Page, requestUpdate = false): Promise<void> {
-  await page.locator("openclaw-app").evaluate(async (element, shouldRequestUpdate) => {
-    const app = element as UpdatingElement;
+  await page.locator("openclaw-workboard-page").evaluate(async (element, shouldRequestUpdate) => {
+    const workboardPage = element as UpdatingElement;
     if (shouldRequestUpdate) {
-      app.requestUpdate?.();
+      workboardPage.requestUpdate?.();
     }
-    await app.updateComplete;
+    await workboardPage.updateComplete;
   }, requestUpdate);
 }
 
@@ -306,7 +303,7 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
       viewport,
     });
     page = await context.newPage();
-    page.setDefaultTimeout(10_000);
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     return { context, page, rawVideoDir };
   } catch (error) {
     await page?.close().catch(() => {});

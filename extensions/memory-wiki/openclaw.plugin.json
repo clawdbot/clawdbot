@@ -1,8 +1,7 @@
 {
   "id": "memory-wiki",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true,
+    "configRepair": true,
     "stateMigrations": true
   },
   "activation": {

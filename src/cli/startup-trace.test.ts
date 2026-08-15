@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createGatewayStartupTrace } from "./startup-trace.js";
+import { createGatewayDispatchStartupTrace } from "./startup-trace.js";
 
 function readTimelineEvents(timelinePath: string): Record<string, unknown>[] {
   return fs
@@ -24,7 +24,10 @@ describe("CLI startup trace", () => {
     vi.stubEnv("OPENCLAW_DIAGNOSTICS", "timeline");
     vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
 
-    const trace = createGatewayStartupTrace(["node", "openclaw", "agent", "--local"], "entry");
+    const trace = createGatewayDispatchStartupTrace(
+      ["node", "openclaw", "agent", "--local"],
+      "entry",
+    );
     trace.mark("bootstrap");
     await trace.measure("run-main-import", async () => {
       await Promise.resolve();
@@ -71,7 +74,10 @@ describe("CLI startup trace", () => {
     vi.stubEnv("OPENCLAW_DIAGNOSTICS", "");
     vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
 
-    const trace = createGatewayStartupTrace(["node", "openclaw", "agent", "--local"], "entry");
+    const trace = createGatewayDispatchStartupTrace(
+      ["node", "openclaw", "agent", "--local"],
+      "entry",
+    );
     trace.mark("bootstrap");
     await trace.measure("run-main-import", async () => "loaded");
 

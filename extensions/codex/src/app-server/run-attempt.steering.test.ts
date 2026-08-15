@@ -19,6 +19,7 @@ import {
 } from "./run-attempt-test-harness.js";
 
 const activeRunRegistrationMocks = vi.hoisted(() => ({
+  cancelPendingAgentQuestionForSession: vi.fn(),
   clearActiveEmbeddedRun: vi.fn(),
   setActiveEmbeddedRun: vi.fn(),
   questionWaiters: new Map<string, (value: unknown) => void>(),
@@ -32,6 +33,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
     cancelPendingAgentQuestionForSession: async (
       ...args: Parameters<typeof actual.cancelPendingAgentQuestionForSession>
     ) => {
+      activeRunRegistrationMocks.cancelPendingAgentQuestionForSession(...args);
       const error = activeRunRegistrationMocks.cancelQuestionError;
       activeRunRegistrationMocks.cancelQuestionError = undefined;
       if (error) {
@@ -90,6 +92,7 @@ function createSteeringParams() {
   params.sessionId = sessionId;
   params.sessionKey = `agent:main:${sessionId}`;
   params.runId = `run-${sessionId}`;
+  params.toolAuthorityFingerprint = `authority-${sessionId}`;
   return params;
 }
 
@@ -142,6 +145,31 @@ describe("runCodexAppServerAttempt steering", () => {
     });
   });
 
+  it("exposes pending-question cancellation for queued image fallback", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createSteeringParams();
+    activeRunRegistrationMocks.cancelPendingAgentQuestionForSession.mockClear();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    let handle: { cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean> } | undefined;
+    await vi.waitFor(() => {
+      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as typeof handle;
+      expect(handle?.cancelPendingUserInput).toBeTypeOf("function");
+    }, fastWait);
+
+    await expect(handle?.cancelPendingUserInput?.("image-reply")).resolves.toBe(false);
+    expect(activeRunRegistrationMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledWith({
+      sessionKey: params.sessionKey,
+      resolvedBy: "image-reply",
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("accepts Gateway transcript-backed steering for the active Codex turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
@@ -151,6 +179,7 @@ describe("runCodexAppServerAttempt steering", () => {
       pluginConfig: { appServer: { mode: "yolo" } },
     });
     await waitForMethod("turn/start");
+    const onQueueAccepted = vi.fn();
 
     await vi.waitFor(() => {
       expect(
@@ -165,8 +194,10 @@ describe("runCodexAppServerAttempt steering", () => {
     await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
       debounceMs: 0,
       isInboundUserMessage: true,
+      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
       taskSuggestionDeliveryMode: "gateway",
       waitForTranscriptCommit: true,
+      onQueueAccepted,
     });
     await vi.waitFor(
       () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
@@ -178,6 +209,7 @@ describe("runCodexAppServerAttempt steering", () => {
     if (!clientUserMessageId) {
       throw new Error("turn/steer clientUserMessageId missing");
     }
+    await vi.waitFor(() => expect(onQueueAccepted).toHaveBeenCalledWith(true), fastWait);
 
     await notify({
       method: "item/completed",
@@ -419,100 +451,83 @@ describe("runCodexAppServerAttempt steering", () => {
     );
   });
 
-  it("flushes batched default queued steering during normal turn cleanup", async () => {
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+  it("seals unsent steering without erasing an earlier consumed dispatch", async () => {
+    const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
 
     const run = runCodexAppServerAttempt(params);
     await waitForMethod("turn/start");
-
-    await waitAndQueueActiveRunMessage(params.sessionId, "first", { debounceMs: 30_000 });
-    expect(queueActiveRunMessageForTest(params.sessionId, "second", { debounceMs: 30_000 })).toBe(
-      true,
-    );
-
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-
-    expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
-      {
-        method: "turn/steer",
-        params: {
-          threadId: "thread-1",
-          expectedTurnId: "turn-1",
-          input: [
-            { type: "text", text: "first", text_elements: [] },
-            { type: "text", text: "second", text_elements: [] },
-          ],
-          clientUserMessageId: "openclaw:turn-1:steer:1",
-        },
-      },
-    ]);
-  });
-
-  it("flushes pending default queued steering during normal turn cleanup", async () => {
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
-    const params = createSteeringParams();
-
-    const run = runCodexAppServerAttempt(params);
-    await waitForMethod("turn/start");
-
-    await waitAndQueueActiveRunMessage(params.sessionId, "late steer", { debounceMs: 30_000 });
-
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-
-    expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
-      {
-        method: "turn/steer",
-        params: {
-          threadId: "thread-1",
-          expectedTurnId: "turn-1",
-          input: [{ type: "text", text: "late steer", text_elements: [] }],
-          clientUserMessageId: "openclaw:turn-1:steer:1",
-        },
-      },
-    ]);
-  });
-
-  it("flushes batched explicit all-mode steering during normal turn cleanup", async () => {
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
-    const params = createSteeringParams();
-
-    const run = runCodexAppServerAttempt(params);
-    await waitForMethod("turn/start");
-
-    await waitAndQueueActiveRunMessage(params.sessionId, "first", {
-      debounceMs: 30_000,
-      steeringMode: "all",
+    let handle:
+      | {
+          queueMessage: (
+            text: string,
+            options: { debounceMs: number; onQueueAccepted?: (accepted: boolean) => void },
+          ) => Promise<void>;
+        }
+      | undefined;
+    await vi.waitFor(() => {
+      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as typeof handle;
+      expect(handle).toBeDefined();
+    }, fastWait);
+    const onDispatchedAccepted = vi.fn();
+    const onUnsentAccepted = vi.fn();
+    const onLateAccepted = vi.fn();
+    const dispatchedDelivery = handle!.queueMessage("on the wire", {
+      debounceMs: 0,
+      onQueueAccepted: onDispatchedAccepted,
     });
-    expect(
-      queueActiveRunMessageForTest(params.sessionId, "second", {
-        debounceMs: 30_000,
-        steeringMode: "all",
-      }),
-    ).toBe(true);
+    await vi.waitFor(
+      () => expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1),
+      fastWait,
+    );
+    const steer = requests.find((entry) => entry.method === "turn/steer");
+    const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
+      ?.clientUserMessageId;
+    if (!clientUserMessageId) {
+      throw new Error("turn/steer clientUserMessageId missing");
+    }
+    const unsentDelivery = handle!.queueMessage("still debounced", {
+      debounceMs: 30_000,
+      onQueueAccepted: onUnsentAccepted,
+    });
+    const unsentRejected = expect(unsentDelivery).rejects.toThrow("queue admission sealed");
 
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    // Raw receipt seals admission immediately, while serialized projection still
+    // honors the matching consumption notification already ahead of the terminal.
+    const consumed = notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "steered-user-message", type: "userMessage", clientId: clientUserMessageId },
+      },
+    });
+    const completed = completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await Promise.all([consumed, completed]);
+
+    await expect(dispatchedDelivery).resolves.toBeUndefined();
+    await unsentRejected;
+    expect(onDispatchedAccepted).toHaveBeenCalledWith(true);
+    expect(onUnsentAccepted).toHaveBeenCalledWith(false);
     await run;
 
     expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
-      {
-        method: "turn/steer",
-        params: {
-          threadId: "thread-1",
-          expectedTurnId: "turn-1",
-          input: [
-            { type: "text", text: "first", text_elements: [] },
-            { type: "text", text: "second", text_elements: [] },
-          ],
-          clientUserMessageId: "openclaw:turn-1:steer:1",
-        },
-      },
+      expect.objectContaining({
+        params: expect.objectContaining({ expectedTurnId: "turn-1", clientUserMessageId }),
+      }),
     ]);
+    await expect(
+      handle!.queueMessage("too late", { debounceMs: 0, onQueueAccepted: onLateAccepted }),
+    ).rejects.toThrow("steering queue cancelled");
+    expect(onLateAccepted).toHaveBeenCalledWith(false);
   });
 
-  it("routes request_user_input prompts through the active run follow-up queue", async () => {
+  it.each([
+    { name: "gateway-backed", isSecret: false },
+    { name: "secret", isSecret: true },
+  ])("routes $name user prompts without consuming internal steering", async ({ isSecret }) => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
@@ -550,6 +565,8 @@ describe("runCodexAppServerAttempt steering", () => {
 
     const params = createSteeringParams();
     params.onBlockReply = vi.fn();
+    const onRunProgress = vi.fn();
+    params.onRunProgress = onRunProgress;
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
       () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
@@ -564,13 +581,14 @@ describe("runCodexAppServerAttempt steering", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "ask-1",
+        isBlocking: true,
         questions: [
           {
             id: "mode",
             header: "Mode",
             question: "Pick a mode",
             isOther: false,
-            isSecret: false,
+            isSecret,
             options: [
               { label: "Fast", description: "Use less reasoning" },
               { label: "Deep", description: "Use more reasoning" },
@@ -600,10 +618,25 @@ describe("runCodexAppServerAttempt steering", () => {
         item: { id: "source-message", type: "userMessage", clientId: sourceMessageId },
       },
     });
-    await waitAndQueueActiveRunMessage(params.sessionId, "2", { isInboundUserMessage: true });
+    expect(
+      onRunProgress.mock.calls.some(
+        ([event]) =>
+          (event as { reason?: string }).reason === "request:item/tool/requestUserInput:response",
+      ),
+    ).toBe(false);
+    const onQuestionAccepted = vi.fn();
+    await waitAndQueueActiveRunMessage(params.sessionId, "2", {
+      isInboundUserMessage: true,
+      onQueueAccepted: onQuestionAccepted,
+      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    });
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },
     });
+    expect(onRunProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "request:item/tool/requestUserInput:response" }),
+    );
+    expect(onQuestionAccepted).toHaveBeenCalledWith(true);
     expect(request.mock.calls.filter(([method]) => method === "turn/steer")).toHaveLength(1);
 
     await notify({

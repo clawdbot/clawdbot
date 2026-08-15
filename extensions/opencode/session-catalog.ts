@@ -5,7 +5,10 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as optionalOpenCodeString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
@@ -92,14 +95,6 @@ type OpenCodeReadParams = {
   limit?: number;
   cursor?: string;
 };
-
-function optionalOpenCodeString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
-}
 
 function boundedLimit(value: unknown, fallback = DEFAULT_PAGE_LIMIT): number {
   if (value === undefined) {

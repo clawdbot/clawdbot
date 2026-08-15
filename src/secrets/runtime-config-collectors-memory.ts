@@ -40,7 +40,11 @@ export function collectAgentMemorySearchAssignments(params: {
   let defaultApiKeyAssignmentCollected = false;
   const collectedDefaultHeaderKeys = new Set<string>();
   const collectForAgent = ({ entry: rawAgent, source }: ListedAgentEntry) => {
-    const rawAgentRecord = rawAgent as unknown as Record<string, unknown>;
+    const rawAgentValue: unknown = rawAgent;
+    if (!isRecord(rawAgentValue)) {
+      return;
+    }
+    const rawAgentRecord = rawAgentValue;
     const agentMemory = isRecord(rawAgentRecord.memory) ? rawAgentRecord.memory : undefined;
     const memorySearch = isRecord(agentMemory?.search) ? agentMemory.search : undefined;
     const remote = isRecord(memorySearch?.remote) ? memorySearch.remote : undefined;
@@ -48,7 +52,7 @@ export function collectAgentMemorySearchAssignments(params: {
     const agentPath =
       source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
     const active =
-      rawAgentRecord.enabled !== false &&
+      rawAgentRecord["enabled"] !== false &&
       (memorySearch?.enabled ?? defaultsMemorySearch?.enabled ?? true) !== false;
     const owner = {
       ownerKind: "capability",
@@ -58,7 +62,7 @@ export function collectAgentMemorySearchAssignments(params: {
       contract: {
         defaults: defaultsMemorySearch,
         override: memorySearch,
-        agentEnabled: rawAgentRecord.enabled,
+        agentEnabled: rawAgentRecord["enabled"],
       },
     } satisfies SecretAssignmentOwner;
 

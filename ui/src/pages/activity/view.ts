@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 // Control UI view renders activity screen content.
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
@@ -7,10 +9,12 @@ import {
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../lib/string-coerce.ts";
 import "../../styles/activity.css";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
+
+registerActivityEnglish();
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
 
@@ -48,7 +52,7 @@ function formatDuration(value: number): string {
   if (!Number.isFinite(value) || value < 0) {
     return t("common.na");
   }
-  return formatDurationCompact(value, { spaced: true }) ?? "0ms";
+  return formatDurationCompact(value) ?? "0ms";
 }
 
 function statusLabel(status: ActivityStatus): string {
@@ -66,11 +70,7 @@ function buildEntrySummary(entry: ActivityEntry): string {
   if (entry.entryKind === "answer_candidate") {
     return t(`activity.answerCandidate.${entry.candidateStatus ?? "candidate"}`);
   }
-  return t("activity.entrySummary", {
-    argumentSummary: hiddenArgumentsLabel(entry.hiddenArgumentCount),
-    status: statusLabel(entry.status),
-    tool: entry.toolName,
-  });
+  return hiddenArgumentsLabel(entry.hiddenArgumentCount);
 }
 
 function entryLabel(entry: ActivityEntry): string {

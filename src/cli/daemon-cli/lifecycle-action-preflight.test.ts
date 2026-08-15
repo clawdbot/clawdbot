@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../../config/config.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getServiceActionPreflightFailure } from "./lifecycle-action-preflight.js";
 
 afterEach(() => {
@@ -13,7 +13,7 @@ afterEach(() => {
 async function withIsolatedLifecycleState(
   run: (params: { agentDir: string }) => Promise<void>,
 ): Promise<void> {
-  await withTempDir({ prefix: "openclaw-lifecycle-action-preflight-" }, async (root) => {
+  await withTestDir({ prefix: "openclaw-lifecycle-action-preflight-" }, async (root) => {
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -24,6 +24,9 @@ async function withIsolatedLifecycleState(
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     resetConfigRuntimeState();
     await run({ agentDir });
+    await expect(fs.access(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 }
 

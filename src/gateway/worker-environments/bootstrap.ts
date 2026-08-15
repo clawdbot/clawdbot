@@ -28,6 +28,9 @@ import {
 const BOOTSTRAP_ROOT = ".openclaw-worker";
 const BOOTSTRAP_RECEIPT = "bootstrap-receipt.json";
 const DEFAULT_BOOTSTRAP_TIMEOUT_MS = 10 * 60_000;
+const BUNDLE_TRANSFER_MIN_THROUGHPUT_BYTES_PER_SECOND = 125_000;
+const BUNDLE_TRANSFER_TIMEOUT_MAX_MS = 60 * 60_000;
+const BOOTSTRAP_OPERATION_HEADROOM_MS = 5 * 60_000;
 const NODE_MISSING_EXIT_CODE = 42;
 const NPM_MISSING_EXIT_CODE = 43;
 const LOCK_TIMEOUT_EXIT_CODE = 44;
@@ -39,6 +42,31 @@ const NPM_MISSING_MARKER = "OPENCLAW_WORKER_NPM_MISSING";
 const BOOTSTRAP_OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
 const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
+
+// Scale transfer time for congested uplinks (~243 MB at <4 Mbps exceeds 10 minutes).
+// The base timeout remains the floor; the cap keeps transfer bounded and fail-closed.
+function bundleTransferTimeoutMs(tarballBytes: number, floorMs: number): number {
+  if (!Number.isSafeInteger(tarballBytes) || tarballBytes < 0) {
+    throw new Error("Worker bundle artifact has an invalid tarball size");
+  }
+  return Math.min(
+    BUNDLE_TRANSFER_TIMEOUT_MAX_MS,
+    Math.max(
+      floorMs,
+      Math.ceil(tarballBytes / BUNDLE_TRANSFER_MIN_THROUGHPUT_BYTES_PER_SECOND) * 1000,
+    ),
+  );
+}
+
+/** Bounds the complete bootstrap lifecycle without preempting any permitted phase. */
+export function workerBootstrapOperationTimeoutMs(artifact: WorkerInstallationArtifact): number {
+  const nonTransferTimeoutMs = DEFAULT_BOOTSTRAP_TIMEOUT_MS * 3;
+  const transferTimeoutMs =
+    artifact.install === "bundle"
+      ? bundleTransferTimeoutMs(artifact.tarballBytes, DEFAULT_BOOTSTRAP_TIMEOUT_MS)
+      : 0;
+  return nonTransferTimeoutMs + transferTimeoutMs + BOOTSTRAP_OPERATION_HEADROOM_MS;
+}
 
 // Keep these boundaries aligned with package.json engines.node and infra/runtime-guard.ts.
 const NODE_RUNTIME_CHECK_JS = String.raw`const parse = (value) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number); const atLeast = (version, floor) => version[0] > floor[0] || (version[0] === floor[0] && (version[1] > floor[1] || (version[1] === floor[1] && version[2] >= floor[2])));
@@ -354,6 +382,14 @@ receipt_matches() {
     node -e '${VERIFY_INSTALL_JS}' "$install_dir" "$hash" "$install"
 }
 
+finish_with_receipt() {
+  # A durable receipt makes retries independent of this operation's upload.
+  rm -f -- "$upload"
+  printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
+  cat "$receipt"
+  printf '\n'
+}
+
 read_lock_owner() {
   if [ -L "$lock" ]; then
     readlink "$lock" 2>/dev/null || true
@@ -365,9 +401,7 @@ read_lock_owner() {
 attempt=0
 while ! ln -s "$lock_identity" "$lock" 2>/dev/null; do
   if receipt_matches; then
-    printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
-    cat "$receipt"
-    printf '\n'
+    finish_with_receipt
     exit 0
   fi
   owner=$(read_lock_owner)
@@ -442,9 +476,7 @@ for stale_staging in "$root"/.staging-"$hash"-*; do
 done
 
 if receipt_matches; then
-  printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
-  cat "$receipt"
-  printf '\n'
+  finish_with_receipt
   exit 0
 fi
 
@@ -506,9 +538,7 @@ printf '%s\n' "$receipt_json" > "$staging/${BOOTSTRAP_RECEIPT}"
 chmod 600 "$staging/${BOOTSTRAP_RECEIPT}"
 rm -rf "$install_dir"
 mv "$staging" "$install_dir"
-printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
-cat "$receipt"
-printf '\n'
+finish_with_receipt
 `;
 
 type ResolvedWorkerSshIdentity = WorkerSshIdentity;
@@ -752,10 +782,14 @@ export async function bootstrapWorker(
   dependencies: WorkerBootstrapDependencies,
 ): Promise<WorkerAdmissionHandshake> {
   const artifact = request.artifact;
+  const timeoutMs = dependencies.timeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
+  const transferTimeoutMs =
+    artifact.install === "bundle"
+      ? bundleTransferTimeoutMs(artifact.tarballBytes, timeoutMs)
+      : timeoutMs;
   const receipt = normalizeHandshake(artifact);
   const operationToken = createHash("sha256").update(request.operationId).digest("hex");
   const uploadFilename = workerUploadFilename(receipt.bundleHash, operationToken);
-  const timeoutMs = dependencies.timeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
   const prepared = await prepareWorkerSsh({
     ssh: request.ssh,
@@ -794,7 +828,7 @@ export async function bootstrapWorker(
     if (artifact.install === "bundle") {
       const transfer = await runWorkerSshCandidates(
         prepared,
-        timeoutMs,
+        transferTimeoutMs,
         (port, remainingTimeoutMs) =>
           runCommand(
             [

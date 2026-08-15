@@ -31,7 +31,6 @@ import {
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
-import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import {
@@ -270,10 +269,9 @@ export async function finalizeCodexAttempt(
     !effectiveTimedOut &&
     (finalPromptError === null || finalPromptError === undefined) &&
     (completedTurnStatus === "completed" || recoveredTurnWatchTimeout || locallyCompletedTurn);
-  // buildResult retains the bridge's delivery records. Resolve omitted final
-  // intent only after the authoritative turn outcome is known, before any
-  // terminal observer consumes the result.
-  const completedSourceReply = settleCodexSourceReplyFinality(toolBridge.telemetry, turnSucceeded);
+  const completedSourceReply = toolBridge.telemetry.messagingToolSentTargets.some(
+    (target) => target.sourceReplyFinal === true,
+  );
   if (completedSourceReply) {
     // Harness classification only sees assistant/reasoning/plan projections.
     // A reply delivered entirely through the source message tool is visible
@@ -325,9 +323,9 @@ export async function finalizeCodexAttempt(
   const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
     mirrorOutcome;
   const shouldCaptureSettledTurnFinalizationContext =
-    turnSucceeded &&
     result.assistantTexts.every((text) => !text.trim()) &&
-    result.messagesSnapshot.some((message) => message.role === "toolResult");
+    result.messagesSnapshot.some((message) => message.role === "toolResult") &&
+    (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
   const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
     ? await captureCodexSettledTurnFinalizationContext({
         ...activeTranscriptTarget,
@@ -481,7 +479,7 @@ export async function finalizeCodexAttempt(
           }),
         },
   );
-  return {
+  const finalizedResult: EmbeddedRunAttemptResult = {
     ...result,
     terminal: attemptTerminal.normalize({
       timedOut: effectiveTimedOut,
@@ -496,9 +494,14 @@ export async function finalizeCodexAttempt(
     ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
+    ...(resourceState.runtimeContinuationStarted ? { runtimeContinuationStarted: true } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
       : {}),
     systemPromptReport,
   };
+  if (turnSucceeded && toolState.yieldDetected && !runAbortController.signal.aborted) {
+    resourceState.nativeHookRelay?.authorizeRetentionAfterSuccessfulYield();
+  }
+  return finalizedResult;
 }

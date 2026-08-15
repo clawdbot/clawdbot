@@ -9,10 +9,7 @@ import { createDedupeCache } from "../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
-import {
-  filterWorkspaceSkillEntriesWithOptions,
-  loadVisibleWorkspaceSkillEntries,
-} from "../loading/workspace.js";
+import { filterWorkspaceSkills, loadVisibleSkills } from "../loading/workspace-skill-loader.js";
 import type { SkillEligibilityContext, SkillCommandSpec, SkillEntry } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { filterUserInvocableSkillEntries, isSkillPromptVisible } from "./skill-index.js";
@@ -89,12 +86,12 @@ export function buildWorkspaceSkillCommandSpecs(
   const effectiveSkillFilter =
     opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId);
   const eligible = opts?.entries
-    ? filterWorkspaceSkillEntriesWithOptions(opts.entries, {
+    ? filterWorkspaceSkills(opts.entries, {
         config: opts?.config,
         skillFilter: effectiveSkillFilter,
         eligibility: opts?.eligibility,
       })
-    : loadVisibleWorkspaceSkillEntries(workspaceDir, {
+    : loadVisibleSkills(workspaceDir, {
         config: opts?.config,
         managedSkillsDir: opts?.managedSkillsDir,
         bundledSkillsDir: opts?.bundledSkillsDir,
@@ -173,6 +170,7 @@ export function buildWorkspaceSkillCommandSpecs(
 
     specs.push({
       name: unique,
+      displayName: entry.skill.displayName ?? rawName,
       skillFile: canonicalizePath(entry.skill.filePath),
       skillName: rawName,
       description,

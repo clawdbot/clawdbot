@@ -914,7 +914,7 @@ describe("collectCodexRouteWarnings", () => {
 
   it("does not overwrite a non-Lossless context-engine slot", () => {
     const result = maybeRepairCodexRoutes({
-      plugins: { slots: { contextEngine: "qmd" } },
+      plugins: { slots: { contextEngine: "custom-context" } },
       agents: {
         defaults: {
           model: "openai/gpt-5.5",
@@ -953,7 +953,7 @@ describe("collectCodexRouteWarnings", () => {
 
   it("preserves local Lossless models when inherited provider migration is blocked", () => {
     const result = maybeRepairCodexRoutes({
-      plugins: { slots: { contextEngine: "qmd" } },
+      plugins: { slots: { contextEngine: "custom-context" } },
       agents: {
         defaults: { model: "openai/gpt-5.5", compaction: { provider: "lossless-claw" } },
         list: [
@@ -1053,7 +1053,7 @@ describe("collectCodexRouteWarnings", () => {
       models: {
         providers: { openai: { baseUrl: "https://proxy.example.test/v1" } },
       },
-      plugins: { slots: { contextEngine: "qmd" } },
+      plugins: { slots: { contextEngine: "custom-context" } },
       agents: {
         defaults: {
           model: "openai/gpt-5.5",
@@ -1089,7 +1089,7 @@ describe("collectCodexRouteWarnings", () => {
 
   it("points inherited Lossless model warnings at defaults when migration is blocked", () => {
     const result = maybeRepairCodexRoutes({
-      plugins: { slots: { contextEngine: "qmd" } },
+      plugins: { slots: { contextEngine: "custom-context" } },
       agents: {
         defaults: { model: "openai/gpt-5.5", compaction: { model: "openai/gpt-5.4-mini" } },
         list: [
@@ -1127,7 +1127,7 @@ describe("collectCodexRouteWarnings", () => {
       models: {
         providers: { openai: { baseUrl: "https://proxy.example.test/v1" } },
       },
-      plugins: { slots: { contextEngine: "qmd" } },
+      plugins: { slots: { contextEngine: "custom-context" } },
       agents: {
         defaults: {
           model: "anthropic/claude-sonnet-4-6",

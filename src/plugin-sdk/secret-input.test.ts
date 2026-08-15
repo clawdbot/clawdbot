@@ -51,6 +51,9 @@ describe("plugin-sdk secret input schema", () => {
       schema.safeParse({ source: "file", provider: "filemain", id: "/providers/openai/apiKey" })
         .success,
     ).toBe(true);
+    expect(
+      schema.safeParse({ source: "store", provider: "default", id: "STORED_API_KEY" }).success,
+    ).toBe(true);
     for (const id of VALID_EXEC_SECRET_REF_IDS) {
       expect(schema.safeParse({ source: "exec", provider: "vault", id }).success, id).toBe(true);
     }
@@ -60,5 +63,11 @@ describe("plugin-sdk secret input schema", () => {
     for (const id of INVALID_EXEC_SECRET_REF_IDS) {
       expect(schema.safeParse({ source: "exec", provider: "vault", id }).success, id).toBe(false);
     }
+  });
+
+  it("rejects store refs outside the env-name grammar", () => {
+    expect(
+      schema.safeParse({ source: "store", provider: "default", id: "lowercase" }).success,
+    ).toBe(false);
   });
 });

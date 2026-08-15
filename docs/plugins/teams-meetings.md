@@ -2,7 +2,7 @@
 summary: "Microsoft Teams meetings plugin: join work or consumer meetings as a Chrome browser guest"
 read_when:
   - You want an OpenClaw agent to join a Microsoft Teams meeting
-  - You are configuring Chrome, BlackHole, or SoX for Teams meeting talk-back
+  - You are configuring Chrome or virtual audio for Teams meeting talk-back
 title: "Microsoft Teams meetings plugin"
 ---
 
@@ -10,7 +10,7 @@ The `teams-meetings` plugin joins Microsoft Teams links as a guest in the OpenCl
 
 ## Setup
 
-Talk-back uses the same local audio prerequisites as the [Google Meet plugin](/plugins/google-meet): macOS, the `BlackHole 2ch` virtual audio device, and SoX.
+Talk-back uses the shared [meeting-plugin audio setup](/plugins/meeting-plugins#prepare-chrome-and-audio): `BlackHole 2ch` plus SoX on macOS, or PipeWire-Pulse plus `pactl`/`pacat`/`parec` on Linux.
 
 ```bash
 openclaw plugins install @openclaw/teams-meetings
@@ -19,6 +19,13 @@ brew install blackhole-2ch sox
 sudo reboot
 system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
+```
+
+On Linux, verify the desktop user's PipeWire-Pulse session instead:
+
+```bash
+pactl info
+command -v pactl pacat parec
 ```
 
 The plugin is enabled by default after installation. Add an entry only to customize it, then check setup:
@@ -45,7 +52,7 @@ openclaw teamsmeetings setup
 openclaw teamsmeetings join 'https://teams.microsoft.com/l/meetup-join/...'
 ```
 
-Use `chromeNode.node` to run Chrome, BlackHole, and SoX on a paired macOS node. The node must allow `teamsmeetings.chrome` and `browser.proxy`.
+Use `chromeNode.node` to run Chrome and its native virtual-audio backend on a paired macOS or Linux node. The node must allow `teamsmeetings.chrome` and `browser.proxy`; backend setup and generated commands resolve on that node, not on the Gateway host.
 
 ## Modes
 

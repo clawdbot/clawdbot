@@ -22,7 +22,7 @@ import {
   resolveNpmLockJobs,
   shouldUseLegacyPeerDepsForNpmLock,
   npmLockPackageDirsForChangedPaths,
-} from "../../scripts/generate-npm-package-lock.mjs";
+} from "../../scripts/generate-npm-package-lock.mts";
 
 describe("generate-npm-package-lock", () => {
   function repoRelativePath(value: string): string {

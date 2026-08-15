@@ -1,6 +1,133 @@
 import type { Message } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import { serializeConversation } from "./utils.js";
+import type { AgentMessage } from "../../types.js";
+import {
+  computeFileLists,
+  createFileOps,
+  extractFileOpsFromMessage,
+  mergeSummaryFileOperations,
+  serializeConversation,
+} from "./utils.js";
+
+describe("file operation provenance", () => {
+  it.each([
+    {
+      name: "path aliases",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              name: "read",
+              arguments: { path: 42, file_path: "src/read.ts" },
+            },
+            {
+              type: "toolCall",
+              name: "write",
+              arguments: { path: null, file_path: false, filePath: "src/write.ts" },
+            },
+            {
+              type: "toolCall",
+              name: "edit",
+              arguments: { path: "src/edit.ts", file_path: "ignored.ts" },
+            },
+          ],
+        },
+      ],
+      expected: {
+        readFiles: ["src/read.ts"],
+        modifiedFiles: ["src/edit.ts", "src/write.ts"],
+      },
+    },
+    {
+      name: "namespaced tool names",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", name: "mcp__files__READ", arguments: { path: "src/read.ts" } },
+            { type: "toolCall", name: "files__edit", arguments: { path: "src/edit.ts" } },
+          ],
+        },
+      ],
+      expected: { readFiles: ["src/read.ts"], modifiedFiles: ["src/edit.ts"] },
+    },
+    {
+      name: "apply_patch result summary",
+      messages: [
+        {
+          role: "toolResult",
+          toolName: "apply_patch",
+          details: {
+            summary: {
+              added: ["src/added.ts"],
+              modified: ["src/modified.ts"],
+              deleted: ["src/deleted.ts"],
+            },
+          },
+        },
+        {
+          role: "toolResult",
+          toolName: "apply_patch",
+          content: [
+            {
+              type: "toolResult",
+              details: {
+                summary: { added: [], modified: ["src/nested.ts"], deleted: [] },
+              },
+            },
+          ],
+        },
+      ],
+      expected: {
+        readFiles: [],
+        modifiedFiles: ["src/added.ts", "src/modified.ts", "src/nested.ts"],
+      },
+    },
+    {
+      name: "unknown tools",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", name: "plugin__inspect", arguments: { path: "ignored.ts" } },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolName: "unknown_patch",
+          details: { summary: { added: ["also-ignored.ts"], modified: [], deleted: [] } },
+        },
+      ],
+      expected: { readFiles: [], modifiedFiles: [] },
+    },
+  ])("extracts $name", ({ messages, expected }) => {
+    const fileOps = createFileOps();
+    for (const message of messages as unknown as AgentMessage[]) {
+      extractFileOpsFromMessage(message, fileOps);
+    }
+    expect(computeFileLists(fileOps)).toEqual(expected);
+  });
+
+  it("merges file identity forward across two compactions", () => {
+    const first = createFileOps();
+    first.read.add("src/first-read.ts");
+    first.written.add("src/first-write.ts");
+
+    const second = createFileOps();
+    mergeSummaryFileOperations(second, computeFileLists(first));
+    second.edited.add("src/second-edit.ts");
+
+    const third = createFileOps();
+    mergeSummaryFileOperations(third, computeFileLists(second));
+
+    expect(computeFileLists(third)).toEqual({
+      readFiles: ["src/first-read.ts"],
+      modifiedFiles: ["src/first-write.ts", "src/second-edit.ts"],
+    });
+  });
+});
 
 describe("serializeConversation", () => {
   it.each([

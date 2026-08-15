@@ -10,6 +10,7 @@ import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { danger, info, success, warn } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   ExitError,
   type RuntimeEnv,
@@ -182,11 +183,11 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       throw err;
     }
     if (opts.json) {
-      writeRuntimeJson(runtime, { error: String(err) });
+      writeRuntimeJson(runtime, { error: formatErrorMessage(err) });
       runtime.exit(1);
       return;
     }
-    runtime.error(danger(String(err)));
+    runtime.error(danger(formatErrorMessage(err)));
     runtime.exit(1);
   }
 }
@@ -288,7 +289,7 @@ async function runConfigFile(opts: { json?: boolean; runtime?: RuntimeEnv }) {
     }
     writeRuntimeStdout(runtime, `${path}\n`);
   } catch (err) {
-    runtime.error(danger(String(err)));
+    runtime.error(danger(formatErrorMessage(err)));
     runtime.exit(1);
   }
 }
@@ -302,7 +303,7 @@ async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
     schema.properties = { $schema: { type: "string" }, ...schema.properties };
     writeRuntimeJson(runtime, schema);
   } catch (err) {
-    runtime.error(danger(`Config schema error: ${String(err)}`));
+    runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
     runtime.exit(1);
   }
 }
@@ -368,9 +369,13 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     }
   } catch (err) {
     if (opts.json) {
-      writeRuntimeJson(runtime, { valid: false, path: outputPath, error: String(err) }, 0);
+      writeRuntimeJson(
+        runtime,
+        { valid: false, path: outputPath, error: formatErrorMessage(err) },
+        0,
+      );
     } else {
-      runtime.error(danger(`Config validation error: ${String(err)}`));
+      runtime.error(danger(`Config validation error: ${formatErrorMessage(err)}`));
     }
     runtime.exit(1);
   }
@@ -435,9 +440,9 @@ export function registerConfigCli(program: Command) {
       false,
     )
     .option("--ref-provider <alias>", "SecretRef builder: provider alias")
-    .option("--ref-source <source>", "SecretRef builder: source (env|file|exec)")
+    .option("--ref-source <source>", "SecretRef builder: source (env|file|exec|store)")
     .option("--ref-id <id>", "SecretRef builder: ref id")
-    .option("--provider-source <source>", "Provider builder: source (env|file|exec)")
+    .option("--provider-source <source>", "Provider builder: source (env|file|exec|store)")
     .option(
       "--provider-allowlist <envVar>",
       "Provider builder (env): allowlist entry (repeatable)",

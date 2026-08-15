@@ -1,6 +1,8 @@
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
+import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
@@ -61,6 +63,7 @@ export type SteerSendDependencies = {
       runId: string;
       expectedRunId?: string;
       expectedLeafEntryId?: string | null;
+      replyToId?: string;
     },
   ) => Promise<SteerChatSendResult>;
 };
@@ -147,20 +150,16 @@ function findQueuedSendMessageIndex(
     return -1;
   }
   return (Array.isArray(messages) ? messages : []).findIndex((message) => {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
+    if (!isRecord(message)) {
       return false;
     }
     // Render retirement requires a user-role entry: an assistant entry can
     // carry the same run key without proving the queued turn is visible.
-    const record = message as Record<string, unknown>;
+    const record = message;
     if (userRoleOnly && record.role !== "user") {
       return false;
     }
-    const marker = record["__openclaw"];
-    const markerIdempotencyKey =
-      marker && typeof marker === "object" && !Array.isArray(marker)
-        ? (marker as { idempotencyKey?: unknown }).idempotencyKey
-        : undefined;
+    const markerIdempotencyKey = asOptionalRecord(record["__openclaw"])?.idempotencyKey;
     const idempotencyKey = markerIdempotencyKey ?? record.idempotencyKey;
     return idempotencyKey === item.sendRunId || idempotencyKey === `${item.sendRunId}:user`;
   });
@@ -252,7 +251,51 @@ export function retireSteeredChipsForTerminalRun(
   return firstPersistedSteerIndex;
 }
 
-export function retireHistoryProvenSteeredChips(state: SteerLifecycleHost): void {
+export function retireSteeredChipsForRequestRun(
+  state: SteerLifecycleHost,
+  runId: string | undefined,
+): number | undefined {
+  if (!runId) {
+    return undefined;
+  }
+  const landed = state.chatQueue.filter(
+    (item) => isAckedSteeredChip(item) && item.sendRunId === runId,
+  );
+  let firstPersistedSteerIndex: number | undefined;
+  for (const item of landed) {
+    // A started active turn can still exist only as an optimistic queue row.
+    // Promote that target before its landed steer so stable transcript history
+    // cannot render the newer steer ahead of the original prompt.
+    const target = state.chatQueue.find(
+      (candidate) => candidate.id !== item.id && candidate.sendRunId === item.pendingRunId,
+    );
+    if (target) {
+      preserveQueuedUserTurn(state, target);
+    }
+    const persistedIndex = findQueuedSendMessageIndex(state.chatMessages, item, true);
+    if (
+      persistedIndex >= 0 &&
+      (firstPersistedSteerIndex === undefined || persistedIndex < firstPersistedSteerIndex)
+    ) {
+      firstPersistedSteerIndex = persistedIndex;
+    }
+    preserveQueuedUserTurn(state, item);
+  }
+  if (landed.length > 0) {
+    const landedIds = new Set(landed.map((item) => item.id));
+    writeChatQueueForScope(
+      state,
+      state.sessionKey,
+      state.chatQueue.filter((item) => !landedIds.has(item.id)),
+    );
+    for (const item of landed) {
+      releaseChatAttachmentPayloads(excludeComposerAttachments(state, item.attachments));
+    }
+  }
+  return firstPersistedSteerIndex;
+}
+
+export function retirePersistedSteeredChips(state: SteerLifecycleHost): void {
   const retired = state.chatQueue.filter(
     (item) =>
       isAckedSteeredChip(item) && chatMessagesContainQueuedSend(state.chatMessages, item, true),
@@ -338,6 +381,7 @@ export async function sendQueuedChatMessageWithQueueMode(
     text: item.text,
     createdAt: item.createdAt,
     attachments: item.attachments,
+    replyToId: item.replyToId,
     sendRunId: claimed.sendRunId,
     sessionKey: claimed.sessionKey,
     agentId: claimed.agentId,
@@ -370,6 +414,7 @@ export async function sendQueuedChatMessageWithQueueMode(
     {
       canApplyError: () => visibleSessionMatches(host, itemSessionKey, item.agentId),
       ...(queueMode ? { queueMode } : {}),
+      ...(claimed.replyToId ? { replyToId: claimed.replyToId } : {}),
       ...(steerTarget
         ? {
             expectedRunId: steerTarget.runId,
@@ -454,7 +499,7 @@ export async function sendQueuedChatMessageWithQueueMode(
       host,
       itemSessionKey,
       [...host.chatQueue.filter((entry) => entry.id !== id), steeredIndicator].toSorted(
-        (left, right) => left.createdAt - right.createdAt,
+        compareChatQueueOrder,
       ),
       item.agentId,
     );

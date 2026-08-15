@@ -24,7 +24,6 @@ describe("Telegram QA profiles", () => {
     const live = resolveTelegramQaScenarioIds({ providerMode: "live-frontier" });
     const mock = resolveTelegramQaScenarioIds({ providerMode: "mock-openai" });
 
-    expect(mock).toHaveLength(19);
     expect(live).not.toContain("telegram-long-final-reuses-preview");
     expect(mock).toContain("telegram-long-final-reuses-preview");
     expect(mock).not.toContain("telegram-assistant-transcript-role-boundary");

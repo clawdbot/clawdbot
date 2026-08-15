@@ -10,7 +10,7 @@ import {
 } from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
-import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
+import { channelToNpmTag, resolveDevUpstreamRef, type UpdateChannel } from "./update-channels.js";
 import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
@@ -24,6 +24,7 @@ type GitUpdateStatus = {
   tag: string | null;
   branch: string | null;
   upstream: string | null;
+  upstreamSource?: "tracking" | "receipt";
   upstreamSha?: string | null;
   commitAtMs?: number | null;
   dirty: boolean | null;
@@ -228,6 +229,8 @@ async function checkGitUpdateStatus(params: {
   root: string;
   timeoutMs?: number;
   fetch?: boolean;
+  useDetachedDevUpstream?: boolean;
+  upstreamFallback?: { currentSha: string; upstreamRef: string };
 }): Promise<GitUpdateStatus> {
   const timeoutMs = params.timeoutMs ?? 6000;
   const root = path.resolve(params.root);
@@ -246,7 +249,7 @@ async function checkGitUpdateStatus(params: {
     fetchOk: null,
   };
 
-  const [branchRes, shaRes, commitAtRes, tagRes, upstreamRes, dirtyRes] = await Promise.all([
+  const [branchRes, shaRes, commitAtRes, tagRes, dirtyRes] = await Promise.all([
     runCommandWithTimeout(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
       timeoutMs,
     }).catch(() => null),
@@ -257,9 +260,6 @@ async function checkGitUpdateStatus(params: {
       timeoutMs,
     }).catch(() => null),
     runCommandWithTimeout(["git", "-C", root, "describe", "--tags", "--exact-match"], {
-      timeoutMs,
-    }).catch(() => null),
-    runCommandWithTimeout(["git", "-C", root, "rev-parse", "--abbrev-ref", "@{upstream}"], {
       timeoutMs,
     }).catch(() => null),
     runCommandWithTimeout(
@@ -273,6 +273,13 @@ async function checkGitUpdateStatus(params: {
     return { ...base, error: branchRes?.stderr?.trim() || "git unavailable" };
   }
   const branch = branchRes.stdout.trim() || null;
+  const trackingRevision = resolveDevUpstreamRef(branch, params.useDetachedDevUpstream);
+  const upstreamRes = trackingRevision
+    ? await runCommandWithTimeout(
+        ["git", "-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", trackingRevision],
+        { timeoutMs },
+      ).catch(() => null)
+    : null;
 
   const sha = shaRes && shaRes.code === 0 ? shaRes.stdout.trim() : null;
   const commitAtSeconds =
@@ -281,7 +288,21 @@ async function checkGitUpdateStatus(params: {
 
   const tag = tagRes && tagRes.code === 0 ? tagRes.stdout.trim() : null;
 
-  const upstream = upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() : null;
+  const trackingUpstream =
+    upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() || null : null;
+  const receiptUpstream =
+    !trackingUpstream &&
+    branch === "HEAD" &&
+    sha &&
+    params.upstreamFallback?.currentSha.trim().toLowerCase() === sha.toLowerCase()
+      ? params.upstreamFallback.upstreamRef.trim() || null
+      : null;
+  const upstream = trackingUpstream ?? receiptUpstream;
+  const upstreamSource = trackingUpstream
+    ? ("tracking" as const)
+    : receiptUpstream
+      ? ("receipt" as const)
+      : undefined;
 
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
 
@@ -293,13 +314,13 @@ async function checkGitUpdateStatus(params: {
 
   const canCompareUpstream = !params.fetch || fetchOk === true;
 
-  // Freeze the post-fetch upstream for both graph queries. Resolve via @{upstream} rather than
-  // its display name so dashed remotes stay operands on older Git versions. Three-dot rev-list
-  // still counts disconnected or truncated histories, so require a visible common ancestor.
+  // Freeze the post-fetch upstream for both graph queries. Active tracking wins;
+  // a matching successful update receipt keeps intentional detached installs comparable.
+  const upstreamRevision = `${upstreamSource === "tracking" ? trackingRevision : upstream}^{commit}`;
   const upstreamCommitRes =
     canCompareUpstream && upstream && sha
       ? await runCommandWithTimeout(
-          ["git", "-C", root, "rev-parse", "--verify", "@{upstream}^{commit}"],
+          ["git", "-C", root, "rev-parse", "--verify", upstreamRevision],
           { timeoutMs },
         ).catch(() => null)
       : null;
@@ -339,6 +360,7 @@ async function checkGitUpdateStatus(params: {
     tag,
     branch,
     upstream,
+    ...(upstreamSource ? { upstreamSource } : {}),
     upstreamSha: upstreamCommit,
     commitAtMs,
     dirty,
@@ -590,24 +612,32 @@ export async function checkUpdateStatus(params: {
   root: string | null;
   timeoutMs?: number;
   fetchGit?: boolean;
+  useDetachedDevUpstream?: boolean;
+  gitUpstreamFallback?: { currentSha: string; upstreamRef: string };
   includeRegistry?: boolean;
   registryChannel?: UpdateChannel;
+  resolveRegistryChannel?: (
+    status: Pick<UpdateCheckResult, "installKind" | "git">,
+  ) => UpdateChannel;
 }): Promise<UpdateCheckResult> {
   const timeoutMs = params.timeoutMs ?? 6000;
-  const fetchRegistry = () =>
-    params.registryChannel
+  const resolveRegistryChannel = (status: Pick<UpdateCheckResult, "installKind" | "git">) =>
+    params.registryChannel ?? params.resolveRegistryChannel?.(status);
+  const fetchRegistry = (registryChannel: UpdateChannel | undefined) =>
+    registryChannel
       ? fetchNpmRegistryVersionForChannel({
-          channel: params.registryChannel,
+          channel: registryChannel,
           timeoutMs,
         })
       : fetchNpmLatestVersion({ timeoutMs });
   const root = params.root ? path.resolve(params.root) : null;
   if (!root) {
+    const registryChannel = resolveRegistryChannel({ installKind: "unknown" });
     return {
       root: null,
       installKind: "unknown",
       packageManager: "unknown",
-      registry: params.includeRegistry ? await fetchRegistry() : undefined,
+      registry: params.includeRegistry ? await fetchRegistry(registryChannel) : undefined,
     };
   }
 
@@ -626,17 +656,6 @@ export async function checkUpdateStatus(params: {
       ? "npm"
       : detectedPackageManager;
 
-  const registry = params.includeRegistry
-    ? params.registryChannel === "extended-stable" && isGit
-      ? {
-          latestVersion: null,
-          tag: "extended-stable",
-          error: "unsupported_git_channel",
-          reason: "unsupported_git_channel" as const,
-        }
-      : await fetchRegistry()
-    : undefined;
-
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
   const [git, deps] = await Promise.all([
     isGit
@@ -644,10 +663,23 @@ export async function checkUpdateStatus(params: {
           root,
           timeoutMs,
           fetch: Boolean(params.fetchGit),
+          useDetachedDevUpstream: params.useDetachedDevUpstream,
+          upstreamFallback: params.gitUpstreamFallback,
         })
       : Promise.resolve(undefined),
     checkDepsStatus({ root, manager: packageManager }),
   ]);
+  const registryChannel = resolveRegistryChannel({ installKind, git });
+  const registry = params.includeRegistry
+    ? registryChannel === "extended-stable" && isGit
+      ? {
+          latestVersion: null,
+          tag: "extended-stable",
+          error: "unsupported_git_channel",
+          reason: "unsupported_git_channel" as const,
+        }
+      : await fetchRegistry(registryChannel)
+    : undefined;
 
   return {
     root,

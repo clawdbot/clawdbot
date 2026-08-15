@@ -17,16 +17,33 @@ function expectSlackConfigIssue(config: unknown, path: string) {
   }
 }
 
+function expectSlackConfigKeyRejected(config: unknown, key: string) {
+  const res = SlackConfigSchema.safeParse(config);
+  expect(res.success).toBe(false);
+  if (!res.success) {
+    expect(res.error.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "unrecognized_keys",
+          keys: expect.arrayContaining([key]),
+        }),
+      ]),
+    );
+  }
+}
+
 describe("slack config schema", () => {
   it("accepts capability arrays and rejects retired interactive reply objects", () => {
     expectSlackConfigValid({ capabilities: ["presentation"] });
     expectSlackConfigIssue({ capabilities: { interactiveReplies: true } }, "capabilities");
   });
 
-  it("accepts explicit Enterprise Grid org-install mode", () => {
-    expectSlackConfigValid({ enterpriseOrgInstall: true });
-    expectSlackConfigValid({ accounts: { org: { enterpriseOrgInstall: true } } });
-    expectSlackConfigIssue({ enterpriseOrgInstall: "true" }, "enterpriseOrgInstall");
+  it("rejects the retired Enterprise Grid installation setting", () => {
+    expectSlackConfigKeyRejected({ enterpriseOrgInstall: true }, "enterpriseOrgInstall");
+    expectSlackConfigKeyRejected(
+      { accounts: { org: { enterpriseOrgInstall: true } } },
+      "enterpriseOrgInstall",
+    );
   });
 
   it("keeps workspace-scoped mention pattern policies valid for workspace installs", () => {
@@ -140,12 +157,32 @@ describe("slack config schema", () => {
     if (absent.success) {
       expect(absent.data.presenceEvents).toBeUndefined();
     }
-    expectSlackConfigValid({ presenceEvents: { mode: "auto" } });
+    expectSlackConfigValid({ presenceEvents: { mode: "auto", prompt: "Do not greet." } });
     expectSlackConfigValid({
-      accounts: { ops: { presenceEvents: { mode: "on" } } },
-      channels: { C123: { presenceEvents: { mode: "off" } } },
+      accounts: { ops: { presenceEvents: { mode: "on", prompt: "Account guidance" } } },
+      channels: { C123: { presenceEvents: { mode: "off", prompt: "" } } },
     });
     expectSlackConfigIssue({ presenceEvents: { mode: "enabled" } }, "presenceEvents.mode");
+    expectSlackConfigIssue({ presenceEvents: { prompt: false } }, "presenceEvents.prompt");
+  });
+
+  it("caps presence event prompts at the AGENTS.md bootstrap limit", () => {
+    const maxPrompt = "x".repeat(20_000);
+    const oversizedPrompt = `${maxPrompt}x`;
+
+    expectSlackConfigValid({ presenceEvents: { prompt: maxPrompt } });
+    expectSlackConfigIssue(
+      { presenceEvents: { prompt: oversizedPrompt } },
+      "presenceEvents.prompt",
+    );
+    expectSlackConfigIssue(
+      { accounts: { ops: { presenceEvents: { prompt: oversizedPrompt } } } },
+      "accounts.ops.presenceEvents.prompt",
+    );
+    expectSlackConfigIssue(
+      { channels: { C123: { presenceEvents: { prompt: oversizedPrompt } } } },
+      "channels.C123.presenceEvents.prompt",
+    );
   });
 
   it("accepts historyLimit overrides per account", () => {

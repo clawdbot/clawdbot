@@ -1,5 +1,5 @@
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -17,7 +17,7 @@ export type AutoCaptureCursor = {
 };
 
 export function extractUserTextContent(message: unknown): string[] {
-  const msgObj = asRecord(message);
+  const msgObj = asOptionalRecord(message);
   if (!msgObj || msgObj.role !== "user") {
     return [];
   }
@@ -33,7 +33,7 @@ export function extractUserTextContent(message: unknown): string[] {
 
   const texts: string[] = [];
   for (const block of content) {
-    const blockObj = asRecord(block);
+    const blockObj = asOptionalRecord(block);
     if (blockObj?.type === "text" && typeof blockObj.text === "string") {
       texts.push(blockObj.text);
     }
@@ -67,7 +67,7 @@ function normalizeMaxChars(value: number | undefined, fallback: number): number 
 }
 
 export function messageFingerprint(message: unknown): string {
-  const msgObj = asRecord(message);
+  const msgObj = asOptionalRecord(message);
   if (!msgObj) {
     return `${typeof message}:${String(message)}`;
   }

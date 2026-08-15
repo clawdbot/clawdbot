@@ -89,7 +89,7 @@ export function buildEmbeddedRunBaseParams(params: {
     params.isReasoningTagProvider,
   );
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
-  return {
+  const runParams = {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
     cwd: params.run.cwd,
@@ -99,7 +99,11 @@ export function buildEmbeddedRunBaseParams(params: {
     skillsSnapshot: params.run.skillsSnapshot,
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
+    trustedInternalHandoff: params.run.trustedInternalHandoff,
+    scheduledToolPolicy: params.run.scheduledToolPolicy,
+    runtimePluginToolGrant: params.run.runtimePluginToolGrant,
     senderIsOwner: params.run.senderIsOwner,
+    conversationToolPolicy: params.run.conversationToolPolicy,
     channelContext: params.run.channelContext,
     approvalReviewerDeviceId: params.run.approvalReviewerDeviceId,
     enforceFinalTag,
@@ -127,4 +131,5 @@ export function buildEmbeddedRunBaseParams(params: {
     promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
+  return runParams;
 }

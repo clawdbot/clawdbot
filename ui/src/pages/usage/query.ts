@@ -1,6 +1,7 @@
 // Control UI view renders usage query screen content.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty, uniqueStrings } from "../../lib/string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { extractQueryTerms } from "./helpers.ts";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./types.ts";
 

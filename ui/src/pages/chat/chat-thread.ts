@@ -77,7 +77,6 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
     senderIdentityKey(previous.replyToSender) === senderIdentityKey(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
-    previous.turnSucceeded === next.turnSucceeded &&
     previous.messages.length === next.messages.length &&
     previous.messages.every((entry, index) => {
       const candidate = next.messages[index];
@@ -108,6 +107,8 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "notice" &&
         previous.text === next.text &&
+        previous.label === next.label &&
+        previous.startsTurn === next.startsTurn &&
         previous.timestamp === next.timestamp
       );
     case "divider":
@@ -389,7 +390,7 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
 export type AssistantMessageExpansionState =
   | { status: "loading"; revision: number }
   | { status: "error"; revision: number }
-  | { status: "loaded"; expanded: boolean; markdown: string; revision: number };
+  | { status: "loaded"; markdown: string; revision: number };
 
 export function getExpandedAssistantMessages(
   sessionKey: string,

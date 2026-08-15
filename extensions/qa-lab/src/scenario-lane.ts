@@ -1,3 +1,4 @@
+import { normalizeOptionalString as normalizeQaConfigString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
 import {
@@ -13,10 +14,6 @@ export type QaScenarioExecutionCell = {
   executionKind: QaSeedScenario["execution"]["kind"];
   channel: string | null;
 };
-
-function normalizeQaConfigString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function resolveQaScenarioLaneChannels(params: {
   scenario: QaSeedScenario;

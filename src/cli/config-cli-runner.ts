@@ -10,8 +10,10 @@ import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import {
   ConfigSetDryRunValidationError,
@@ -28,7 +30,6 @@ import {
   getAtPath,
   mergeAtPath,
   setAtPath,
-  toDotPath,
   type JsonSchemaRecord,
   type PathSegment,
   unsetAtPath,
@@ -235,10 +236,10 @@ export function configApplyHintForOperations(
     beforeConfig,
     afterConfig,
   );
-  if (
-    paths.length === 0 ||
-    paths.some((path) => path === "plugins.entries" || path.startsWith("plugins.entries."))
-  ) {
+  if (paths.length === 0) {
+    return "No gateway restart needed.";
+  }
+  if (paths.some((path) => path === "plugins.entries" || path.startsWith("plugins.entries."))) {
     return "Restart the gateway to apply.";
   }
   const plan = buildGatewayReloadPlan(paths, { candidateConfig: afterConfig });
@@ -495,13 +496,13 @@ export function handleConfigMutationError(params: {
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
 }) {
+  const message = formatErrorMessage(params.err);
   if (params.options.dryRun && params.options.json) {
     if (params.err instanceof ConfigSetDryRunValidationError) {
       writeRuntimeJson(params.runtime, params.err.result);
       params.runtime.exit(1);
       return;
     }
-    const message = params.err instanceof Error ? params.err.message : String(params.err);
     const result: ConfigSetDryRunResult = {
       ok: false,
       operations: 0,
@@ -513,10 +514,10 @@ export function handleConfigMutationError(params: {
       errors: [{ kind: "schema", message }],
     };
     writeRuntimeJson(params.runtime, result);
-    params.runtime.error(danger(String(params.err)));
+    params.runtime.error(danger(message));
     params.runtime.exit(1);
     return;
   }
-  params.runtime.error(danger(String(params.err)));
+  params.runtime.error(danger(message));
   params.runtime.exit(1);
 }

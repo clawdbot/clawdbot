@@ -1,7 +1,7 @@
 // Public facade for Control UI grouped chat message rendering.
 import "../../../components/tooltip.ts";
 
-export { getAssistantAttachmentAvailabilityRenderVersion } from "./chat-message-attachments.ts";
+export { getChatMediaRenderVersion } from "./chat-message-media.ts";
 export {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,

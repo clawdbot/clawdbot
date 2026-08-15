@@ -13,7 +13,7 @@ import {
 } from "../../../components/confirm-dialog.ts";
 import { renderSettingsDefaultState } from "../../../components/settings-ui.ts";
 import { t } from "../../../i18n/index.ts";
-import { currentConfigObject } from "../../../lib/config/index.ts";
+import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";

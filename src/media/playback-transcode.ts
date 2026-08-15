@@ -135,7 +135,7 @@ const PLAYBACK_TRANSCODE_MAX_INPUT_PIXELS = 4096 * 4096;
 const PLAYBACK_TRANSCODE_THREADS = 2;
 const PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS = 60_000;
 const MAX_PLAYBACK_ENTRIES = { failures: 32, inspections: 32, inspectionJobs: 2 } as const;
-const playbackJobs = new Map<string, true>();
+const playbackJobs = new Map<string, Promise<void>>();
 const playbackFailures = new Map<string, number>();
 const playbackInspections = new Map<string, PlaybackInspection>();
 const playbackInspectionJobs = new Map<string, Promise<PlaybackInspection>>();
@@ -203,6 +203,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     PLAYBACK_TRANSCODE_POLICY,
     readPlaybackSourceBounded,
     resolvePlaybackMode,
+    getPlaybackTranscodeJobs: (): Promise<void>[] => [...playbackJobs.values()],
   };
 }
 
@@ -667,8 +668,7 @@ export async function resolvePlaybackTranscode(
     return { kind: "preparing" };
   }
 
-  playbackJobs.set(operationKey, true);
-  void transcodePlaybackSource({
+  const job = transcodePlaybackSource({
     ...(inspection.audioStreamIndex !== undefined
       ? { audioStreamIndex: inspection.audioStreamIndex }
       : {}),
@@ -681,7 +681,10 @@ export async function resolvePlaybackTranscode(
     ...(inspection.videoStreamIndex !== undefined
       ? { videoStreamIndex: inspection.videoStreamIndex }
       : {}),
-  }).then(
+  });
+  // Pool admission and test synchronization must observe the same completion boundary.
+  playbackJobs.set(operationKey, job);
+  void job.then(
     () => {
       playbackJobs.delete(operationKey);
       playbackFailures.delete(operationKey);

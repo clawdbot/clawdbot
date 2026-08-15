@@ -117,7 +117,9 @@ function readTranscriptEventsForImport(
     id: sessionId,
     type: "session",
     version: plan.sourceVersion,
-  } as unknown as FileEntry;
+    timestamp: "",
+    cwd: "",
+  } satisfies FileEntry;
   // V1 compactions refer to original row indexes. Stable index-derived IDs let
   // the second pass resolve those links without retaining the transcript.
   const idPrefix = createHash("sha256")
@@ -144,14 +146,15 @@ function readTranscriptEventsForImport(
         let event = loadedEvent;
         let recognizedEvent: FileEntry | undefined;
         if (originalIndex === plan.headerIndex) {
-          const legacyHeader = event as unknown as Record<string, unknown>;
-          const canonicalHeader: Record<string, unknown> = {
-            ...legacyHeader,
+          const canonicalHeader = {
+            ...event,
             id: sessionId,
-            type: "session",
+            type: "session" as const,
+            timestamp: typeof event.timestamp === "string" ? event.timestamp : "",
+            cwd: "cwd" in event && typeof event.cwd === "string" ? event.cwd : "",
           };
-          delete canonicalHeader.sessionId;
-          event = canonicalHeader as unknown as FileEntry;
+          Reflect.deleteProperty(canonicalHeader, "sessionId");
+          event = canonicalHeader;
           recognizedEvent = event;
         } else {
           // Reuse the runtime partition contract one row at a time. The
@@ -482,7 +485,14 @@ function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
   try {
     const parsed = JSON.parse(entryJson) as unknown;
     return isRecord(parsed) && typeof parsed.sessionId === "string"
-      ? (parsed as unknown as SessionEntry)
+      ? {
+          ...parsed,
+          sessionId: parsed.sessionId,
+          updatedAt:
+            typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt)
+              ? parsed.updatedAt
+              : 0,
+        }
       : undefined;
   } catch {
     return undefined;

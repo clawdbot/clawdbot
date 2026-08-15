@@ -38,12 +38,14 @@ import {
 import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
 import * as clientVoiceSession from "../talk/client-voice-session.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
+import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
   finalizeToolTerminalPresentation,
   isToolWrappedWithBeforeToolCallHook,
+  rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import {
@@ -647,6 +649,37 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       undefined,
     );
     expect(order).toEqual(["commit", "body", "gap"]);
+  });
+
+  it("rechecks a private source guard after asynchronous before-tool policy", async () => {
+    let releaseHook: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => {
+        await held;
+      },
+    });
+    let authorityActive = true;
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const guarded = bindAgentToolSourceExecutionGuard(
+      asAgentTool({ name: "read", execute }),
+      () => {
+        if (!authorityActive) {
+          throw new Error("delegated authority closed");
+        }
+      },
+    );
+    const source = rewrapToolWithBeforeToolCallHook(guarded);
+
+    const pending = expectDefined(source.execute, "guarded source execute")("call-guard", {});
+    await vi.waitFor(() => expect(beforeToolCallHook).toHaveBeenCalledOnce());
+    authorityActive = false;
+    releaseHook?.();
+
+    await expect(pending).rejects.toThrow("delegated authority closed");
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("does not consume a voice grant when private execution is disposed", async () => {

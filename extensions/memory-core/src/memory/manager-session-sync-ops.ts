@@ -11,7 +11,7 @@ import {
   sessionPathForSessionIdentity,
   statSessionEntrySync,
   type SessionTranscriptCorpusEntry,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isFileMissingError,
   runWithConcurrency,
@@ -21,7 +21,7 @@ import {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
-  resolveMemorySessionStartupDirtyFiles,
+  resolveMemorySessionStartupState,
   type MemorySessionStartupFileState,
 } from "./manager-session-sync-state.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
@@ -128,7 +128,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       return [];
     }
     const corpusEntries = await this.listSessionCorpusEntries();
-    if (corpusEntries.length === 0 || this.closed) {
+    if (this.closed) {
       return [];
     }
     const existingRows = loadMemorySourceFileState({
@@ -168,20 +168,29 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         this.getIndexConcurrency(),
       )
     ).filter((file): file is MemorySessionStartupFileState => file !== null);
-    const dirtyFiles = resolveMemorySessionStartupDirtyFiles({ files: fileStates, existingRows });
-    if (dirtyFiles.length === 0 || this.closed) {
+    const { dirtyFiles, hasStaleIndexedPaths } = resolveMemorySessionStartupState({
+      files: fileStates,
+      existingRows,
+    });
+    if (this.closed) {
       return dirtyFiles;
+    }
+    if (hasStaleIndexedPaths) {
+      this.sessionsDirty = true;
+      this.sessionsReconcileDirty = true;
     }
     for (const file of dirtyFiles) {
       this.sessionsDirtyFiles.add(file);
     }
-    this.sessionsDirty = true;
+    if (dirtyFiles.length > 0) {
+      this.sessionsDirty = true;
+    }
     return dirtyFiles;
   }
 
   protected async runSessionStartupCatchup(): Promise<string[]> {
     const dirtyFiles = await this.markSessionStartupCatchupDirtyFiles();
-    if ((dirtyFiles.length === 0 && !this.sessionsFullRetryDirty) || this.closed) {
+    if (!this.sessionsDirty || this.closed) {
       return dirtyFiles;
     }
     void this.sync({ reason: "session-startup-catchup" }).catch((err: unknown) => {
@@ -221,7 +230,13 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
     if (pending.length > 0) {
       this.sessionsDirty = true;
-      void this.sync({ reason: "session-delta" }).catch((err: unknown) => {
+      // Keep both identity and file keys so every transcript backend enters the
+      // targeted queue instead of letting an active sync clear this newer event.
+      void this.sync({
+        reason: "session-delta",
+        sessions: pendingTargets,
+        archiveFiles: pending,
+      }).catch((err: unknown) => {
         log.warn(`memory sync failed (session update): ${String(err)}`);
       });
     }
@@ -335,7 +350,6 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       hasSessionSource: this.sources.has("sessions"),
       sessionsDirty: this.sessionsDirty,
       sessionsFullRetryDirty: this.sessionsFullRetryDirty,
-      dirtySessionFileCount: this.sessionsDirtyFiles.size,
       sync: params,
       needsFullReindex,
     });

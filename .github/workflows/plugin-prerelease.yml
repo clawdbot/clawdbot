@@ -67,14 +67,27 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Setup manifest TypeScript runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.x"
+
+      - name: Setup manifest pnpm
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: "24.x"
+
+      - name: Install manifest dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Build plugin prerelease manifest
         id: manifest
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
         run: |
-          node --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
+          node --import tsx --input-type=module <<'EOF'
+          import { appendFileSync, existsSync } from "node:fs";
           import { execFileSync } from "node:child_process";
 
           const createMatrix = (include) => ({ include });
@@ -95,9 +108,19 @@ jobs:
           let extensionShards = [];
           let nodeShards = [];
 
+          const targetPlanPaths = {
+            "plugin-prerelease-test-plan": "./scripts/lib/plugin-prerelease-test-plan.mts",
+            "extension-test-plan": "./scripts/lib/extension-test-plan.mts",
+            "ci-node-test-plan": "./scripts/lib/ci-node-test-plan.mts",
+          };
+          const targetPlanPath = (name) => {
+            const mtsPath = targetPlanPaths[name];
+            return existsSync(mtsPath) ? mtsPath : mtsPath.replace(/\.mts$/u, ".mjs");
+          };
+
           try {
             const { assertPluginPrereleaseTestPlanComplete } = await import(
-              "./scripts/lib/plugin-prerelease-test-plan.mjs"
+              targetPlanPath("plugin-prerelease-test-plan")
             );
             pluginPrereleasePlan = assertPluginPrereleaseTestPlanComplete();
           } catch (error) {
@@ -107,7 +130,8 @@ jobs:
               error && typeof error === "object" && "url" in error ? String(error.url) : "";
             if (
               errorCode === "ERR_MODULE_NOT_FOUND" &&
-              moduleUrl.endsWith("/scripts/lib/plugin-prerelease-test-plan.mjs")
+              (moduleUrl.endsWith("/scripts/lib/plugin-prerelease-test-plan.mjs") ||
+                moduleUrl.endsWith("/scripts/lib/plugin-prerelease-test-plan.mts"))
             ) {
               console.warn(
                 "Plugin prerelease plan unavailable in target ref; skipping static and Docker plugin prerelease lanes.",
@@ -119,7 +143,7 @@ jobs:
 
           try {
             const { createExtensionTestShards, DEFAULT_EXTENSION_TEST_SHARD_COUNT } = await import(
-              "./scripts/lib/extension-test-plan.mjs"
+              targetPlanPath("extension-test-plan")
             );
             extensionShards = createExtensionTestShards({
               shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
@@ -146,7 +170,8 @@ jobs:
               error && typeof error === "object" && "url" in error ? String(error.url) : "";
             if (
               errorCode === "ERR_MODULE_NOT_FOUND" &&
-              moduleUrl.endsWith("/scripts/lib/extension-test-plan.mjs")
+              (moduleUrl.endsWith("/scripts/lib/extension-test-plan.mjs") ||
+                moduleUrl.endsWith("/scripts/lib/extension-test-plan.mts"))
             ) {
               console.warn(
                 "Extension test plan unavailable in target ref; skipping extension prerelease shards.",
@@ -157,7 +182,7 @@ jobs:
           }
 
           try {
-            const { createNodeTestShards } = await import("./scripts/lib/ci-node-test-plan.mjs");
+            const { createNodeTestShards } = await import(targetPlanPath("ci-node-test-plan"));
             nodeShards = createNodeTestShards({
               includeReleaseOnlyPluginShards: true,
             })
@@ -178,7 +203,8 @@ jobs:
               error && typeof error === "object" && "url" in error ? String(error.url) : "";
             if (
               errorCode === "ERR_MODULE_NOT_FOUND" &&
-              moduleUrl.endsWith("/scripts/lib/ci-node-test-plan.mjs")
+              (moduleUrl.endsWith("/scripts/lib/ci-node-test-plan.mjs") ||
+                moduleUrl.endsWith("/scripts/lib/ci-node-test-plan.mts"))
             ) {
               console.warn(
                 "Node test plan unavailable in target ref; skipping release-only plugin Node shard.",
@@ -320,14 +346,10 @@ jobs:
             childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
           }
 
-          const result = spawnSync(
-            "pnpm",
-            ["exec", "node", "scripts/test-projects.mjs", ...configs],
-            {
-              env: childEnv,
-              stdio: "inherit",
-            },
-          );
+          const result = spawnSync("pnpm", ["test", "--", ...configs], {
+            env: childEnv,
+            stdio: "inherit",
+          });
           process.exit(result.status ?? 1);
           EOF
 

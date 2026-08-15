@@ -55,8 +55,9 @@ export function registerBrowserAgentActHookRoutes(
           return;
         }
         const resolvedPaths = resolvedResult.paths;
+        const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
 
-        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+        if (capabilities.usesChromeMcp) {
           if (element) {
             return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.uploadElement);
           }
@@ -84,12 +85,14 @@ export function registerBrowserAgentActHookRoutes(
           return;
         }
 
+        const browserFilesystemLocal = capabilities.browserFilesystemLocal;
         if (inputRef || element) {
           if (ref) {
             return jsonError(res, 400, "ref cannot be combined with inputRef/element");
           }
           await pw.setInputFilesViaPlaywright({
             cdpUrl,
+            browserFilesystemLocal,
             targetId: tab.targetId,
             inputRef,
             element,
@@ -99,6 +102,7 @@ export function registerBrowserAgentActHookRoutes(
         } else if (ref) {
           await pw.uploadViaPlaywright({
             cdpUrl,
+            browserFilesystemLocal,
             targetId: tab.targetId,
             paths: resolvedPaths,
             timeoutMs: timeoutMs ?? undefined,
@@ -109,9 +113,11 @@ export function registerBrowserAgentActHookRoutes(
         } else {
           await pw.armFileUploadViaPlaywright({
             cdpUrl,
+            browserFilesystemLocal,
             targetId: tab.targetId,
             paths: resolvedPaths,
             timeoutMs: timeoutMs ?? undefined,
+            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           });
         }
         res.json({ ok: true });

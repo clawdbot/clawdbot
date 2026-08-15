@@ -223,6 +223,26 @@ describe("SQLite backup commands", () => {
     ).rejects.toThrow("Choose exactly one SQLite snapshot source");
   });
 
+  it("does not claim completion when a corrupt database also rejects outcome recording", async () => {
+    const tempDir = tempDirs.make("openclaw-backup-sqlite-corrupt-");
+    const stateDir = path.join(tempDir, "state");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const databasePath = resolveOpenClawStateSqlitePath();
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.writeFile(databasePath, Buffer.alloc(32));
+    const runtime = createRuntimeCapture();
+
+    await expect(
+      backupSqliteCreateCommand(runtime, { global: true, repository: repositoryPath }),
+    ).rejects.toThrow(/cannot be snapshotted safely/u);
+
+    expect(runtime.errors).toEqual([
+      "Warning: the backup outcome could not be recorded: file is not a database",
+    ]);
+    await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+  });
+
   it("requires repository, snapshot, and restore target paths", async () => {
     const runtime = createRuntimeCapture();
 

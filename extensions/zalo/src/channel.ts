@@ -235,6 +235,10 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       messaging: {
         targetPrefixes: ["zalo", "zl"],
         normalizeTarget: normalizeZaloMessagingTarget,
+        inferTargetChatType: ({ to }) => {
+          const target = normalizeZaloMessagingTarget(to);
+          return target ? (/^group:/i.test(target) ? "group" : "direct") : undefined;
+        },
         resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeZaloChatId,

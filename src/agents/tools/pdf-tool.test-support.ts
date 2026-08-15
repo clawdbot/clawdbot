@@ -110,7 +110,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
       wrote: false,
     });
 
-    vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
+    vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({ apiKey: "test-key" } as never);
     vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
 
     return { loadSpy, release, setRuntimeApiKey };

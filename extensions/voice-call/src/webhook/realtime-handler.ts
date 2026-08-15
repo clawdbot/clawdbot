@@ -977,17 +977,17 @@ export class RealtimeCallHandler {
           });
           return;
         }
-        if (event.type === "response.done") {
-          harness.finishOutputAudio("response.done");
-          harness.endTurn("response.done");
-          return;
-        }
         if (event.type === "error") {
           harness.emit({
             type: "session.error",
             payload: { message: event.detail ?? "Realtime provider error" },
             final: true,
           });
+        }
+      },
+      onResponseDone: (outcome) => {
+        if (outcome.status === "failed" || outcome.status === "incomplete") {
+          console.warn(`[voice-call] realtime response ${outcome.status}: ${outcome.message}`);
         }
       },
       onReady: () => {

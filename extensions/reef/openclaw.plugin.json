@@ -1,8 +1,7 @@
 {
   "id": "reef",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true,
+    "configRepair": true,
     "stateMigrations": true
   },
   "name": "Reef",

@@ -7,29 +7,30 @@ type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" |
 const MIRROR_ORIGIN_META_KEY = "mirrorOrigin" as const;
 const MIRROR_SOURCE_FINGERPRINT_META_KEY = "mirrorSourceFingerprint" as const;
 const CODEX_APP_SERVER_MIRROR_ORIGIN = "codex-app-server" as const;
+const CODEX_META_KEY = "__openclaw";
 
 export function attachCodexMirrorAttestation(
   message: AgentMessage,
   sourceFingerprint?: string,
 ): AgentMessage {
-  const record = message as unknown as Record<string, unknown>;
-  const existing = record["__openclaw"];
+  const existing = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
   const baseMeta =
     existing && typeof existing === "object" && !Array.isArray(existing)
       ? (existing as Record<string, unknown>)
       : {};
-  return {
-    ...record,
-    __openclaw: {
+  const attested: AgentMessage & { [CODEX_META_KEY]: Record<string, unknown> } = {
+    ...message,
+    [CODEX_META_KEY]: {
       ...baseMeta,
       [MIRROR_ORIGIN_META_KEY]: CODEX_APP_SERVER_MIRROR_ORIGIN,
       ...(sourceFingerprint ? { [MIRROR_SOURCE_FINGERPRINT_META_KEY]: sourceFingerprint } : {}),
     },
-  } as unknown as AgentMessage;
+  };
+  return attested;
 }
 
 export function readCodexMirrorSourceFingerprint(message: AgentMessage): string | undefined {
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+  const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
     return undefined;
   }
@@ -38,16 +39,16 @@ export function readCodexMirrorSourceFingerprint(message: AgentMessage): string 
 }
 
 export function serializeCodexMirrorSourceEvidence(message: AgentMessage): string {
-  const record = message as unknown as Record<string, unknown>;
+  const content = "content" in message ? message.content : undefined;
   return JSON.stringify({
     role: message.role,
-    content: record.content,
+    content,
     ...(message.role === "user" ? { upstreamUserText: readUpstreamUserText(message) } : {}),
     ...(message.role === "toolResult"
       ? {
-          toolCallId: record.toolCallId,
-          toolName: record.toolName,
-          isError: record.isError === true,
+          toolCallId: message.toolCallId,
+          toolName: message.toolName,
+          isError: message.isError,
         }
       : {}),
   });

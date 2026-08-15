@@ -3,7 +3,7 @@ summary: "Choose and configure Google Meet, Microsoft Teams, or Zoom meeting par
 read_when:
   - You want an OpenClaw agent to join a video meeting
   - You are choosing between the Google Meet, Microsoft Teams meetings, and Zoom meetings plugins
-  - You need the shared Chrome, BlackHole, SoX, or meeting-mode setup
+  - You need the shared Chrome, virtual-audio, or meeting-mode setup
 title: "Meeting plugins"
 ---
 
@@ -25,11 +25,11 @@ Choose Google Meet when you need meeting creation, Google API artifacts, or a Tw
 
 The three plugins share the same modes:
 
-| Mode         | Behavior                                                                                              | Audio requirements                                      |
-| ------------ | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `agent`      | Realtime transcription goes to the configured OpenClaw agent; regular OpenClaw TTS speaks the reply.  | Chrome talk-back requires the BlackHole and SoX bridge. |
-| `bidi`       | A realtime voice model listens and replies directly.                                                  | Chrome talk-back requires the BlackHole and SoX bridge. |
-| `transcribe` | Joins observe-only and exposes a bounded live-caption transcript when the platform provides captions. | No BlackHole or SoX talk-back bridge.                   |
+| Mode         | Behavior                                                                                              | Audio requirements                                           |
+| ------------ | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `agent`      | Realtime transcription goes to the configured OpenClaw agent; regular OpenClaw TTS speaks the reply.  | Chrome talk-back requires a supported virtual-audio backend. |
+| `bidi`       | A realtime voice model listens and replies directly.                                                  | Chrome talk-back requires a supported virtual-audio backend. |
+| `transcribe` | Joins observe-only and exposes a bounded live-caption transcript when the platform provides captions. | No virtual-audio bridge.                                     |
 
 Use `transcribe` when the agent only needs meeting text. Use `agent` for normal OpenClaw reasoning and tools. Use `bidi` when low-latency direct voice is more important than routing each turn through the regular agent.
 
@@ -55,7 +55,7 @@ Chrome can run on the Gateway host or on a paired node. A remote Chrome node mus
 | Microsoft Teams | `teamsmeetings.chrome` |
 | Zoom            | `zoommeetings.chrome`  |
 
-For `agent` or `bidi` mode through Chrome, run Chrome on macOS and install the shared audio dependencies on that same host:
+For `agent` or `bidi` mode through Chrome, install the native audio dependencies on the host that runs Chrome. On macOS:
 
 ```bash
 brew install blackhole-2ch sox
@@ -63,6 +63,18 @@ sudo reboot
 system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
+
+On a Linux desktop with PipeWire-Pulse, install the PulseAudio command-line tools. OpenClaw creates and reuses an `OpenClaw Meeting Audio` null sink and matching source in the desktop user's audio session:
+
+```bash
+# Debian/Ubuntu
+sudo apt install pipewire-audio pulseaudio-utils
+systemctl --user --now enable pipewire pipewire-pulse wireplumber
+pactl info
+command -v pactl pacat parec
+```
+
+Run the Gateway or paired node as the same desktop user that runs Chrome. A root service or headless service without that user's `XDG_RUNTIME_DIR` cannot access the PipeWire-Pulse socket and fails setup with an actionable error.
 
 The Gateway host still owns the OpenClaw agent and model credentials when Chrome runs on a paired node. Configure a realtime transcription provider and OpenClaw TTS for `agent` mode, or a realtime voice provider for `bidi` mode. The platform guides contain the provider and audio-command options.
 
@@ -97,7 +109,7 @@ Restart the Gateway if your plugin-management path does not restart it automatic
 
 Treat any failed setup check as a blocker for that transport and mode. For an observe-only smoke test, select `transcribe` mode and confirm that status reports an in-call session before expecting caption text.
 
-For talk-back smoke tests, verified speech requires more than bytes accepted by the playback command. The shared command-pair bridge correlates a bounded waveform fingerprint from the current output generation with audio returning on the BlackHole microphone capture path; Google Meet, Teams, and Zoom do not report `speechOutputVerified: true` when only the output-byte counter advances or unrelated participant audio is present.
+For talk-back smoke tests, verified speech requires more than bytes accepted by the playback command. The shared command-pair bridge correlates a bounded waveform fingerprint from the current output generation with audio returning on the selected virtual microphone capture path; Google Meet, Teams, and Zoom do not report `speechOutputVerified: true` when only the output-byte counter advances or unrelated participant audio is present.
 
 ## Handle platform policy prompts
 

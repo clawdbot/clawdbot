@@ -203,7 +203,12 @@ These survive reboots and benefit from SSD over SD card for both performance and
 
 ```bash
 openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
+
+Restore verifies and extracts into a fresh staging directory; activation is a
+separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
 
 ## Troubleshooting
 

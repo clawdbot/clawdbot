@@ -9,7 +9,7 @@ import {
   pollUntilDeadline,
   sanitizeCheckName,
   selectRunAfter,
-} from "../../scripts/watch-pr-ci.mjs";
+} from "../../scripts/watch-pr-ci.mts";
 
 const sha = "a".repeat(40);
 

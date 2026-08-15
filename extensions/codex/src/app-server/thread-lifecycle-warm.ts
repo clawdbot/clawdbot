@@ -43,7 +43,7 @@ type CodexWarmThreadReuseParams = {
   nativeSkillIsolation?: Parameters<typeof applyCodexNativeSkillIsolation>[1];
   releaseConsumedThread: (threadId: string, cause?: unknown) => Promise<void>;
   ringZeroActive: boolean;
-  ringZeroInheritedMcpServerNames: string[];
+  restrictedToolSurfaceInheritedMcpServerNames: string[];
   startModelProvider?: string;
   startModelSelection: ReturnType<typeof resolveCodexAppServerThreadModelSelection>;
   throwIfAborted: () => void;
@@ -127,7 +127,7 @@ export async function tryReuseCodexLiveThread(
     nativeSkillIsolation,
     releaseConsumedThread,
     ringZeroActive,
-    ringZeroInheritedMcpServerNames,
+    restrictedToolSurfaceInheritedMcpServerNames,
     startModelProvider,
     startModelSelection,
     throwIfAborted,
@@ -181,7 +181,7 @@ export async function tryReuseCodexLiveThread(
       nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
       webSearchAllowed: params.webSearchAllowed,
       hostSystemAgentActive,
-      ringZeroInheritedMcpServerNames,
+      restrictedToolSurfaceInheritedMcpServerNames,
     }),
   );
   const liveThreadConfigFingerprint = fingerprintCodexThreadConfig(

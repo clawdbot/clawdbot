@@ -1,6 +1,10 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
+import {
+  buildAgentHarnessQuestionPromptPayload,
+  deliverAgentHarnessUserInputPrompt,
+} from "../../agents/harness/user-input-bridge.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
@@ -161,6 +165,54 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     }
     expect(onBlockReplyQueued).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "gateway-backed choice",
+      deliver: async (onBlockReply: NonNullable<GetReplyOptions["onBlockReply"]>) => {
+        await onBlockReply(
+          buildAgentHarnessQuestionPromptPayload({
+            questionId: "question-owned-by-harness",
+            questions: [
+              {
+                id: "color",
+                header: "Color",
+                question: "Choose a color",
+                options: [{ label: "Red" }, { label: "Blue" }],
+              },
+            ],
+          }),
+        );
+      },
+    },
+    {
+      name: "plain secret",
+      deliver: async (onBlockReply: NonNullable<GetReplyOptions["onBlockReply"]>) => {
+        await deliverAgentHarnessUserInputPrompt({ onBlockReply }, [
+          { id: "token", header: "Token", question: "Enter your token", isSecret: true },
+        ]);
+      },
+    },
+  ])("delivers $name harness questions in direct message-tool-only turns", async ({ deliver }) => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy: "allow" };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await deliver(requireBlockReplyHandler(opts?.onBlockReply));
+      return [];
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct", SessionKey: "test:harness-question" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(1);
   });
 
   it("keeps hook-cancelled marked blocks out of delivery and queued callbacks", async () => {
@@ -827,6 +879,49 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       text: "private final reply",
     },
   ] satisfies HarnessDeliveryCase[])("$name", runHarnessDeliveryCase);
+
+  it("records a rejected source delivery after a runtime-derived fallback", async () => {
+    setNoAbort();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      deliveryDefaults: { visibleReplies: "message_tool" },
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
+    sessionStoreMocks.currentEntry = { ...codexEntry };
+    const deliveryError = new Error("source transport rejected final");
+    const deliver = vi.fn(async () => {
+      throw deliveryError;
+    });
+    const onError = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver, onError });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const internalOpts = opts as
+        | (GetReplyOptions & {
+            onSourceReplyDeliveryModeResolved?: (mode: "automatic") => void;
+          })
+        | undefined;
+      internalOpts?.onSourceReplyDeliveryModeResolved?.("automatic");
+      return { text: "Rejected fallback final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toMatchObject({ queuedFinal: true });
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Rejected fallback final" }),
+      expect.objectContaining({ kind: "final" }),
+    );
+    expect(onError).toHaveBeenCalledWith(deliveryError, expect.objectContaining({ kind: "final" }));
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+    expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+  });
 
   it("honors parent model overrides before Codex direct source delivery defaults", async () => {
     setNoAbort();

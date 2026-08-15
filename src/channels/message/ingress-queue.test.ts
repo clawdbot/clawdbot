@@ -44,6 +44,10 @@ async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T
   }
 }
 
+function openIngressStateDatabase(stateDir: string) {
+  return openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+}
+
 describe("channel ingress queue", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
@@ -115,31 +119,65 @@ describe("channel ingress queue", () => {
   it("keeps channel and account queue identities unambiguous", async () => {
     await withTempState(async (stateDir) => {
       const first = createChannelIngressQueue<{ text: string }>({
-        channelId: "a",
-        accountId: "b:c",
+        channelId: "discord",
+        accountId: "account-a",
         stateDir,
       });
       const second = createChannelIngressQueue<{ text: string }>({
-        channelId: "a:b",
-        accountId: "c",
+        channelId: "discord",
+        accountId: "account-b",
         stateDir,
       });
 
-      expect(await first.enqueue("same-id", { text: "first" })).toMatchObject({
+      expect(
+        await first.enqueue("same-id", { text: "first" }, { laneKey: "channel:same-lane" }),
+      ).toMatchObject({
         kind: "accepted",
       });
-      expect(await second.enqueue("same-id", { text: "second" })).toMatchObject({
+      expect(
+        await second.enqueue("same-id", { text: "second" }, { laneKey: "channel:same-lane" }),
+      ).toMatchObject({
         kind: "accepted",
       });
 
-      await first.complete("same-id");
+      const firstClaim = await first.claim("same-id", { ownerId: "first-worker" });
+      expect(firstClaim).not.toBeNull();
+      if (!firstClaim) {
+        return;
+      }
+      await first.fail(firstClaim, { reason: "poison", failedAt: 20 });
 
       expect(await first.enqueue("same-id", { text: "first duplicate" })).toMatchObject({
-        kind: "completed",
+        kind: "failed",
       });
       expect(await second.enqueue("same-id", { text: "second duplicate" })).toMatchObject({
         kind: "pending",
         record: { payload: { text: "second" } },
+      });
+
+      if (!first.resubmit) {
+        return;
+      }
+      await expect(first.resubmit("same-id", { resubmittedAt: 30 })).resolves.toMatchObject({
+        kind: "resubmitted",
+        record: { attempts: 0, laneKey: "channel:same-lane", payload: { text: "first" } },
+      });
+      const resubmittedClaim = await first.claim("same-id", { ownerId: "replacement" });
+      const secondClaim = await second.claim("same-id", { ownerId: "second-worker" });
+      expect(resubmittedClaim).not.toBeNull();
+      expect(secondClaim).not.toBeNull();
+      if (!resubmittedClaim || !secondClaim) {
+        return;
+      }
+      await first.fail(resubmittedClaim, { reason: "poison-again", failedAt: 40 });
+      await second.complete(secondClaim, { completedAt: 40 });
+
+      expect(await first.prune({ failedTtlMs: 1, now: 42 })).toBe(1);
+      expect(await first.enqueue("same-id", { text: "fresh after prune" })).toMatchObject({
+        kind: "accepted",
+      });
+      expect(await second.enqueue("same-id", { text: "completed duplicate" })).toMatchObject({
+        kind: "completed",
       });
     });
   });
@@ -554,9 +592,7 @@ describe("channel ingress queue", () => {
       await queue.release("retry", { lastError: "stale retry text", releasedAt: 26 });
       await queue.complete("retry", { completedAt: 27 });
 
-      const database = openOpenClawStateDatabase({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      const database = openIngressStateDatabase(stateDir);
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db);
       const rows = executeSqliteQuerySync(
         database.db,
@@ -612,9 +648,7 @@ describe("channel ingress queue", () => {
         completed_at: number;
       }>,
     ) {
-      const { db } = openOpenClawStateDatabase({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      const { db } = openIngressStateDatabase(stateDir);
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(db);
       const claimValue = overrides.claim_token ?? null;
       executeSqliteQuerySync(
@@ -740,9 +774,7 @@ describe("channel ingress queue", () => {
         await queue.complete("comp-1", { metadata: { handler: "worker" }, completedAt: 150 });
 
         // Corrupt the completed_metadata_json
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         db.prepare(
           `UPDATE channel_ingress_events
              SET completed_metadata_json = ?
@@ -769,9 +801,7 @@ describe("channel ingress queue", () => {
         });
         // Override the bad row's received_at to be earlier.
         {
-          const { db } = openOpenClawStateDatabase({
-            env: { OPENCLAW_STATE_DIR: stateDir },
-          });
+          const { db } = openIngressStateDatabase(stateDir);
           db.prepare(
             `UPDATE channel_ingress_events SET received_at = ? WHERE queue_name = ? AND event_id = ?`,
           ).run(earlyTime, '["test","account"]', "bad-claim");
@@ -782,7 +812,7 @@ describe("channel ingress queue", () => {
         expect(claimed).not.toBeNull();
         expect(claimed!.id).toBe("good-1");
 
-        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        const database = openIngressStateDatabase(stateDir);
         const failed = executeSqliteQueryTakeFirstSync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -826,7 +856,7 @@ describe("channel ingress queue", () => {
 
         await expect(queue.claimNext({ scanLimit: 200 })).resolves.toBeNull();
 
-        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        const database = openIngressStateDatabase(stateDir);
         const counts = executeSqliteQuerySync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -860,7 +890,7 @@ describe("channel ingress queue", () => {
         expect(goodClaim).not.toBeNull();
         expect(goodClaim!.payload.text).toBe("hello");
 
-        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        const database = openIngressStateDatabase(stateDir);
         const failed = executeSqliteQueryTakeFirstSync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -901,9 +931,7 @@ describe("channel ingress queue", () => {
         }
 
         // Verify the corrupt row was actually tombstoned in the DB.
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQuerySync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
@@ -935,9 +963,7 @@ describe("channel ingress queue", () => {
           "Corrupt payload_json in claimed channel ingress event",
         );
 
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQueryTakeFirstSync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
@@ -975,9 +1001,7 @@ describe("channel ingress queue", () => {
         expect(recovered).toBe(1);
 
         // The corrupt claimed row should now be tombstoned as failed.
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQuerySync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
@@ -1030,9 +1054,7 @@ describe("channel ingress queue", () => {
           },
         });
 
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQueryTakeFirstSync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)

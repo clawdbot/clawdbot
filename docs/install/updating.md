@@ -46,7 +46,8 @@ or inconsistent registry data fails closed; it never falls back to `latest`.
 If the selected version is older than the installed version, the normal
 downgrade confirmation still applies. The CLI persists the channel after a
 successful core update; a direct `npm install -g openclaw@extended-stable`
-does not update `update.channel`.
+does not update `update.channel`, but a final extended-stable package version
+still checks only the verified `extended-stable` selector for update availability.
 After the core swap, eligible official npm plugins with bare/default or
 `latest` intent converge to that exact core version. Exact pins and explicit
 non-`latest` tags, third-party plugins, and non-npm sources remain unchanged.
@@ -281,8 +282,12 @@ install time until their next verified successful update.
 ### Update campaigns
 
 When an automatic update is due, the campaign waits for active work to finish,
-then starts a one-minute countdown. A 15-minute hard deadline starts the update
-even if work remains, using the normal restart drain and session-recovery path.
+then starts a one-minute countdown. Once that countdown starts, new work does
+not reset it or return the campaign to waiting. A 15-minute hard deadline starts
+the update even if work remains, using the normal restart drain and
+session-recovery path. Open terminal sessions do not defer the countdown or
+apply. The Gateway restart ends these process-local PTYs, and terminal sessions
+are not recovered afterward.
 
 An admin can use **Hold 1 h** once to postpone the campaign and shift its hard
 deadline, or choose **Update now** from the sidebar update card or
@@ -317,6 +322,13 @@ manager in-process.
 The Control UI sidebar update card shows **Update Gateway** when it will start
 this `update.run` flow directly. This covers browser-hosted Control UI, remote
 Gateways, and manually managed local Gateways.
+
+Manual updates started from the Control UI always ask first. The first click on
+the sidebar update card or on **Settings → Updates → Update now** opens a
+confirmation naming the target, the installed and available versions when known,
+and the restart impact; it sends nothing until you choose **Update and restart**.
+Cancel, Escape, and dismissing the dialog leave the Gateway untouched. Automatic
+campaigns, the CLI, and `update.run` API clients are unaffected.
 
 In the signed macOS app, a local app-owned Gateway changes that card to
 **Update Mac app + Gateway**. Sparkle updates the app first; after relaunch, the
@@ -469,12 +481,24 @@ Gateway and restore the verified pre-update filesystem, volume, or VM snapshot.
 Preserve the current state separately before restoring because this removes
 changes made after the snapshot.
 
-Broad `openclaw backup create` archives support creation and verification, but
-not in-place whole-archive activation. Extract a broad archive into a staging
-directory and use its `manifest.json` source-to-archive mapping for an offline
-restore. `openclaw backup sqlite restore` likewise writes a verified database
-to a fresh target; activating that target remains an explicit offline operator
-step.
+Restore a broad archive to a fresh staging directory with the current CLI:
+
+```bash
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
+```
+
+The command verifies the archive and its SQLite databases before extraction.
+Activation remains an explicit offline step: stop the Gateway, move the
+restored asset tree into place or point `OPENCLAW_STATE_DIR` at the restored
+state asset, run `openclaw doctor`, then restart.
+
+Treat a state restore as time travel. Ratcheting channel credentials, especially
+WhatsApp, can desynchronize and require relinking. Approvals and
+delivery/dedupe state roll back too, and plugin `node_modules` trees are not
+archived. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the complete activation and recovery sequence. `openclaw backup sqlite
+restore` likewise writes a verified database to a fresh target; activating that
+target remains an explicit offline operator step.
 
 ### Verify the rollback
 

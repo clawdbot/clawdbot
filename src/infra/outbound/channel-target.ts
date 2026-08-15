@@ -1,13 +1,10 @@
 // Message-action target helpers bridge canonical `target` params into legacy
 // per-action fields while rejecting mixed destination arguments.
 import {
-  hasNonEmptyString as sharedHasNonEmptyString,
+  hasNonEmptyString,
   normalizeOptionalString,
 } from "../../../packages/normalization-core/src/string-coerce.js";
 import { MESSAGE_ACTION_TARGET_MODE } from "./message-action-spec.js";
-
-/** Shared non-empty string guard for message-action target params. */
-export const hasNonEmptyString = sharedHasNonEmptyString;
 
 /** Human-readable description for a single message-action destination. */
 export const CHANNEL_TARGET_DESCRIPTION =
