@@ -293,6 +293,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const environmentAccess = createWorkerEnvironmentAccess({
     store,
     getConfig: options.getConfig,
+    prepareCurrentBundle: async () => await options.prepareInstallation("bundle"),
     tunnelManager: options.tunnelManager,
     nodeTunnelManager: options.nodeTunnelManager,
     resolveWorkerGateway: options.resolveWorkerGateway,
