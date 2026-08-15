@@ -159,10 +159,7 @@ export function resolveModelsTargetAgent(
 } {
   const agentId =
     resolveKnownAgentId({ cfg, rawAgentId }) ??
-    resolveDefaultAgentId(cfg, {
-      surface: "the model command",
-      hint: "Pass --agent <id>.",
-    });
+    resolveDefaultAgentId(cfg, { surface: "the model command", hint: "Pass --agent <id>." });
   const agentDir = resolveAgentDir(cfg, agentId);
   return { agentId, agentDir };
 }

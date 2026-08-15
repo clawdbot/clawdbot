@@ -157,10 +157,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   const agentId =
     explicitAgentId ??
     inferredAgentId ??
-    resolveDefaultAgentId(config, {
-      surface: "the skills command",
-      hint: "Pass --agent <id>.",
-    });
+    resolveDefaultAgentId(config, { surface: "the skills command", hint: "Pass --agent <id>." });
   return {
     config,
     agentId,

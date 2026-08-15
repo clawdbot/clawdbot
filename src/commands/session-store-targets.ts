@@ -1,7 +1,4 @@
-import {
-  AgentSelectionRequiredError,
-  type AgentSelectionContext,
-} from "../agents/agent-scope-config.js";
+import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 /**
  * Session store target resolution wrapper for CLI commands.
  *
@@ -20,7 +17,7 @@ import type { RuntimeEnv } from "../runtime.js";
 const SESSION_STORE_SELECTION_CONTEXT = {
   surface: "session-store selection",
   hint: "Pass --agent <id> to select one agent, or --all-agents to include every configured agent.",
-} satisfies AgentSelectionContext;
+};
 
 /** Resolves session store targets or exits the current command on validation errors. */
 export function resolveSessionStoreTargetsOrExit(params: {
@@ -31,11 +28,10 @@ export function resolveSessionStoreTargetsOrExit(params: {
   try {
     return resolveSessionStoreTargets(params.cfg, params.opts);
   } catch (error) {
-    const displayError =
-      error instanceof AgentSelectionRequiredError
-        ? new AgentSelectionRequiredError(error.agentIds, SESSION_STORE_SELECTION_CONTEXT)
-        : error;
-    params.runtime.error(formatErrorMessage(displayError));
+    if (error instanceof AgentSelectionRequiredError) {
+      error = new AgentSelectionRequiredError(error.agentIds, SESSION_STORE_SELECTION_CONTEXT);
+    }
+    params.runtime.error(formatErrorMessage(error));
     params.runtime.exit(1);
     return null;
   }
