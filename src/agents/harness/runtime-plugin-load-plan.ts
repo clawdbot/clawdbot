@@ -111,6 +111,7 @@ export function resolveAgentHarnessOwnerPluginIds(params: {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir: string;
+  providerOwnerPluginIds?: readonly string[];
 }): string[] {
   const harnessPluginIds = resolveManifestActivationPlan({
     trigger: { kind: "agentHarness", runtime: params.runtime },
@@ -126,7 +127,8 @@ export function resolveAgentHarnessOwnerPluginIds(params: {
   ) {
     return harnessPluginIds;
   }
-  const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds(params);
+  const providerOwnerPluginIds =
+    params.providerOwnerPluginIds ?? resolveSelectedProviderOwnerPluginIds(params);
   if (providerOwnerPluginIds.length === 0) {
     return harnessPluginIds;
   }
@@ -207,14 +209,14 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   const forceActivatedPluginIds = [...memoryPluginIds, ...contextEnginePluginIds];
   for (const selection of params.selections) {
     const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
+    const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({
+      provider: selection.provider,
+      config,
+      workspaceDir: params.workspaceDir,
+    });
+    pluginIds.push(...providerOwnerPluginIds);
+    forceActivatedPluginIds.push(...providerOwnerPluginIds);
     if (!requiresAgentHarnessPluginSelection(selection, config)) {
-      const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({
-        provider: selection.provider,
-        config,
-        workspaceDir: params.workspaceDir,
-      });
-      pluginIds.push(...providerOwnerPluginIds);
-      forceActivatedPluginIds.push(...providerOwnerPluginIds);
       continue;
     }
     const harnessPluginIds = resolveAgentHarnessOwnerPluginIds({
@@ -222,6 +224,7 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
       provider: selection.provider,
       config,
       workspaceDir: params.workspaceDir,
+      providerOwnerPluginIds,
     });
     pluginIds.push(...harnessPluginIds);
     const allowedHarnessPluginIds =
