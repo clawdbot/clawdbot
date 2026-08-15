@@ -86,6 +86,7 @@ import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js"
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
+import { isUninstallPathInsideOrEqual } from "./uninstall-config.js";
 import {
   prepareConfigForPendingPluginDirectoryRemovalSet,
   recordPluginPackageUninstallPlan,
@@ -1084,7 +1085,13 @@ async function cleanupFailedManagedPluginInstall(params: {
       `Could not resolve a managed cleanup target for failed plugin install ${params.pluginId}.`,
     ];
   }
-  if (path.resolve(plan.directoryRemoval.target) !== path.resolve(params.targetDir)) {
+  const plannedTarget = path.resolve(plan.directoryRemoval.target);
+  const installedTarget = path.resolve(params.targetDir);
+  const removesIsolatedNpmProject =
+    plan.directoryRemoval.cleanup?.kind === "npm" &&
+    plannedTarget === path.resolve(plan.directoryRemoval.cleanup.npmRoot) &&
+    isUninstallPathInsideOrEqual(plannedTarget, installedTarget);
+  if (plannedTarget !== installedTarget && !removesIsolatedNpmProject) {
     return [
       `Refused cleanup for failed plugin install ${params.pluginId}: planned target does not match the newly installed target.`,
     ];
