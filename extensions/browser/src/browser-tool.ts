@@ -659,7 +659,9 @@ export function createBrowserTool(opts?: {
                   body: { kind: "close" },
                   timeoutMs: toolTimeoutMs,
                 });
-            sessionTabs.untrack(targetId);
+            sessionTabs.untrack(
+              readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+            );
             return jsonResult(result);
           }
           if (targetId) {
@@ -669,7 +671,7 @@ export function createBrowserTool(opts?: {
             });
             sessionTabs.untrack(targetId);
           } else {
-            await browserToolDeps.browserAct(
+            const result = await browserToolDeps.browserAct(
               baseUrl,
               { kind: "close" },
               {
@@ -677,6 +679,7 @@ export function createBrowserTool(opts?: {
                 timeoutMs: toolTimeoutMs,
               },
             );
+            sessionTabs.untrack(readStringValue(result.targetId));
           }
           return jsonResult({ ok: true });
         }
@@ -983,6 +986,7 @@ export function createBrowserTool(opts?: {
             profile,
             proxyRequest,
             onTabActivity: sessionTabs.touch,
+            onTabClose: sessionTabs.untrack,
           });
         }
         default:
