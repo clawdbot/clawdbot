@@ -691,11 +691,14 @@ export async function recordLoopOutcome(args: {
       ...(args.ctx.runId && { runId: args.ctx.runId }),
       cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
     });
+    const scopedHistory = record
+      ? (sessionState.toolCallHistory ?? []).filter((call) => call.runId === record.runId)
+      : [];
     const churn = record
       ? getToolArgumentChurnStreak(
-          (sessionState.toolCallHistory ?? []).filter(
-            (call) => call.runId === record.runId && call !== record,
-          ),
+          record.outcomeKind === "write-mutation"
+            ? scopedHistory.filter((call) => call !== record)
+            : scopedHistory,
           record,
         )
       : { count: 0, variantCount: 0 };

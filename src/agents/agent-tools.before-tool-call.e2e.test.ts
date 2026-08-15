@@ -645,6 +645,37 @@ describe("before_tool_call loop detection behavior", () => {
     }
   });
 
+  it("activates stable no-progress churn on the sixth completed outcome", async () => {
+    const sessionId = "stable-churn-completion-session";
+    const runId = "stable-churn-completion-run";
+    const markChurn = vi.spyOn(beforeToolCallRuntime, "markDiagnosticArgumentChurnObservation");
+    const tool = createWrappedTool(
+      "write",
+      vi.fn().mockResolvedValue(createStableNoProgressWriteResult()),
+      { ...enabledLoopDetectionContext, sessionId, runId },
+    );
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
+
+    try {
+      for (let index = 0; index < 6; index += 1) {
+        await expectUnblockedToolExecution(tool, `stable-churn-completion-${index}`, {
+          path: index % 2 === 0 ? "/tmp/a.md" : "/tmp/b.md",
+          content: "same content",
+        });
+      }
+      const outcomeObservations = markChurn.mock.calls
+        .map(([observation]) => observation)
+        .filter((observation) => observation.existingOnly === true);
+      expect(outcomeObservations).toHaveLength(6);
+      expect(outcomeObservations.slice(0, 5).every((observation) => !observation.active)).toBe(
+        true,
+      );
+      expect(outcomeObservations.at(-1)?.active).toBe(true);
+    } finally {
+      markChurn.mockRestore();
+    }
+  });
+
   it("warns on non-strict same-tool argument churn while preserving tool execution", async () => {
     const execute = vi.fn().mockImplementation(async (toolCallId: string, _params: unknown) => {
       const progressed = toolCallId === "write-churn-progress";
