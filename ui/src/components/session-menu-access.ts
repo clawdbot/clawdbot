@@ -79,6 +79,7 @@ export function sessionMenuReasons(params: {
       ? {
           "toggle-pin": patchReason,
           rename: patchReason,
+          "set-icon": patchReason,
         }
       : {}),
     ...(unreadReason ? { "toggle-unread": unreadReason } : {}),

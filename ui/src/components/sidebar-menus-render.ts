@@ -181,6 +181,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           unread: batchRows ? allUnread : session.unread,
           archived: allArchived,
           category: batchRows ? sharedCategory : (session.category ?? null),
+          icon: batchRows ? null : (session.icon ?? null),
           categoryClearReturnsToGroups:
             sharedCategory !== null &&
             rows.every((row) => categoryClearReturnsToGroups(row, host.sessionsGrouping)),
@@ -229,6 +230,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "rename":
               void host.sessionOrganizer.renameSession(session);
+              break;
+            case "set-icon":
+              void host.sessionOrganizer.patchSession(session, { icon: action.icon });
               break;
             case "fork":
               void host.sessionOrganizer.forkSession(session);

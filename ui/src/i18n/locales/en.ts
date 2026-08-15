@@ -977,6 +977,8 @@ export const en: TranslationMap = {
     renameSession: "Rename session",
     renameSessionPrompt: "Rename session",
     renameSessionMenu: "Rename…",
+    setIconMenu: "Set icon",
+    removeIcon: "Remove icon",
     pinSession: "Pin session",
     unpinSession: "Unpin session",
     markUnread: "Mark as unread",

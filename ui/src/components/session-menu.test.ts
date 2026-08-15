@@ -11,6 +11,7 @@ type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   category: string | null;
+  icon: string | null;
   categoryClearReturnsToGroups: boolean;
 };
 type SessionMenuElement = HTMLElement & {
@@ -56,6 +57,7 @@ async function mountMenu(
     unread: false,
     archived: false,
     category: null,
+    icon: null,
     categoryClearReturnsToGroups: false,
     ...options.session,
   };
@@ -153,6 +155,7 @@ describe("session menu", () => {
       "Pin session",
       "Mark as unread",
       "Rename…",
+      "Set icon",
       "Fork",
       "Add to Workboard",
       "Move to group",
@@ -287,6 +290,36 @@ describe("session menu", () => {
 
     menuItem(menu, "New group…").click();
     expect(onAction).toHaveBeenCalledWith({ kind: "new-group" });
+  });
+
+  it("offers emoji-only icon choices, marks the current icon, and dispatches set and remove", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({ session: { icon: "🦞" }, onAction });
+    const submenu = menuItem(menu, "Set icon");
+    (submenu as SessionMenuItem & { submenuOpen: boolean }).submenuOpen = true;
+
+    expect(menuItemLabels(submenu)).toEqual([
+      "🦞",
+      "🚀",
+      "🐛",
+      "✅",
+      "🔥",
+      "📝",
+      "⭐",
+      "📦",
+      "Remove icon",
+    ]);
+    const current = menuItem(submenu, "🦞");
+    await current.updateComplete;
+    await Promise.resolve();
+    expect(current.getAttribute("role")).toBe("menuitemradio");
+    expect(current.getAttribute("aria-checked")).toBe("true");
+    expect(current.querySelector(".session-menu__check")).not.toBeNull();
+
+    menuItem(submenu, "🚀").click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: "🚀" });
+    menuItem(submenu, "Remove icon").click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: null });
   });
 
   it("omits Remove from group when the session has no category", async () => {
