@@ -404,11 +404,6 @@ openclaw-chat-sidebar-region,
   color: var(--text);
 }
 
-.side-panel-empty__icon {
-  display: inline-flex;
-  color: var(--muted);
-}
-
 .side-panel__header .tabstrip-tab__icon svg,
 .side-panel-type-option__icon svg {
   width: 16px;
@@ -638,23 +633,20 @@ openclaw-chat-sidebar-region,
   text-align: center;
 }
 
-.side-panel-empty__icon svg {
-  width: 28px;
-  height: 28px;
-}
-
 .side-panel-empty__title {
-  margin-top: 12px;
+  margin-top: 14px;
   color: var(--text);
-  font-size: var(--control-ui-text-lg);
+  font-size: var(--control-ui-text-md);
+  font-weight: 500;
+  line-height: 1.25;
 }
 
 .side-panel-empty__description {
-  max-width: 32ch;
-  margin: 6px 0 0;
+  max-width: 40ch;
+  margin: 8px 0 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  line-height: 1.45;
+  line-height: 1.4;
 }
 
 .side-panel-empty--selector .side-panel-empty__title {
@@ -1029,6 +1021,10 @@ openclaw-chat-sidebar-region,
   flex-direction: column;
   min-height: 0;
   overflow: auto;
+}
+
+.chat-tasks-rail__scroll[hidden] {
+  display: none;
 }
 
 /* List mode splits scrolling per section: running work owns the rail and the

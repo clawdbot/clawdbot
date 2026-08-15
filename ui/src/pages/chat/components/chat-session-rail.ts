@@ -6,6 +6,7 @@ import type { SessionObserverDigest } from "../../../../../packages/gateway-prot
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -505,7 +506,11 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     return html`
       <div class="chat-session-rail__thread" aria-live="polite" ${ref(syncScroll)}>
         ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
-          ? html`<p class="chat-session-rail__empty">${t("chat.rail.empty")}</p>`
+          ? renderPanelEmptyState({
+              icon: icons.bot,
+              heading: t("chat.sidePanel.companion"),
+              description: t("chat.rail.empty"),
+            })
           : nothing}
         ${this.companion.exchanges.map((exchange) =>
           this.renderExchange(exchange.question, exchange.answer, exchange.ts),

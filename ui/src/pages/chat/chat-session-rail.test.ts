@@ -462,6 +462,15 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__timing")?.textContent).toBe("1m 32s");
   });
 
+  it("uses the shared surface empty state before the first side-chat exchange", async () => {
+    const element = await mount();
+    const empty = element.querySelector("openclaw-panel-empty-state");
+    await empty?.updateComplete;
+
+    expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Side chat");
+    expect(empty?.querySelector("svg")).not.toBeNull();
+  });
+
   it("submits the rail composer and renders sanitized markdown answers", async () => {
     const onSubmit = vi.fn();
     const element = await mount({

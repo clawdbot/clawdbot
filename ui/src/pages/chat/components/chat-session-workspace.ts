@@ -19,6 +19,7 @@ import {
   type UiSettings,
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
@@ -1231,9 +1232,11 @@ export function renderSessionWorkspaceRail(
           : html`
               <div class="chat-workspace-rail__scroll">
                 ${!hasSessionItems
-                  ? html`<div class="chat-workspace-rail__state">
-                      ${t("chat.workspaceFiles.empty")}
-                    </div>`
+                  ? renderPanelEmptyState({
+                      icon: icons.fileText,
+                      heading: t("chat.sidePanel.files"),
+                      description: t("chat.sidePanel.filesEmpty"),
+                    })
                   : html`
                       ${renderWorkspaceRailSection(
                         t("chat.workspaceFiles.changed"),

@@ -3,6 +3,7 @@ import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { icons } from "../../../components/icons.ts";
+import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import { renderPanelTabStrip } from "../../../components/panel-tab-strip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -315,9 +316,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     if (panel) {
       const type = panelType(panel.slot);
       return html`<div class="side-panel-empty side-panel-empty--type">
-        <span class="side-panel-empty__icon" aria-hidden="true">${type.icon}</span>
-        <strong class="side-panel-empty__title">${type.label}</strong>
-        <p class="side-panel-empty__description">${type.description}</p>
+        ${renderPanelEmptyState({
+          icon: type.icon,
+          heading: type.label,
+          description: type.description,
+        })}
       </div>`;
     }
     return html`<div class="side-panel-empty side-panel-empty--selector">

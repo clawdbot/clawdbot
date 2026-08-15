@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
+import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { isActiveTask, partitionTasks } from "../../../lib/tasks/data.ts";
@@ -116,9 +117,13 @@ export function renderBackgroundTasksRail(
         ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.loading")}</div>`
         : nothing}
       ${empty
-        ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.empty")}</div>`
+        ? renderPanelEmptyState({
+            icon: icons.listChecks,
+            heading: t("chat.sidePanel.tasks"),
+            description: t("chat.sidePanel.tasksEmpty"),
+          })
         : nothing}
-      <div class="chat-tasks-rail__scroll chat-tasks-rail__scroll--split">
+      <div class="chat-tasks-rail__scroll chat-tasks-rail__scroll--split" ?hidden=${empty}>
         ${active.length > 0
           ? html`
               <section class="chat-tasks-rail__section" data-tasks-section="running">

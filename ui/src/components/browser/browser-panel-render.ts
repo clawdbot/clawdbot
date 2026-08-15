@@ -2,6 +2,7 @@ import { html, nothing, svg, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { icons } from "../icons.ts";
+import { renderPanelEmptyState } from "../panel-empty-state.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { renderBrowserPanelTabs } from "./browser-panel-tabs.ts";
 
@@ -244,25 +245,25 @@ function renderInspectTooltip(controller: BrowserPanelController) {
 
 function renderViewportContent(controller: BrowserPanelController) {
   if (controller.running === false) {
-    return html`
-      <div class="bp-status">
-        <span>${t("browser.notRunning")}</span>
-        <button
-          class="bp-btn bp-btn--primary"
-          type="button"
-          @click=${() => void controller.startBrowserNow()}
-        >
+    return renderPanelEmptyState({
+      icon: icons.globe,
+      heading: t("chat.sidePanel.browser"),
+      description: t("browser.notRunning"),
+      action: html`
+        <button class="bp-btn" type="button" @click=${() => void controller.startBrowserNow()}>
           ${t("browser.start")}
         </button>
-      </div>
-    `;
+      `,
+    });
   }
   if (!controller.view) {
-    return html`
-      <div class="bp-status">
-        <span>${controller.loading ? t("browser.loading") : t("browser.empty")}</span>
-      </div>
-    `;
+    return controller.loading
+      ? html`<div class="bp-status"><span>${t("browser.loading")}</span></div>`
+      : renderPanelEmptyState({
+          icon: icons.globe,
+          heading: t("chat.sidePanel.browser"),
+          description: t("chat.sidePanel.browserEmpty"),
+        });
   }
   const overlayMode =
     controller.mode === "annotate"

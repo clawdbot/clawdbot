@@ -191,11 +191,30 @@ describe("chat sidebar region", () => {
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("detail");
   });
 
-  it("renders a type-specific empty state when a type has no content yet", async () => {
+  it("gives every surface the shared icon, title, and description empty state", async () => {
     const region = await createRegion(openSlot({ columns: [] }, "companion"));
-    expect(root(region).querySelector(".side-panel-empty--type")?.textContent).toContain(
-      "Side chat",
-    );
+    region.panelTemplates = {};
+
+    for (const [slot, label] of [
+      ["detail", "Review"],
+      ["browser", "Browser"],
+      ["terminal", "Terminal"],
+      ["workspace", "Files"],
+      ["companion", "Side chat"],
+      ["tasks", "Tasks"],
+      ["discussion", "Discussion"],
+    ] as const) {
+      region.layout = openSlot({ columns: [] }, slot);
+      await region.updateComplete;
+      const empty = root(region).querySelector(".side-panel-empty--type");
+      const state = empty?.querySelector("openclaw-panel-empty-state");
+      await (state as HTMLElement & { updateComplete?: Promise<unknown> })?.updateComplete;
+      expect(state?.querySelector("svg")).not.toBeNull();
+      expect(state?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe(label);
+      expect(
+        state?.shadowRoot?.querySelector(".empty-state__description")?.textContent?.trim(),
+      ).not.toBe("");
+    }
   });
 
   it("offers every chat-side content owner through the shared type menu", async () => {

@@ -1,6 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { DockPanelPlacement } from "../dock-panel-layout.ts";
+import { icons } from "../icons.ts";
+import { renderPanelEmptyState } from "../panel-empty-state.ts";
 import type { TerminalPanelSessionTab } from "./terminal-panel-session-types.ts";
 import { renderTerminalPanelTabs } from "./terminal-panel-tabs.ts";
 import {
@@ -79,6 +81,13 @@ export function renderTerminalPanelViewport(
             <span class="tp-connecting__spinner" aria-hidden="true"></span>
             <span>${t("terminal.connecting")}</span>
           </div>`
+        : nothing}
+      ${!activeId && !connecting && !errorText
+        ? renderPanelEmptyState({
+            icon: icons.terminal,
+            heading: t("chat.sidePanel.terminal"),
+            description: t("chat.sidePanel.terminalEmpty"),
+          })
         : nothing}
       ${renderTerminalUploadLayer(uploadController)}
     </wa-tab-panel>

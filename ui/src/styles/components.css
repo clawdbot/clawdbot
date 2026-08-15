@@ -1936,16 +1936,6 @@ openclaw-chat-session-rail {
   padding: 0 14px 10px;
 }
 
-/* Centred in the thread's empty space, both axes: margin auto claims the free
-   vertical room inside the flex column. */
-.chat-session-rail__empty {
-  margin: auto 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
-  text-align: center;
-}
-
 .chat-session-rail__starter {
   display: inline-flex;
   align-items: center;

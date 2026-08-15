@@ -69,6 +69,24 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(panel.browserPanelIsOpen()).toBe(true);
   });
 
+  it("uses the shared surface empty state when the embedded browser has no tabs", async () => {
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      available: boolean;
+      embedded: boolean;
+      renderRoot: ShadowRoot;
+      updateComplete: Promise<unknown>;
+    };
+    panel.available = true;
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const empty = panel.renderRoot.querySelector("openclaw-panel-empty-state");
+    await empty?.updateComplete;
+    expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Browser");
+    expect(empty?.querySelector("svg")).not.toBeNull();
+  });
+
   it("suppresses an open dock without overwriting its persisted preference", async () => {
     localStorage.setItem(
       "openclaw.browser.panel.v1",
