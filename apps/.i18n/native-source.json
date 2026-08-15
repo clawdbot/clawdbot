@@ -20575,17 +20575,6 @@
       ]
     },
     {
-      "id": "native.apple.c8aea204934bc72d",
-      "source": "Accessibility grant may be stale",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "conditional-branch",
-          "path": "apps/macos/Sources/OpenClaw/ComputerActionService.swift"
-        }
-      ]
-    },
-    {
       "id": "native.apple.8749684a8c17f426",
       "source": "Accessibility permission is required to paste.",
       "surface": "apple",
@@ -30918,10 +30907,6 @@
       "surface": "apple",
       "sites": [
         {
-          "kind": "conditional-branch",
-          "path": "apps/macos/Sources/OpenClaw/ComputerActionService.swift"
-        },
-        {
           "kind": "ui-localized-call",
           "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
         },
@@ -33941,17 +33926,6 @@
         {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift"
-        }
-      ]
-    },
-    {
-      "id": "native.apple.2f563e685fcd2e50",
-      "source": "Missing permission",
-      "surface": "apple",
-      "sites": [
-        {
-          "kind": "conditional-branch",
-          "path": "apps/macos/Sources/OpenClaw/ComputerActionService.swift"
         }
       ]
     },
