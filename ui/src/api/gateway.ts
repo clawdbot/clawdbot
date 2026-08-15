@@ -308,10 +308,7 @@ export class GatewayBrowserClient {
         this.buildConnectPlan(nonce, challengeTs, generation),
       buildConnectParams: (plan) => plan.params,
       onConnectHello: (hello, context) => this.handleConnectHello(hello, context.plan),
-      onHello: (hello) => {
-        this.maxPayloadBytes = hello.policy?.maxPayload;
-        this.opts.onHello?.(hello);
-      },
+      onHello: (hello) => this.opts.onHello?.(hello),
       onConnectFailure: (error, context) => {
         this.client.recordTiming("failed", context.generation, context.plan, {
           errorCode: error.code,
@@ -504,6 +501,7 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
+    this.maxPayloadBytes = hello.policy?.maxPayload;
     this.startTickWatch(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
@@ -667,8 +665,10 @@ export class GatewayBrowserClient {
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
-    // The fixed request envelope outside this tuple uses a 36-byte UUID and 75 UTF-8 bytes.
-    const requestBytes = new TextEncoder().encode(JSON.stringify([method, params])).byteLength + 75;
+    // The UUID request envelope adds 75 bytes with params, 61 when params is omitted.
+    const requestBytes =
+      new TextEncoder().encode(JSON.stringify([method, params])).byteLength +
+      (params === undefined ? 61 : 75);
     if (this.maxPayloadBytes !== undefined && requestBytes > this.maxPayloadBytes) {
       throw new Error(
         "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
