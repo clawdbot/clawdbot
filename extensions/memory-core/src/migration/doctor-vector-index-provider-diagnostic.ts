@@ -11,7 +11,7 @@ export type ProviderFailure = {
   requirement?: string;
   fixHint?: string;
 };
-export type VectorProviderFinding = ProviderFailure & {
+type VectorProviderFinding = ProviderFailure & {
   agentId: string;
   model: string;
   configPrefix: string;
