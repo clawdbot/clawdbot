@@ -8,6 +8,7 @@ import type {
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isDeliverableMessageChannel,
+  isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { applyTargetToParams } from "./channel-target.js";
@@ -18,7 +19,6 @@ import {
   resolveActionDeliveryTargetAlias,
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";
-import { HEARTBEAT_SENDER_SENTINEL } from "./targets.js";
 
 export function resolveImplicitMessageActionTarget(
   toolContext: ChannelThreadingToolContext | undefined,
@@ -28,10 +28,7 @@ export function resolveImplicitMessageActionTarget(
     if (!target) {
       continue;
     }
-    // Defense in depth for isolated heartbeat turns: the runner may still
-    // surface the non-deliverable "heartbeat" sentinel in tool context even
-    // when the owning run forgot requireExplicitMessageTarget.
-    if (target === HEARTBEAT_SENDER_SENTINEL) {
+    if (isInternalNonDeliveryChannel(target)) {
       continue;
     }
     // A session can arrive bare or wrapped as a channel target; neither is

@@ -16,7 +16,15 @@ import {
   MESSAGE_TOOL_DELIVERY_HINTS,
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
-import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import {
+  consumePreExecutionBlockedToolCall,
+  wrapToolWithBeforeToolCallHook,
+} from "../agent-tools.before-tool-call.js";
 type CreateMessageTool = typeof import("./message-tool-execution.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
@@ -377,6 +385,7 @@ beforeAll(async () => {
 const mintedTurnCapabilities: string[] = [];
 
 beforeEach(() => {
+  resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
   resetDiagnosticSessionStateForTest();
   mocks.runMessageAction.mockReset();
@@ -390,6 +399,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetGlobalHookRunner();
   for (const token of mintedTurnCapabilities.splice(0)) {
     revokeMessageActionTurnCapability(token);
   }
@@ -2610,23 +2620,35 @@ describe("message tool agent routing", () => {
 });
 
 describe("message tool explicit target guard", () => {
-  it("requires an explicit target for send when configured (heartbeat-style)", async () => {
-    // Heartbeat runs set requireExplicitMessageTarget so ambient delivery.to /
-    // "heartbeat" sentinel never become implicit recipients of no-target sends.
-    const tool = createMessageTool({
-      runMessageAction: mocks.runMessageAction as never,
-      requireExplicitTarget: true,
-      currentChannelProvider: "telegram",
-      currentChannelId: "telegram:dm-user-1",
-    });
+  it("rejects a target removed by a hook before the mutation boundary", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: async () => ({ params: { target: "" } }),
+        },
+      ]),
+    );
+    const tool = wrapToolWithBeforeToolCallHook(
+      createMessageTool({
+        runMessageAction: mocks.runMessageAction as never,
+        requireExplicitTarget: true,
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:dm-user-1",
+      }),
+      { agentId: "main", sessionKey: "agent:main:heartbeat" },
+    );
+    const toolCallId = "heartbeat-target-removed";
 
     await expect(
-      tool.execute("1", {
+      tool.execute(toolCallId, {
         action: "send",
+        target: "telegram:dm-user-1",
         message: "HEARTBEAT_OK",
       }),
     ).rejects.toThrow(/Explicit message target required/i);
 
+    expect(consumePreExecutionBlockedToolCall(toolCallId)).toBe(true);
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
 

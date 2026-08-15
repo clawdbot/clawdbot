@@ -36,9 +36,6 @@ import {
   type OutboundTargetResolution,
 } from "./targets-resolve-shared.js";
 
-/** Non-deliverable sender placeholder for heartbeat runs without a route. */
-export const HEARTBEAT_SENDER_SENTINEL = "heartbeat";
-
 /** Resolved outbound delivery destination and routing hints. */
 type OutboundTarget = {
   channel: string;
@@ -715,7 +712,7 @@ function resolveHeartbeatSenderId(params: {
 
   const allowList = concreteAllowFromEntries(allowFrom);
   if (mapAllowFromEntries(allowFrom).some((entry) => entry.trim() === "*")) {
-    return candidates[0] ?? HEARTBEAT_SENDER_SENTINEL;
+    return candidates[0] ?? "heartbeat";
   }
   if (candidates.length > 0 && allowList.length > 0) {
     const matched = candidates.find((candidate) => allowList.includes(candidate));
@@ -729,7 +726,7 @@ function resolveHeartbeatSenderId(params: {
   if (allowList.length > 0) {
     return allowList[0];
   }
-  return candidates[0] ?? HEARTBEAT_SENDER_SENTINEL;
+  return candidates[0] ?? "heartbeat";
 }
 
 /** Resolves the sender id/allow-list context used for heartbeat sends. */

@@ -39,8 +39,13 @@ import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-to
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readToolStringParam } from "./common.js";
+import {
+  asToolParamsRecord,
+  type AnyAgentTool,
+  jsonResult,
+  readToolStringParam,
+  ToolInputError,
+} from "./common.js";
 import {
   readGatewayCallOptions,
   resolveGatewayOptions,
@@ -73,6 +78,26 @@ import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return action === "broadcast" || shouldApplyCrossContextMarker(action);
+}
+
+function requireExplicitMessageTarget(params: Record<string, unknown>): void {
+  const action = readToolStringParam(params, "action", {
+    required: true,
+  }) as ChannelMessageActionName;
+  if (!actionNeedsExplicitTarget(action)) {
+    return;
+  }
+  const hasTarget =
+    (typeof params.target === "string" && params.target.trim().length > 0) ||
+    (typeof params.to === "string" && params.to.trim().length > 0) ||
+    (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
+    (Array.isArray(params.targets) &&
+      params.targets.some((value) => typeof value === "string" && value.trim().length > 0));
+  if (!hasTarget) {
+    throw new ToolInputError(
+      "Explicit message target required for this run. Provide target/targets (and channel when needed).",
+    );
+  }
 }
 
 function normalizeMessageToolIdempotencyKeyPart(value: unknown): string | undefined {
@@ -322,6 +347,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     displaySummary: "Send and manage messages across configured channels.",
     description,
     parameters: schema,
+    finalizeBeforeToolCallParams: options?.requireExplicitTarget
+      ? (params) => {
+          requireExplicitMessageTarget(asToolParamsRecord(params));
+          return params;
+        }
+      : undefined,
     execute: async (toolCallId, args, signal) => {
       if (signal?.aborted) {
         throw createAbortError("Message send aborted");
@@ -385,19 +416,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               : "Suppressed outbound message text because it matched internal runtime context.",
         });
       }
-      const requireExplicitTarget = options?.requireExplicitTarget === true;
-      if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
-        const explicitTarget =
-          (typeof params.target === "string" && params.target.trim().length > 0) ||
-          (typeof params.to === "string" && params.to.trim().length > 0) ||
-          (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
-          (Array.isArray(params.targets) &&
-            params.targets.some((value) => typeof value === "string" && value.trim().length > 0));
-        if (!explicitTarget) {
-          throw new Error(
-            "Explicit message target required for this run. Provide target/targets (and channel when needed).",
-          );
-        }
+      if (options?.requireExplicitTarget) {
+        requireExplicitMessageTarget(params);
       }
 
       const gatewayOpts = readGatewayCallOptions(params);

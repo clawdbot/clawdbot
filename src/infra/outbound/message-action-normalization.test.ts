@@ -9,7 +9,8 @@ vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
   ).createPinboardMessageActionBootstrapRegistryMock(),
 }));
 
-vi.mock("../../utils/message-channel.js", () => ({
+vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/message-channel.js")>()),
   isDeliverableMessageChannel: (value: string) => ["workspace", "forum"].includes(value),
   normalizeMessageChannel: (value?: string | null) =>
     typeof value === "string" ? value.trim().toLowerCase() : undefined,
@@ -303,8 +304,7 @@ describe("normalizeMessageActionInput", () => {
   });
 
   it("does not inject heartbeat sender sentinel as inferred target", () => {
-    // Isolated heartbeat turns put the non-deliverable "heartbeat" sentinel in
-    // From/To → tool context. Inferring it as target produces @heartbeat errors.
+    // The non-deliverable sender sentinel must not become @heartbeat.
     expect(() =>
       normalizeMessageActionInput({
         action: "send",
