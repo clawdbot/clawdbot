@@ -12,10 +12,10 @@ import {
 import {
   type DispatchStage,
   type PlacementStore,
+  FORCED_WORKER_ABANDONMENT_ERROR,
   REQUEST,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-force-abandon.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { WorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
 

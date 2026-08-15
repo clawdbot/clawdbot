@@ -9,8 +9,7 @@ import {
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
-export const FORCED_WORKER_ABANDONMENT_ERROR =
-  "Cloud worker result abandoned by forced operator teardown";
+const FORCED_WORKER_ABANDONMENT_ERROR = "Cloud worker result abandoned by forced operator teardown";
 
 export class WorkerForcedAbandonmentBlockedError extends Error {
   constructor(environmentId: string) {
