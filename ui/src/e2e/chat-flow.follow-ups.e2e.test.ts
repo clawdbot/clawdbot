@@ -845,6 +845,19 @@ suite.define(() => {
       });
       expect(await row.count()).toBe(0);
       await page.getByText(steerText, { exact: true }).waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() =>
+          page.locator(".chat-thread-inner").evaluate(
+            (thread, texts) => {
+              const bubbles = Array.from(thread.querySelectorAll(".chat-bubble"));
+              return texts.map((text) =>
+                bubbles.findIndex((bubble) => bubble.textContent?.includes(text)),
+              );
+            },
+            ["keep this run active", steerText],
+          ),
+        )
+        .toEqual([0, 1]);
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
     } finally {
       await suite.closeBrowserContext(context);

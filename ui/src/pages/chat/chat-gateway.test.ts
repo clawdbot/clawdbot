@@ -921,10 +921,19 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it("retires a landed steer chip when its request run finishes inside the active run", () => {
+    const activePrompt = {
+      id: "active-prompt",
+      text: "Keep this run active",
+      createdAt: 1,
+      sendRunId: "active-run",
+      sendState: "waiting-model" as const,
+      sessionKey: "main",
+    };
     const state = createState({
       sessionKey: "main",
       chatRunId: "active-run",
       chatQueue: [
+        activePrompt,
         {
           id: "landed-steer-chip",
           text: "Use the deployment plan",
@@ -945,9 +954,13 @@ describe("handleChatGatewayEvent", () => {
       }),
     ).toBe("final");
 
-    expect(state.chatQueue).toEqual([]);
+    expect(state.chatQueue).toEqual([activePrompt]);
     expect(state.chatRunId).toBe("active-run");
     expect(state.chatMessages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        __openclaw: { idempotencyKey: "active-run:user" },
+      }),
       expect.objectContaining({
         role: "user",
         __openclaw: { idempotencyKey: "steer-request-run:user" },

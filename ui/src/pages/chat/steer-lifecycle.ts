@@ -263,6 +263,15 @@ export function retireSteeredChipsForRequestRun(
   );
   let firstPersistedSteerIndex: number | undefined;
   for (const item of landed) {
+    // A started active turn can still exist only as an optimistic queue row.
+    // Promote that target before its landed steer so stable transcript history
+    // cannot render the newer steer ahead of the original prompt.
+    const target = state.chatQueue.find(
+      (candidate) => candidate.id !== item.id && candidate.sendRunId === item.pendingRunId,
+    );
+    if (target) {
+      preserveQueuedUserTurn(state, target);
+    }
     const persistedIndex = findQueuedSendMessageIndex(state.chatMessages, item, true);
     if (
       persistedIndex >= 0 &&
