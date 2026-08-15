@@ -132,6 +132,31 @@ function createSaveState(): {
 }
 
 describe("createAgentCapability lifecycle", () => {
+  it("keeps an adopted startup roster ahead of an older list request", async () => {
+    const pending = deferred<unknown>();
+    const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+
+    const staleLoad = agents.refreshList();
+    const adopted = {
+      defaultId: "research",
+      mainKey: "main",
+      scope: "per-sender" as const,
+      agents: [{ id: "main" }, { id: "research" }],
+    };
+    agents.adoptList(adopted, client);
+
+    expect(agents.state.agentsList).toEqual(adopted);
+    expect(agents.state.agentsLoading).toBe(false);
+
+    pending.resolve({ defaultId: "main", agents: [{ id: "main" }] });
+    await staleLoad;
+    expect(agents.state.agentsList).toEqual(adopted);
+    agents.dispose();
+  });
+
   it("starts a fresh list request after a same-client reconnect", async () => {
     const first = deferred<unknown>();
     const second = deferred<unknown>();

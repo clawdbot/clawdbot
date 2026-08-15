@@ -362,6 +362,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         this.connectedClient === startupClient &&
         state.client === startupClient &&
         state.connected;
+      // chat.startup and agents.list share roster ownership. A startup response may
+      // adopt only while no newer direct roster publication has replaced its baseline.
+      state.onAgentsList = (agentsList, client) => {
+        if (clientIsCurrent() && this.context.agents.state.agentsList === agentsListBeforeStartup) {
+          this.context.agents.adoptList(agentsList, client);
+        }
+      };
       const finishStartup = async () => {
         if (!clientIsCurrent()) {
           return;
@@ -402,6 +409,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       });
       this.deferSessionHydrationUntilTranscript(startupSessionKey, historyRefresh);
       void historyRefresh.finally(() => {
+        if (clientIsCurrent()) {
+          state.onAgentsList = undefined;
+        }
         void finishStartup();
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());

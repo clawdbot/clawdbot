@@ -250,6 +250,12 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
   let agentsRequest: Promise<AgentsListResult | null> | null = null;
   let agentsRequestOwner: symbol | null = null;
 
+  const retireAgentsRequest = () => {
+    agentsRequest = null;
+    agentsRequestOwner = null;
+    state.agentsLoading = false;
+  };
+
   const publish = () => {
     if (disposed) {
       return;
@@ -372,8 +378,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     state.client = snapshot.client;
     state.connected = connected;
     if (clientChanged || !connected) {
-      agentsRequest = null;
-      agentsRequestOwner = null;
+      retireAgentsRequest();
       fileRequests.clear();
       fileRequestOwners.clear();
       for (const status of files.values()) {
@@ -382,7 +387,6 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
       files.clear();
       state.agentsList = null;
       state.agentsError = null;
-      state.agentsLoading = false;
     }
     publish();
   });
@@ -395,6 +399,9 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
       if (state.client !== client || !state.connected) {
         return;
       }
+      // The startup projection began after any direct load it replaces; retire that
+      // owner so a late completion cannot overwrite the adopted roster.
+      retireAgentsRequest();
       state.agentsList = result;
       state.agentsError = null;
       publish();
@@ -435,9 +442,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
       fileRequests.clear();
       fileRequestOwners.clear();
       files.clear();
-      agentsRequest = null;
-      agentsRequestOwner = null;
-      state.agentsLoading = false;
+      retireAgentsRequest();
     },
   };
 }
