@@ -13877,8 +13877,8 @@ public struct AgentsUpdateParams: Codable, Sendable {
         name: String? = nil,
         workspace: String? = nil,
         modelvalue: AnyCodable?,
-        emoji: String? = nil,
-        avatar: String? = nil)
+        emoji: String?,
+        avatar: String?)
     {
         self.init(
             agentid: agentid,

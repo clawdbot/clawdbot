@@ -529,7 +529,10 @@ function emitStructCompatibilityInitializer(
         return `        ${propName}: AnyCodable?`;
       }
       if (agentsUpdateNullableStringKeys.has(key)) {
-        return `        ${safeName(key)}: String? = nil`;
+        // Mixed emoji/avatar omit defaults so
+        // AgentsUpdateParams(agentid:modelvalue:) uniquely matches the raw
+        // initializer instead of this String-label overload.
+        return `        ${safeName(key)}: String?`;
       }
       return `        ${swiftInitializerParam({
         name: propName,
