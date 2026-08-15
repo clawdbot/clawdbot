@@ -2,7 +2,10 @@
 import { html } from "lit";
 import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
-import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
+import {
+  normalizeChatModelProviderId,
+  resolvePreferredServerChatModelValue,
+} from "../../../lib/chat/model-ref.ts";
 import {
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
@@ -278,11 +281,11 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       : modelOptions.find((option) => option.value === pickerValue);
   const activeSessionModel = activeSession?.model
     ? resolveChatModelCatalogEntry(
-        activeSession.model.includes("/")
-          ? activeSession.model
-          : activeSession.modelProvider
-            ? `${activeSession.modelProvider}/${activeSession.model}`
-            : activeSession.model,
+        resolvePreferredServerChatModelValue(
+          activeSession.model,
+          activeSession.modelProvider,
+          props.modelCatalog,
+        ),
         props.modelCatalog,
       )
     : undefined;
