@@ -70,11 +70,7 @@ function buildEntrySummary(entry: ActivityEntry): string {
   if (entry.entryKind === "answer_candidate") {
     return t(`activity.answerCandidate.${entry.candidateStatus ?? "candidate"}`);
   }
-  return t("activity.entrySummary", {
-    argumentSummary: hiddenArgumentsLabel(entry.hiddenArgumentCount),
-    status: statusLabel(entry.status),
-    tool: entry.toolName,
-  });
+  return hiddenArgumentsLabel(entry.hiddenArgumentCount);
 }
 
 function entryLabel(entry: ActivityEntry): string {

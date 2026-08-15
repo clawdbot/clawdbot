@@ -41,12 +41,21 @@ async function* readNulFile(filePath: string): AsyncGenerator<string> {
   }
 }
 
+export async function readWorkspaceTransferPaths(filePath: string): Promise<Set<string>> {
+  const paths = new Set<string>();
+  for await (const entry of readNulFile(filePath)) {
+    paths.add(entry);
+  }
+  return paths;
+}
+
 export async function runLocalCommandToFile(params: {
   argv: string[];
   inputPath?: string;
   outputPath: string;
   signal: AbortSignal;
   timeoutMs: number;
+  maxOutputBytes?: number;
 }): Promise<void> {
   await runWorkspaceInventoryCommandToFile(params);
 }
@@ -75,7 +84,7 @@ export async function filterExistingGitTransferList(params: {
         throw error;
       });
       if (stats?.isFile() || stats?.isSymbolicLink()) {
-        await output.write(`${file}\0`);
+        await output.writeFile(`${file}\0`);
       }
     }
   } finally {

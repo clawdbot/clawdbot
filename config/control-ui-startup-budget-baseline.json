@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 329483,
-  "reason": "cumulative chat/session UI growth (#122296, #122713, #122870, #122876); CI-measured build-artifacts bytes",
-  "updatedAt": "2026-08-13"
+  "startupJsGzipBytes": 333338,
+  "reason": "cumulative 2026-08-15 UI fix growth (tab retry/session attention/talk backpressure stream) plus chat transcript virtualizer re-attach fix (#123974); CI runs 31861213699 and 31861214469 build-artifacts bytes",
+  "updatedAt": "2026-08-15"
 }

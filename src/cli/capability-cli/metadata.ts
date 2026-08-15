@@ -47,7 +47,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.providers",
     description: "List model providers discovered from the catalog.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids with counts and defaults",
   },
   {
@@ -134,7 +134,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "image.providers",
     description: "List image generation providers.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids and defaults",
   },
   {
@@ -148,7 +148,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "audio.providers",
     description: "List audio transcription providers.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids and capabilities",
   },
   {
@@ -179,7 +179,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "tts.providers",
     description: "List speech providers.",
     transports: ["local", "gateway"],
-    flags: ["--local", "--gateway", "--json"],
+    flags: ["--agent", "--local", "--gateway", "--json"],
     resultShape: "provider ids, configured state, models, voices",
   },
   {
@@ -254,7 +254,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "video.providers",
     description: "List video generation and description providers.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids and defaults",
   },
   {
@@ -275,7 +275,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "web.providers",
     description: "List web search and fetch providers.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids grouped by family",
   },
   {
@@ -289,7 +289,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "embedding.providers",
     description: "List embedding providers.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids and default models",
   },
 ];

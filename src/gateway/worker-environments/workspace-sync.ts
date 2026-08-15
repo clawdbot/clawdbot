@@ -137,10 +137,12 @@ export function createWorkerWorkspaceActions(
     // Exit 255 does not prove whether the remote command was accepted, so stateful
     // commands must stay pinned to one transport attempt.
     if (command.transportRetry === "never") {
-      return await runTask(
+      const operation = runTask(
         workerWorkspaceSshArgv(prepared, command.argv),
         commandOptions(timeoutMs),
       );
+      command.onDispatchReady?.();
+      return await operation;
     }
     return await runWorkerSshCandidates(
       prepared,

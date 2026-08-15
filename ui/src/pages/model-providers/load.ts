@@ -68,7 +68,7 @@ function errorMessage(error: unknown): string {
 
 export async function loadModelProvidersData(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean; agentId?: string; signal?: AbortSignal },
+  opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelProvidersData> {
   const request = <T>(method: string, params?: unknown): Promise<T> =>
     opts?.signal
@@ -79,7 +79,7 @@ export async function loadModelProvidersData(
   const catalogRefresh = opts?.refresh
     ? request<ModelProvidersCatalogResult>("models.list", {
         view: "all",
-        ...(opts.agentId ? { agentId: opts.agentId } : {}),
+        agentId: opts.agentId,
         refresh: true,
       })
         .then((result) => ({ ok: true as const, result: result ?? null }))
@@ -88,12 +88,12 @@ export async function loadModelProvidersData(
   const modelsLoad = opts?.refresh
     ? catalogRefresh.then((catalogResult) =>
         loadModels(client, {
-          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          agentId: opts.agentId,
           ...(catalogResult.ok ? { refresh: true } : { preparedOnly: true }),
         }),
       )
     : loadModels(client, {
-        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+        agentId: opts.agentId,
         preparedOnly: true,
       }).catch(() => null);
   const [authStatus, models, catalogResult, config, providerUsage, costByProvider] =

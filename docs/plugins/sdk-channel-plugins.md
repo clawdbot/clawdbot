@@ -85,6 +85,22 @@ update occurred. Existing synchronous and asynchronous callbacks that return `vo
 backward-compatible and are treated as visible; new acceptance-aware implementations should use
 an explicit boolean.
 
+### Commentary delivery ownership
+
+Set `commentaryPayloadsEnabled: true` when the channel supports durable commentary messages.
+Channels that normally render commentary in one evolving progress draft can also provide
+`shouldDeliverCommentaryPayloads`. Core freezes verbose visibility for the turn, registers that
+getter through `onVerboseProgressVisibility`, evaluates the delivery callback once before
+dispatch, and snapshots that result for the whole turn. Session changes apply on the next turn.
+The callback is inert unless `commentaryPayloadsEnabled` is also `true`; without that static
+opt-in, core neither evaluates the callback nor freezes the registered visibility getter.
+
+Return `false` while the draft owns normal progress and `true` when verbose progress makes that
+draft yield to durable commentary. Keep the callback synchronous and read only channel-owned,
+already prepared state. Omitting it preserves durable delivery for existing plugins that use the
+static opt-in. The callback does not control reasoning, partial replies, tool progress, or final
+answers.
+
 Inbound receivers that defer platform acknowledgements should declare
 `message.receive.defaultAckPolicy` and `supportedAckPolicies` instead of hiding
 ack timing in monitor-local state. Cover every declared policy with
@@ -117,6 +133,18 @@ descriptor you pass to the resolver; do not serialize raw match values from
 the resolved state or decision. See
 [Channel ingress API](/plugins/sdk-channel-ingress) for the API design,
 ownership boundary, and test expectations.
+
+Pass the exact resolver result to the host-injected registered context builder
+as `channelIngress`. Results used for execution must include the final
+agent/session/message/event `contextBinding`; decision-only resolver calls may
+omit it. This preserves the native plugin's record-, epoch-, and scope-bound participant evidence through one-shot queued run admission without
+exposing it in message context fields. The standalone public builder is not an
+authoritative substitute. Never reconstruct evidence from sender, route, room,
+account, thread, message, transport, or session values. Legacy adapters can explicitly pass
+`channelIngress: "unsupported"` only when the path is source-proven to lack an
+authoritative Phase 0 integration. Supported paths must pass the exact result;
+omission is invalid production wiring. Missing, fake, stale, reused, or mixed
+supported evidence projects as unknown, never as an allow signal.
 
 ### Durable ingress and replay dedupe
 
@@ -268,6 +296,9 @@ the shared outbound loader. Hosted media capacity defaults to
 `overflowPolicy: "evict-oldest"` for compatibility. Use `"reject-new"` when
 issued URLs must remain valid until expiry, and configure both backing keyed
 stores with `"reject-new"` so independent writers cannot evict live rows.
+Use `validateBeforePersist` to inspect the guarded loader's exact bytes and
+metadata when a transport must reject a payload class. Treat its buffer as
+read-only and throw to reject before capability creation or any store write.
 Authenticate bearer requests with `readMetadata(...)` before calling `read(...)`
 so invalid tokens and `HEAD` requests do not hydrate stored media chunks.
 

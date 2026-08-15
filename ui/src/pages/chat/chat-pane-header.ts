@@ -467,6 +467,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
               .layoutActions=${layoutMenuActions}
               .actionDisabledReasons=${actionDisabledReasons}
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
+              .forkFromLastCompleted=${row.hasActiveRun === true}
               .archiveAllowed=${archiveAllowed}
               .deleteAllowed=${deleteAllowed}
               .onOpen=${() => {

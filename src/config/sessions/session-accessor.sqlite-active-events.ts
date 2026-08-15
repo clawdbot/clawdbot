@@ -90,34 +90,31 @@ export function readSessionTranscriptMessageEvents(
   });
 }
 
-/** Reads the projected active leaf without materializing the transcript. */
-export function readSessionTranscriptActiveLeafEvents(
+/** Classifies one entry against the authoritative active path and leaf. */
+export function readSessionTranscriptActivePathEntryRelation(
   scope: SessionTranscriptReadScope,
-): TranscriptEvent[] {
+  entryId: string | null,
+): "exact" | "ancestor" | "off-path" {
   return withCurrentProjectionSnapshot(scope, (projection) => {
-    const leafEventId = projection.state.leafEventId;
-    if (!leafEventId) {
-      return [];
+    if (projection.state.leafEventId === entryId || entryId === null) {
+      return projection.state.leafEventId === entryId ? "exact" : "off-path";
     }
     const db = getActiveTranscriptKysely(projection.database);
     const row = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       db
         .selectFrom("transcript_event_identities as identity")
-        .innerJoin("transcript_events as event", (join) =>
+        .innerJoin("session_transcript_active_events as active", (join) =>
           join
-            .onRef("event.session_id", "=", "identity.session_id")
-            .onRef("event.seq", "=", "identity.seq"),
+            .onRef("active.session_id", "=", "identity.session_id")
+            .onRef("active.event_seq", "=", "identity.seq"),
         )
-        .select("event.event_json")
+        .select("identity.seq")
         .where("identity.session_id", "=", projection.resolved.sessionId)
-        .where("identity.event_id", "=", leafEventId)
+        .where("identity.event_id", "=", entryId)
         .limit(1),
     );
-    if (!row) {
-      throw new Error(`Active transcript leaf event is missing: ${leafEventId}`);
-    }
-    return [JSON.parse(row.event_json) as TranscriptEvent];
+    return row ? "ancestor" : "off-path";
   });
 }
 

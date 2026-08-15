@@ -497,11 +497,15 @@ describe("openai transport stream", () => {
       replayContext({
         source: model,
         thinking: {
-          signature: testing.tagOpenAIResponsesReasoningReplayItem(
-            { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
-            model,
-            { authProfileId: "openai:oauth", sessionId: "session-123" },
-          ) as Record<string, unknown>,
+          signature: {
+            type: "reasoning",
+            id: "rs_prior",
+            encrypted_content: "ciphertext",
+            __openclaw_replay: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+              authProfileId: "openai:oauth",
+              sessionId: "session-123",
+            }),
+          },
         },
       }),
       { authProfileId: "openai:oauth", sessionId: "session-123" },

@@ -1,5 +1,6 @@
 /** Promotes safe standalone text tool calls into structured stream events. */
 import { randomUUID } from "node:crypto";
+import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import {
   createPromotedPlainTextToolCallEvents,
   normalizePlainTextToolCallStreamEvents,
@@ -55,6 +56,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       requireAssistantRole: true,
     });
     if (scrubbed) {
+      stripCompactionReplayCheckpointInPlace(scrubbed.message);
       return { kind: "scrubbed", ...scrubbed };
     }
     if (!params.allowPromotion) {
@@ -90,6 +92,9 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       resolveProtectedRanges: findCodeRegions,
       resolveToolName: (name) => resolveToolCallName(name, allowedToolNames, undefined, true),
     });
+    if (promoted) {
+      stripCompactionReplayCheckpointInPlace(promoted.message);
+    }
     return promoted ? { kind: "promoted", ...promoted } : undefined;
   };
 

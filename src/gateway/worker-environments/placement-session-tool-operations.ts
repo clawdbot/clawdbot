@@ -2,7 +2,11 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
-import { required, type WorkerSessionTurnClaim } from "./placement-record.js";
+import {
+  isCurrentPlacementTurnClaim,
+  required,
+  type WorkerSessionTurnClaim,
+} from "./placement-record.js";
 import { find, getRequired, query } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 
@@ -300,7 +304,16 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
 
     async closeWorkerTurnToolState(claim: WorkerSessionTurnClaim): Promise<void> {
       if (claim.owner.kind !== "worker") {
-        throw new Error(`Session ${claim.sessionId} turn is not worker-owned`);
+        write((db) => {
+          const current = getRequired(db, required(claim.sessionId, "session id"));
+          if (!isCurrentPlacementTurnClaim(current, claim)) {
+            throw new Error(`Session ${claim.sessionId} local turn authority changed`);
+          }
+          const identity = { sessionId: claim.sessionId, claimId: claim.claimId };
+          assertNoRunningWorkerSessionToolOperations(db, identity);
+          clearWorkerTurnToolState(db, identity);
+        });
+        return;
       }
       const identity = {
         sessionId: claim.sessionId,

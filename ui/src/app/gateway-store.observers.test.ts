@@ -11,7 +11,11 @@ import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
 
 vi.mock("../build-info.ts", () => ({
-  CONTROL_UI_BUILD_INFO: { version: "2026.7.2" },
+  CONTROL_UI_BUILD_INFO: { version: "2026.7.2", buildId: "test" },
+  controlUiBuildDiffersFrom: (identity: { version?: string | null; buildId?: string | null }) =>
+    identity.buildId
+      ? identity.buildId !== "test"
+      : Boolean(identity.version && identity.version !== "2026.7.2"),
 }));
 
 const HELLO: GatewayHelloOk = {

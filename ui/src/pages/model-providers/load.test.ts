@@ -96,7 +96,7 @@ describe("loadModelProvidersData", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
 
-    const result = await loadModelProvidersData(client);
+    const result = await loadModelProvidersData(client, { agentId: "main" });
 
     expect(result.authStatus).toBeNull();
     expect(result.models).toEqual([]);

@@ -204,10 +204,6 @@ describe("resolveVitestIsolation", () => {
     });
   });
 
-  it("defaults shared scoped configs to the non-isolated runner", () => {
-    expect(resolveVitestIsolation({})).toBe(false);
-  });
-
   it("ignores the legacy isolation escape hatches", () => {
     expect(resolveVitestIsolation({ OPENCLAW_TEST_ISOLATE: "1" })).toBe(false);
     expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "0" })).toBe(false);

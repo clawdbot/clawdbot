@@ -71,7 +71,11 @@ export function registerWebhooksCli(program: Command) {
         const parsed = parseGmailSetupOptions(opts);
         await runGmailSetup(parsed);
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        if (opts.json) {
+          defaultRuntime.writeJson({ error: String(err) });
+        } else {
+          defaultRuntime.error(danger(String(err)));
+        }
         defaultRuntime.exit(1);
       }
     });

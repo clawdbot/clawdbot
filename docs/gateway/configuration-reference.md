@@ -1260,6 +1260,26 @@ Reference env vars in any config string with `${VAR_NAME}`:
 
 Secret refs are additive: plaintext values still work.
 
+### `secrets.egressProxy`
+
+Default-off Gateway-owned substitution for shared-store `secret` entries used by agent exec subprocesses:
+
+```json5
+{
+  secrets: {
+    egressProxy: {
+      enabled: false,
+      bypassHosts: ["pinned-api.example.com"],
+    },
+  },
+}
+```
+
+- `enabled`: starts the loopback proxy and ephemeral CA at Gateway startup. Default: `false`. Changing it requires a Gateway restart.
+- `bypassHosts`: optional exact-hostname list for authenticated blind CONNECT tunnels used by certificate-pinned clients. Sentinels are not substituted on bypassed hosts and fail vendor authentication without exposing plaintext.
+
+See [Secret egress proxy](/gateway/secrets#secret-egress-proxy) for subprocess environment wiring, authentication, fail-closed behavior, and limitations.
+
 ### `SecretRef`
 
 Use one object shape:
