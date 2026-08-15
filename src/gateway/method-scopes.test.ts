@@ -161,6 +161,11 @@ describe("method scope resolution", () => {
       }),
     ).toEqual(["operator.admin"]);
     expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", {
+        command: "codex.appServer.threads.history.list.v1",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
       authorizeOperatorScopesForMethod("node.invoke", ["operator.write"], {
         command: "fs.listDir",
       }),
