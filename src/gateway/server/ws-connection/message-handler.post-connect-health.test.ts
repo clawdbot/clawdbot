@@ -269,7 +269,7 @@ function attachGatewayHarness(options: {
       return socket;
     }),
   } as unknown as WebSocket;
-  const send = vi.fn();
+  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
   let client: unknown = options.client ?? null;
   const requestHost = options.requestHost ?? "127.0.0.1:19001";
   const remoteAddr = options.remoteAddr ?? "127.0.0.1";

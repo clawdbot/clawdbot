@@ -113,23 +113,14 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       error?: ErrorShape,
       meta?: Record<string, unknown>,
     ) => {
-      let response = { ok, payload, error };
-      let frame = { type: "res", id: req.id, ...response };
-      try {
-        JSON.stringify(frame);
-      } catch (serializationError) {
-        logGateway.error(
-          `response serialization failed method=${req.method}: ${formatForLog(serializationError)}`,
-        );
-        response = {
-          ok: false,
-          payload: undefined,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "gateway response serialization failed"),
-        };
-        frame = { type: "res", id: req.id, ...response };
+      const sendResult = send({ type: "res", id: req.id, ok, payload, error });
+      if (sendResult.kind === "serialization") {
+        const detail = formatForLog(sendResult.error);
+        logGateway.error(`response serialization failed method=${req.method}: ${detail}`);
+        const fallback = errorShape(ErrorCodes.UNAVAILABLE, "response serialization failed");
+        return respond(false, undefined, fallback, meta);
       }
-      send(frame);
-      const unauthorizedRoleError = isUnauthorizedRoleError(response.error);
+      const unauthorizedRoleError = isUnauthorizedRoleError(error);
       let logMeta = meta;
       if (unauthorizedRoleError) {
         const unauthorizedDecision = unauthorizedFloodGuard.registerUnauthorized();
@@ -159,10 +150,10 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       logWs("out", "res", {
         connId,
         id: req.id,
-        ok: response.ok,
+        ok,
         method: req.method,
-        errorCode: response.error?.code,
-        errorMessage: response.error?.message,
+        errorCode: error?.code,
+        errorMessage: error?.message,
         ...logMeta,
       });
     };
