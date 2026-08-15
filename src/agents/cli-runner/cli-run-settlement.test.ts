@@ -215,16 +215,16 @@ describe("hasCliYieldContinuationEvidence", () => {
     expect(
       hasCliYieldContinuationEvidence({
         ...baseOutput,
-        hadApprovalPromptTool: true,
+        hadPendingApprovalTool: true,
       }),
     ).toBe(true);
   });
 
-  it("does not count hadApprovalPromptTool=false as continuation evidence", () => {
+  it("does not count hadPendingApprovalTool=false as continuation evidence", () => {
     expect(
       hasCliYieldContinuationEvidence({
         ...baseOutput,
-        hadApprovalPromptTool: false,
+        hadPendingApprovalTool: false,
       }),
     ).toBe(false);
   });

@@ -63,7 +63,7 @@ export type CliOutput = {
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   successfulCronAdds?: number;
   hadAsyncStartedTool?: boolean;
-  hadApprovalPromptTool?: boolean;
+  hadPendingApprovalTool?: boolean;
   yielded?: true;
   yieldAcknowledgment?: string;
 };

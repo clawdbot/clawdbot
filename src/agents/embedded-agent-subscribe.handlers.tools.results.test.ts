@@ -1,24 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { isApprovalPromptToolResult } from "./embedded-agent-subscribe.handlers.tools.results.js";
+import { isPendingApprovalToolResult } from "./embedded-agent-subscribe.handlers.tools.results.js";
 
-describe("isApprovalPromptToolResult", () => {
+describe("isPendingApprovalToolResult", () => {
   it("recognizes an approval-pending result", () => {
-    expect(isApprovalPromptToolResult({ details: { status: "approval-pending" } })).toBe(true);
+    expect(isPendingApprovalToolResult({ details: { status: "approval-pending" } })).toBe(true);
   });
 
-  it("recognizes an approval-unavailable result", () => {
-    expect(isApprovalPromptToolResult({ details: { status: "approval-unavailable" } })).toBe(true);
+  it("rejects an approval-unavailable result", () => {
+    // Regression: ClawSweeper flagged that approval-unavailable is an error/no-approval-route
+    // outcome, not a future completion -- a yield right after one still has no automatic wake.
+    expect(isPendingApprovalToolResult({ details: { status: "approval-unavailable" } })).toBe(
+      false,
+    );
   });
 
   it("rejects an unrelated status", () => {
-    expect(isApprovalPromptToolResult({ details: { status: "started" } })).toBe(false);
+    expect(isPendingApprovalToolResult({ details: { status: "started" } })).toBe(false);
   });
 
   it("rejects a result with no details", () => {
-    expect(isApprovalPromptToolResult({ text: "ok" })).toBe(false);
+    expect(isPendingApprovalToolResult({ text: "ok" })).toBe(false);
   });
 
   it("rejects a non-object result", () => {
-    expect(isApprovalPromptToolResult("ok")).toBe(false);
+    expect(isPendingApprovalToolResult("ok")).toBe(false);
   });
 });

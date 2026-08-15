@@ -260,7 +260,7 @@ export function hasCliYieldContinuationEvidence(output: CliOutput): boolean {
     hasAcceptedSessionSpawn(output.acceptedSessionSpawns) ||
     (output.successfulCronAdds ?? 0) > 0 ||
     output.hadAsyncStartedTool === true ||
-    output.hadApprovalPromptTool === true
+    output.hadPendingApprovalTool === true
   );
 }
 

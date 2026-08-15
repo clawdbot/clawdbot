@@ -31,9 +31,9 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
 import {
-  isApprovalPromptToolResult,
   isAsyncStartedToolResult,
   isCronAddAction,
+  isPendingApprovalToolResult,
 } from "../embedded-agent-subscribe.handlers.tools.results.js";
 import {
   extractToolResultMediaArtifact,
@@ -91,7 +91,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
   let successfulCronAdds = 0;
   let hadAsyncStartedTool = false;
-  let hadApprovalPromptTool = false;
+  let hadPendingApprovalTool = false;
   let inFlightUnclassifiedMcpRequests = 0;
   let inFlightMessagingToolCalls = 0;
   const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
@@ -473,8 +473,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           if (isAsyncStartedToolResult(call.result)) {
             hadAsyncStartedTool = true;
           }
-          if (isApprovalPromptToolResult(call.result)) {
-            hadApprovalPromptTool = true;
+          if (isPendingApprovalToolResult(call.result)) {
+            hadPendingApprovalTool = true;
           }
         }
       },
@@ -651,7 +651,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     acceptedSessionSpawns,
     successfulCronAdds,
     hadAsyncStartedTool,
-    hadApprovalPromptTool,
+    hadPendingApprovalTool,
   });
   return {
     beginGatewayCapture,
@@ -694,7 +694,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           ? { successfulCronAdds: current.successfulCronAdds }
           : {}),
         ...(current.hadAsyncStartedTool ? { hadAsyncStartedTool: true } : {}),
-        ...(current.hadApprovalPromptTool ? { hadApprovalPromptTool: true } : {}),
+        ...(current.hadPendingApprovalTool ? { hadPendingApprovalTool: true } : {}),
       };
     },
     attachDeliveryEvidence(error: unknown) {
