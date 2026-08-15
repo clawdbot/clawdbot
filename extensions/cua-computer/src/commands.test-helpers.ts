@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
 import { createCuaComputerProvider } from "./commands.js";
 import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
@@ -133,12 +134,16 @@ export function driver(
   };
 }
 
-export async function execution(session: CuaDriverSession) {
+export async function execution(
+  session: CuaDriverSession,
+  options: { resourceRoot?: string } = {},
+) {
   return await createCuaComputerProvider({
     platform: "linux",
     driver: session,
     imageProcessor: {
       encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
     },
-  }).openExecution({});
+    resourceRoot: options.resourceRoot,
+  }).openExecution({ executionId: randomUUID() });
 }

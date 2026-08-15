@@ -21,6 +21,7 @@ import {
   projectWindows,
   windowObservation,
 } from "./driver-result.js";
+import type { CuaExecutionState } from "./execution-state.js";
 import {
   adoptGeneration,
   resolveAppRef,
@@ -29,6 +30,7 @@ import {
   verifyGeneration,
   type CuaFrameState,
 } from "./frame.js";
+import { handleRecordingAct } from "./recording-actions.js";
 
 const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 const CUA_TARGETED_ACTION_NAMES = new Set([
@@ -216,6 +218,7 @@ export async function handleV2Act(
   platform: NodeJS.Platform,
   driver: CuaDriverSession,
   state: CuaFrameState,
+  execution: CuaExecutionState,
   params: ComputerActParams,
   handleDesktop: (
     driver: CuaDriverSession,
@@ -235,7 +238,17 @@ export async function handleV2Act(
   if ((CUA_WIRE_ACTION_NAMES as readonly string[]).includes(input.action)) {
     return await handleDesktop(driver, state, params, signal);
   }
-  const browserResult = await handleBrowserAct(driver, state, input, signal);
+  const recordingResult = await handleRecordingAct(
+    driver,
+    execution.recording,
+    execution.resources,
+    input,
+    signal,
+  );
+  if (recordingResult !== undefined) {
+    return recordingResult;
+  }
+  const browserResult = await handleBrowserAct(driver, state, execution.resources, input, signal);
   if (browserResult !== undefined) {
     return browserResult;
   }
