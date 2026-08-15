@@ -203,8 +203,6 @@ export function readTelegramUserProofLogTailBytes(env: NodeJS.ProcessEnv = proce
 }
 
 const LOG_READY_TAIL_BYTES = readTelegramUserProofLogTailBytes();
-const TELEGRAM_PROOF_WINDOW = TELEGRAM_DESKTOP_WINDOW;
-const TELEGRAM_PROOF_CROP = TELEGRAM_DESKTOP_CROP;
 
 function usageText() {
   return [
@@ -362,7 +360,7 @@ export function parseArgs(argvInput: string[]): Options {
     mockResponseText: "OPENCLAW_E2E_OK",
     mockPort: 19_882,
     outputDir: path.join(DEFAULT_OUTPUT_ROOT, createTelegramProofRunId()),
-    previewCropWidth: TELEGRAM_PROOF_CROP.cropWidth,
+    previewCropWidth: TELEGRAM_DESKTOP_CROP.cropWidth,
     previewFps: 24,
     previewWidth: 1920,
     provider: process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER?.trim() || "aws",
@@ -1725,7 +1723,7 @@ async function createMotionPreview(params: {
 
 function previewCrop(opts: Options) {
   return opts.previewCrop === "telegram-window"
-    ? { ...TELEGRAM_PROOF_CROP, cropWidth: opts.previewCropWidth }
+    ? { ...TELEGRAM_DESKTOP_CROP, cropWidth: opts.previewCropWidth }
     : undefined;
 }
 
@@ -2972,8 +2970,8 @@ async function viewSession(root: string, opts: Options, outputDir: string) {
     outputFile: logPath,
   });
   return {
-    crop: TELEGRAM_PROOF_CROP,
-    geometry: TELEGRAM_PROOF_WINDOW,
+    crop: TELEGRAM_DESKTOP_CROP,
+    geometry: TELEGRAM_DESKTOP_WINDOW,
     link,
     log: path.relative(root, logPath),
     status: "pass",
