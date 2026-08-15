@@ -292,11 +292,26 @@ openclaw-chat-sidebar-region,
   border-bottom: 0;
 }
 
+/* Width model: the tabs region takes the free space, but the strip itself sizes
+   to its tabs and is the only thing that clips. The new-tab control sits outside
+   that clip, so it hugs the last tab when everything fits and stays pinned at
+   the visible edge once the tabs overflow. */
+.side-panel__header-tabs {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+}
+
+.side-panel__header-tabs .side-panel-type-menu {
+  flex: 0 0 auto;
+}
+
 .side-panel__header .tabstrip {
   --track-width: 0;
   display: block;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   overflow: hidden;
 }
 

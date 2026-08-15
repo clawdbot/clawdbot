@@ -319,6 +319,8 @@ describe("chat sidebar region", () => {
     divider.dispatchEvent(
       new CustomEvent("resize", { bubbles: true, detail: { splitRatio: 0.5 } }),
     );
+    // Docked bottom: the cluster offers the alternative destination only.
+    expect(root(region).querySelector(".side-panel__dock-bottom")).toBeNull();
     root(region).querySelector<HTMLButtonElement>(".side-panel__dock-right")?.click();
 
     expect(region.callbacks?.resizePanel).toHaveBeenCalledWith(region.layout.columns[0]!.id, 400);

@@ -210,24 +210,27 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     const openUrl = activePanel ? this.panelOpenUrls[activePanel.slot] : null;
     return html`
       <header class="rail-header side-panel__header">
-        ${renderPanelTabStrip({
-          tabs,
-          activeId: active?.id ?? null,
-          ariaControls: "chat-side-panel-content",
-          onSelect: (panelId) => this.callbacks?.activatePanel(panelId),
-          onClose: (panelId) => {
-            const panel = column.panels.find((entry) => entry.id === panelId);
-            if (panel) {
-              this.callbacks?.closeSlot(panel.slot);
-            }
-          },
-          onNew: () => undefined,
-          newLabel: t("chat.sidePanel.addTab"),
-          newControl: this.renderTypeMenu(),
-          separateTabs: true,
-          onReorder: (panelId, targetPanelId, placement) =>
-            this.callbacks?.reorderPanel(panelId, targetPanelId, placement),
-        })}
+        <div class="side-panel__header-tabs">
+          ${renderPanelTabStrip({
+            tabs,
+            activeId: active?.id ?? null,
+            ariaControls: "chat-side-panel-content",
+            onSelect: (panelId) => this.callbacks?.activatePanel(panelId),
+            onClose: (panelId) => {
+              const panel = column.panels.find((entry) => entry.id === panelId);
+              if (panel) {
+                this.callbacks?.closeSlot(panel.slot);
+              }
+            },
+            onNew: () => undefined,
+            newLabel: t("chat.sidePanel.addTab"),
+            newControl: nothing,
+            separateTabs: true,
+            onReorder: (panelId, targetPanelId, placement) =>
+              this.callbacks?.reorderPanel(panelId, targetPanelId, placement),
+          })}
+          ${this.renderTypeMenu()}
+        </div>
         ${this.renderHeaderActions(openUrl)}
       </header>
     `;
@@ -238,29 +241,33 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       return nothing;
     }
     const dock = sidebarDock(this.layout);
+    // Destinations only: the current dock has nowhere to move to, so it drops
+    // out of the cluster instead of rendering as a pressed, coloured state.
     return html`<span class="side-panel__action-group side-panel__action-group--dock">
-      <openclaw-tooltip .content=${t("browser.dockBottom")}>
-        <button
-          class="rail-header__action side-panel__dock-bottom"
-          type="button"
-          aria-pressed=${String(dock === "bottom")}
-          aria-label=${t("browser.dockBottom")}
-          @click=${() => this.callbacks?.setDock("bottom")}
-        >
-          ${icons.panelBottomOpen}
-        </button>
-      </openclaw-tooltip>
-      <openclaw-tooltip .content=${t("browser.dockRight")}>
-        <button
-          class="rail-header__action side-panel__dock-right"
-          type="button"
-          aria-pressed=${String(dock === "right")}
-          aria-label=${t("browser.dockRight")}
-          @click=${() => this.callbacks?.setDock("right")}
-        >
-          ${icons.panelRightOpen}
-        </button>
-      </openclaw-tooltip>
+      ${dock === "bottom"
+        ? nothing
+        : html`<openclaw-tooltip .content=${t("browser.dockBottom")}>
+            <button
+              class="rail-header__action side-panel__dock-bottom"
+              type="button"
+              aria-label=${t("browser.dockBottom")}
+              @click=${() => this.callbacks?.setDock("bottom")}
+            >
+              ${icons.panelBottomOpen}
+            </button>
+          </openclaw-tooltip>`}
+      ${dock === "right"
+        ? nothing
+        : html`<openclaw-tooltip .content=${t("browser.dockRight")}>
+            <button
+              class="rail-header__action side-panel__dock-right"
+              type="button"
+              aria-label=${t("browser.dockRight")}
+              @click=${() => this.callbacks?.setDock("right")}
+            >
+              ${icons.panelRightOpen}
+            </button>
+          </openclaw-tooltip>`}
     </span>`;
   }
 

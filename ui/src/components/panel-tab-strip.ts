@@ -19,7 +19,7 @@ export type PanelTabStripTab = {
   closeLabel: string;
 };
 
-const reconciledTabOrders = new WeakMap<Element, string>();
+const reconciledTabLayouts = new WeakMap<Element, string>();
 const keyboardCloseActivations = new WeakSet<Element>();
 const PANEL_TAB_DRAG_TYPE = "application/x-openclaw-panel-tab";
 
@@ -87,19 +87,19 @@ function panelTabLabelOverflowRef() {
 
 function reconcileSelectedTabElement(
   element: Element | undefined,
-  tabOrder: string,
+  layoutKey: string,
   restoreFocus: boolean,
 ): void {
   if (!(element instanceof HTMLElement)) {
     return;
   }
-  const orderChanged = reconciledTabOrders.get(element) !== tabOrder;
-  reconciledTabOrders.set(element, tabOrder);
-  if (!orderChanged && !restoreFocus) {
+  const layoutChanged = reconciledTabLayouts.get(element) !== layoutKey;
+  reconciledTabLayouts.set(element, layoutKey);
+  if (!layoutChanged && !restoreFocus) {
     return;
   }
-  // Keyed movement can make the browser briefly focus the document or move the
-  // selected tab outside the overflow viewport. Reconcile only those changes.
+  // Keyed movement or a new selection can leave the active tab clipped by the
+  // overflow viewport, which reads as an icon-only tab. Reconcile those changes.
   queueMicrotask(() => {
     if (!element.isConnected) {
       return;
@@ -165,7 +165,9 @@ export function renderPanelTabStrip(params: {
     params.tabs.some((tab) => tab.domId === activeElement.id)
       ? activeElement.id
       : null;
-  const tabOrder = params.tabs.map((tab) => tab.id).join("\u0000");
+  // Selection belongs in the key: activating a clipped tab has to scroll it back
+  // into view, otherwise it stays cut off at the viewport edge as icon-only.
+  const layoutKey = [params.activeId ?? "", ...params.tabs.map((tab) => tab.id)].join("\u0000");
   return html`
     <wa-tab-group
       class="tabstrip"
@@ -205,7 +207,7 @@ export function renderPanelTabStrip(params: {
               .tabIndex=${selected ? 0 : -1}
               ${selected
                 ? ref((element) =>
-                    reconcileSelectedTabElement(element, tabOrder, focusedTabDomId === tab.domId),
+                    reconcileSelectedTabElement(element, layoutKey, focusedTabDomId === tab.domId),
                   )
                 : nothing}
               @auxclick=${(event: MouseEvent) => {
