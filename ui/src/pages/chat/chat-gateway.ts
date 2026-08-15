@@ -527,6 +527,14 @@ function handleChatEvent(
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
   if (isChatHistoryAnchorIsolated(state) && payload && chatEventSessionMatches(state, payload)) {
+    if (isTerminalChatState(payload.state)) {
+      const activeRunIdBeforeEvent = state.chatRunId;
+      const preserveInCanonicalCache = { canonicalCacheOnly: true };
+      if (!isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)) {
+        retireSteeredChipsForTerminalRun(state, payload.runId, preserveInCanonicalCache);
+      }
+      retireSteeredChipsForRequestRun(state, payload.runId, preserveInCanonicalCache);
+    }
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {

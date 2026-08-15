@@ -182,7 +182,15 @@ function durableDeliveredAttachments(
   });
 }
 
-export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueueItem): void {
+type PreserveQueuedUserTurnOptions = {
+  canonicalCacheOnly?: boolean;
+};
+
+export function preserveQueuedUserTurn(
+  state: SteerLifecycleHost,
+  item: ChatQueueItem,
+  options: PreserveQueuedUserTurnOptions = {},
+): void {
   const runId = item.sendRunId;
   const sessionKey = item.sessionKey ?? state.sessionKey;
   if (!runId) {
@@ -201,7 +209,7 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
     timestamp: item.createdAt,
     __openclaw: { idempotencyKey: `${runId}:user` },
   };
-  if (visibleSessionMatches(state, sessionKey, item.agentId)) {
+  if (!options.canonicalCacheOnly && visibleSessionMatches(state, sessionKey, item.agentId)) {
     if (!chatMessagesContainQueuedSend(state.chatMessages, item, true)) {
       const scope = readChatSessionProjectionScope(state, {
         sessionKey,
@@ -230,6 +238,7 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
 export function retireSteeredChipsForTerminalRun(
   state: SteerLifecycleHost,
   runId: string | undefined,
+  options: PreserveQueuedUserTurnOptions = {},
 ): number | undefined {
   if (!runId) {
     return undefined;
@@ -244,7 +253,7 @@ export function retireSteeredChipsForTerminalRun(
       ) {
         firstPersistedSteerIndex = persistedIndex;
       }
-      preserveQueuedUserTurn(state, item);
+      preserveQueuedUserTurn(state, item, options);
     }
   }
   clearPendingQueueItemsForRun(state, runId);
@@ -254,6 +263,7 @@ export function retireSteeredChipsForTerminalRun(
 export function retireSteeredChipsForRequestRun(
   state: SteerLifecycleHost,
   runId: string | undefined,
+  options: PreserveQueuedUserTurnOptions = {},
 ): number | undefined {
   if (!runId) {
     return undefined;
@@ -270,7 +280,7 @@ export function retireSteeredChipsForRequestRun(
       (candidate) => candidate.id !== item.id && candidate.sendRunId === item.pendingRunId,
     );
     if (target) {
-      preserveQueuedUserTurn(state, target);
+      preserveQueuedUserTurn(state, target, options);
     }
     const persistedIndex = findQueuedSendMessageIndex(state.chatMessages, item, true);
     if (
@@ -279,7 +289,7 @@ export function retireSteeredChipsForRequestRun(
     ) {
       firstPersistedSteerIndex = persistedIndex;
     }
-    preserveQueuedUserTurn(state, item);
+    preserveQueuedUserTurn(state, item, options);
   }
   if (landed.length > 0) {
     const landedIds = new Set(landed.map((item) => item.id));
