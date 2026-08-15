@@ -23,6 +23,7 @@ import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/sessi
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -232,6 +233,8 @@ export type RunCliAgentParams = {
   toolsAllow?: string[];
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Server-authored origin for fresh automation mutations from this CLI run. */
+  cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
   /** Exact native plus canonical OpenClaw surface for a selectable CLI backend. */
   cliToolAvailability?: {
     native: string[];

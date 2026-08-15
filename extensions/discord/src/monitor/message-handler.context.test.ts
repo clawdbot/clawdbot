@@ -33,6 +33,18 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
     expect(result.ctxPayload.NativeChannelId).toBe(ctx.messageChannelId);
   });
 
+  it("records the canonical guild id when no configured guild entry exists", async () => {
+    const ctx = await createBaseDiscordMessageContext({
+      data: { guild: { id: "guild-id", name: "Friendly Guild" } },
+      guildInfo: null,
+      guildSlug: "friendly-guild",
+    });
+
+    const result = await buildDiscordMessageProcessContext({ ctx, text: "hi", mediaList: [] });
+
+    expect(result?.ctxPayload.GroupSpace).toBe("guild-id");
+  });
+
   it("forwards bot author status to ctxPayload.SenderIsBot", async () => {
     const ctx = await createBaseDiscordMessageContext({
       author: { id: "U1", username: "alice", discriminator: "0", globalName: "Alice", bot: true },

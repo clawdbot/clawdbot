@@ -10,7 +10,10 @@ import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
-import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import {
+  normalizeCronScheduledToolCallerOrigin,
+  normalizeCronScheduledToolPolicy,
+} from "../scheduled-tool-policy.js";
 import type {
   CronJobState,
   CronPacing,
@@ -302,7 +305,13 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
     isRecord(jobJson.toolsAllowProvenance) &&
     jobJson.toolsAllowProvenance.version === 1 &&
     jobJson.toolsAllowProvenance.source === "final-executable-surface"
-      ? ({ version: 1, source: "final-executable-surface" } as const)
+      ? ({
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: normalizeCronScheduledToolCallerOrigin(
+            jobJson.toolsAllowProvenance.callerOrigin,
+          ),
+        } as const)
       : undefined;
   if (!schedule || !payload) {
     return null;
