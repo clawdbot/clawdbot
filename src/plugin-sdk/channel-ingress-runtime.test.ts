@@ -58,13 +58,14 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
 
   it("settles or abandons claims that no reply lane adopted", async () => {
     const adopted = vi.fn(async () => {});
+    const failed = vi.fn(async () => {});
     const abandoned = vi.fn(async () => {});
     const lifecycle = {
       abortSignal: new AbortController().signal,
       onAdopted: adopted,
       onDeferred: vi.fn(),
       onAdoptionFinalizing: vi.fn(),
-      onFailed: vi.fn(async () => {}),
+      onFailed: failed,
       onAbandoned: abandoned,
     };
 
@@ -73,6 +74,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
 
     expect(adopted).toHaveBeenCalledOnce();
     expect(abandoned).toHaveBeenCalledOnce();
+    expect(failed).not.toHaveBeenCalled();
     expect(fanInChannelIngressLifecycles([]).lifecycle).toBeUndefined();
   });
 
@@ -127,7 +129,8 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     expect(second.cancellationCount).toBe(1);
   });
 
-  it("can abandon claims after terminal settlement adoption fails", async () => {
+  it("fails claims with the exact error after terminal settlement adoption fails", async () => {
+    const failed = vi.fn(async () => {});
     const abandoned = vi.fn(async () => {});
     const combined = fanInChannelIngressLifecycles([
       {
@@ -137,15 +140,17 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
         },
         onDeferred: vi.fn(),
         onAdoptionFinalizing: vi.fn(),
-        onFailed: vi.fn(async () => {}),
+        onFailed: failed,
         onAbandoned: abandoned,
       },
     ]);
 
     await expect(combined.settle()).rejects.toThrow("adoption failed");
-    await combined.abandon(new Error("dispatch failed"));
+    const failure = new Error("dispatch failed");
+    await combined.abandon(failure);
 
-    expect(abandoned).toHaveBeenCalledOnce();
+    expect(failed).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(abandoned).not.toHaveBeenCalled();
   });
 
   it("derives store allowlists, command auth, sender separation, and redaction", async () => {

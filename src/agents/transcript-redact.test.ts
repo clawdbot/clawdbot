@@ -314,6 +314,104 @@ describe("redactTranscriptMessage", () => {
     expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
   });
 
+  it("preserves validated Anthropic compaction state while redacting its summary", () => {
+    const msg = {
+      role: "assistant",
+      api: "anthropic-messages",
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay: {
+        v: 1,
+        type: "anthropic-compaction",
+        data: "summary containing sk-abcdef1234567890xyz",
+        replayIndex: 0,
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+        secret: "sk-another-secret-value",
+      },
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      providerReplay: Record<string, unknown>;
+    };
+
+    expect(result.providerReplay).toMatchObject({
+      v: 1,
+      type: "anthropic-compaction",
+      replayIndex: 0,
+      provider: "anthropic",
+      api: "anthropic-messages",
+      model: "claude-sonnet-4-6",
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    });
+    expect(result.providerReplay.data).toContain("summary containing");
+    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+    expect(result.providerReplay).not.toHaveProperty("secret");
+  });
+
+  it("preserves Anthropic suppression and drops malformed or foreign replay state", () => {
+    const base = {
+      role: "assistant",
+      api: "anthropic-messages",
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+      content: [{ type: "text", text: "visible" }],
+    };
+    const suppression = redactTranscriptMessage(
+      {
+        ...base,
+        providerReplay: {
+          v: 1,
+          type: "anthropic-compaction-suppression",
+          data: "rejected",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-sonnet-4-6",
+          baseUrlHash: "ozhevd1smnk8s",
+        },
+      } as unknown as AgentMessage,
+      cfg("tools"),
+    ) as unknown as { providerReplay: Record<string, unknown> };
+    expect(suppression.providerReplay).toMatchObject({
+      type: "anthropic-compaction-suppression",
+      data: "rejected",
+    });
+
+    for (const providerReplay of [
+      {
+        v: 1,
+        type: "anthropic-compaction",
+        data: "",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "ozhevd1smnk8s",
+      },
+      {
+        v: 1,
+        type: "anthropic-compaction",
+        data: "summary",
+        provider: "other-provider",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "ozhevd1smnk8s",
+      },
+    ]) {
+      const result = redactTranscriptMessage(
+        { ...base, providerReplay } as unknown as AgentMessage,
+        cfg("tools"),
+      );
+      expect(result).not.toHaveProperty("providerReplay");
+    }
+  });
+
   it.each([
     ["oversized", "i".repeat(10_000)],
     ["non-string", 42],

@@ -181,6 +181,42 @@ struct DashboardGatewaysBridgeTests {
 @Suite(.serialized)
 @MainActor
 struct DashboardManagerGatewayTargetTests {
+    @Test func `background configuration keeps the gateway profile registry cold`() async {
+        var catalogReads = 0
+        let manager = DashboardManager._testMake(
+            observeGatewayChanges: true,
+            automaticGatewayProfileRefreshEnabled: false,
+            gatewayEntriesProvider: {
+                catalogReads += 1
+                return []
+            })
+
+        manager.configure(updater: DashboardGatewayTestUpdater())
+        NotificationCenter.default.post(name: MacGatewayProfileStore.didChangeNotification, object: nil)
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        #expect(catalogReads == 0)
+        #expect(manager._testGatewayRefreshObserverCount() == 0)
+    }
+
+    @Test func `interactive configuration retains the gateway profile refresh`() async {
+        var catalogReads = 0
+        let manager = DashboardManager._testMake(
+            gatewayEntriesProvider: {
+                catalogReads += 1
+                return []
+            })
+
+        manager.configure(updater: DashboardGatewayTestUpdater())
+        for _ in 0..<20 where catalogReads == 0 {
+            await Task.yield()
+        }
+
+        #expect(catalogReads == 1)
+    }
+
     @Test func `primary window configuration retains resolved TLS policy`() async throws {
         let state = AppStateStore.shared
         let originalMode = state.connectionMode

@@ -190,6 +190,16 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for gateway restart control",
+      commandPath: ["gateway", "restart"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for legacy daemon restart control",
+      commandPath: ["daemon", "restart"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "skips doctor flow for config set",
       commandPath: ["config", "set"],
       expectedDoctorCalls: 0,
@@ -290,6 +300,19 @@ describe("ensureConfigReady", () => {
     await runEnsureConfigReady(["gateway", "call"]);
 
     expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["gateway", "restart"],
+    ["daemon", "restart"],
+  ])("keeps %s control from migrating existing local legacy state", async (command, action) => {
+    const root = useTempOpenClawHome();
+    writeLegacyTaskSidecarMarker(root);
+
+    await runEnsureConfigReady([command, action]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
   });
 
   it("keeps logs from migrating existing local legacy state", async () => {

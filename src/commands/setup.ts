@@ -230,7 +230,15 @@ export async function setupCommand(
 
   if (!snapshot.exists) {
     const { ensureOnboardingAgent } = await import("./onboard-agent.js");
-    next = (await ensureOnboardingAgent({ config: next, workspace, baseConfig: cfg })).config;
+    const onboardingAgent = await ensureOnboardingAgent({
+      config: next,
+      workspace,
+      baseConfig: cfg,
+    });
+    next = onboardingAgent.config;
+    for (const warning of onboardingAgent.sessionMigrationWarnings ?? []) {
+      runtime.log(`Warning: ${warning}`);
+    }
   }
 
   const configChanged =

@@ -142,7 +142,7 @@ export async function downloadVerifiedFile(params: {
             break;
           }
           const chunk = Buffer.from(value);
-          await handle.write(chunk);
+          await handle.writeFile(chunk);
           hash.update(chunk);
           downloadedSize += chunk.byteLength;
           const now = Date.now();

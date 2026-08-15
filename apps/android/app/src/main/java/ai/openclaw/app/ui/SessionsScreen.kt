@@ -376,7 +376,13 @@ internal fun SessionsScreen(
               onRename = { renameSessionTarget = session.toActionTarget(activeGatewayStableId) },
               onFork = {
                 coroutineScope.launch {
-                  viewModel.forkChatSession(session.key, session.ownerAgentId)?.let { newKey ->
+                  val newKey =
+                    viewModel.forkChatSession(
+                      session.key,
+                      session.ownerAgentId,
+                      fromLastCompleted = session.hasActiveRun == true,
+                    )
+                  if (newKey != null) {
                     viewModel.switchChatSession(newKey, session.ownerAgentId)
                     onOpenChat()
                   }
@@ -727,7 +733,11 @@ private fun SessionRow(
             menuExpanded = false
             onRename()
           }
-          SessionMenuItem(nativeString("Fork")) {
+          SessionMenuItem(
+            nativeString(
+              if (session.hasActiveRun == true) "Fork from last completed message" else "Fork",
+            ),
+          ) {
             menuExpanded = false
             onFork()
           }

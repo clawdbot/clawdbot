@@ -11,7 +11,11 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentEffectiveModelPrimary,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import {
   listProfilesForProvider,
   loadAuthProfileStoreForRuntime,
@@ -27,7 +31,6 @@ import {
 } from "../../agents/simple-completion-runtime.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
@@ -46,6 +49,7 @@ import {
   providerHasGenericConfig,
   providerSummaryText,
   requireProviderModelOverride,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
   resolveTransport,
@@ -54,8 +58,8 @@ import {
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
-async function loadModelCatalogForInspection(cfg: OpenClawConfig) {
-  const prepared = await loadPreparedModelCatalog({ config: cfg, readOnly: true });
+async function loadModelCatalogForInspection(cfg: OpenClawConfig, agentId?: string) {
+  const prepared = await loadPreparedModelCatalog({ config: cfg, agentId, readOnly: true });
   const metadataSnapshot = loadManifestMetadataSnapshot({ config: cfg, env: process.env });
   const manifest = planEffectiveModelCatalogRows({
     registry: metadataSnapshot.manifestRegistry,
@@ -342,11 +346,12 @@ async function runModelRun(params: {
   } satisfies CapabilityEnvelope;
 }
 
-async function buildModelProviders() {
+async function buildModelProviders(rawAgentId?: string) {
   const cfg = getRuntimeConfig();
-  const catalog = await loadModelCatalogForInspection(cfg);
+  const agentId = resolveCapabilityProviderAgentId(cfg, rawAgentId);
+  const catalog = await loadModelCatalogForInspection(cfg, agentId);
   const selectedProvider = resolveSelectedProviderFromModelRef(
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+    resolveAgentEffectiveModelPrimary(cfg, agentId),
   );
   const grouped = new Map<
     string,
@@ -368,6 +373,7 @@ async function buildModelProviders() {
       configured: providerHasGenericConfig({
         cfg,
         providerId: entry.provider,
+        agentId,
         envVars: getProviderEnvVars(entry.provider),
       }),
       selected: selectedProvider === entry.provider,
@@ -511,10 +517,11 @@ export function registerModelCapabilityCommands(capability: Command): void {
   model
     .command("providers")
     .description("List model providers from the catalog")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await buildModelProviders();
+        const result = await buildModelProviders(opts.agent as string | undefined);
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });

@@ -234,6 +234,7 @@ export async function installPluginFromNpmPackArchive(
 
   const result = await installPluginFromManagedNpmRoot({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
     packageName,

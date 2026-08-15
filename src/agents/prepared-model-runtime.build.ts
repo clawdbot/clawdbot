@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
@@ -72,6 +73,9 @@ function runSerializedPreparedModelRuntimeTask<T>(params: {
     if (previous) {
       await previous;
     }
+    // Workspace generations serialize to bound heap growth. Yield before the first and between
+    // later builds so queued Gateway accepts and health probes always get an admission turn.
+    await yieldToEventLoop();
     if (!params.isCurrent()) {
       throw new PreparedModelRuntimePublicationSupersededError(
         `prepared model runtime catalog generation was superseded for ${params.agentDir}`,

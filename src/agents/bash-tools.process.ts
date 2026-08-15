@@ -170,8 +170,8 @@ function finishedPollResult(
 ): AgentToolResult<unknown> {
   resetPollRetrySuggestion(sessionId);
   acknowledgeNotifyOnExit(finished);
-  const { stdout, stderr, outputDropped } = drainFinishedSession(finished);
-  const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+  const { output: unreadOutput, outputDropped } = drainFinishedSession(finished);
+  const output = unreadOutput.trim();
   // Omitted retained output is pageable only while this public id still owns
   // the exact snapshot; a reused slug must never point the model at successor logs.
   const retainedOutputNote = outputDropped
@@ -461,8 +461,8 @@ export function createProcessTool(
             resetPollRetrySuggestion(params.sessionId);
             return failText(`No session found for ${params.sessionId}`);
           }
-          const { stdout, stderr, outputDropped } = drainSession(scopedSession);
-          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const { output: unreadOutput, outputDropped } = drainSession(scopedSession);
+          const output = unreadOutput.trim();
           const aggregateOutputNote = retentionCapNote(scopedSession);
           const retainedOutputNote = outputDropped
             ? "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]"

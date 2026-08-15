@@ -337,9 +337,10 @@ export async function healthCommand(
               } satisfies AgentHealthSummary;
             }),
           );
-    const displayAgents = opts.verbose
-      ? resolvedAgents
-      : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
+    const displayAgents =
+      opts.verbose || !defaultAgentId
+        ? resolvedAgents
+        : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
     const channelBindings = buildChannelAccountBindings(cfg);
     const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
       includeSetupFallbackPlugins: false,

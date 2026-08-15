@@ -44,6 +44,7 @@ export function logNonInteractiveOnboardingJson(params: {
     bind: string;
     authMode: string;
     tailscaleMode: string;
+    reachable?: boolean;
   };
   installDaemon?: boolean;
   daemonInstall?: {
@@ -99,7 +100,7 @@ function hasConnectionRefusedDetail(detail: string): boolean {
   return /\b(?:econnrefused|connection refused|connect refused)\b/i.test(detail);
 }
 
-function classifyGatewayHealthFailure(params: {
+export function classifyGatewayHealthFailure(params: {
   detail?: string;
   diagnostics?: GatewayHealthFailureDiagnostics;
 }): GatewayHealthFailureClassification | undefined {
@@ -183,6 +184,7 @@ export function logNonInteractiveOnboardingFailure(params: {
   };
   daemonRuntime?: string;
   diagnostics?: GatewayHealthFailureDiagnostics;
+  informational?: boolean;
 }) {
   const classification = classifyGatewayHealthFailure({
     detail: params.detail,
@@ -229,5 +231,9 @@ export function logNonInteractiveOnboardingFailure(params: {
     .filter(Boolean)
     .join("\n");
 
-  params.runtime.error(lines);
+  if (params.informational) {
+    params.runtime.log(lines);
+  } else {
+    params.runtime.error(lines);
+  }
 }

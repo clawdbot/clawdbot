@@ -29,9 +29,13 @@ type InProcessDispatchMock = (
   options?: Record<string, unknown>,
 ) => Promise<Record<string, unknown>>;
 type AdvanceSessionDeliveryAgentRunMock =
-  typeof import("../infra/session-delivery-queue.js").advanceSessionDeliveryAgentRun;
+  typeof import("../infra/session-delivery-queue-storage.js").advanceSessionDeliveryAgentRun;
+type DeferSessionDeliveryMock =
+  typeof import("../infra/session-delivery-queue-storage.js").deferSessionDelivery;
+type FailSessionDeliveryMock =
+  typeof import("../infra/session-delivery-queue-storage.js").failSessionDelivery;
 type RecoverPendingSessionDeliveriesMock =
-  typeof import("../infra/session-delivery-queue.js").recoverPendingSessionDeliveries;
+  typeof import("../infra/session-delivery-queue-recovery.js").recoverPendingSessionDeliveries;
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -144,8 +148,8 @@ const mocks = vi.hoisted(() => {
     requestHeartbeat: vi.fn(),
     enqueueSessionDelivery: vi.fn(),
     advanceSessionDeliveryAgentRun: vi.fn<AdvanceSessionDeliveryAgentRunMock>(async () => {}),
-    deferSessionDelivery: vi.fn(async () => {}),
-    failSessionDelivery: vi.fn(async () => {}),
+    deferSessionDelivery: vi.fn<DeferSessionDeliveryMock>(async () => {}),
+    failSessionDelivery: vi.fn<FailSessionDeliveryMock>(async () => {}),
     markSessionDeliveryAttemptStarted: vi.fn(async () => {}),
     markSessionDeliverySettlement: vi.fn(async () => {}),
     appendAssistantMessageToSessionTranscript: vi.fn(async () => ({
@@ -205,12 +209,21 @@ vi.mock("../infra/restart-sentinel.js", () => ({
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
 }));
 
-vi.mock("../infra/session-delivery-queue.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/session-delivery-queue.js")>();
+vi.mock("../infra/session-delivery-queue-storage.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../infra/session-delivery-queue-storage.js")>();
   mocks.enqueueSessionDelivery.mockImplementation(actual.enqueueSessionDelivery);
+  mocks.deferSessionDelivery.mockImplementation(async (id, delayMs, stateDir) => {
+    if (await actual.loadPendingSessionDelivery(id, stateDir)) {
+      await actual.deferSessionDelivery(id, delayMs, stateDir);
+    }
+  });
+  mocks.failSessionDelivery.mockImplementation(async (id, error, stateDir, options) => {
+    if (await actual.loadPendingSessionDelivery(id, stateDir)) {
+      await actual.failSessionDelivery(id, error, stateDir, options);
+    }
+  });
   mocks.loadPendingSessionDelivery.mockImplementation(actual.loadPendingSessionDelivery);
-  mocks.drainPendingSessionDeliveries.mockImplementation(actual.drainPendingSessionDeliveries);
-  mocks.recoverPendingSessionDeliveries.mockImplementation(actual.recoverPendingSessionDeliveries);
   return {
     ...actual,
     advanceSessionDeliveryAgentRun: mocks.advanceSessionDeliveryAgentRun,
@@ -220,6 +233,16 @@ vi.mock("../infra/session-delivery-queue.js", async (importOriginal) => {
     loadPendingSessionDelivery: mocks.loadPendingSessionDelivery,
     markSessionDeliveryAttemptStarted: mocks.markSessionDeliveryAttemptStarted,
     markSessionDeliverySettlement: mocks.markSessionDeliverySettlement,
+  };
+});
+
+vi.mock("../infra/session-delivery-queue-recovery.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../infra/session-delivery-queue-recovery.js")>();
+  mocks.drainPendingSessionDeliveries.mockImplementation(actual.drainPendingSessionDeliveries);
+  mocks.recoverPendingSessionDeliveries.mockImplementation(actual.recoverPendingSessionDeliveries);
+  return {
+    ...actual,
     drainPendingSessionDeliveries: mocks.drainPendingSessionDeliveries,
     recoverPendingSessionDeliveries: mocks.recoverPendingSessionDeliveries,
   };
@@ -310,22 +333,20 @@ vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
-vi.mock("../infra/outbound/delivery-queue.js", () => ({
-  enqueueDeliveryOnce: mocks.enqueueDeliveryOnce,
+vi.mock("../infra/outbound/delivery-queue-storage.js", () => ({
   ackDelivery: mocks.ackDelivery,
   failDelivery: mocks.failDelivery,
   failDeliveryAfterPlatformSend: mocks.failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend: mocks.failDeliveryBeforePlatformSend,
-  drainPendingDeliveriesCore: mocks.drainPendingDeliveries,
-  withActiveDeliveryClaim: mocks.withActiveDeliveryClaim,
-}));
-
-vi.mock("../infra/outbound/delivery-queue-storage.js", () => ({
   failPendingDelivery: mocks.failPendingDelivery,
   findDeliveryIntentOwner: mocks.findDeliveryIntentOwner,
   loadPendingDelivery: async () =>
     mocks.takeInitialOutboundDelivery() ?? (await mocks.loadPendingDelivery()),
   reserveDeliveryAttempt: mocks.reserveDeliveryAttempt,
+}));
+vi.mock("../infra/outbound/delivery-queue-recovery.js", () => ({
+  drainPendingDeliveriesCore: mocks.drainPendingDeliveries,
+  withActiveDeliveryClaim: mocks.withActiveDeliveryClaim,
 }));
 
 vi.mock("../infra/outbound/delivery-queue-preparation.js", () => ({

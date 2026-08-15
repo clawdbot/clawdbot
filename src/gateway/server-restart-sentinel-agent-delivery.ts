@@ -29,7 +29,7 @@ import {
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
   type SessionDeliveryRoute,
-} from "../infra/session-delivery-queue.js";
+} from "../infra/session-delivery-queue-storage.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";

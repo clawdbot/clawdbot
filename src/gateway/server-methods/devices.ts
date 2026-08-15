@@ -28,6 +28,7 @@ import {
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import {
@@ -522,6 +523,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     context.invalidateClientsForDevice?.(removed.deviceId, {
       reason: "device-pair-removed",
     });
+    await reconcileRevokedDeviceWorker(context, removed.deviceId);
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     emitDevicePairingLifecycleSecurityEvent({
       action: "device.pairing.removed",

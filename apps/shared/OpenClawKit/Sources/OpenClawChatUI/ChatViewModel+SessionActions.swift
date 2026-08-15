@@ -375,11 +375,15 @@ extension OpenClawChatViewModel {
         }
     }
 
-    public func forkSession(key: String) async {
+    public func forkSession(key: String, fromLastCompleted: Bool? = nil) async {
         guard self.canCreateSessionForImmediateSwitch() else { return }
         let initiatingSession = self.currentSessionSnapshot()
         do {
-            let createdKey = try await self.transport.forkSession(parentKey: key)
+            let stableBoundary = fromLastCompleted ??
+                (self.sessions.first(where: { $0.key == key })?.hasActiveRun == true)
+            let createdKey = try await self.transport.forkSession(
+                parentKey: key,
+                fromLastCompleted: stableBoundary)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !createdKey.isEmpty else { return }
             guard self.isCurrentSession(initiatingSession), self.canCreateSessionForImmediateSwitch() else {

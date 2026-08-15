@@ -159,11 +159,15 @@ function createApprovalRequestPolicy(params?: {
   timeoutMs?: number;
   title?: string;
   description?: string;
+  toolName?: string;
+  agentId?: string;
 }): NodeInvokePolicyRegistration {
   return createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
     const approval = await ctx.approvals?.request({
       title: params?.title ?? "Sensitive action",
       description: params?.description ?? "Needs approval",
+      ...(params?.toolName === undefined ? {} : { toolName: params.toolName }),
+      ...(params?.agentId === undefined ? {} : { agentId: params.agentId }),
       ...(params?.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
     });
     return { ok: true, payload: approval ?? null };
@@ -639,6 +643,37 @@ describe("applyPluginNodeInvokePolicy", () => {
       visibleConnIds,
       { dropIfSlow: true },
     );
+
+    await expectApprovalResolution(resultPromise, manager, record);
+  });
+
+  it("sanitizes node-policy approval titles at creation like the RPC ingress", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    const getApprovalClientConnIds = createApprovalClientLookup([
+      createApprovalClient({
+        connId: "conn-owner-approval",
+        clientId: "client-owner",
+        deviceId: "device-owner",
+      }),
+    ]);
+    setDangerousDemoCommandRegistry([
+      // Bidi override + zero-width space: reviewer-spoofing characters.
+      createApprovalRequestPolicy({
+        title: "Deploy‮yolped",
+        description: "safe​text",
+        toolName: "tool‮run",
+        agentId: "agent​x",
+      }),
+    ]);
+    const { context } = createContext({ pluginApprovalManager: manager, getApprovalClientConnIds });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request.title).toBe("Deploy\\u{202E}yolped");
+    expect(record.request.description).toBe("safe\\u{200B}text");
+    // Metadata is interpolated into channel approval text lines.
+    expect(record.request.toolName).toBe("tool\\u{202E}run");
+    expect(record.request.agentId).toBe("agent\\u{200B}x");
 
     await expectApprovalResolution(resultPromise, manager, record);
   });

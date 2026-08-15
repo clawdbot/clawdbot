@@ -114,13 +114,15 @@ export function createWorkerSshRunner(): WorkerSshRunner {
       let exitEventResult: WorkerSshProcessExit | undefined;
       child.once("exit", (code, signal) => {
         exitEventResult = { code, signal };
-        settleReadyError();
         settleExited(exitEventResult);
-        // Release our pipe ends so a descendant holding the other side cannot pin local
-        // descriptors across retries; this also lets "close" fire promptly.
         child.stdin.destroy();
-        child.stdout.destroy();
-        child.stderr.destroy();
+        // Give queued output one I/O turn to reach the diagnostic buffers without waiting
+        // for "close", which a descendant holding the pipe can delay indefinitely.
+        setImmediate(() => {
+          settleReadyError();
+          child.stdout.destroy();
+          child.stderr.destroy();
+        });
       });
       child.once("close", (code, signal) => {
         closed = true;

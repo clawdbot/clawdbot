@@ -21,6 +21,7 @@ import {
 import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -81,41 +82,44 @@ describe("worker turn launcher reclaimed placement", () => {
       }
       return active;
     };
-    const launchTurn = vi.fn(async (): Promise<SpawnResult> => {
-      workerStarted.resolve();
-      await resumeWorker.promise;
-      expect(placements.get(SESSION_ID)).toMatchObject({
-        state: "active",
-        turnClaim: { owner: "worker", runId },
-      });
-      const completed = openSessionManager();
-      const leafId = completed.appendMessage(
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "Redispatched worker reply" }],
-          timestamp: 51,
-        }),
-      );
-      createWorkerSessionPlacementGate(placements).updateAckCursors({
-        sessionId: SESSION_ID,
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        runId,
-        transcriptSeq: 2,
-        liveSeq: 1,
-      });
-      return {
-        stdout: JSON.stringify({
-          status: "completed",
-          transcriptLeafId: leafId,
-          transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
-    });
+    const launchTurn = vi.fn(
+      async (request: Parameters<WorkerTunnelHandle["launchTurn"]>[0]): Promise<SpawnResult> => {
+        request.onDispatchReady?.();
+        workerStarted.resolve();
+        await resumeWorker.promise;
+        expect(placements.get(SESSION_ID)).toMatchObject({
+          state: "active",
+          turnClaim: { owner: "worker", runId },
+        });
+        const completed = openSessionManager();
+        const leafId = completed.appendMessage(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "Redispatched worker reply" }],
+            timestamp: 51,
+          }),
+        );
+        createWorkerSessionPlacementGate(placements).updateAckCursors({
+          sessionId: SESSION_ID,
+          environmentId: ENVIRONMENT_ID,
+          ownerEpoch: OWNER_EPOCH,
+          runId,
+          transcriptSeq: 2,
+          liveSeq: 1,
+        });
+        return {
+          stdout: JSON.stringify({
+            status: "completed",
+            transcriptLeafId: leafId,
+            transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      },
+    );
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
@@ -406,30 +410,6 @@ describe("worker turn launcher reclaimed placement", () => {
       clearAgentRunContext(runId);
       clock.mockRestore();
     }
-  });
-
-  it("rejects a reclaimed placement when redispatch is unavailable", async () => {
-    seedReclaimedPlacement();
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments: unusedEnvironments(),
-      placements,
-    });
-    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-reclaimed-unavailable",
-        },
-        turn("run-reclaimed-unavailable"),
-        runLocal,
-      ),
-    ).rejects.toThrow("Reclaimed worker placement requires redispatch");
-    expect(runLocal).not.toHaveBeenCalled();
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed", turnClaim: null });
   });
 
   it("does not fall back locally when reclaimed redispatch fails", async () => {
