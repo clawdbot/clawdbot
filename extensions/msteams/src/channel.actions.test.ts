@@ -660,6 +660,68 @@ describe("msteamsPlugin message actions", () => {
     expect(sendMessageMSTeamsMock.mock.calls[0]?.[0]?.mediaAccess).toBe(mediaAccess);
   });
 
+  it.each([
+    {
+      name: "maps an upload-file caption to the MSTeams message text",
+      extraParams: { caption: "chart attached" },
+      expectedText: "chart attached",
+    },
+    {
+      name: "prefers an explicit upload-file message over a caption",
+      extraParams: { message: "message text", caption: "caption text" },
+      expectedText: "message text",
+    },
+    {
+      name: "keeps an explicitly empty upload-file message empty instead of using the caption",
+      extraParams: { message: "", caption: "caption text" },
+      expectedText: "",
+    },
+  ])("$name", async ({ extraParams, expectedText }) => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("png"));
+    const mediaAccess = {
+      localRoots: ["/tmp"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp",
+    };
+    await expectSuccessfulAction({
+      mockFn: sendMessageMSTeamsMock,
+      mockResult: {
+        messageId: "msg-upload-caption",
+        conversationId: "conv-upload-caption",
+      },
+      action: "upload-file",
+      actionParams: {
+        target: padded(targetChannelId),
+        media: "/tmp/chart.png",
+        ...extraParams,
+      },
+      mediaAccess,
+      mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
+      runtimeParams: {
+        to: targetChannelId,
+        text: expectedText,
+        mediaUrl: "/tmp/chart.png",
+        filename: undefined,
+        mediaAccess,
+        mediaLocalRoots: ["/tmp"],
+        mediaReadFile,
+      },
+      details: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-upload-caption",
+      },
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "upload-file",
+        messageId: "msg-upload-caption",
+        conversationId: "conv-upload-caption",
+      },
+    });
+  });
+
   it("does not grant forged upload-file media authority when the host grants none", async () => {
     const forgedMediaAccess = {
       localRoots: ["/forged/workspace"],

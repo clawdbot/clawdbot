@@ -244,6 +244,23 @@ function resolveActionContent(params: Record<string, unknown>): string {
         : "";
 }
 
+/**
+ * `media` is accepted as an alias for the uploaded file, so a send-shaped call
+ * arrives with its text in `caption`; without this alias that text is silently
+ * dropped instead of becoming the uploaded message's text. Scoped to
+ * `upload-file` because the other actions carry their own text field.
+ */
+function resolveActionUploadFileContent(params: Record<string, unknown>): string {
+  const hasExplicitText =
+    typeof params.text === "string" ||
+    typeof params.content === "string" ||
+    typeof params.message === "string";
+  if (hasExplicitText) {
+    return resolveActionContent(params);
+  }
+  return typeof params.caption === "string" ? params.caption : "";
+}
+
 function readOptionalTrimmedString(
   params: Record<string, unknown>,
   key: string,
@@ -704,7 +721,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 const result = await sendMessageMSTeams({
                   cfg: ctx.cfg,
                   to,
-                  text: resolveActionContent(ctx.params),
+                  text: resolveActionUploadFileContent(ctx.params),
                   mediaUrl,
                   filename:
                     readOptionalTrimmedString(ctx.params, "filename") ??
