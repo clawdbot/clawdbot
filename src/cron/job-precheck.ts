@@ -649,6 +649,15 @@ export function normalizeCronJobPrecheck(value: unknown): CronJobPrecheck | unde
   };
   const workExitCodes = toIntList(rec.workExitCodes);
   const noWorkExitCodes = toIntList(rec.noWorkExitCodes);
+  if (workExitCodes && noWorkExitCodes) {
+    const noWork = new Set(noWorkExitCodes);
+    const overlap = workExitCodes.filter((code) => noWork.has(code));
+    if (overlap.length > 0) {
+      throw new Error(
+        `precheck.workExitCodes and precheck.noWorkExitCodes must not overlap (shared: ${[...new Set(overlap)].sort((a, b) => a - b).join(", ")})`,
+      );
+    }
+  }
   const cwd = normalizeOptionalString(rec.cwd);
   const workStdoutPrefix = normalizeOptionalString(rec.workStdoutPrefix);
   const noWorkStdoutPrefix = normalizeOptionalString(rec.noWorkStdoutPrefix);

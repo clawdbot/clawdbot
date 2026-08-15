@@ -85,6 +85,16 @@ describe("cronRunOutcomeFromPrecheck", () => {
 });
 
 describe("normalizeCronJobPrecheck", () => {
+  it("rejects overlapping work and no-work exit codes", () => {
+    expect(() =>
+      normalizeCronJobPrecheck({
+        command: "echo hi",
+        workExitCodes: [0, 2],
+        noWorkExitCodes: [2, 3],
+      }),
+    ).toThrow(/must not overlap/);
+  });
+
   it("requires a command and normalizes kinds", () => {
     expect(normalizeCronJobPrecheck(null)).toBeUndefined();
     expect(normalizeCronJobPrecheck({})).toBeUndefined();
