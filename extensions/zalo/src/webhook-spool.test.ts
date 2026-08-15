@@ -134,9 +134,7 @@ describe("Zalo durable webhook ingress", () => {
         await ingress.accept(raw);
         await waitForZaloWebhookVerdict(queue, "duplicate", "completed");
         await ingress.accept(raw);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
-        });
+        await ingress.stop();
         expect(deliver).toHaveBeenCalledTimes(1);
       } finally {
         await ingress.stop();
@@ -162,9 +160,7 @@ describe("Zalo durable webhook ingress", () => {
         await ingress.accept(
           rawEvent({ messageId: "redelivery", text: "transport redelivery", date: 2 }),
         );
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
-        });
+        await ingress.stop();
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(deliver.mock.calls[0]?.[0].message?.text).toBe("original");
       } finally {

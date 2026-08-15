@@ -176,9 +176,7 @@ describe("Microsoft Teams durable ingress", () => {
         await ingress.accept(incoming);
         await waitForVerdict(queue, "activity-duplicate", "completed");
         await ingress.accept(incoming);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
-        });
+        await ingress.stop();
         expect(dispatch).toHaveBeenCalledTimes(1);
       } finally {
         await ingress.stop();
@@ -199,9 +197,7 @@ describe("Microsoft Teams durable ingress", () => {
         await ingress.accept(first);
         await waitForVerdict(queue, "bot-framework-redelivery", "completed");
         await ingress.accept(redelivery);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
-        });
+        await ingress.stop();
         expect(dispatch).toHaveBeenCalledTimes(1);
         expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ text: "original" });
       } finally {

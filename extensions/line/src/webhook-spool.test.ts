@@ -518,9 +518,7 @@ describe("LINE webhook spool", () => {
         await waitForVerdict(queue, "message:message-event-duplicate", "completed");
 
         await spool.accept(callback(event));
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
-        });
+        await spool.stop();
 
         expect(deliver).toHaveBeenCalledTimes(1);
       } finally {
@@ -550,9 +548,7 @@ describe("LINE webhook spool", () => {
         await spool.accept(
           callback(createEvent({ webhookEventId: "delivery-b", messageId: "shared-message" })),
         );
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
-        });
+        await spool.stop();
 
         expect(deliver).toHaveBeenCalledTimes(1);
       } finally {
