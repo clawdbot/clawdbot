@@ -108,6 +108,28 @@ export function activatePanel(layout: SidebarLayout, panelId: string): SidebarLa
   return next;
 }
 
+export function reorderPanel(
+  layout: SidebarLayout,
+  panelId: string,
+  targetPanelId: string,
+  placement: "before" | "after",
+): SidebarLayout {
+  const next = cloneLayout(layout);
+  const panels = next.columns[0]?.panels;
+  if (!panels || panelId === targetPanelId) {
+    return next;
+  }
+  const panelIndex = panels.findIndex((panel) => panel.id === panelId);
+  const targetIndex = panels.findIndex((panel) => panel.id === targetPanelId);
+  if (panelIndex < 0 || targetIndex < 0) {
+    return next;
+  }
+  const [panel] = panels.splice(panelIndex, 1);
+  const settledTargetIndex = panels.findIndex((entry) => entry.id === targetPanelId);
+  panels.splice(settledTargetIndex + (placement === "after" ? 1 : 0), 0, panel!);
+  return next;
+}
+
 export function setSidebarOpen(layout: SidebarLayout, open: boolean): SidebarLayout {
   return { ...cloneLayout(layout), open };
 }

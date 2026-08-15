@@ -316,11 +316,26 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header .tabstrip-tab[active]::before,
-.side-panel__header
-  .tabstrip-tab[active]
-  + .tabstrip-tab__close
-  + .tabstrip-tab::before {
+.side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close + .tabstrip-tab::before {
   opacity: 0;
+}
+
+.side-panel__header .tabstrip-tab:is(.is-drop-before, .is-drop-after)::after {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--text);
+  content: "";
+}
+
+.side-panel__header .tabstrip-tab.is-drop-before::after {
+  left: 0;
+}
+
+.side-panel__header .tabstrip-tab.is-drop-after::after {
+  right: 0;
 }
 
 .side-panel__header .tabstrip-tab::part(base) {

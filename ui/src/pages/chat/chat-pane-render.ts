@@ -66,6 +66,7 @@ import {
   activatePanel,
   closeSlot,
   openSlot,
+  reorderPanel,
   setSidebarExpanded,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
@@ -709,6 +710,10 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         closePanelSlot(slot);
       },
       openSlot: openPanelSlot,
+      reorderPanel: (panelId, targetPanelId, placement) =>
+        state.updateSidebarLayout(
+          reorderPanel(state.sidebarLayout, panelId, targetPanelId, placement),
+        ),
       resizeColumn: (columnId: string, width: number) => {
         this.commitSidebarColumnResize(sidebarLayout, columnId, width);
       },

@@ -20,6 +20,7 @@ function renderStrip(options: {
   activeId?: string | null;
   onClose?: (id: string) => void;
   onNew?: () => void;
+  onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
   onSelect?: (id: string) => void;
   container?: HTMLDivElement;
 }) {
@@ -32,6 +33,7 @@ function renderStrip(options: {
       onSelect: options.onSelect ?? vi.fn(),
       onClose: options.onClose ?? vi.fn(),
       onNew: options.onNew ?? vi.fn(),
+      onReorder: options.onReorder,
       newLabel: "New tab",
     }),
     container,
@@ -92,5 +94,37 @@ describe("renderPanelTabStrip", () => {
 
     container.querySelector("wa-tab")?.dispatchEvent(new MouseEvent("auxclick", { button: 1 }));
     expect(onClose).toHaveBeenCalledWith(TAB.id);
+  });
+
+  it("reorders draggable tabs at the requested edge", () => {
+    const onReorder = vi.fn();
+    const container = renderStrip({
+      tabs: [TAB, { ...TAB, id: "tab-2", domId: "test-tab-2", label: "Second tab" }],
+      onReorder,
+    });
+    const [source, target] = [...container.querySelectorAll<HTMLElement>("wa-tab")];
+    const values = new Map<string, string>();
+    const dataTransfer = {
+      dropEffect: "none",
+      effectAllowed: "none",
+      getData: (type: string) => values.get(type) ?? "",
+      setData: (type: string, value: string) => values.set(type, value),
+    };
+    const dispatchDrag = (element: HTMLElement, type: string, clientX: number) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX, cancelable: true });
+      Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+      element.dispatchEvent(event);
+    };
+    vi.spyOn(target!, "getBoundingClientRect").mockReturnValue({
+      left: 100,
+      width: 80,
+    } as DOMRect);
+
+    dispatchDrag(source!, "dragstart", 0);
+    dispatchDrag(target!, "dragover", 110);
+    dispatchDrag(target!, "drop", 110);
+
+    expect(source?.draggable).toBe(true);
+    expect(onReorder).toHaveBeenCalledWith("tab-1", "tab-2", "before");
   });
 });

@@ -6,6 +6,7 @@ import {
   fitSidebarLayout,
   normalizeSidebarLayout,
   openSlot,
+  reorderPanel,
   resizeColumn,
   setSidebarExpanded,
   setSidebarOpen,
@@ -52,6 +53,21 @@ describe("sidebar layout", () => {
       "chat",
     ]);
     expect(withoutDetail.columns[0]?.activePanelId).toBe("chat");
+  });
+
+  it("reorders tabs without changing the active surface", () => {
+    const layout = openAll();
+    const [discussion, chat, detail] = layout.columns[0]!.panels;
+    const reordered = reorderPanel(layout, discussion!.id, detail!.id, "after");
+
+    expect(reordered.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
+      "chat",
+      "detail",
+      "discussion",
+    ]);
+    expect(reordered.columns[0]?.activePanelId).toBe(detail!.id);
+    expect(layout.columns[0]?.panels[0]?.id).toBe(discussion!.id);
+    expect(chat?.slot).toBe("chat");
   });
 
   it("keeps the panel open as a type selector after its final tab closes", () => {

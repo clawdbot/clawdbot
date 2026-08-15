@@ -19,6 +19,23 @@ export type PanelTabStripTab = {
 
 const reconciledTabOrders = new WeakMap<Element, string>();
 const keyboardCloseActivations = new WeakSet<Element>();
+const PANEL_TAB_DRAG_TYPE = "application/x-openclaw-panel-tab";
+
+function clearPanelTabDropTargets(element: Element): void {
+  const group = element.closest<HTMLElement>("wa-tab-group");
+  group
+    ?.querySelectorAll(".is-drop-before, .is-drop-after")
+    .forEach((target) => target.classList.remove("is-drop-before", "is-drop-after"));
+}
+
+function draggedPanelTabId(element: Element): string {
+  return element.closest<HTMLElement>("wa-tab-group")?.dataset.draggedPanelTab ?? "";
+}
+
+function finishPanelTabDrag(element: Element): void {
+  clearPanelTabDropTargets(element);
+  element.closest<HTMLElement>("wa-tab-group")?.removeAttribute("data-dragged-panel-tab");
+}
 
 function activeElementFor(element: Element): Element | null {
   const root = element.getRootNode();
@@ -90,6 +107,7 @@ export function renderPanelTabStrip(params: {
   newLabel: string;
   newDisabled?: boolean;
   newControl?: TemplateResult;
+  onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
 }) {
   const newButton = (slotted: boolean) =>
     params.newControl
@@ -144,6 +162,7 @@ export function renderPanelTabStrip(params: {
               aria-selected=${selected ? "true" : "false"}
               title=${tab.title || nothing}
               ?active=${selected}
+              draggable=${params.onReorder ? "true" : nothing}
               .tabIndex=${selected ? 0 : -1}
               ${selected
                 ? ref((element) =>
@@ -154,6 +173,79 @@ export function renderPanelTabStrip(params: {
                 if (event.button === 1) {
                   event.preventDefault();
                   void params.onClose(tab.id);
+                }
+              }}
+              @dragstart=${(event: DragEvent) => {
+                if (!params.onReorder || !event.dataTransfer) {
+                  return;
+                }
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData(PANEL_TAB_DRAG_TYPE, tab.id);
+                if (event.currentTarget instanceof Element) {
+                  const group = event.currentTarget.closest<HTMLElement>("wa-tab-group");
+                  if (group) {
+                    group.dataset.draggedPanelTab = tab.id;
+                  }
+                }
+              }}
+              @dragover=${(event: DragEvent) => {
+                if (!params.onReorder || !event.dataTransfer) {
+                  return;
+                }
+                const sourceId =
+                  event.currentTarget instanceof Element
+                    ? draggedPanelTabId(event.currentTarget)
+                    : "";
+                if (!sourceId || sourceId === tab.id) {
+                  return;
+                }
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                const target = event.currentTarget;
+                if (!(target instanceof Element)) {
+                  return;
+                }
+                clearPanelTabDropTargets(target);
+                const bounds = target.getBoundingClientRect();
+                target.classList.add(
+                  event.clientX < bounds.left + bounds.width / 2
+                    ? "is-drop-before"
+                    : "is-drop-after",
+                );
+              }}
+              @dragleave=${(event: DragEvent) => {
+                if (
+                  event.currentTarget instanceof Element &&
+                  !(
+                    event.relatedTarget instanceof Node &&
+                    event.currentTarget.contains(event.relatedTarget)
+                  )
+                ) {
+                  event.currentTarget.classList.remove("is-drop-before", "is-drop-after");
+                }
+              }}
+              @drop=${(event: DragEvent) => {
+                if (!params.onReorder || !event.dataTransfer) {
+                  return;
+                }
+                const target = event.currentTarget;
+                const sourceId =
+                  target instanceof Element
+                    ? draggedPanelTabId(target) || event.dataTransfer.getData(PANEL_TAB_DRAG_TYPE)
+                    : "";
+                if (!sourceId || sourceId === tab.id || !(target instanceof Element)) {
+                  return;
+                }
+                event.preventDefault();
+                const bounds = target.getBoundingClientRect();
+                const placement =
+                  event.clientX < bounds.left + bounds.width / 2 ? "before" : "after";
+                finishPanelTabDrag(target);
+                params.onReorder(sourceId, tab.id, placement);
+              }}
+              @dragend=${(event: DragEvent) => {
+                if (event.currentTarget instanceof Element) {
+                  finishPanelTabDrag(event.currentTarget);
                 }
               }}
             >
