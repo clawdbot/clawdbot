@@ -133,18 +133,12 @@ async function createPublishedWorkspace(root: string) {
 async function createSourceWorkerInstallation(root: string): Promise<NodeWorkerInstallation> {
   const packageRoot = path.join(root, "local-install");
   const repoRoot = process.cwd();
-  await fs.mkdir(packageRoot, { recursive: true });
-  await Promise.all([
-    fs.copyFile(path.join(repoRoot, "openclaw.mjs"), path.join(packageRoot, "openclaw.mjs")),
-    fs.copyFile(path.join(repoRoot, "package.json"), path.join(packageRoot, "package.json")),
-    fs.cp(path.join(repoRoot, "dist"), path.join(packageRoot, "dist"), { recursive: true }),
-  ]);
-  await fs.chmod(path.join(packageRoot, "openclaw.mjs"), 0o700);
-  await fs.symlink(
-    path.join(repoRoot, "node_modules"),
-    path.join(packageRoot, "node_modules"),
-    process.platform === "win32" ? "junction" : "dir",
+  await fs.mkdir(path.join(packageRoot, "dist", "worker"), { recursive: true });
+  await fs.copyFile(
+    path.join(repoRoot, "dist", "worker", "worker.mjs"),
+    path.join(packageRoot, "dist", "worker", "worker.mjs"),
   );
+  await fs.chmod(path.join(packageRoot, "dist", "worker", "worker.mjs"), 0o700);
   return await resolveNodeWorkerInstallation({
     packageRoot,
     openclawVersion: VERSION,

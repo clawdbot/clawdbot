@@ -16,6 +16,10 @@ type HighlightJs = {
   highlightAuto(code: string, languageSubset?: string[]): { value: string };
 };
 
+let highlightJsRuntime: HighlightJs | undefined;
+// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled worker builds replace this compile-time define.
+declare const __OPENCLAW_WORKER_DEPLOY__: boolean;
+
 function isHighlightJs(value: unknown): value is HighlightJs {
   return (
     typeof value === "object" &&
@@ -29,14 +33,29 @@ function isHighlightJs(value: unknown): value is HighlightJs {
   );
 }
 
-// highlight.js ships `/// <reference lib="dom" />` in its d.ts, which would
-// silently re-inject DOM globals into the DOM-free core program. Load it
-// untyped and validate the narrow API we use instead of importing its types.
-const highlightJsModule: unknown = createRequire(import.meta.url)("highlight.js");
-if (!isHighlightJs(highlightJsModule)) {
-  throw new TypeError("highlight.js did not expose the expected Node API");
+/** Registers the statically bundled highlighter for portable worker startup. */
+export function registerHighlightJsRuntime(runtime: unknown): void {
+  if (!isHighlightJs(runtime)) {
+    throw new TypeError("highlight.js did not expose the expected Node API");
+  }
+  highlightJsRuntime = runtime;
 }
-const hljs = highlightJsModule;
+
+function loadHighlightJsRuntime(): HighlightJs {
+  if (highlightJsRuntime) {
+    return highlightJsRuntime;
+  }
+  // oxlint-disable-next-line unicorn/no-typeof-undefined -- The build define is absent in source runtimes.
+  if (typeof __OPENCLAW_WORKER_DEPLOY__ !== "undefined" && __OPENCLAW_WORKER_DEPLOY__) {
+    throw new Error("worker highlight.js runtime was not registered before use");
+  }
+  // highlight.js ships `/// <reference lib="dom" />` in its d.ts, which would
+  // silently re-inject DOM globals into the DOM-free core program. Load it
+  // untyped and validate the narrow API we use instead of importing its types.
+  const loaded: unknown = createRequire(import.meta.url)("highlight.js");
+  registerHighlightJsRuntime(loaded);
+  return highlightJsRuntime!;
+}
 
 /** Formatter applied to highlighted text segments. */
 type HighlightFormatter = (text: string) => string;
@@ -176,6 +195,7 @@ function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string
 
 /** Highlights code using an explicit language or highlight.js auto-detection. */
 export function highlight(code: string, options: HighlightOptions = {}): string {
+  const hljs = loadHighlightJsRuntime();
   const html = options.language
     ? hljs.highlight(code, {
         language: options.language,
@@ -187,5 +207,5 @@ export function highlight(code: string, options: HighlightOptions = {}): string 
 
 /** Returns whether highlight.js has a registered language by this name. */
 export function supportsLanguage(name: string): boolean {
-  return hljs.getLanguage(name) !== undefined;
+  return loadHighlightJsRuntime().getLanguage(name) !== undefined;
 }

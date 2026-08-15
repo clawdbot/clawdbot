@@ -483,7 +483,7 @@ class NodeWorkerSupervisor {
         gatewayNamespace: params.input.gatewayNamespace,
       });
       adapter = await createChildAdapter({
-        argv: [process.execPath, entry, "worker", "--internal-worker-ipc"],
+        argv: [process.execPath, entry, "--internal-worker-ipc"],
         env: this.workerEnv,
         exactEnv: true,
         ownedWorker: true,

@@ -191,7 +191,7 @@ describe("node worker supervisor", () => {
     const completed = await waitForTerminal(supervisor, input.launchId);
     expect(completed).toMatchObject({ state: "completed", errorText: null });
     expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
-      argv: ["worker", "--internal-worker-ipc"],
+      argv: ["--internal-worker-ipc"],
       status: "completed",
     });
     expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toEqual(completed);
@@ -692,7 +692,7 @@ describe("node worker supervisor", () => {
     const outsideEntry = path.join(root, "outside.mjs");
     fs.mkdirSync(escapedBundle, { recursive: true });
     fs.writeFileSync(outsideEntry, TEST_WORKER_SOURCE);
-    fs.symlinkSync(outsideEntry, path.join(escapedBundle, "openclaw.mjs"));
+    fs.symlinkSync(outsideEntry, path.join(escapedBundle, "worker.mjs"));
     const input = launchInput(workspaceDir, "escaped-entry");
     input.expectedBundleHash = escapedHash;
     input.descriptor.admission.handshake.bundleHash = escapedHash;

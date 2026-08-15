@@ -317,12 +317,13 @@ it cannot rot into approval fatigue or silent surprise:
   silently.
 
 The first milestone 7 slice (#123985) adds the private paired-channel install
-command, one-use Gateway download capability, bounded archive validation,
-script-disabled dependency materialization, and atomic namespaced publication.
-The cutover slice (#124037) installs the current Gateway bundle before device
-environments become ready, requires that exact durable receipt across attach,
-admission, placement, tunnel, and launch, retires stale environments for
-idempotent reprovisioning, and removes local-package execution. The remaining
+command, one-use Gateway download capability, bounded archive validation, and
+atomic namespaced publication. The cutover slice (#124037) packages the complete
+worker JavaScript dependency closure into one dedicated, hash-covered executable,
+installs that exact Gateway artifact before device environments become ready,
+requires its durable receipt across attach, admission, placement, tunnel, and
+launch, retires stale environments for idempotent reprovisioning, and removes
+local-package execution. The remaining
 slice separates inventory consent/capacity from installed bundle status, exposes
 the installed version on the devices page, and bounds superseded node bundle GC.
 

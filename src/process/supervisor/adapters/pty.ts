@@ -11,6 +11,8 @@ import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
+// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled worker builds replace this compile-time define.
+declare const __OPENCLAW_WORKER_DEPLOY__: boolean;
 
 type PtyAdapter = SpawnProcessAdapter;
 
@@ -23,6 +25,12 @@ export async function createPtyAdapter(params: {
   rows?: number;
   name?: string;
 }): Promise<PtyAdapter> {
+  // Worker deploys are portable JavaScript artifacts; exec falls back to the child adapter
+  // instead of binding the Gateway host's native PTY binary into the bundle.
+  // oxlint-disable-next-line unicorn/no-typeof-undefined -- The build define is absent in source runtimes.
+  if (typeof __OPENCLAW_WORKER_DEPLOY__ !== "undefined" && __OPENCLAW_WORKER_DEPLOY__) {
+    throw new Error("PTY is unavailable in the portable worker runtime");
+  }
   const { spawn } = await import("@lydell/node-pty");
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const preparedSpawn = prepareOomScoreAdjustedSpawn(params.shell, params.args, { env: baseEnv });

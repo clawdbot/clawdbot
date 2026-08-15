@@ -202,7 +202,7 @@ export function writeNodeWorkerFixture(root: string) {
   const bundleDir = path.join(bundleRoot, "gateway-1", "bundles", TEST_BUNDLE_HASH);
   fs.mkdirSync(bundleDir, { recursive: true });
   fs.mkdirSync(workspaceDir, { recursive: true });
-  fs.writeFileSync(path.join(bundleDir, "openclaw.mjs"), TEST_WORKER_SOURCE);
+  fs.writeFileSync(path.join(bundleDir, "worker.mjs"), TEST_WORKER_SOURCE);
   return { bundleRoot, env: { OPENCLAW_STATE_DIR: stateDir }, root, stateDir, workspaceDir };
 }
 

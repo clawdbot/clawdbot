@@ -27,6 +27,8 @@ const formatCommit = (value?: string | null) => {
 
 const cachedGitCommitBySearchDir = new Map<string, string | null>();
 const GIT_COMMIT_CACHE_LIMIT = 256;
+// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled worker builds replace this compile-time define.
+declare const __OPENCLAW_WORKER_DEPLOY__: boolean;
 
 type CommitMetadataReaders = {
   readGitCommit?: (searchDir: string, packageRoot: string | null) => string | null | undefined;
@@ -168,6 +170,10 @@ const resolveRefPath = (refsBase: string, ref: string) => {
 };
 
 const readCommitFromPackageJson = () => {
+  // oxlint-disable-next-line unicorn/no-typeof-undefined -- The build define is absent in source runtimes.
+  if (typeof __OPENCLAW_WORKER_DEPLOY__ !== "undefined" && __OPENCLAW_WORKER_DEPLOY__) {
+    return null;
+  }
   try {
     const require = createRequire(import.meta.url);
     const pkg = require("../../package.json") as {

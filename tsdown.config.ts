@@ -1,5 +1,6 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
+import { isBuiltin } from "node:module";
 import path from "node:path";
 import type { UserConfig } from "tsdown";
 import {
@@ -22,6 +23,7 @@ import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
+import { createWorkerDeployBuildPlugin } from "./scripts/lib/worker-deploy-build-plugin.mts";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
@@ -48,6 +50,9 @@ type ExternalOptionFunction = (
 const env = {
   NODE_ENV: "production",
 };
+const workerDeployVersion = (
+  JSON.parse(fs.readFileSync("package.json", "utf8")) as { version: string }
+).version;
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
 const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
@@ -87,7 +92,10 @@ function matchesExternalOption(
   return false;
 }
 
-function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
+function buildInputOptions(
+  options: InputOptionsArg,
+  build?: { bundleAllDependencies?: boolean },
+): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
@@ -127,7 +135,7 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
     ...options,
     external(id: string, parentId: string | undefined, isResolved: boolean) {
       return (
-        shouldNeverBundleDependency(id) ||
+        (!build?.bundleAllDependencies && shouldNeverBundleDependency(id)) ||
         matchesExternalOption(previousExternal, id, parentId, isResolved)
       );
     },
@@ -157,6 +165,44 @@ function nodeBuildConfig(
     fixedExtension: false,
     sourcemap: OUTPUT_SOURCE_MAPS,
     inputOptions: buildInputOptions,
+  };
+}
+
+function workerDeployBuildConfig(): UserConfig {
+  return {
+    name: TSDOWN_UNIFIED_CONFIG_GROUP,
+    entry: { "worker/worker": "src/worker/worker-deploy-entry.ts" },
+    outDir: "dist",
+    dts: false,
+    env,
+    define: {
+      __OPENCLAW_WORKER_DEPLOY__: "true",
+      __OPENCLAW_WORKER_VERSION__: JSON.stringify(workerDeployVersion),
+    },
+    alias: {
+      bufferutil: path.resolve("src/worker/worker-deploy-optional-native.ts"),
+      "chromium-bidi/lib/cjs/bidiMapper/BidiMapper": path.resolve(
+        "src/worker/worker-deploy-optional-native.ts",
+      ),
+      "chromium-bidi/lib/cjs/cdp/CdpConnection": path.resolve(
+        "src/worker/worker-deploy-optional-native.ts",
+      ),
+      "electron/index.js": path.resolve("src/worker/worker-deploy-optional-native.ts"),
+      fsevents: path.resolve("src/worker/worker-deploy-optional-native.ts"),
+      kerberos: path.resolve("src/worker/worker-deploy-optional-native.ts"),
+      "utf-8-validate": path.resolve("src/worker/worker-deploy-optional-native.ts"),
+    },
+    deps: {
+      alwaysBundle: (id) => !isBuiltin(id),
+      onlyBundle: false,
+    },
+    fixedExtension: false,
+    outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
+    outputOptions: { codeSplitting: false, assetFileNames: "worker/[name][extname]" },
+    plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
+    shims: true,
+    sourcemap: OUTPUT_SOURCE_MAPS,
+    inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),
   };
 }
 
@@ -679,6 +725,7 @@ const configs = [
     },
     false,
   ),
+  workerDeployBuildConfig(),
   ...(TSDOWN_DECLARATIONS
     ? buildUnifiedDeclarationPartitions(unifiedDistEntries).map(({ name, sources }) =>
         nodeBuildConfig(

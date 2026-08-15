@@ -25,10 +25,21 @@ export type ResolvePreferredOpenClawTmpDirOptions = {
 type ResolveSecureTempRoot = typeof import("@openclaw/fs-safe/temp").resolveSecureTempRoot;
 
 let resolveSecureTempRootRuntime: ResolveSecureTempRoot | undefined;
+// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled worker builds replace this compile-time define.
+declare const __OPENCLAW_WORKER_DEPLOY__: boolean;
+
+/** Registers the statically bundled temp-root runtime for portable worker startup. */
+export function registerSecureTempRootRuntime(runtime: ResolveSecureTempRoot): void {
+  resolveSecureTempRootRuntime = runtime;
+}
 
 function loadResolveSecureTempRoot(): ResolveSecureTempRoot {
   if (resolveSecureTempRootRuntime) {
     return resolveSecureTempRootRuntime;
+  }
+  // oxlint-disable-next-line unicorn/no-typeof-undefined -- The build define is absent in source runtimes.
+  if (typeof __OPENCLAW_WORKER_DEPLOY__ !== "undefined" && __OPENCLAW_WORKER_DEPLOY__) {
+    throw new Error("worker temp-root runtime was not registered before use");
   }
   // Keep this module browser-import safe: fs-safe's temp barrel owns Node-only
   // workspaces, so load it only when the Node runtime actually resolves a temp root.

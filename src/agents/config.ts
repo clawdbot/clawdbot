@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = dirname(currentFile);
+// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled worker builds replace this compile-time define.
+declare const __OPENCLAW_WORKER_VERSION__: string | undefined;
 
 /**
  * Detect if we're running as a Bun compiled binary.
@@ -96,7 +98,11 @@ interface PackageJson {
   };
 }
 
-const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson;
+const workerVersion =
+  typeof __OPENCLAW_WORKER_VERSION__ === "string" ? __OPENCLAW_WORKER_VERSION__ : undefined;
+const pkg: PackageJson = workerVersion
+  ? { name: "openclaw", version: workerVersion }
+  : (JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson);
 
 const openClawConfigName: string | undefined = pkg.openclawConfig?.name;
 export const APP_NAME: string = openClawConfigName || "openclaw";
