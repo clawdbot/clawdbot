@@ -32,6 +32,7 @@ import { readToolSearchRequest } from "./tool-search-request.js";
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
+  prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
   readToolSearchId,
   ToolSearchRuntime,
@@ -370,6 +371,9 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       parameters: Type.Object({
         id: Type.String({ description: "Tool search result id or tool name." }),
       }),
+      // Recover a double-wrapped `{args:{id}}`/`{input:{id}}` selector before the
+      // schema gate runs; see prepareToolSearchDispatcherArguments (#124084).
+      prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
         jsonResult(await runtime.describe(readToolSearchId(args))),
     },
@@ -383,6 +387,12 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           Type.Record(Type.String(), Type.Unknown(), { description: "Tool input." }),
         ),
       }),
+      // Recover a double-wrapped `{args:{id,args}}` dispatcher payload before the
+      // schema gate runs, so smaller models that nest the selector one level too
+      // deep still reach the target tool instead of a guaranteed validation
+      // failure (#124084). readToolSearchCallArgs still owns ambiguous-selector
+      // rejection once the call reaches execute().
+      prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (
         toolCallId: string,
         args: unknown,

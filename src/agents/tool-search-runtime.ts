@@ -269,6 +269,35 @@ export function readToolSearchCallArgs(
   return { id, input: { ...dottedInput, ...flattenedInput } };
 }
 
+function hasDispatcherSelector(record: Record<string, unknown>): boolean {
+  return ["id", "toolId", "name"].some((key) => {
+    const value = record[key];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+/**
+ * Hoists a double-wrapped `{args:{id,...}}`/`{input:{id,...}}` dispatcher payload
+ * to the canonical top-level `{id, ...}` shape the tool_call/tool_describe schemas
+ * require. Some smaller models nest the selector one level too deep instead of
+ * emitting it at the top level; without this, schema validation rejects the call
+ * before `readToolSearchId`/`readToolSearchCallArgs` ever run, and the model has
+ * no way to recover (#124084). Only acts when the outer object carries no
+ * selector of its own and the nested object carries one, so a genuinely
+ * malformed or selector-less call is still rejected exactly as before.
+ */
+export function prepareToolSearchDispatcherArguments(args: unknown): unknown {
+  if (!isRecord(args) || hasDispatcherSelector(args)) {
+    return args;
+  }
+  const nestedInput = args.args ?? args.input;
+  if (!isRecord(nestedInput) || !hasDispatcherSelector(nestedInput)) {
+    return args;
+  }
+  const { args: _wrappedArgs, input: _wrappedInput, ...outerRest } = args;
+  return { ...outerRest, ...nestedInput };
+}
+
 function getTelemetry(catalog: ToolSearchCatalogSession) {
   const sources: Record<CatalogSource, number> = { openclaw: 0, mcp: 0, client: 0 };
   for (const entry of catalog.entries) {

@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   initializeGlobalHookRunner,
@@ -13,6 +14,7 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.j
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
+  prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
 } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
@@ -241,6 +243,79 @@ describe("Tool Search flattened call arguments", () => {
     expect(intended.execute).toHaveBeenCalledOnce();
     expect(vi.mocked(intended.execute).mock.calls[0]?.[1]).toEqual({ instruction: "run" });
     expect(colliding.execute).not.toHaveBeenCalled();
+  });
+});
+
+// #124084: some smaller models double-wrap the tool_call/tool_describe dispatcher
+// payload as {args:{id,...}}/{input:{id,...}} instead of the documented {id,...}
+// shape. The outer TypeBox schema requires a top-level `id` and rejects the call
+// before readToolSearchId/readToolSearchCallArgs ever run, so recovery must
+// happen in prepareArguments, which the agent loop invokes before schema
+// validation (see prepareToolCallArguments in packages/agent-core/src/agent-loop.ts).
+describe("Tool Search dispatcher argument preparation", () => {
+  it.each([
+    {
+      label: "args-wrapped selector and input",
+      input: { args: { id: "openclaw:example-plugin:example_tool", args: { path: "/x" } } },
+      expected: { id: "openclaw:example-plugin:example_tool", args: { path: "/x" } },
+    },
+    {
+      label: "input-wrapped selector and args",
+      input: { input: { id: "example_tool", args: { path: "/x" } } },
+      expected: { id: "example_tool", args: { path: "/x" } },
+    },
+    {
+      label: "args-wrapped toolId/name aliases",
+      input: { args: { toolId: "example_tool" } },
+      expected: { toolId: "example_tool" },
+    },
+    {
+      label: "sibling keys alongside the wrapper are preserved",
+      input: { extra: "keep", args: { id: "example_tool" } },
+      expected: { extra: "keep", id: "example_tool" },
+    },
+  ])("hoists a double-wrapped $label to the top level", ({ input, expected }) => {
+    expect(prepareToolSearchDispatcherArguments(input)).toEqual(expected);
+  });
+
+  it.each([
+    { label: "non-record input", input: "not an object" },
+    { label: "already-canonical selector", input: { id: "example_tool", args: { path: "/x" } } },
+    { label: "nested wrapper without a selector", input: { args: { path: "/x" } } },
+    { label: "nested wrapper that is not a record", input: { args: "not an object" } },
+  ])("leaves $label unchanged", ({ input }) => {
+    expect(prepareToolSearchDispatcherArguments(input)).toBe(input);
+  });
+
+  it("admits a double-wrapped tool_call payload through the real schema and dispatch", async () => {
+    const target = fakeTool("inspect_resource");
+    const { catalogRef, config } = createRuntime([target]);
+    const callTool = createToolSearchTools({ catalogRef, config }).find(
+      (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
+    );
+    expect(callTool).toBeDefined();
+
+    const doubleWrapped = { args: { id: "inspect_resource", args: { path: "/x" } } };
+    const prepared = callTool!.prepareArguments?.(doubleWrapped);
+    expect(prepared).toEqual({ id: "inspect_resource", args: { path: "/x" } });
+    expect(Value.Check(callTool!.parameters, prepared)).toBe(true);
+
+    await callTool!.execute("double-wrapped-call", prepared);
+    expect(target.execute).toHaveBeenCalledOnce();
+    expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ path: "/x" });
+  });
+
+  it("still rejects a double-wrapped payload with no readable selector", async () => {
+    const target = fakeTool("inspect_resource");
+    const { catalogRef, config } = createRuntime([target]);
+    const callTool = createToolSearchTools({ catalogRef, config }).find(
+      (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
+    );
+    expect(callTool).toBeDefined();
+
+    const noSelector = { args: { path: "/x" } };
+    const prepared = callTool!.prepareArguments?.(noSelector);
+    expect(Value.Check(callTool!.parameters, prepared)).toBe(false);
   });
 });
 
