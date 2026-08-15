@@ -99,7 +99,35 @@ const ROUND_CASES: readonly CornerCase[] = [
   },
 ];
 
-const ALL_CASES = [...CORNER_CASES, ...ROUND_CASES];
+// Consumers of the shared --radius-* tokens that are NOT named in the base.css
+// corner block. The 1.25 scale must stay scoped to the opted-in selector list
+// (declared as a local custom-property override, not at :root) or these
+// unrelated surfaces inflate their radius while staying `round` — a regressed
+// look with no matching corner-shape. .run-inspector__panel stands in for the
+// whole excluded class: any --radius-md consumer outside the opted list.
+const EXCLUDED_CASES: readonly CornerCase[] = [
+  {
+    circular: "10px",
+    markup: '<div class="run-inspector__panel">Panel</div>',
+    selector: ".run-inspector__panel",
+    superelliptical: "10px",
+  },
+];
+
+const ALL_CASES = [...CORNER_CASES, ...ROUND_CASES, ...EXCLUDED_CASES];
+
+// The radius tokens themselves, read at :root exactly like
+// collectMcpAppStyleVariables() in mcp-app-theme.ts reads them for embedded
+// MCP apps. They must stay canonical/unscaled even under the superelliptical
+// fixture: an MCP app is a separate origin that only ever sees this snapshot,
+// so a :root-level scale would leak the corner refinement into a contract
+// that never opted into it.
+const ROOT_RADIUS_TOKENS = {
+  "--radius": "10px",
+  "--radius-lg": "14px",
+  "--radius-sm": "6px",
+  "--radius-xl": "20px",
+} as const;
 
 function readUiCss(): string {
   return [
@@ -108,6 +136,7 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/option-card.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/pages/activity/run-inspector.css",
   ]
     .map((file) => readStyleSheet(file))
     .join("\n");
@@ -143,6 +172,24 @@ async function probeCorners(browser: Browser, fixtureFile: string): Promise<Corn
       },
       ALL_CASES.map((corner) => corner.selector),
     );
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+async function probeRootRadiusTokens(
+  browser: Browser,
+  fixtureFile: string,
+): Promise<Record<string, string>> {
+  const page = await browser.newPage();
+  try {
+    await page.goto(`file://${fixtureFile}`);
+    return await page.evaluate((tokens: readonly string[]) => {
+      const style = getComputedStyle(document.documentElement);
+      return Object.fromEntries(
+        tokens.map((token) => [token, style.getPropertyValue(token).trim()]),
+      );
+    }, Object.keys(ROOT_RADIUS_TOKENS));
   } finally {
     await page.close().catch(() => {});
   }
@@ -192,6 +239,10 @@ describeCornerShape("Control UI corner curvature", () => {
           corner.selector,
           { radius: corner.superelliptical, shape: "round" },
         ]),
+        ...EXCLUDED_CASES.map((corner) => [
+          corner.selector,
+          { radius: corner.superelliptical, shape: "round" },
+        ]),
       ]),
     );
   });
@@ -204,5 +255,11 @@ describeCornerShape("Control UI corner curvature", () => {
         ALL_CASES.map((corner) => [corner.selector, { radius: corner.circular, shape: "round" }]),
       ),
     );
+  });
+
+  it("keeps the :root radius tokens MCP apps read canonical under the scale", async () => {
+    const probe = await probeRootRadiusTokens(browser, superellipticalFixture);
+
+    expect(probe).toEqual(ROOT_RADIUS_TOKENS);
   });
 });

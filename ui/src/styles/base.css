@@ -226,16 +226,21 @@
      surfaces. Board layout math mirrors this value numerically. */
   --widget-frame-inset: var(--space-3);
 
-  /* Radii - Slightly larger for modern feel. Every step runs through one scale
-     so the corner refinement below can widen the whole app from a single knob;
-     --radius-full is shape, not scale, and stays fully round. */
-  --openclaw-corner-radius-scale: 1;
-  --radius-sm: calc(6px * var(--openclaw-corner-radius-scale));
-  --radius-md: calc(10px * var(--openclaw-corner-radius-scale));
-  --radius-lg: calc(14px * var(--openclaw-corner-radius-scale));
-  --radius-xl: calc(20px * var(--openclaw-corner-radius-scale));
+  /* Radii - Slightly larger for modern feel */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
   --radius-full: 9999px;
-  --radius: var(--radius-md);
+  --radius: 10px;
+
+  /* Corner-scale signal: whatever the @supports block below sets this to,
+     tests and other introspection can read it to learn the active multiplier
+     without duplicating the @supports check. It is intentionally not part of
+     the calc() above — the tokens stay usable by consumers that must not
+     inherit the widened surface treatment (excluded selectors, the tokens
+     exported to embedded MCP apps in mcp-app-theme.ts). */
+  --openclaw-corner-radius-scale: 1;
 
   /* Menu items stay optically parallel to their panel edge: item radius +
      padding = panel radius. Deriving the item keeps that true at any scale. */
@@ -284,45 +289,78 @@
    The shape is opt-in per surface rather than universal because a superellipse
    flattens the ends of anything fully rounded, and pills, circles, avatars and
    status dots are a third of this app's corners. Add new shared surfaces to
-   the list below; leaving one out only keeps its current corner. */
+   the list below; leaving one out only keeps its current corner.
+   --openclaw-corner-radius-scale flips to 1.25 at :root — that part is a
+   harmless capability signal, not a radius. The --radius-* tokens that
+   consumers actually draw with are redeclared locally, scaled through that
+   signal, only on the selectors below, so only opted-in surfaces widen;
+   :root consumers that stay `round` (.run-inspector__panel) and the
+   canonical tokens exported to embedded MCP apps (mcp-app-theme.ts) keep
+   drawing the base radii untouched. */
 @supports (corner-shape: superellipse(1.5)) {
   :root {
     --openclaw-corner-radius-scale: 1.25;
   }
 
-  /* Dialogs and overlays */
+  /* Dialogs, overlays, panels, cards, composer, nav/list rows and controls
+     draw straight from --radius-*, so redeclaring the scaled tokens on the
+     matched element is enough for its own border-radius to pick them up. */
   .exec-approval-card,
   .exec-approval-list,
   .cmd-palette,
   .login-gate__card,
   .md-preview-dialog__panel,
   .md-preview-dialog__reader,
-  /* Menus, popovers and select panels */
-  wa-dropdown::part(menu),
-  wa-popover::part(body),
-  wa-select::part(listbox),
-  wa-select::part(combobox),
-  .slash-menu,
-  .chat-reply-context-menu,
-  .chat-selection-popup,
-  /* Panels, cards and message surfaces */
   .card,
   .settings-group,
   .option-card,
   .agent-tool-card,
   .chat-thread,
   .chat-bubble,
-  /* Composer */
   .agent-chat__input,
-  /* Navigation and list rows */
   .nav-item,
   .list-item,
   .sidebar-recent-session,
   .settings-sidebar__item,
-  /* Buttons and text controls */
   .btn,
   .settings-input,
   .field :is(input, textarea, select) {
+    --radius-sm: calc(6px * var(--openclaw-corner-radius-scale));
+    --radius-md: calc(10px * var(--openclaw-corner-radius-scale));
+    --radius-lg: calc(14px * var(--openclaw-corner-radius-scale));
+    --radius-xl: calc(20px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+
+  /* Menu panels draw from --menu-radius/--menu-item-radius, not --radius-*
+     directly. A custom property's nested var() references resolve relative
+     to wherever THAT property is declared, not wherever it's later read, so
+     redeclaring only --radius-md here would leave --menu-radius and
+     --menu-item-radius pinned to their :root (unscaled) computation —
+     redeclaring the derived tokens themselves is what lets both the panel
+     and its items draw the scaled radius. wa-dropdown/wa-popover/wa-select
+     redeclare on the host rather than the ::part() below: menu items are
+     light-DOM children slotted into the part, and slotted content inherits
+     custom properties from its light-DOM parent (the host), not from the
+     shadow part it renders inside — the host is the only common ancestor. */
+  .slash-menu,
+  .chat-reply-context-menu,
+  .chat-selection-popup,
+  wa-dropdown,
+  wa-popover,
+  wa-select {
+    --radius-md: calc(10px * var(--openclaw-corner-radius-scale));
+    --menu-radius: var(--radius-md);
+    --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
+  }
+
+  .slash-menu,
+  .chat-reply-context-menu,
+  .chat-selection-popup,
+  wa-dropdown::part(menu),
+  wa-popover::part(body),
+  wa-select::part(listbox),
+  wa-select::part(combobox) {
     corner-shape: superellipse(1.5);
   }
 }
