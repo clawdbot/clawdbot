@@ -132,25 +132,14 @@ function isWebSocketUpgradeRequest(req: IncomingMessage): boolean {
 type GatewayHttpRequestStage = {
   name: string;
   run: () => Promise<boolean> | boolean;
-  continueOnError?: boolean;
 };
 
 async function runGatewayHttpRequestStages(
   stages: readonly GatewayHttpRequestStage[],
 ): Promise<boolean> {
   for (const stage of stages) {
-    try {
-      if (await stage.run()) {
-        return true;
-      }
-    } catch (err) {
-      if (!stage.continueOnError) {
-        throw err;
-      }
-      // Log and skip the failing stage so subsequent stages (control-ui,
-      // gateway-probes, etc.) remain reachable. A common trigger is a
-      // plugin-owned route/runtime code still failing to load an optional dependency.
-      console.error(`[gateway-http] stage "${stage.name}" threw — skipping:`, err);
+    if (await stage.run()) {
+      return true;
     }
   }
   return false;
@@ -544,8 +533,7 @@ export function createGatewayHttpServer(opts: {
         let pluginGatewayAuthSatisfied = false;
         let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
         let pluginRequestOperatorScopes: string[] | undefined;
-        // Auth and dispatch stay separate so authorized context reaches the handler while
-        // plugin failures can still fall through to core and Control UI routes.
+        // Auth and dispatch stay separate so authorized context reaches the handler.
         requestStages.push(
           {
             name: "plugin-auth",
@@ -581,7 +569,6 @@ export function createGatewayHttpServer(opts: {
           },
           {
             name: "plugin-http",
-            continueOnError: true,
             run: () =>
               handlePluginRequest(req, res, pluginPathContext, {
                 gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
