@@ -508,6 +508,39 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
+  it("keeps a representable cgroup mount when a later view cannot represent it", () => {
+    // Several mounts can expose one hierarchy; only the first covers this process here, so
+    // retaining just the last-seen view would lose the budget entirely.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/docker/abc123/openclaw-main-update.service\n"],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /docker/abc123 /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n" +
+          "31 25 0:26 /other/branch /mnt/peer-cgroup rw - cgroup2 cgroup2 rw\n",
+      ],
+      ["/sys/fs/cgroup/openclaw-main-update.service/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
+      ["/test/meminfo", "MemTotal: 7340032 kB\n"],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      procMeminfoPath: "/test/meminfo",
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
   it("ignores a cgroup mount that cannot represent this process's cgroup", () => {
     // An inherited namespace can leave a mount whose subtree holds someone else's cgroup.
     // Sizing the build from it would apply an unrelated limit, so it must be skipped.

@@ -87,6 +87,8 @@ type MemoryLimitParams = {
   procSelfMountinfoPath?: string;
 };
 
+type CgroupMount = { mountPoint: string; root: string };
+
 type TsdownBuildParams = MemoryLimitParams & {
   args?: string[];
   comSpec?: string;
@@ -497,8 +499,10 @@ function resolveCgroupMountPoints(params: MemoryLimitParams = {}) {
     // Unreadable off Linux; the documented defaults still apply.
   }
 
-  let unified = { mountPoint: DEFAULT_CGROUP_V2_MOUNT_PATH, root: "/" };
-  let v1Memory = { mountPoint: DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH, root: "/" };
+  // One hierarchy can be visible through several mounts, and only some of them expose a subtree
+  // containing this process, so every view is kept as a candidate rather than the last one seen.
+  const unified: CgroupMount[] = [];
+  const v1Memory: CgroupMount[] = [];
   for (const line of rawMountinfo.split("\n")) {
     // mountinfo separates its variable optional fields from the fstype with a lone "-".
     const [fields, describe] = line.split(" - ");
@@ -508,12 +512,19 @@ function resolveCgroupMountPoints(params: MemoryLimitParams = {}) {
       continue;
     }
     if (fsType === "cgroup2") {
-      unified = { mountPoint, root };
+      unified.push({ mountPoint, root });
     } else if (fsType === "cgroup" && (superOptions ?? "").split(",").includes("memory")) {
-      v1Memory = { mountPoint, root };
+      v1Memory.push({ mountPoint, root });
     }
   }
-  return { unified, v1Memory };
+  return {
+    unified:
+      unified.length > 0 ? unified : [{ mountPoint: DEFAULT_CGROUP_V2_MOUNT_PATH, root: "/" }],
+    v1Memory:
+      v1Memory.length > 0
+        ? v1Memory
+        : [{ mountPoint: DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH, root: "/" }],
+  };
 }
 
 // mountinfo field 4 is the subtree a cgroupfs mount exposes, so /proc/self/cgroup records are
@@ -544,19 +555,17 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
   }
 
   const paths: string[] = [];
-  const addHierarchy = (
-    mount: { mountPoint: string; root: string },
-    limitFiles: string[],
-    cgroupPath: string,
-  ) => {
-    const relative = relativeCgroupPath(mount.root, cgroupPath);
-    if (relative === null) {
-      return;
-    }
-    const segments = relative.split("/").filter(Boolean);
-    for (let depth = segments.length; depth >= 0; depth -= 1) {
-      for (const limitFile of limitFiles) {
-        paths.push(path.join(mount.mountPoint, ...segments.slice(0, depth), limitFile));
+  const addHierarchy = (mounts: CgroupMount[], limitFiles: string[], cgroupPath: string) => {
+    for (const mount of mounts) {
+      const relative = relativeCgroupPath(mount.root, cgroupPath ?? mount.root);
+      if (relative === null) {
+        continue;
+      }
+      const segments = relative.split("/").filter(Boolean);
+      for (let depth = segments.length; depth >= 0; depth -= 1) {
+        for (const limitFile of limitFiles) {
+          paths.push(path.join(mount.mountPoint, ...segments.slice(0, depth), limitFile));
+        }
       }
     }
   };
@@ -580,8 +589,12 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
   // Only probe the mounts blind when this process has no memory cgroup record at all; a record
   // that no mount can represent means the limit is unreadable here, not that the root applies.
   if (!sawMemoryRecord) {
-    addHierarchy(mounts.unified, CGROUP_V2_MEMORY_LIMIT_FILES, mounts.unified.root);
-    addHierarchy(mounts.v1Memory, CGROUP_V1_MEMORY_LIMIT_FILES, mounts.v1Memory.root);
+    for (const mount of mounts.unified) {
+      addHierarchy([mount], CGROUP_V2_MEMORY_LIMIT_FILES, mount.root);
+    }
+    for (const mount of mounts.v1Memory) {
+      addHierarchy([mount], CGROUP_V1_MEMORY_LIMIT_FILES, mount.root);
+    }
   }
   return paths;
 }
