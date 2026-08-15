@@ -274,8 +274,10 @@ export function readToolSearchCallArgs(
 // resolve, but Value.Check has no knowledge of that fallback and rejects a
 // selector that only carries an alias. Hoisting must canonicalize whichever
 // alias it finds into `id`, not just relocate it a level up.
+const DISPATCHER_SELECTOR_KEYS = ["id", "toolId", "name"] as const;
+
 function readDispatcherSelectorValue(record: Record<string, unknown>): string | undefined {
-  for (const key of ["id", "toolId", "name"] as const) {
+  for (const key of DISPATCHER_SELECTOR_KEYS) {
     const value = record[key];
     if (typeof value === "string" && value.trim().length > 0) {
       return value;
@@ -291,13 +293,15 @@ function readDispatcherSelectorValue(record: Record<string, unknown>): string | 
  * emitting it at the top level; without this, schema validation rejects the call
  * before `readToolSearchId`/`readToolSearchCallArgs` ever run, and the model has
  * no way to recover (#124084). Only acts when the outer object carries no
- * selector of its own and the nested object carries one, so a genuinely
- * malformed or selector-less call is still rejected exactly as before. The
- * nested selector is canonicalized to `id` (whether it arrived as `id`,
+ * selector key at all (checked by presence, not validity — an empty-string or
+ * non-string outer `id`/`toolId`/`name` already carries a selector key and
+ * must keep rejecting through the established readToolSearchId path, exactly
+ * as before this recovery existed) and the nested object carries a valid one.
+ * The nested selector is canonicalized to `id` (whether it arrived as `id`,
  * `toolId`, or `name`) since the schema itself only recognizes `id`.
  */
 export function prepareToolSearchDispatcherArguments(args: unknown): unknown {
-  if (!isRecord(args) || readDispatcherSelectorValue(args) !== undefined) {
+  if (!isRecord(args) || DISPATCHER_SELECTOR_KEYS.some((key) => Object.hasOwn(args, key))) {
     return args;
   }
   const nestedInput = args.args ?? args.input;

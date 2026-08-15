@@ -300,6 +300,27 @@ describe("Tool Search dispatcher argument preparation", () => {
     { label: "already-canonical selector", input: { id: "example_tool", args: { path: "/x" } } },
     { label: "nested wrapper without a selector", input: { args: { path: "/x" } } },
     { label: "nested wrapper that is not a record", input: { args: "not an object" } },
+    // ClawSweeper follow-up finding: a wrapper that already carries an outer
+    // selector key must keep rejecting through readToolSearchId/
+    // readToolSearchCallArgs exactly like it did before this recovery
+    // existed, even when that key's value is empty or non-string. Only a
+    // wrapper with no outer selector key at all is eligible to hoist.
+    {
+      label: "empty-string outer id alongside a valid nested selector",
+      input: { id: "", args: { id: "example_tool" } },
+    },
+    {
+      label: "non-string outer id alongside a valid nested selector",
+      input: { id: 1, args: { id: "example_tool" } },
+    },
+    {
+      label: "empty-string outer toolId alongside a valid nested selector",
+      input: { toolId: "", args: { id: "example_tool" } },
+    },
+    {
+      label: "empty-string outer name alongside a valid nested selector",
+      input: { name: "", args: { id: "example_tool" } },
+    },
   ])("leaves $label unchanged", ({ input }) => {
     expect(prepareToolSearchDispatcherArguments(input)).toBe(input);
   });
@@ -361,6 +382,32 @@ describe("Tool Search dispatcher argument preparation", () => {
     const noSelector = { args: { path: "/x" } };
     const prepared = callTool!.prepareArguments?.(noSelector);
     expect(Value.Check(callTool!.parameters, prepared)).toBe(false);
+  });
+
+  it("still rejects a double-wrapped payload with a malformed outer selector, through the real dispatcher", async () => {
+    // ClawSweeper follow-up finding: an empty-string outer `id` must not be
+    // treated as selector-less. Before the fix, prepareArguments replaced it
+    // with the nested selector and the call executed successfully; the outer
+    // `id: ""` schema-checks fine (Type.String() accepts empty strings), so
+    // the real established rejection only shows up at dispatch time via
+    // readToolSearchCallArgs/readToolSearchId ("id must be a non-empty
+    // string"), which this test locks down as still reachable post-fix.
+    const target = fakeTool("inspect_resource");
+    const { catalogRef, config } = createRuntime([target]);
+    const callTool = createToolSearchTools({ catalogRef, config }).find(
+      (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
+    );
+    expect(callTool).toBeDefined();
+
+    const malformedOuterSelector = { id: "", args: { id: "inspect_resource" } };
+    const prepared = callTool!.prepareArguments?.(malformedOuterSelector);
+    expect(prepared).toBe(malformedOuterSelector);
+    expect(Value.Check(callTool!.parameters, prepared)).toBe(true);
+
+    await expect(callTool!.execute("malformed-outer-selector-call", prepared)).rejects.toThrow(
+      "id must be a non-empty string",
+    );
+    expect(target.execute).not.toHaveBeenCalled();
   });
 
   // The two tests above call prepareArguments/execute on the real tool object
