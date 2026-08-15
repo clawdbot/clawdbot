@@ -28,6 +28,8 @@ export type WhatsAppGroupConfig = {
 export type WhatsAppDirectConfig = {
   /** Optional system prompt for this direct chat. */
   systemPrompt?: string;
+  /** Probabilistic reply rate (0.0 to 1.0) for incoming messages. */
+  replyRate?: number;
 };
 
 export type WhatsAppAckReactionConfig = {
@@ -50,6 +52,8 @@ type WhatsAppSharedConfig = CommonChannelMessagingConfig<string[], string> &
   ChannelReactionConfig<never, WhatsAppReactionLevel, WhatsAppAckReactionConfig> & {
     /** Same-phone setup (bot uses your personal WhatsApp number). */
     selfChatMode?: boolean;
+    /** Probabilistic reply rate (0.0 to 1.0) for incoming messages. Default is 1.0. */
+    replyRate?: number;
     groups?: Record<string, WhatsAppGroupConfig>;
     /** Per-direct-chat prompt overrides keyed by user ID or `*` wildcard. */
     direct?: Record<string, WhatsAppDirectConfig>;

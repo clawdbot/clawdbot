@@ -19,6 +19,14 @@ const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).opti
 const WhatsAppDirectEntrySchema = z
   .object({
     systemPrompt: z.string().optional(),
+    replyRate: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe(
+        "Probabilistically drops otherwise authorized inbound messages before an agent turn is created. 1 is always admit; 0 is always drop. Evaluated per exact direct entry, then direct wildcard, then account. Useful to simulate human non-response. Dropped messages are completely silent (no read receipts, no agent logs).",
+      ),
   })
   .strict()
   .optional();
@@ -44,6 +52,14 @@ const WhatsAppCommonShape = {
   ...accountShape,
   sendReadReceipts: ChannelSendReadReceiptsSchema,
   selfChatMode: z.boolean().optional(),
+  replyRate: z
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe(
+      "Probabilistically drops otherwise authorized inbound messages before an agent turn is created. 1 is always admit; 0 is always drop. Evaluated per exact direct entry, then direct wildcard, then account. Useful to simulate human non-response. Dropped messages are completely silent (no read receipts, no agent logs).",
+    ),
   groups: WhatsAppGroupsSchema,
   direct: WhatsAppDirectSchema,
   ...buildChannelReactionShape({

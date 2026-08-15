@@ -5,6 +5,7 @@ import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-ru
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } from "../inbound-policy.js";
+import { normalizeE164 } from "../text-runtime.js";
 import { buildWhatsAppInboundAdmission, type WhatsAppInboundAdmission } from "./admission.js";
 
 type BlockedInboundAccessControlResult = {
@@ -185,6 +186,20 @@ export async function checkInboundAccessControl(params: {
         `Blocked unauthorized sender ${params.from} (dmPolicy=${policy.dmPolicy})`,
       );
       return blockedInboundAccess(policy);
+    }
+
+    const e164 = normalizeE164(params.from) ?? params.from;
+    const exactCfg = policy.account.direct?.[e164];
+    const wildcardCfg = policy.account.direct?.["*"];
+    const rate = exactCfg?.replyRate ?? wildcardCfg?.replyRate ?? policy.account.replyRate;
+    if (typeof rate === "number" && rate >= 0 && rate < 1) {
+      if (Math.random() >= rate) {
+        logWhatsAppVerbose(
+          params.verbose,
+          `Ignored message from ${params.from} (${rate * 100}% probabilistic rule).`,
+        );
+        return blockedInboundAccess(policy);
+      }
     }
   }
 
