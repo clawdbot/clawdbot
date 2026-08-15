@@ -38,19 +38,33 @@ async function withListeningServer(
 
 describe("tryListenOnPort", () => {
   it("can bind and release an ephemeral loopback port", async () => {
-    let port;
-    try {
-      port = await tryListenOnPort({ port: 0, host: "127.0.0.1", exclusive: true });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EPERM") {
-        return;
+    // The rebind proves release completed. A foreign process can steal the
+    // freed port between attempts on shared CI runners, so retry the whole
+    // cycle on a fresh ephemeral port; a real release regression fails every
+    // attempt because the collision is with our own lingering listener.
+    let lastRebindError: unknown;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      let port;
+      try {
+        port = await tryListenOnPort({ port: 0, host: "127.0.0.1", exclusive: true });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EPERM") {
+          return;
+        }
+        throw err;
       }
-      throw err;
+      expect(port).toBeGreaterThan(0);
+      try {
+        await tryListenOnPort({ port, host: "127.0.0.1", exclusive: true });
+        return;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EADDRINUSE") {
+          throw err;
+        }
+        lastRebindError = err;
+      }
     }
-    expect(port).toBeGreaterThan(0);
-    await expect(
-      tryListenOnPort({ port, host: "127.0.0.1", exclusive: true }),
-    ).resolves.toBeUndefined();
+    throw lastRebindError;
   });
 
   it("rejects when the port is already in use", async () => {
