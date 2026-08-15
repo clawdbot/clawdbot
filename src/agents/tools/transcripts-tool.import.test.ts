@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function currentDateDir(): string {
   return new Date().toISOString().slice(0, 10);
@@ -25,7 +25,6 @@ function createTool(stateDir: string) {
 describe("transcripts tool imports", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
-    tempDirs.cleanup();
   });
 
   it("imports a speaker transcript and writes summary artifacts", async () => {

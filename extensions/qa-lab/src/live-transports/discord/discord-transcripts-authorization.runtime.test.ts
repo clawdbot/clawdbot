@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const { requestDiscordMock } = vi.hoisted(() => ({ requestDiscordMock: vi.fn() }));
 
@@ -13,13 +13,15 @@ import {
 } from "./discord-transcripts-authorization.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("Discord transcript authorization live scenario", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it("proves visible denial, authorized join/stop, and message cleanup", async () => {
-    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "discord-transcript-auth-"));
+    const outputDir = tempDirs.make("discord-transcript-auth-");
     const run = discordQaTranscriptsVoiceAuthorizationScenario.buildRun("323456789012345678");
     if (run.kind !== "transcripts-voice-authorization") {
       throw new Error("unexpected scenario run kind");
@@ -103,53 +105,49 @@ describe("Discord transcript authorization live scenario", () => {
     });
     requestDiscordMock.mockResolvedValue(undefined);
 
-    try {
-      await expect(
-        runDiscordTranscriptsVoiceAuthorizationScenario(environment, {
-          cfg: {},
-          configureTranscriptVoiceAccess,
-          run,
-          voiceChannel: { id: "523456789012345678", type: 2 },
-        }),
-      ).resolves.toMatchObject({
-        details: "visible denial, authorized transcript join, and verified stop/leave",
-      });
+    await expect(
+      runDiscordTranscriptsVoiceAuthorizationScenario(environment, {
+        cfg: {},
+        configureTranscriptVoiceAccess,
+        run,
+        voiceChannel: { id: "523456789012345678", type: 2 },
+      }),
+    ).resolves.toMatchObject({
+      details: "visible denial, authorized transcript join, and verified stop/leave",
+    });
 
-      expect(configureTranscriptVoiceAccess).toHaveBeenCalledExactlyOnceWith(true);
-      expect(send).toHaveBeenCalledTimes(3);
-      const prompts = send.mock.calls.map((call) => call[2]);
-      expect(prompts[0]).toContain('"action":"start"');
-      expect(prompts[0]).toContain(run.deniedSessionId);
-      expect(prompts[1]).toContain(run.allowedSessionId);
-      expect(prompts[2]).toContain('"action":"stop"');
-      expect(prompts.join("\n")).not.toContain('"accountId"');
-      expect(requestDiscordMock).toHaveBeenCalledTimes(6);
+    expect(configureTranscriptVoiceAccess).toHaveBeenCalledExactlyOnceWith(true);
+    expect(send).toHaveBeenCalledTimes(3);
+    const prompts = send.mock.calls.map((call) => call[2]);
+    expect(prompts[0]).toContain('"action":"start"');
+    expect(prompts[0]).toContain(run.deniedSessionId);
+    expect(prompts[1]).toContain(run.allowedSessionId);
+    expect(prompts[2]).toContain('"action":"stop"');
+    expect(prompts.join("\n")).not.toContain('"accountId"');
+    expect(requestDiscordMock).toHaveBeenCalledTimes(6);
 
-      const evidence = JSON.parse(
-        await fs.readFile(
-          path.join(outputDir, "discord-transcripts-voice-authorization-evidence.json"),
-          "utf8",
-        ),
-      ) as Record<string, unknown>;
-      expect(evidence).toEqual({
-        schemaVersion: 1,
-        scenarioId: "discord-transcripts-voice-authorization",
-        denied: {
-          replyObserved: true,
-          visibleDenial: true,
-          voiceStayedDisconnected: true,
-        },
-        allowed: { replyObserved: true, voiceJoined: true },
-        cleanup: {
-          emergencyStopAttempted: false,
-          messagesDeleted: 6,
-          messageDeleteFailures: 0,
-          stopReplyObserved: true,
-          voiceDisconnected: true,
-        },
-      });
-    } finally {
-      await fs.rm(outputDir, { force: true, recursive: true });
-    }
+    const evidence = JSON.parse(
+      await fs.readFile(
+        path.join(outputDir, "discord-transcripts-voice-authorization-evidence.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect(evidence).toEqual({
+      schemaVersion: 1,
+      scenarioId: "discord-transcripts-voice-authorization",
+      denied: {
+        replyObserved: true,
+        visibleDenial: true,
+        voiceStayedDisconnected: true,
+      },
+      allowed: { replyObserved: true, voiceJoined: true },
+      cleanup: {
+        emergencyStopAttempted: false,
+        messagesDeleted: 6,
+        messageDeleteFailures: 0,
+        stopReplyObserved: true,
+        voiceDisconnected: true,
+      },
+    });
   });
 });
