@@ -28,9 +28,12 @@ function ancestors(rows) {
 }
 function processIdentity(pid) {
   try {
+    // Identity lookups gate every thaw; an unbounded ps would strand frozen
+    // processes, so this matches the bound processes()/processStatus() use.
     const start = require("node:child_process").execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
       maxBuffer: 4096,
+      timeout: 2000,
     }).trim();
     return start || null;
   } catch (error) {

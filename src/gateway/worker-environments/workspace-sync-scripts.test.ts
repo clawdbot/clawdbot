@@ -54,6 +54,7 @@ async function fixture() {
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
   return {
+    bin,
     home,
     workspace,
     extraProcessPath,
@@ -265,6 +266,27 @@ describe("remote workspace quiescence scripts", () => {
       [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce],
       { timeoutMs: 10_000, baseEnv: input.env },
     );
+    expect(result.code).not.toBe(0);
+  });
+
+  it("bounds identity lookups so a stalled host ps cannot strand frozen processes", async () => {
+    const input = await fixture();
+    const nonce = await quiesce(input);
+
+    // Every SIGCONT is gated on processIdentity, so an unbounded lookup leaves
+    // the whole lease frozen with no remaining resumer.
+    await fs.writeFile(
+      path.join(input.bin, "ps"),
+      '#!/bin/sh\ncase "$*" in\n  *"lstart= -p"*) sleep 30 ;;\n  *) exit 1 ;;\nesac\n',
+    );
+    await fs.chmod(path.join(input.bin, "ps"), 0o755);
+
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+      { timeoutMs: 15_000, baseEnv: input.env },
+    );
+
+    expect(result.termination).toBe("exit");
     expect(result.code).not.toBe(0);
   });
 });
