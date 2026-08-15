@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadExecApprovals,
   type ExecAsk,
+  type ExecApprovalsFile,
   type ExecHost,
   type ExecMode,
   type ExecSecurity,
@@ -112,6 +113,7 @@ function resolveExecConfigState(params: {
 /** Resolves whether node exec is usable and any effective node binding. */
 export function resolveNodeExecEligibility(params: {
   cfg?: OpenClawConfig;
+  execApprovals?: ExecApprovalsFile;
   sessionEntry?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides;
   agentId?: string;
@@ -131,6 +133,7 @@ export function resolveNodeExecEligibility(params: {
 /** Resolves effective exec host, mode, approval policy, and node availability. */
 export function resolveExecDefaults(params: {
   cfg?: OpenClawConfig;
+  execApprovals?: ExecApprovalsFile;
   sessionEntry?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides;
   agentId?: string;
@@ -173,7 +176,7 @@ export function resolveExecDefaults(params: {
     resolved.effectiveHost === "sandbox"
       ? undefined
       : resolveExecApprovalsFromFile({
-          file: loadExecApprovals(),
+          file: params.execApprovals ?? loadExecApprovals(),
           agentId: resolvedAgentId,
           overrides: {
             security: defaultSecurity,

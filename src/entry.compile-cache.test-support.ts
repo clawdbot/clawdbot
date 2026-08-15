@@ -3,11 +3,8 @@ import type { RespawnChildRuntime } from "./process/respawn-child-runner.js";
 import "./entry.compile-cache.js";
 
 type CompileCacheParams = {
-  argv?: string[];
   env?: NodeJS.ProcessEnv;
   installRoot: string;
-  nodeVersion?: string;
-  platform?: NodeJS.Platform;
 };
 
 type CompileCacheRespawnPlan = {
@@ -26,7 +23,6 @@ type CompileCacheTestApi = {
     installRoot: string;
     argv?: string[];
     compileCacheDir?: string;
-    nodeVersion?: string;
     platform?: NodeJS.Platform;
   }): CompileCacheRespawnPlan | undefined;
   isSourceCheckoutInstallRoot(installRoot: string): boolean;

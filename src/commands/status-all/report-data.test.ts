@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   resolveStatusGatewayDiagnosticsSafe: vi.fn(async () => null),
   resolveStatusGatewayHealthSafe: vi.fn(async () => undefined),
   resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
+  loadExecApprovalsReadOnly: vi.fn(() => ({ version: 1, agents: {} })),
   buildWorkspaceSkillStatus: vi.fn(() => null),
 }));
 
@@ -27,7 +28,12 @@ vi.mock("../../gateway/net.js", () => ({
     bindHost === "100.64.0.40" ? [bindHost, "127.0.0.1"] : [bindHost],
 }));
 vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage: mocks.inspectPortUsage }));
-vi.mock("../../infra/restart-sentinel.js", () => ({ readRestartSentinel: async () => null }));
+vi.mock("../../infra/exec-approvals.js", () => ({
+  loadExecApprovalsReadOnly: mocks.loadExecApprovalsReadOnly,
+}));
+vi.mock("../../infra/restart-sentinel.js", () => ({
+  readRestartSentinelReadOnly: async () => null,
+}));
 vi.mock("../../plugins/status.js", () => ({ buildPluginCompatibilityNotices: () => [] }));
 vi.mock("../../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: mocks.buildWorkspaceSkillStatus,
@@ -172,6 +178,7 @@ describe("buildStatusAllReportData", () => {
 
     expect(mocks.resolveNodeExecEligibility).toHaveBeenCalledWith({
       cfg: expect.any(Object),
+      execApprovals: { version: 1, agents: {} },
       agentId: "beta",
     });
     expect(mocks.buildWorkspaceSkillStatus).toHaveBeenCalledWith("/tmp/beta", expect.any(Object));

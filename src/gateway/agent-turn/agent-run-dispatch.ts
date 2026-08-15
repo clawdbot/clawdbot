@@ -173,7 +173,10 @@ export function dispatchAgentRunFromGateway(params: {
     }
   };
   const cronCreatorAuthorityCapability = params.cronCreatorAuthority
-    ? createCronCreatorAuthorityCapability(params.cronCreatorAuthority.runId)
+    ? createCronCreatorAuthorityCapability(
+        params.cronCreatorAuthority.runId,
+        params.cronCreatorAuthority.callerOrigin,
+      )
     : undefined;
   const runAgent = () =>
     agentCommandFromGatewayIngress(

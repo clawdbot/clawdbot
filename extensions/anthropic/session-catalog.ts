@@ -13,6 +13,7 @@ import type {
   SessionCatalogPullRequestSummary,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
+import { createSessionCatalogAdoptionCoordinator } from "openclaw/plugin-sdk/session-catalog";
 import {
   asPositiveSafeInteger as pullRequestNumber,
   isRecord,
@@ -87,6 +88,8 @@ const NODE_INVOKE_TIMEOUT_MS = 30_000;
 const NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS = 8_000;
 const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
 const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
+const continueClaudeAdoption =
+  createSessionCatalogAdoptionCoordinator<Awaited<ReturnType<typeof upstream.linkContinued>>>();
 
 type SessionIndexEntry = {
   sessionId?: unknown;
@@ -1788,71 +1791,73 @@ async function continueClaudeSession(
   if (existing) {
     return await linkSession(existing);
   }
-  const pending = upstream.continueOperations.get(operationKey);
-  if (pending) {
-    return await pending;
-  }
-  const operation = (async () => {
-    let nodeId: string | undefined;
-    let record: ClaudeSessionCatalogSession | undefined;
-    if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
-      record = (await listClaudeSessions(currentHomeDir(), scanOptions)).find(
-        (candidate) => candidate.threadId === threadId,
-      );
-      if (!record || !isResumableClaudeSource(record.source)) {
-        throw new ClaudeCatalogParamsError("only local Claude Code sessions can be continued");
-      }
-    } else if (hostId.startsWith("node:")) {
-      nodeId = hostId.slice("node:".length);
-      const node = (await api.runtime.nodes.list()).nodes.find(
-        (candidate) =>
-          candidate.nodeId === nodeId &&
-          candidate.connected === true &&
-          candidate.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
-          candidate.commands.includes(CLAUDE_SESSION_READ_COMMAND) &&
-          candidate.commands.includes(CLAUDE_CLI_NODE_RUN_COMMAND) &&
-          candidate.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
-          candidate.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
-          candidate.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
-      );
-      if (!node) {
-        throw new ClaudeCatalogParamsError(
-          "paired node does not permit Claude CLI session continuation",
+  let history: ClaudeTranscriptItem[] | undefined;
+  return await continueClaudeAdoption({
+    sourceKey: operationKey,
+    findExisting: () => listBoundClaudeSessions(api, agentId).get(sourceKey),
+    create: async () => {
+      let nodeId: string | undefined;
+      let record: ClaudeSessionCatalogSession | undefined;
+      if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
+        record = (await listClaudeSessions(currentHomeDir(), scanOptions)).find(
+          (candidate) => candidate.threadId === threadId,
         );
+        if (!record || !isResumableClaudeSource(record.source)) {
+          throw new ClaudeCatalogParamsError("only local Claude Code sessions can be continued");
+        }
+      } else if (hostId.startsWith("node:")) {
+        nodeId = hostId.slice("node:".length);
+        const node = (await api.runtime.nodes.list()).nodes.find(
+          (candidate) =>
+            candidate.nodeId === nodeId &&
+            candidate.connected === true &&
+            candidate.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
+            candidate.commands.includes(CLAUDE_SESSION_READ_COMMAND) &&
+            candidate.commands.includes(CLAUDE_CLI_NODE_RUN_COMMAND) &&
+            candidate.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
+            candidate.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
+            candidate.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
+        );
+        if (!node) {
+          throw new ClaudeCatalogParamsError(
+            "paired node does not permit Claude CLI session continuation",
+          );
+        }
+        // Node rows stay CLI-only: desktop transcripts on nodes have no
+        // node-side run command and remain view-only.
+        record = await resolveNodeClaudeRecord({ runtime: api.runtime, nodeId, threadId });
+        if (!record || record.source !== "claude-cli") {
+          throw new ClaudeCatalogParamsError("only Claude CLI sessions can be continued");
+        }
+      } else {
+        throw new ClaudeCatalogParamsError("hostId is invalid");
       }
-      // Node rows stay CLI-only: desktop transcripts on nodes have no
-      // node-side run command and remain view-only.
-      record = await resolveNodeClaudeRecord({ runtime: api.runtime, nodeId, threadId });
-      if (!record || record.source !== "claude-cli") {
-        throw new ClaudeCatalogParamsError("only Claude CLI sessions can be continued");
+      if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
+        const source = await fs.stat((record as CatalogRecord).filePath).catch(() => undefined);
+        if (!source?.isFile()) {
+          throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
+        }
       }
-    } else {
-      throw new ClaudeCatalogParamsError("hostId is invalid");
-    }
-    if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
-      const source = await fs.stat((record as CatalogRecord).filePath).catch(() => undefined);
-      if (!source?.isFile()) {
-        throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
-      }
-    }
-    const history = await readBoundedClaudeHistory({
-      runtime: api.runtime,
-      hostId,
-      threadId,
-      allowProcessHomeFallback,
-    });
-    const config = currentClaudeSessionCatalogConfig(api);
-    const adoptingAgentId = agentId;
-    // Adopt onto the model this agent actually routes to the CLI backend; the
-    // packaged default may not be routed or allowed in an existing config.
-    const model =
-      resolveClaudeCliRoutedModelId(config, adoptingAgentId) ??
-      CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
-    const marker = {
-      sourceThreadId: threadId,
-      ...(hostId !== CLAUDE_LOCAL_SESSION_HOST_ID ? { sourceHostId: hostId } : {}),
-    };
-    try {
+      // Narrowed local: afterCreate below needs a definite array, while the outer
+      // `history` stays optional so complete() can link without a reread on races.
+      const loadedHistory = await readBoundedClaudeHistory({
+        runtime: api.runtime,
+        hostId,
+        threadId,
+        allowProcessHomeFallback,
+      });
+      history = loadedHistory;
+      const config = currentClaudeSessionCatalogConfig(api);
+      const adoptingAgentId = agentId;
+      // Adopt onto the model this agent actually routes to the CLI backend; the
+      // packaged default may not be routed or allowed in an existing config.
+      const model =
+        resolveClaudeCliRoutedModelId(config, adoptingAgentId) ??
+        CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
+      const marker = {
+        sourceThreadId: threadId,
+        ...(hostId !== CLAUDE_LOCAL_SESSION_HOST_ID ? { sourceHostId: hostId } : {}),
+      };
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg: config,
         key: adoptedSessionKey(hostId, threadId),
@@ -1871,7 +1876,7 @@ async function continueClaudeSession(
         },
         afterCreate: async (entry) => {
           await importClaudeHistory({
-            items: history,
+            items: loadedHistory,
             threadId,
             sessionId: entry.sessionId,
             sessionKey: entry.key,
@@ -1885,23 +1890,10 @@ async function continueClaudeSession(
           return { pluginExtensions: { anthropic: { sessionCatalog: marker } } };
         },
       });
-      return await linkSession(created.key, history);
-    } catch (error) {
-      const raced = listBoundClaudeSessions(api, agentId).get(sourceKey);
-      if (raced) {
-        return await linkSession(raced, history);
-      }
-      throw error;
-    }
-  })();
-  upstream.continueOperations.set(operationKey, operation);
-  try {
-    return await operation;
-  } finally {
-    if (upstream.continueOperations.get(operationKey) === operation) {
-      upstream.continueOperations.delete(operationKey);
-    }
-  }
+      return { sessionKey: created.key };
+    },
+    complete: async (continued) => await linkSession(continued.sessionKey, history),
+  });
 }
 
 function toGenericClaudeItem(item: ClaudeTranscriptItem): SessionCatalogTranscriptItem {

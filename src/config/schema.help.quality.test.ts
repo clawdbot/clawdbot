@@ -244,6 +244,7 @@ describe("config help copy quality", () => {
       name: "documents session maintenance duration/size examples and deprecations",
       fields: [
         ["session.maintenance.pruneAfter", ["30d", "12h"]],
+        ["session.maintenance.preserveRecent", ["7d", /false/i]],
         ["session.maintenance.resetArchiveRetention", [".reset.", /false/i]],
         ["session.maintenance.maxDiskBytes", ["500mb"]],
         ["session.maintenance.highWaterBytes", ["80%"]],

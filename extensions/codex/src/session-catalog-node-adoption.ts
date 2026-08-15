@@ -1,21 +1,18 @@
-import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   listSessionCatalogEntries,
+  sessionCatalogAdoptedSessionKey,
+  sessionCatalogAdoptedSourceKey,
   type SessionCatalogEntrySnapshot,
 } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThread } from "./app-server/protocol.js";
 import { importCodexThreadHistoryToTranscript } from "./app-server/transcript-mirror.js";
-import {
-  boundedCatalogString,
-  CatalogParamsError,
-  MAX_SESSION_ID_LENGTH,
-} from "./session-catalog-parsing.js";
+import { CatalogParamsError } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogSession } from "./session-catalog-types.js";
 
 const CODEX_NODE_SESSION_KEY_PREFIX = "harness:codex:node-session:";
@@ -80,37 +77,9 @@ export function adoptionSessionKeyRest(sessionKey: string): string {
   return parseAgentSessionKey(trimmed)?.rest ?? trimmed;
 }
 
-export function adoptedSourceKey(hostId: string, threadId: string): string {
-  return `${hostId}\u0000${threadId}`;
-}
-
-export function adoptedOwnerSourceKey(agentId: string, hostId: string, threadId: string): string {
-  return `${agentId}\u0000${adoptedSourceKey(hostId, threadId)}`;
-}
-
-export function lastTerminalTurnId(thread: CodexThread): string | undefined {
-  for (let index = (thread.turns?.length ?? 0) - 1; index >= 0; index -= 1) {
-    const turn = thread.turns?.[index];
-    const turnId = boundedCatalogString(turn?.id, MAX_SESSION_ID_LENGTH);
-    if (!turnId) {
-      continue;
-    }
-    if (
-      turn?.status === "completed" ||
-      turn?.status === "interrupted" ||
-      turn?.status === "failed"
-    ) {
-      return turnId;
-    }
-  }
-  return undefined;
-}
-
 function nodeAdoptionSessionKey(hostId: string, threadId: string): string {
-  const digest = createHash("sha256")
-    .update(JSON.stringify([hostId, threadId]))
-    .digest("hex");
-  return `${CODEX_NODE_SESSION_KEY_PREFIX}${digest}`;
+  const source = JSON.stringify([hostId, threadId]);
+  return sessionCatalogAdoptedSessionKey(CODEX_NODE_SESSION_KEY_PREFIX, source);
 }
 
 function readNodeSessionMarker(entry: CatalogSessionEntry): CodexNodeSessionMarker | undefined {
@@ -164,7 +133,7 @@ export function listNodeAdoptedSessionEntries(params: {
     ) {
       continue;
     }
-    const sourceKey = adoptedSourceKey(marker.sourceHostId, marker.sourceThreadId);
+    const sourceKey = sessionCatalogAdoptedSourceKey(marker.sourceHostId, marker.sourceThreadId);
     if (adopted.has(sourceKey)) {
       throw new Error(
         `multiple OpenClaw sessions adopt Codex thread ${marker.sourceThreadId} on ${marker.sourceHostId}`,
@@ -189,7 +158,7 @@ export function findNodeAdoptedSessionEntry(params: {
   includeInitializing?: boolean;
 }): AdoptedSessionEntry | undefined {
   return listNodeAdoptedSessionEntries(params).get(
-    adoptedSourceKey(params.hostId, params.threadId),
+    sessionCatalogAdoptedSourceKey(params.hostId, params.threadId),
   );
 }
 

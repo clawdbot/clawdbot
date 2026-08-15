@@ -12,6 +12,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
+import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
 import { createDockPanelLayout } from "../dock-panel-layout.ts";
 import {
@@ -109,6 +110,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     desktopPanelLauncherStyles,
     desktopPanelStyles,
     desktopDocumentStyles,
+    scrollbarShadowStyles,
   ];
 
   override connectedCallback(): void {

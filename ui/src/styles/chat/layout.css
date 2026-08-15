@@ -338,7 +338,6 @@ openclaw-chat-page {
   /* The transcript is document content, unlike the surrounding app chrome. */
   user-select: text;
   scrollbar-gutter: stable both-edges;
-  scrollbar-color: var(--muted-strong) transparent;
   /* The pane header owns the titlebar and native drag surface. No horizontal
      padding: macOS overlay scrollbars render inside the
      scroll container's padding, which floats the thumb away from the pane
@@ -356,14 +355,6 @@ openclaw-chat-page {
 .chat-thread:focus-visible {
   outline: 2px solid var(--muted-strong);
   outline-offset: -2px;
-}
-
-:root .chat-thread::-webkit-scrollbar-thumb {
-  background: var(--muted-strong);
-}
-
-:root .chat-thread::-webkit-scrollbar-thumb:hover {
-  background: var(--text);
 }
 
 .chat-thread-inner > :first-child {
@@ -2822,8 +2813,6 @@ button.chat-reply-preview--message:disabled {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: var(--muted-strong) transparent;
 }
 
 .agent-chat__capability-menu-item[value="back"] {
@@ -2831,15 +2820,6 @@ button.chat-reply-preview--message:disabled {
   top: calc(-1 * var(--menu-padding));
   z-index: 1;
   background: var(--bg-elevated);
-}
-
-.agent-chat__capability-menu::part(menu)::-webkit-scrollbar {
-  width: 6px;
-}
-
-.agent-chat__capability-menu::part(menu)::-webkit-scrollbar-thumb {
-  background: var(--muted-strong);
-  border-radius: 999px;
 }
 
 .agent-chat__capability-menu-item {
@@ -3907,13 +3887,6 @@ button.chat-reply-preview--message:disabled {
   max-height: inherit;
   overflow-y: auto;
   padding: var(--menu-padding);
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
-}
-
-.slash-menu__scroll::-webkit-scrollbar-track,
-.slash-menu__scroll::-webkit-scrollbar-corner {
-  background: transparent;
 }
 
 .slash-menu-group + .slash-menu-group {
