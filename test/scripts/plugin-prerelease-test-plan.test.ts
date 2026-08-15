@@ -10,6 +10,10 @@ import {
   assertPluginPrereleaseTestPlanComplete,
   createPluginPrereleaseTestPlan,
 } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
+import {
+  pluginPrereleaseTimeoutComponents,
+  releaseTimeoutForProfile,
+} from "../helpers/release-workflow-timeouts.js";
 
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
@@ -42,56 +46,13 @@ function readLiveE2eWorkflow() {
   return parse(readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"));
 }
 
-function jobNeeds(job: { needs?: string | string[] }): string[] {
-  return Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : [];
-}
-
-function timeoutForProfile(
-  timeout: number | string | undefined,
-  profile: "beta" | "stable" | "full",
-): number {
-  if (typeof timeout === "number") {
-    return timeout;
-  }
-  if (timeout === "${{ matrix.group.timeout_minutes || 60 }}") {
-    return 60;
-  }
-  const match = timeout?.match(
-    /^\$\{\{ inputs\.(?:release_profile|release_test_profile) == 'full' && ([0-9]+) \|\| ([0-9]+) \}\}$/u,
-  );
-  if (!match) {
-    throw new Error(`Unsupported release timeout expression: ${String(timeout)}`);
-  }
-  return Number(profile === "full" ? match[1] : match[2]);
-}
-
 function pluginPrereleaseTimeoutFloor(profile: "beta" | "stable" | "full"): number {
-  const plugin = readPluginPrereleaseWorkflow();
-  const liveE2e = readLiveE2eWorkflow();
-  const preflight = plugin.jobs.preflight;
-  const dockerSuite = plugin.jobs["plugin-prerelease-docker-suite"];
-  const suite = plugin.jobs["plugin-prerelease-suite"];
-  const validateSelectedRef = liveE2e.jobs.validate_selected_ref;
-  const prepareImage = liveE2e.jobs.prepare_docker_e2e_image;
-  const imageReady = liveE2e.jobs.docker_e2e_image_ready;
-  const dockerLanes = liveE2e.jobs.validate_docker_lanes;
-
-  expect(jobNeeds(dockerSuite)).toContain("preflight");
-  expect(jobNeeds(prepareImage)).toEqual(["validate_selected_ref"]);
-  expect(jobNeeds(imageReady)).toEqual(["prepare_docker_e2e_image"]);
-  expect(jobNeeds(dockerLanes)).toEqual(
-    expect.arrayContaining(["prepare_docker_e2e_image", "docker_e2e_image_ready"]),
-  );
-  expect(jobNeeds(suite)).toContain("plugin-prerelease-docker-suite");
-
-  return [
-    timeoutForProfile(preflight["timeout-minutes"], profile),
-    timeoutForProfile(validateSelectedRef["timeout-minutes"], profile),
-    timeoutForProfile(prepareImage["timeout-minutes"], profile),
-    timeoutForProfile(imageReady["timeout-minutes"], profile),
-    timeoutForProfile(dockerLanes["timeout-minutes"], profile),
-    timeoutForProfile(suite["timeout-minutes"], profile),
-  ].reduce((total, value) => total + value, 0);
+  const components = pluginPrereleaseTimeoutComponents({
+    pluginPrerelease: readPluginPrereleaseWorkflow(),
+    liveE2e: readLiveE2eWorkflow(),
+    profile,
+  });
+  return Object.values(components).reduce((total, value) => total + value, 0);
 }
 
 function getDockerLane(name: string) {
@@ -762,9 +723,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       full: pluginPrereleaseTimeoutFloor("full"),
     };
     const parentTimeouts = {
-      beta: timeoutForProfile(pluginMonitorTimeout, "beta"),
-      stable: timeoutForProfile(pluginMonitorTimeout, "stable"),
-      full: timeoutForProfile(pluginMonitorTimeout, "full"),
+      beta: releaseTimeoutForProfile(pluginMonitorTimeout, "beta"),
+      stable: releaseTimeoutForProfile(pluginMonitorTimeout, "stable"),
+      full: releaseTimeoutForProfile(pluginMonitorTimeout, "full"),
     };
     expect(childTimeoutFloors).toEqual({ beta: 175, stable: 175, full: 205 });
     expect(parentTimeouts).toEqual({ beta: 240, stable: 240, full: 300 });
