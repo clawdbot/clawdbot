@@ -502,11 +502,7 @@ class McpCuaDriverSession implements CuaDriverSession {
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
     await this.ensureStarted("window", signal);
-    return await this.client.callTool(
-      name,
-      { ...args, session: this.windowPublicSession },
-      signal,
-    );
+    return await this.client.callTool(name, { ...args, session: this.windowPublicSession }, signal);
   }
 
   async callDesktopTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {

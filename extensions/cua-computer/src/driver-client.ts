@@ -223,7 +223,8 @@ class DirectCuaDriverSession implements CuaDriverSession {
     return await this.invoke("desktop", signal, () =>
       this.desktopSession.click(
         { ...input, scope: this.sdk.DesktopScope.Desktop },
-        asyncOptions(signal)),
+        asyncOptions(signal),
+      ),
     );
   }
   async drag(
@@ -233,7 +234,8 @@ class DirectCuaDriverSession implements CuaDriverSession {
     return await this.invoke("desktop", signal, () =>
       this.desktopSession.drag(
         { ...input, scope: this.sdk.DesktopScope.Desktop },
-        asyncOptions(signal)),
+        asyncOptions(signal),
+      ),
     );
   }
   async moveCursor(input: { x: number; y: number }, signal?: AbortSignal) {
@@ -263,7 +265,8 @@ class DirectCuaDriverSession implements CuaDriverSession {
     return await this.invoke("desktop", signal, () =>
       this.desktopSession.typeText(
         { text, scope: this.sdk.DesktopScope.Desktop },
-        asyncOptions(signal)),
+        asyncOptions(signal),
+      ),
     );
   }
   async pressKey(input: { key: string; modifiers: string[] }, signal?: AbortSignal) {
