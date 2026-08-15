@@ -416,6 +416,33 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
+  it("caps the tsdown heap using the legacy v1 memory controller slice budget", () => {
+    const slicePath = "/user.slice/user-999.slice";
+    // A legacy/hybrid host publishes the budget through the v1 memory controller, and the
+    // unified record carries no controllers, so only the v1 walk can find this limit.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `0::/\n7:memory:${slicePath}/openclaw-main-update.service\n`],
+      [`/sys/fs/cgroup/memory${slicePath}/memory.limit_in_bytes`, `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
   it("clamps explicit tsdown heap settings to the container memory limit", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",

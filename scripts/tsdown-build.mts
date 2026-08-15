@@ -47,15 +47,12 @@ const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
 const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
-const CGROUP_MEMORY_LIMIT_PATHS = [
-  "/sys/fs/cgroup/memory.max",
-  "/sys/fs/cgroup/memory/memory.limit_in_bytes",
-];
-const CGROUP_V2_MOUNT_PATH = "/sys/fs/cgroup";
+const CGROUP_MOUNT_PATH = "/sys/fs/cgroup";
 const PROC_SELF_CGROUP_PATH = "/proc/self/cgroup";
 // memory.high throttles reclaim rather than failing allocation, so a heap sized
 // above it stalls the build instead of OOM-ing; both bounds cap the build heap.
 const CGROUP_V2_MEMORY_LIMIT_FILES = ["memory.max", "memory.high"];
+const CGROUP_V1_MEMORY_LIMIT_FILES = ["memory.limit_in_bytes"];
 const PROC_MEMINFO_PATH = "/proc/meminfo";
 const tsdownStdio = () => ["ignore", "pipe", "pipe"] satisfies ["ignore", "pipe", "pipe"];
 // Build descendants get a short cleanup window; a timed-out build must not hold CI for seconds.
@@ -482,28 +479,48 @@ function parseCgroupMemoryLimitBytes(value: string) {
   return Number(parsed);
 }
 
-// A systemd slice budget lives on the process's own cgroup, never on the v2 root,
-// so probing only the root misses every limit outside a namespaced container.
-function resolveOwnCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
+// A systemd slice budget lives on the process's own cgroup, never on a hierarchy root, so
+// probing only the root misses every limit outside a namespaced container. Legacy and hybrid
+// hosts publish that same budget through the v1 memory controller instead of the `0::` record,
+// so both hierarchies are walked leaf-to-root; depth 0 is the root probe.
+function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
   const fsImpl = params.fs ?? fs;
-  let rawCgroup: string;
+  let rawCgroup = "";
   try {
     rawCgroup = fsImpl.readFileSync(params.procSelfCgroupPath ?? PROC_SELF_CGROUP_PATH, "utf8");
   } catch {
-    return [];
+    // Unreadable off Linux; the hierarchy roots below still apply.
   }
 
-  const unifiedLine = rawCgroup.split("\n").find((line) => line.startsWith("0::"));
-  if (!unifiedLine) {
-    return [];
-  }
-
-  const segments = unifiedLine.slice(3).split("/").filter(Boolean);
   const paths: string[] = [];
-  for (let depth = segments.length; depth >= 0; depth -= 1) {
-    for (const limitFile of CGROUP_V2_MEMORY_LIMIT_FILES) {
-      paths.push(path.join(CGROUP_V2_MOUNT_PATH, ...segments.slice(0, depth), limitFile));
+  const addHierarchy = (root: string, limitFiles: string[], cgroupPath: string) => {
+    const segments = cgroupPath.split("/").filter(Boolean);
+    for (let depth = segments.length; depth >= 0; depth -= 1) {
+      for (const limitFile of limitFiles) {
+        paths.push(path.join(root, ...segments.slice(0, depth), limitFile));
+      }
     }
+  };
+
+  for (const line of rawCgroup.split("\n")) {
+    const record = /^\d+:([^:]*):(.*)$/u.exec(line);
+    if (!record) {
+      continue;
+    }
+    const controllers = record[1] ?? "";
+    if (controllers === "") {
+      addHierarchy(CGROUP_MOUNT_PATH, CGROUP_V2_MEMORY_LIMIT_FILES, record[2] ?? "");
+    } else if (controllers.split(",").includes("memory")) {
+      addHierarchy(
+        path.join(CGROUP_MOUNT_PATH, "memory"),
+        CGROUP_V1_MEMORY_LIMIT_FILES,
+        record[2] ?? "",
+      );
+    }
+  }
+  if (paths.length === 0) {
+    addHierarchy(CGROUP_MOUNT_PATH, CGROUP_V2_MEMORY_LIMIT_FILES, "");
+    addHierarchy(path.join(CGROUP_MOUNT_PATH, "memory"), CGROUP_V1_MEMORY_LIMIT_FILES, "");
   }
   return paths;
 }
@@ -515,10 +532,7 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
   }
 
   const fsImpl = params.fs ?? fs;
-  const paths = params.cgroupMemoryLimitPaths ?? [
-    ...resolveOwnCgroupMemoryLimitPaths(params),
-    ...CGROUP_MEMORY_LIMIT_PATHS,
-  ];
+  const paths = params.cgroupMemoryLimitPaths ?? resolveCgroupMemoryLimitPaths(params);
   // An ancestor may bound the leaf, so the tightest limit in the chain wins.
   let tightestLimitBytes: number | null = null;
   for (const limitPath of paths) {
