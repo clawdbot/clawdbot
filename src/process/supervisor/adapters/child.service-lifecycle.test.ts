@@ -241,7 +241,9 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     adapter.kill("SIGTERM");
     if (repeatKill) {
       await waitFor(() => !isAlive(rootPid));
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 200);
+      });
       expect(isAlive(descendantPid)).toBe(true);
       adapter.kill("SIGKILL");
     }

@@ -63,7 +63,9 @@ export function runServiceChildGroupAnchor(): void {
   let lineageClosed = false;
   let forceCleanup = false;
   let resolveForceCleanup: () => void = () => {};
-  const forceCleanupRequested = new Promise<void>((resolve) => (resolveForceCleanup = resolve));
+  const forceCleanupRequested = new Promise<void>((resolve) => {
+    resolveForceCleanup = resolve;
+  });
   let resolveLineage!: () => void;
   const lineageDone = new Promise<void>((resolve) => {
     resolveLineage = resolve;
