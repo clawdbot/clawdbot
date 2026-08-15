@@ -1,0 +1,66 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    # 每天北京时间 08:00，GitHub cron 使用 UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: true
+
+jobs:
+  sync_upstream:
+    name: 同步上游并触发 Android 编译
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: 同步上游
+        id: sync
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git fetch upstream main
+
+          before="$(git rev-parse HEAD)"
+
+          # 保留 Fork 自己的提交，并合并上游更新
+          git merge --no-edit upstream/main
+
+          after="$(git rev-parse HEAD)"
+
+          if [[ "$before" == "$after" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "没有新的上游更新"
+          else
+            git push origin main
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "已同步上游更新"
+          fi
+
+      - name: 触发 Android Release
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh workflow run android-release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f tag="test"
