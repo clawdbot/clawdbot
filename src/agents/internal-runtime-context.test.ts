@@ -15,7 +15,7 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   OPENCLAW_RUNTIME_EVENT_HEADER,
-  relocateCurrentRuntimeContextCarrierToTail,
+  relocateCurrentRuntimeContextCarrierAfterActiveUser,
   stripInternalRuntimeContext,
 } from "./internal-runtime-context.js";
 
@@ -185,10 +185,10 @@ describe("internal runtime context codec", () => {
   });
 });
 
-describe("relocateCurrentRuntimeContextCarrierToTail", () => {
-  it("moves a before-user carrier to the absolute tail", () => {
+describe("relocateCurrentRuntimeContextCarrierAfterActiveUser", () => {
+  it("moves a before-user carrier to right after the active user turn", () => {
     const messages = [user("older"), assistant("reply"), carrier("meta"), user("active")];
-    const out = relocateCurrentRuntimeContextCarrierToTail(messages);
+    const out = relocateCurrentRuntimeContextCarrierAfterActiveUser(messages);
     expect(out.map((m) => m.role)).toEqual(["user", "assistant", "user", "custom"]);
     // Non-carrier order is preserved; the active user turn is no longer preceded
     // by the volatile carrier, so it caches as a stable prefix.
@@ -200,31 +200,34 @@ describe("relocateCurrentRuntimeContextCarrierToTail", () => {
     expect(out[out.length - 1]).toEqual(carrier("meta"));
   });
 
-  it("moves the carrier past tool-call/tool-result scaffolding to the absolute tail", () => {
+  it("keeps the carrier anchored after the active user, ahead of tool-call/tool-result scaffolding", () => {
     const messages = [
       carrier("meta"),
       user("active"),
       assistant("tool call"),
       toolResult("tool output"),
     ];
-    const out = relocateCurrentRuntimeContextCarrierToTail(messages);
-    expect(out.map((m) => m.role)).toEqual(["user", "assistant", "toolResult", "custom"]);
-    expect(out[out.length - 1]).toEqual(carrier("meta"));
+    const out = relocateCurrentRuntimeContextCarrierAfterActiveUser(messages);
+    // The carrier sits immediately after the active user turn; tool-loop
+    // scaffolding follows it so the wire stays a strict prefix-extension
+    // (P+U+X -> P+U+X+Y) instead of relocating the carrier past the new items.
+    expect(out.map((m) => m.role)).toEqual(["user", "custom", "assistant", "toolResult"]);
+    expect(out[1]).toEqual(carrier("meta"));
   });
 
-  it("is a no-op (same reference) when the carrier is already at the tail", () => {
-    const messages = [user("active"), assistant("tool call"), toolResult("out"), carrier("meta")];
-    const out = relocateCurrentRuntimeContextCarrierToTail(messages);
+  it("is a no-op (same reference) when the carrier is already placed after the active user", () => {
+    const messages = [user("active"), carrier("meta"), assistant("tool call"), toolResult("out")];
+    const out = relocateCurrentRuntimeContextCarrierAfterActiveUser(messages);
     expect(out).toBe(messages);
   });
 
   it("is a no-op when there is no carrier", () => {
     const messages = [user("active"), assistant("reply")];
-    expect(relocateCurrentRuntimeContextCarrierToTail(messages)).toBe(messages);
+    expect(relocateCurrentRuntimeContextCarrierAfterActiveUser(messages)).toBe(messages);
   });
 
   it("leaves a carrier in place when there is no active user turn to anchor after", () => {
     const messages = [carrier("meta"), assistant("reply")];
-    expect(relocateCurrentRuntimeContextCarrierToTail(messages)).toBe(messages);
+    expect(relocateCurrentRuntimeContextCarrierAfterActiveUser(messages)).toBe(messages);
   });
 });

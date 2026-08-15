@@ -36,7 +36,7 @@ import {
 import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-  relocateCurrentRuntimeContextCarrierToTail,
+  relocateCurrentRuntimeContextCarrierAfterActiveUser,
 } from "../../internal-runtime-context.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 
@@ -520,7 +520,7 @@ function textOf(message: unknown): string | undefined {
 
 describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", () => {
   const wire = (messages: AgentMsg[]) =>
-    relocateCurrentRuntimeContextCarrierToTail(
+    relocateCurrentRuntimeContextCarrierAfterActiveUser(
       normalizeMessagesForLlmBoundary(messages, { timezone: TZ }),
     ) as unknown as Array<Record<string, unknown>>;
 
@@ -585,6 +585,58 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     expect(wireN1.slice(0, sharedPrefixLen)).toEqual(wireN.slice(0, sharedPrefixLen));
     // In request N the carrier occupies the append-only slot right after q2.
     expect(isCarrier(wire(turnN)[3])).toBe(true);
+  });
+
+  it("keeps the carrier anchored after the active user through a same-turn tool loop (issue #123652)", () => {
+    // Tool loop: request N is P+U+X. The provider then emits reasoning +
+    // tool_call, the tool runs, and the next request replays P+U+Y+X where Y
+    // is the new reasoning/tool_call/tool_output block. Relocating the carrier
+    // to the absolute tail makes the carrier slot move (P+U+X -> P+U+Y+X), so
+    // the shared prefix stops at P+U and cached_tokens never advances. The
+    // carrier must stay anchored immediately after the active user turn so the
+    // provider-visible input is a strict prefix-extension (P+U+X -> P+U+X+Y).
+    const turnN: AgentMsg[] = [
+      storedUserMsg("q1", TS_TURN1 - 2000),
+      ASSISTANT_MSG,
+      runtimeCarrier(META, TS_TURN2),
+      currentUserMsg("q2", TS_TURN2),
+    ];
+    // Same turn, next loop iteration: the previous user turn is now followed by
+    // tool-loop scaffolding (assistant tool-call + tool result). On retry the
+    // runner re-installs the carrier immediately BEFORE the active user turn
+    // (insertRuntimeContextMessageForPrompt), matching the first-request shape.
+    const toolCallAssistant = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "shell", arguments: "{}" }],
+      timestamp: TS_TURN2 + 1000,
+    } as unknown as AgentMsg;
+    const toolResult = {
+      role: "toolResult",
+      content: [{ type: "toolResult", toolCallId: "call_1", content: "ok" }],
+      timestamp: TS_TURN2 + 2000,
+    } as unknown as AgentMsg;
+    const turnN1ToolLoop: AgentMsg[] = [
+      storedUserMsg("q1", TS_TURN1 - 2000),
+      ASSISTANT_MSG,
+      runtimeCarrier(META, TS_TURN2),
+      storedUserMsg("q2", TS_TURN2),
+      toolCallAssistant,
+      toolResult,
+    ];
+    const wireN = wire(turnN);
+    const wireN1 = wire(turnN1ToolLoop);
+
+    // The carrier stays immediately after the active user turn in both
+    // requests: same slot, so request N's bytes are a strict prefix of N+1's.
+    const carrierIndexN = wireN.findIndex(isCarrier);
+    const carrierIndexN1 = wireN1.findIndex(isCarrier);
+    expect(carrierIndexN).toBe(3);
+    expect(carrierIndexN1).toBe(3);
+    expect(wireN1.slice(0, carrierIndexN1).map((m) => JSON.stringify(m))).toEqual(
+      wireN.slice(0, carrierIndexN).map((m) => JSON.stringify(m)),
+    );
+    // Tool-loop scaffolding follows the carrier instead of displacing it.
+    expect(wireN1.slice(carrierIndexN1 + 1).length).toBe(2);
   });
 
   it("runtime-only (room-event) inline context is not strip-eligible, so it stays byte-stable in both positions", () => {

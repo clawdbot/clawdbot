@@ -21,7 +21,7 @@ import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
-import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
+import { relocateCurrentRuntimeContextCarrierAfterActiveUser } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
@@ -349,7 +349,7 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
       await baseConvertToLlm(
         // Wire-only relocation keeps the request append-only through the active
         // user turn without changing position-sensitive precheck normalization.
-        relocateCurrentRuntimeContextCarrierToTail(
+        relocateCurrentRuntimeContextCarrierAfterActiveUser(
           normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()),
         ),
       );

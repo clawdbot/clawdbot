@@ -349,43 +349,47 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
 }
 
 /**
- * Moves current-turn runtime-context carrier messages to the absolute tail of
- * the request (after the active user turn and any tool-call scaffolding).
+ * Moves current-turn runtime-context carrier messages to immediately after the
+ * active user turn, ahead of any tool-loop scaffolding.
  *
  * Prompt-cache rationale: a per-turn carrier that is stripped on replay makes
  * the next request diverge at the carrier's slot. Placed BEFORE the active user
  * turn, that slot precedes everything that gets reused, so the whole tail
- * (user turn + tool loop) re-bills every turn. Placed at the ABSOLUTE tail, the
- * divergence lands exactly where the next turn's new bytes (the assistant reply)
- * begin anyway, so the request is an append-only prefix-extension through the
- * active user turn — only the trailing carrier is ever re-billed.
+ * (user turn + tool loop) re-bills every turn. Placed at the ABSOLUTE tail,
+ * the carrier relocates again whenever same-turn tool items are inserted ahead
+ * of it (P+U+X → P+U+Y+X), so the provider-visible input is not a strict
+ * prefix-extension and the shared-prefix cache stops advancing. Placed
+ * immediately AFTER the active user turn (P+U+X → P+U+X+Y), the carrier slot is
+ * byte-stable across the tool loop and only genuinely new bytes are re-billed.
  *
  * Runs after {@link stripHistoricalRuntimeContextCustomMessages}, so only the
  * current-turn carrier(s) remain. When there is no active user turn to anchor
  * after, messages are returned unchanged.
  */
-export function relocateCurrentRuntimeContextCarrierToTail<T>(messages: T[]): T[] {
-  const lastIndex = messages.length - 1;
-  if (lastIndex < 0 || !messages.some(isOpenClawRuntimeContextCustomMessage)) {
-    return messages;
-  }
-  // Already tail-placed (a contiguous carrier run ends the array): no-op so the
-  // serialized bytes stay stable across re-attempts of the same request.
-  let firstNonCarrierFromEnd = lastIndex;
-  while (
-    firstNonCarrierFromEnd >= 0 &&
-    isOpenClawRuntimeContextCustomMessage(messages[firstNonCarrierFromEnd])
-  ) {
-    firstNonCarrierFromEnd -= 1;
-  }
-  const rest = messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
-  // No active user turn to anchor after — leave placement to the strip pass.
-  if (!rest.some(isUserMessage)) {
-    return messages;
-  }
-  if (firstNonCarrierFromEnd === rest.length - 1) {
+export function relocateCurrentRuntimeContextCarrierAfterActiveUser<T>(messages: T[]): T[] {
+  if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
     return messages;
   }
   const carriers = messages.filter(isOpenClawRuntimeContextCustomMessage);
-  return [...rest, ...carriers];
+  const rest = messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
+  // The active user turn is the last user-role message. Tool-loop items use
+  // dedicated roles (assistant tool-call / toolResult) and carriers use
+  // role "custom", so the last user-role message is the anchor the carrier
+  // must sit right after.
+  const activeUserIndex = rest.findLastIndex(isUserMessage);
+  // No active user turn to anchor after — leave placement to the strip pass.
+  if (activeUserIndex === -1) {
+    return messages;
+  }
+  const relocated = [
+    ...rest.slice(0, activeUserIndex + 1),
+    ...carriers,
+    ...rest.slice(activeUserIndex + 1),
+  ];
+  // Already placed immediately after the active user turn: no-op so the
+  // serialized bytes stay stable across re-attempts of the same request.
+  if (relocated.length === messages.length && relocated.every((m, i) => m === messages[i])) {
+    return messages;
+  }
+  return relocated;
 }
