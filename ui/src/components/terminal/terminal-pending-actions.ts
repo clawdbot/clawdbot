@@ -175,7 +175,7 @@ class TerminalIntentQueue {
     try {
       await host.bootQueue.enqueue(async (isCurrent) => {
         const action = this.actions[0];
-        if (!action || !isCurrent() || this.host !== host || !this.canRun(host)) {
+        if (!action || !isCurrent() || !this.canRun(host)) {
           return;
         }
         const completed = await this.execute(host, action);
@@ -223,7 +223,9 @@ class TerminalIntentQueue {
       return host.open(undefined, action.agentId);
     }
     await host.reattach();
-    if (this.host !== host || !this.canRun(host)) {
+    // A second panel mounting mid-flight must not strand this action: the host
+    // that started it is still connected, so it finishes what it began.
+    if (!this.canRun(host)) {
       return false;
     }
     return action.kind === "catalog"
