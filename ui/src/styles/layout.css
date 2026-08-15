@@ -1387,6 +1387,7 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-nav {
+  position: relative;
   padding: 0;
 }
 
@@ -3111,6 +3112,9 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 /* "Pages" section head: zone-style label plus the pin-editor affordance. */
 .sidebar-nav__head {
+  position: absolute;
+  top: 0;
+  right: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
