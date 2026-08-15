@@ -259,7 +259,9 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header {
+  margin-bottom: 0;
   padding-left: 0;
+  border-bottom: 0;
 }
 
 .side-panel__header .tabstrip {
