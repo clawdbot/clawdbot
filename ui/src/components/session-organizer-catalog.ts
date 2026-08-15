@@ -100,12 +100,16 @@ export async function deleteSessionGroup(
     message: t("sessionsView.deleteGroupConfirm"),
     confirmLabel: t("common.delete"),
     danger: true,
+    signal: scope.signal,
   });
-  if (!confirmed) {
-    return false;
-  }
+  // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
+  // too, so without this order the operator's lost intent would look like an
+  // ordinary cancel instead of the reconnect that actually dropped it.
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     showToast({ message: t("sessionsView.deleteGroupStale", { group }) });
+    return false;
+  }
+  if (!confirmed) {
     return false;
   }
   try {

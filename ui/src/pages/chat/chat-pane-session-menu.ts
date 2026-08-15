@@ -226,6 +226,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       sessions: this.context.sessions,
       client,
       selectedAgentId: this.context.agentSelection.state.selectedId ?? "main",
+      signal: this.headerSessionMutationAbortController.signal,
     };
   }
 

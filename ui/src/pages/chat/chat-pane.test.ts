@@ -7,7 +7,13 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { showToast } from "../../lib/toast.ts";
+import {
+  installDialogPolyfill,
+  waitForConfirmDialogActions,
+} from "../../test-helpers/modal-dialog.ts";
 import {
   createSessionContext,
   createTestChatPane,
@@ -18,6 +24,8 @@ import { createSessionWorkspaceProps } from "./components/chat-session-workspace
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import { openSlot } from "./sidebar-layout.ts";
+
+vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -115,6 +123,50 @@ describe("chat pane header state", () => {
       agentId: "main",
     });
     expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");
+  });
+
+  it("aborts a stale header delete confirm and shows a retry notice when the connection is replaced while it is open", async () => {
+    const restoreDialogPolyfill = installDialogPolyfill();
+    try {
+      const deleteOne = vi.fn(async () => ({ deleted: true }));
+      const sessions = {
+        delete: deleteOne,
+        refreshReplacement: vi.fn(async () => undefined),
+      } as unknown as SessionCapability;
+      const client = {} as GatewayBrowserClient;
+      const { pane } = createTestChatPane({ client, sessions });
+      const session = {
+        key: "agent:main:current",
+        kind: "direct",
+        updatedAt: 0,
+        label: "Current session",
+      } satisfies GatewaySessionRow;
+
+      const pending = pane.handleHeaderSessionAction({ kind: "delete" }, session);
+      await waitForConfirmDialogActions();
+      // Mirrors a reconnect landing while the header's own confirm dialog is
+      // open: the chat header builds this scope independently of
+      // SessionDataController, so it needs its own signal retired here too.
+      pane.applyGatewaySnapshot({
+        ...pane.context.gateway.snapshot,
+        phase: "reconnecting",
+        hello: null,
+      });
+      await pending;
+
+      expect(deleteOne).not.toHaveBeenCalled();
+      // The stale dialog must dismiss itself, not merely stop sending its request.
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+      // The abort resolves the dialog to `false`, same as a user cancel, so the
+      // operator needs a distinct, visible outcome or their lost intent reads
+      // as a click that simply did nothing.
+      expect(showToast).toHaveBeenCalledWith({
+        message: t("sessionsView.deleteSessionStale", { session: "Current session" }),
+      });
+    } finally {
+      document.body.replaceChildren();
+      restoreDialogPolyfill();
+    }
   });
 
   it("commits a trimmed label and clears with null", async () => {
