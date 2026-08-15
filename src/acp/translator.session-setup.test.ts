@@ -330,8 +330,6 @@ describe("acp bridge session cwd persistence", () => {
     expect(createCalls(calls)).toStrictEqual([
       { key: sessionKey, cwd: "/tmp/my-project", cwdOnCreateOnly: true },
     ]);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("provisions an explicitly routed session key, which requireExisting=false leaves unresolved", async () => {
@@ -349,8 +347,6 @@ describe("acp bridge session cwd persistence", () => {
     expect(createCalls(calls)).toStrictEqual([
       { key: "agent:main:work", cwd: "/tmp/my-project", cwdOnCreateOnly: true },
     ]);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("reports the directory the Gateway kept when it adopts an existing session", async () => {
@@ -367,8 +363,6 @@ describe("acp bridge session cwd persistence", () => {
     // Storing the requested cwd here would make the prompt prefix and provenance receipt
     // contradict the directory the agent actually runs in.
     expect(sessionStore.getSession(result.sessionId)?.cwd).toBe("/tmp/owner-project");
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("refuses to claim a directory an adopted session will not run in", async () => {
@@ -384,8 +378,6 @@ describe("acp bridge session cwd persistence", () => {
         _meta: { sessionKey: "agent:main:work" },
       } as never),
     ).rejects.toThrow(/already exists without a working directory/i);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("still provisions a bridge-minted session against a Gateway without the capability", async () => {
@@ -400,8 +392,6 @@ describe("acp bridge session cwd persistence", () => {
     expect(createCalls(calls)).toStrictEqual([
       { key: expect.stringMatching(/^acp-bridge:/) as unknown as string, cwd: "/tmp/my-project" },
     ]);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("refuses an explicitly routed key against a Gateway without the capability", async () => {
@@ -418,8 +408,6 @@ describe("acp bridge session cwd persistence", () => {
       } as never),
     ).rejects.toThrow(/cannot scope a working directory to newly created sessions/i);
     expect(createCalls(calls)).toStrictEqual([]);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("reports the adopted session's directory on loadSession, not the requested one", async () => {
@@ -432,8 +420,6 @@ describe("acp bridge session cwd persistence", () => {
     await agent.loadSession(createLoadSessionRequest("agent:main:work", "/tmp/my-project"));
 
     expect(sessionStore.getSession("agent:main:work")?.cwd).toBe("/tmp/owner-project");
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("reports the adopted session's directory on resumeSession too", async () => {
@@ -449,8 +435,6 @@ describe("acp bridge session cwd persistence", () => {
     } as never);
 
     expect(sessionStore.getSession("agent:main:work")?.cwd).toBe("/tmp/owner-project");
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("keeps the runtime directory unknown when an adopted session records none", async () => {
@@ -466,8 +450,6 @@ describe("acp bridge session cwd persistence", () => {
     const session = sessionStore.getSession("agent:main:work");
     expect(session?.cwd).toBe("/tmp/my-project");
     expect(session?.runtimeCwd).toBe(false);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("treats a bridge-provisioned session's directory as the runtime one", async () => {
@@ -478,8 +460,6 @@ describe("acp bridge session cwd persistence", () => {
     const result = await agent.newSession(createNewSessionRequest("/tmp/my-project"));
 
     expect(sessionStore.getSession(result.sessionId)?.runtimeCwd).not.toBe(false);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("rejects a relative cwd instead of silently running elsewhere", async () => {
@@ -491,7 +471,5 @@ describe("acp bridge session cwd persistence", () => {
       /requires an absolute cwd/i,
     );
     expect(createCalls(calls)).toStrictEqual([]);
-
-    sessionStore.clearAllSessionsForTest();
   });
 });
