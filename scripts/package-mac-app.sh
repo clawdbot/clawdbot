@@ -25,6 +25,17 @@ MLX_TTS_HELPER_BUILD_ROOT="$MLX_TTS_HELPER_ROOT/.build"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
+# OPENCLAW_SKIP_MLX_TTS=1 packages the app without the local MLX voice helper.
+# The helper pulls in the full mlx-swift Metal shader stack, which some beta
+# Xcode toolchains cannot compile (flaky `metal` diagnostics), needlessly
+# blocking unrelated dev/proof builds. Release builds must always ship the
+# helper (notarization verifies it), so refuse the skip there instead of
+# producing a silently incomplete release bundle.
+SKIP_MLX_TTS="${OPENCLAW_SKIP_MLX_TTS:-0}"
+if [[ "$SKIP_MLX_TTS" == "1" && "$BUILD_CONFIG" == "release" ]]; then
+  echo "ERROR: OPENCLAW_SKIP_MLX_TTS is not allowed for release builds; the MLX voice helper must ship in release." >&2
+  exit 1
+fi
 BUILD_TS="$(openclaw_resolve_build_timestamp)"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   OPENCLAW_REQUIRE_BUILD_METADATA=1
@@ -64,6 +75,39 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
   SPARKLE_FEED_URL=""
   AUTO_CHECKS=false
 fi
+
+resolve_peekaboo_source_commit() {
+  local resolved_file="$ROOT_DIR/apps/macos/Package.resolved"
+  /usr/bin/python3 - "$resolved_file" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+resolved_file = Path(sys.argv[1])
+try:
+    resolved = json.loads(resolved_file.read_text())
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(f"ERROR: Could not parse Peekaboo source revision from {resolved_file}: {error}")
+
+pins = resolved.get("pins") if isinstance(resolved, dict) else None
+if not isinstance(pins, list):
+    raise SystemExit(f"ERROR: Expected a pins array in {resolved_file}")
+
+peekaboo_pins = [pin for pin in pins if isinstance(pin, dict) and pin.get("identity") == "peekaboo"]
+if len(peekaboo_pins) != 1:
+    raise SystemExit(f"ERROR: Expected exactly one 'peekaboo' pin in {resolved_file}; found {len(peekaboo_pins)}")
+
+state = peekaboo_pins[0].get("state")
+revision = state.get("revision") if isinstance(state, dict) else None
+if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+    raise SystemExit(
+        f"ERROR: Peekaboo pin in {resolved_file} must have an exact 40-character lowercase hexadecimal revision"
+    )
+
+print(revision, end="")
+PY
+}
 
 sparkle_canonical_build_from_version() {
   (cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")
@@ -306,7 +350,7 @@ merge_framework_machos() {
 
   while IFS= read -r -d '' file; do
     if /usr/bin/file "$file" | /usr/bin/grep -q "Mach-O"; then
-      local rel="${file#$primary/}"
+      local rel="${file#"$primary"/}"
       local primary_archs
       primary_archs=$(archs_for "$file")
       IFS=' ' read -r -a primary_arch_array <<< "$primary_archs"
@@ -327,7 +371,7 @@ merge_framework_machos() {
           IFS=' ' read -r -a other_arch_array <<< "$other_archs"
           for arch in "${other_arch_array[@]}"; do
             if ! arch_in_list "$arch" "${primary_arch_array[@]}"; then
-              local thin_file="$tmp_dir/$(echo "$rel" | tr '/' '_')-$arch"
+              local thin_file="$tmp_dir/${rel//\//_}-$arch"
               /usr/bin/lipo -thin "$arch" "$other_file" -output "$thin_file"
               missing_files+=("$thin_file")
               primary_arch_array+=("$arch")
@@ -343,6 +387,8 @@ merge_framework_machos() {
     fi
   done < <(find "$primary" -type f -print0)
 }
+
+PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"
 
 require_swift_toolchain
 
@@ -396,8 +442,12 @@ for arch in "${BUILD_ARCHS[@]}"; do
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   restore_swiftpm_resource_sources
-  echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
-  build_mlx_tts_helper "$arch"
+  if [[ "$SKIP_MLX_TTS" == "1" ]]; then
+    echo "🔇 Skipping $MLX_TTS_HELPER_PRODUCT (OPENCLAW_SKIP_MLX_TTS=1) — app will lack the local MLX voice helper [$arch]"
+  else
+    echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
+    build_mlx_tts_helper "$arch"
+  fi
 done
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
@@ -425,10 +475,16 @@ plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionSt
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit "$PEEKABOO_SOURCE_COMMIT"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
+  BRIDGE_SOURCE_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit)"
   if [[ "$EMBEDDED_GIT_COMMIT" != "$BUILD_GIT_COMMIT" ]]; then
-    echo "ERROR: Release app embedded Git commit '$EMBEDDED_GIT_COMMIT', expected '$BUILD_GIT_COMMIT'." >&2
+    echo "ERROR: Release app OpenClaw source mismatch: OpenClawGitCommit='$EMBEDDED_GIT_COMMIT', expected='$BUILD_GIT_COMMIT'." >&2
+    exit 1
+  fi
+  if [[ "$BRIDGE_SOURCE_COMMIT" != "$PEEKABOO_SOURCE_COMMIT" ]]; then
+    echo "ERROR: Release app Peekaboo source mismatch: PeekabooSourceCommit='$BRIDGE_SOURCE_COMMIT', expected='$PEEKABOO_SOURCE_COMMIT'." >&2
     exit 1
   fi
 fi
@@ -449,17 +505,21 @@ chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
 
-echo "🚚 Copying MLX TTS helper"
-cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-  HELPER_BIN_INPUTS=()
-  for arch in "${BUILD_ARCHS[@]}"; do
-    HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
-  done
-  /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+if [[ "$SKIP_MLX_TTS" == "1" ]]; then
+  echo "🔇 Skipping MLX TTS helper copy (OPENCLAW_SKIP_MLX_TTS=1) — bundle omits Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+else
+  echo "🚚 Copying MLX TTS helper"
+  cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+    HELPER_BIN_INPUTS=()
+    for arch in "${BUILD_ARCHS[@]}"; do
+      HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
+    done
+    /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  fi
+  chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 fi
-chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
@@ -505,6 +565,9 @@ if [ ! -d "$PROVIDER_ICONS_SRC" ]; then
 fi
 rm -rf "$APP_ROOT/Contents/Resources/ProviderIcons"
 cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"
+
+echo "🖥  Staging embedded CUA driver"
+"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
 
 echo "📦 Copying CLI installer"
 INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
@@ -612,7 +675,11 @@ stop_packaged_app_if_running() {
 
 stop_packaged_app_if_running
 
-echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
+if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+  echo "🔏 Signing bundle with explicit SIGN_IDENTITY"
+else
+  echo "🔏 Signing bundle (auto-selecting signing identity)"
+fi
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
 
 echo "✅ Bundle ready at $APP_ROOT"

@@ -4393,6 +4393,50 @@ describe("runCodexAppServerAttempt", () => {
       { type: "text", text: "hello", text_elements: [] },
       { type: "image", url: `data:image/png;base64,${pngBase64}` },
     ]);
+    expect(
+      requests.filter(
+        (entry) =>
+          entry.method === "skills/list" &&
+          (entry.params as { forceReload?: boolean } | undefined)?.forceReload === false,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("appends path-matched explicit skills to the initial turn input", async () => {
+    const params = createRunParams();
+    const skillPath = path.join(params.workspaceDir, ".agents", "skills", "release", "SKILL.md");
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method !== "skills/list") {
+        return undefined;
+      }
+      return {
+        data: [
+          {
+            cwd: params.workspaceDir,
+            skills: [
+              {
+                name: "release",
+                description: "Release workflow",
+                path: skillPath,
+                scope: "repo",
+                enabled: true,
+              },
+            ],
+            errors: [],
+          },
+        ],
+      } satisfies v2.SkillsListResponse;
+    });
+    params.explicitSkillSelections = [{ name: "release-command", path: skillPath }];
+
+    const run = runCodexAppServerAttempt(params);
+    await completeStartedRun(run, harness.waitForMethod, harness.completeTurn);
+
+    const turnStart = harness.requests.find((entry) => entry.method === "turn/start");
+    expect((turnStart?.params as { input?: unknown[] } | undefined)?.input).toEqual([
+      { type: "text", text: "hello", text_elements: [] },
+      { type: "skill", name: "release", path: skillPath },
+    ]);
   });
 
   it("does not drop turn completion notifications emitted while turn/start is in flight", async () => {

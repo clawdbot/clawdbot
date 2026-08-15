@@ -3,6 +3,10 @@ import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-cor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  parseComputerUseCapabilityDescriptor,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
 import type {
   PluginNodeHostCommandRegistration,
   PluginRegistry,
@@ -51,12 +55,14 @@ export function listRegisteredNodeHostCapsAndCommands(
 ): {
   caps: string[];
   commands: string[];
+  computerUse?: ComputerUseCapabilityDescriptor;
   nodePluginTools: NodePluginToolDescriptor[];
 } {
   const registry = resolveNodeHostPluginRegistry();
   return withPluginRuntimeRegistryScope(registry, () => {
     const caps = new Set<string>();
     const commands = new Set<string>();
+    let computerUse: ComputerUseCapabilityDescriptor | undefined;
     const nodePluginTools = new Map<string, NodePluginToolDescriptor>();
     for (const entry of registry?.nodeHostCommands ?? []) {
       if (entry.command.duplex === true && options.includeDuplex === false) {
@@ -71,6 +77,9 @@ export function listRegisteredNodeHostCapsAndCommands(
         caps.add(entry.command.cap);
       }
       commands.add(entry.command.command);
+      if (entry.command.computerUse) {
+        computerUse = parseComputerUseCapabilityDescriptor(entry.command.computerUse(context));
+      }
       const agentTool = buildNodePluginToolDescriptor(entry);
       if (agentTool) {
         nodePluginTools.set(`${agentTool.pluginId}\0${agentTool.name}`, agentTool);
@@ -79,6 +88,7 @@ export function listRegisteredNodeHostCapsAndCommands(
     return {
       caps: [...caps].toSorted((left, right) => left.localeCompare(right)),
       commands: [...commands].toSorted((left, right) => left.localeCompare(right)),
+      ...(computerUse ? { computerUse } : {}),
       nodePluginTools: [...nodePluginTools.values()].toSorted(
         (left, right) =>
           left.pluginId.localeCompare(right.pluginId) || left.name.localeCompare(right.name),

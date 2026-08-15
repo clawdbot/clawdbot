@@ -2,6 +2,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -225,20 +226,20 @@ export async function agentsSetIdentityCommand(
   }
 
   logConfigUpdated(runtime);
-  runtime.log(`Agent: ${agentId}`);
+  runtime.log(`Agent: ${sanitizeTerminalText(resolvedAgentId)}`);
   if (nextIdentity.name) {
-    runtime.log(`Name: ${nextIdentity.name}`);
+    runtime.log(`Name: ${sanitizeTerminalText(nextIdentity.name)}`);
   }
   if (nextIdentity.theme) {
-    runtime.log(`Theme: ${nextIdentity.theme}`);
+    runtime.log(`Theme: ${sanitizeTerminalText(nextIdentity.theme)}`);
   }
   if (nextIdentity.emoji) {
-    runtime.log(`Emoji: ${nextIdentity.emoji}`);
+    runtime.log(`Emoji: ${sanitizeTerminalText(nextIdentity.emoji)}`);
   }
   if (nextIdentity.avatar) {
-    runtime.log(`Avatar: ${nextIdentity.avatar}`);
+    runtime.log(`Avatar: ${sanitizeTerminalText(nextIdentity.avatar)}`);
   }
   if (workspaceDir) {
-    runtime.log(`Workspace: ${shortenHomePath(workspaceDir)}`);
+    runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(workspaceDir))}`);
   }
 }

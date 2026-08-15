@@ -4,10 +4,6 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as tar from "tar";
 import { resolveLlamaCppDataDir } from "./defaults.js";
@@ -105,6 +101,10 @@ export async function downloadVerifiedFile(params: {
 }): Promise<void> {
   const partialPath = `${params.destination}.partial-${randomUUID()}`;
   await fsp.mkdir(path.dirname(params.destination), { recursive: true });
+  // Setup/doctor closure must not cold-load the SSRF barrel (DNS, proxy state,
+  // logging); defer it to actual download time per the closure guard contract.
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedOrigin } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   try {
     const { response, release } = await fetchWithSsrFGuard({
       url: params.url,
@@ -142,7 +142,7 @@ export async function downloadVerifiedFile(params: {
             break;
           }
           const chunk = Buffer.from(value);
-          await handle.write(chunk);
+          await handle.writeFile(chunk);
           hash.update(chunk);
           downloadedSize += chunk.byteLength;
           const now = Date.now();

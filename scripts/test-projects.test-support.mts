@@ -50,7 +50,10 @@ import {
   isProviderOpenAiExtensionRoot,
 } from "../test/vitest/vitest.extension-provider-paths.mjs";
 import { isQaExtensionRoot } from "../test/vitest/vitest.extension-qa-paths.mjs";
-import { isTelegramExtensionRoot } from "../test/vitest/vitest.extension-telegram-paths.mjs";
+import {
+  isTelegramExtensionRoot,
+  telegramExtensionTestRoots,
+} from "../test/vitest/vitest.extension-telegram-paths.mjs";
 import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
@@ -86,7 +89,10 @@ import {
 } from "./changed-lanes.mts";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
-import { createExtensionTestProcessTargetChunks } from "./lib/extension-test-plan.mts";
+import {
+  createExtensionTestProcessTargetChunks,
+  splitExtensionTestProcessTargets,
+} from "./lib/extension-test-plan.mts";
 import {
   GATEWAY_SERVER_TEST_PROCESS_COUNT,
   listGatewayServerTestTargets,
@@ -255,6 +261,10 @@ const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-t
 const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts";
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
+const EXTENSION_TEST_PROCESS_ROOTS = new Map([
+  [EXTENSION_MATRIX_VITEST_CONFIG, matrixExtensionTestRoots],
+  [EXTENSION_TELEGRAM_VITEST_CONFIG, telegramExtensionTestRoots],
+]);
 
 const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [GATEWAY_VITEST_CONFIG, 180],
@@ -584,6 +594,27 @@ const CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS = [
         `src/channels/plugins/contracts/${suite}.registry-backed-shard-${shard}.contract.test.ts`,
     ),
 );
+const CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET =
+  "src/channels/plugins/contracts/plugin-shape.contract.test.ts";
+const CHANNEL_PLUGIN_SHAPE_PARITY_WIRING_PATHS = new Set([
+  "extensions/imessage/message-tool-api.ts",
+  "extensions/imessage/src/actions.ts",
+  "extensions/imessage/src/channel.ts",
+  "extensions/slack/message-tool-api.ts",
+  "extensions/slack/src/channel-actions.ts",
+  "extensions/slack/src/channel.ts",
+  "extensions/mattermost/gateway-auth-api.ts",
+  "extensions/mattermost/src/channel.ts",
+  "extensions/feishu/session-key-api.ts",
+  "extensions/feishu/src/channel.ts",
+  "extensions/telegram/session-key-api.ts",
+  "extensions/telegram/src/channel.ts",
+  "extensions/discord/session-key-api.ts",
+  "extensions/discord/thread-binding-api.ts",
+  "extensions/discord/src/channel.ts",
+  "extensions/matrix/thread-binding-api.ts",
+  "extensions/matrix/src/channel.ts",
+]);
 const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
   "src/auto-reply/reply/commands-status.test.ts",
   "src/auto-reply/status.test.ts",
@@ -941,16 +972,35 @@ function createBroadToolingScriptPlans(params: VitestRunPlan & { cwd: string }) 
     : null;
 }
 
-function createBoundedExtensionPlans(
-  params: Omit<VitestRunPlan, "includePatterns"> & { roots: string[] },
-) {
-  const { config, forwardedArgs, roots, watchMode } = params;
-  if (watchMode) {
-    return null;
+function createBoundedExtensionPlans(plan: VitestRunPlan, env?: NodeJS.ProcessEnv) {
+  const { config, forwardedArgs, watchMode } = plan;
+  const roots = EXTENSION_TEST_PROCESS_ROOTS.get(config);
+  if (watchMode || !roots) {
+    return [plan];
+  }
+  // A CI include file already owns the test scope. Keep that file set, but
+  // still honor process lifetime so isolate:true configs cannot re-import
+  // a second heavy file in the same Vitest process.
+  const includeFilePath = env?.[INCLUDE_FILE_ENV_KEY]?.trim();
+  if (includeFilePath) {
+    if (!fs.existsSync(includeFilePath)) {
+      return [{ ...plan, includePatterns: null }];
+    }
+    const scopedTargets = loadIncludePatternsForSpecFilter(env ?? {}) ?? [];
+    const chunks = splitExtensionTestProcessTargets(config, scopedTargets);
+    if (chunks.length <= 1) {
+      return [{ ...plan, includePatterns: null }];
+    }
+    return chunks.map((includePatterns) => ({
+      config,
+      forwardedArgs,
+      includePatterns,
+      watchMode,
+    }));
   }
   const chunks = createExtensionTestProcessTargetChunks(config, roots, forwardedArgs);
   if (chunks.length <= 1) {
-    return null;
+    return [plan];
   }
   return chunks.map((includePatterns) => ({
     config,
@@ -2460,6 +2510,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^scripts\/lib\/plistbuddy\.sh$/u, ["create-dmg", "package-mac-app", "package-mac-dist"]],
   [/^scripts\/lib\/swift-toolchain\.sh$/u, ["package-mac-app", "package-mac-dist"]],
+  [/^scripts\/stage-cua-driver-macos\.sh$/u, ["package-mac-app"]],
   [
     /^scripts\/lib\/npm-publish-plan\.mjs$/u,
     [
@@ -3084,12 +3135,16 @@ export function resolveChangedTestTargetPlan(
   const targets = [];
   const skippedBroadFallbackPaths = [];
   for (const changedPath of executableChangedPaths) {
+    const needsPluginShapeParity = CHANNEL_PLUGIN_SHAPE_PARITY_WIRING_PATHS.has(changedPath);
     const preciseTargets = resolvePreciseChangedTestTargets(changedPath, {
       ...options,
       skipImportGraph,
     });
     if (preciseTargets) {
       targets.push(...preciseTargets);
+      if (needsPluginShapeParity) {
+        targets.push(CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET);
+      }
       continue;
     }
     const needsBroadFallback = shouldKeepBroadChangedRun([changedPath]) || changedLanes.lanes.all;
@@ -3102,6 +3157,9 @@ export function resolveChangedTestTargetPlan(
     }
     if (isRoutableChangedTarget(changedPath)) {
       targets.push(changedPath);
+    }
+    if (needsPluginShapeParity) {
+      targets.push(CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET);
     }
   }
   if (
@@ -3574,12 +3632,17 @@ export function buildVitestRunPlans(
         "watch mode with mixed test suites is not supported; target one suite at a time or use a dedicated suite command",
       );
     }
-    return explicitConfigTargets.map((config) => ({
-      config,
-      forwardedArgs: nonTargetArgs,
-      includePatterns: null,
-      watchMode,
-    }));
+    return explicitConfigTargets.flatMap((config) =>
+      createBoundedExtensionPlans(
+        {
+          config,
+          forwardedArgs: nonTargetArgs,
+          includePatterns: null,
+          watchMode,
+        },
+        options.env,
+      ),
+    );
   }
 
   const groupedTargets = new Map<string, string[]>();
@@ -3690,13 +3753,7 @@ export function buildVitestRunPlans(
           includePatterns: null,
           watchMode,
         };
-        const boundedPlans = createBoundedExtensionPlans({
-          config,
-          forwardedArgs: nonTargetArgs,
-          roots: matrixExtensionTestRoots,
-          watchMode,
-        });
-        plans.push(...(boundedPlans ?? [plan]));
+        plans.push(...createBoundedExtensionPlans(plan, options.env));
       }
       continue;
     }
@@ -3733,9 +3790,12 @@ export function buildVitestRunPlans(
       plans.push(...broadToolingScriptPlans);
       continue;
     }
+    const processRoots = EXTENSION_TEST_PROCESS_ROOTS.get(config);
     const boundedExtensionRoots = grouped.flatMap((targetArg) => {
       const root = toRepoRelativeTarget(targetArg, cwd);
-      return isMatrixExtensionRoot(root) && isExistingDirectoryTarget(targetArg, cwd) ? [root] : [];
+      return processRoots?.includes(root) && isExistingDirectoryTarget(targetArg, cwd)
+        ? [root]
+        : [];
     });
     const boundedRootsCoverGroupedTargets = grouped.every((targetArg) => {
       const relativeTarget = toRepoRelativeTarget(targetArg, cwd);
@@ -3745,12 +3805,15 @@ export function buildVitestRunPlans(
     });
     const boundedExtensionPlans =
       boundedExtensionRoots.length > 0 && boundedRootsCoverGroupedTargets
-        ? createBoundedExtensionPlans({
-            config,
-            forwardedArgs: forwardedPlanArgs,
-            roots: boundedExtensionRoots,
-            watchMode,
-          })
+        ? createBoundedExtensionPlans(
+            {
+              config,
+              forwardedArgs: forwardedPlanArgs,
+              includePatterns,
+              watchMode,
+            },
+            options.env,
+          )
         : null;
     if (boundedExtensionPlans) {
       plans.push(...boundedExtensionPlans);
@@ -3828,12 +3891,11 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
             listGatewayServerTestTargets(cwd),
             GATEWAY_SERVER_TEST_PROCESS_COUNT,
           );
-        } else if (config === EXTENSION_MATRIX_VITEST_CONFIG) {
-          chunks = createExtensionTestProcessTargetChunks(
-            config,
-            matrixExtensionTestRoots,
-            forwardedArgs,
-          );
+        } else {
+          const roots = EXTENSION_TEST_PROCESS_ROOTS.get(config);
+          if (roots) {
+            chunks = createExtensionTestProcessTargetChunks(config, roots, forwardedArgs);
+          }
         }
         if (chunks.length > 0) {
           return chunks.map((targets) => ({
@@ -4007,6 +4069,12 @@ export function applyDefaultMultiSpecVitestCachePaths<T extends WatchableVitestS
   params: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }> {
   if (specs.length <= 1 || specs.some((spec) => spec.watchMode)) {
+    return specs;
+  }
+  // Same-config process lifetimes run one after another and must keep the
+  // restored CI seed. Isolating them would make every Telegram file pay a
+  // silent cold import.
+  if (specs.every((spec) => spec.config === specs[0]?.config)) {
     return specs;
   }
   return applyParallelVitestCachePaths(specs, params);

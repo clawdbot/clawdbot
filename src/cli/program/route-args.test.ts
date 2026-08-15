@@ -33,6 +33,8 @@ describe("route-args", () => {
         "--deep",
         "--all",
         "--usage",
+        "--agent",
+        "beta",
         "--timeout",
         "5000",
       ]),
@@ -41,10 +43,12 @@ describe("route-args", () => {
       deep: true,
       all: true,
       usage: true,
+      agent: "beta",
       verbose: false,
       timeoutMs: 5000,
     });
     expect(parseStatusRouteArgs(["node", "openclaw", "status", "--timeout"])).toBeNull();
+    expect(parseStatusRouteArgs(["node", "openclaw", "status", "--agent"])).toBeNull();
   });
 
   it("defers status/health --timeout with a present-but-invalid value to Commander", () => {

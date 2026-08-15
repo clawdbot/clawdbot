@@ -912,7 +912,7 @@ openclaw-settings-save-indicator {
   /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
      never shine through with a mismatched tone. */
   --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
-  /* One rhythm for every group boundary in the sidebar (Pages, Pinned, and each
+  /* One rhythm for every group boundary in the sidebar (Pages and each
      session section) so the column reads as separate shelves, not one list. */
   --sidebar-group-gap: var(--space-4);
   --scrollbar-size: 6px;
@@ -3118,12 +3118,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   flex: 1 1 auto;
 }
 
-/* Pinned sessions are their own group, so they take the sidebar's inter-group
-   rhythm instead of butting against the Pages list. */
-.sidebar-nav__head--pinned {
-  margin-top: var(--sidebar-group-gap);
-}
-
 .sidebar-nav__head-action {
   display: inline-flex;
   align-items: center;
@@ -3157,8 +3151,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   stroke-linejoin: round;
 }
 
-/* Home carries approval and outbox counts at the row's edge; run/unread state
-   rings the leading icon instead (see .session-glyph). */
+/* Home keeps run state plus outbox/draft counts together at the row edge. */
 .nav-item__state {
   flex: none;
   margin-left: auto;
@@ -3672,6 +3665,10 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 
 .content > * + * {
   margin-top: 20px;
+}
+
+.content > openclaw-device-scope-upgrade-banner:has(.scope-upgrade-chip-row) + * {
+  margin-top: 8px;
 }
 
 .content--chat {

@@ -789,6 +789,37 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
   });
 
+  it("prepares a selected profile when remote execution forbids legacy auth", async () => {
+    const authProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:remote": {
+          type: "api_key",
+          provider: "openai",
+          key: "prepared-remote-key",
+        },
+      },
+    };
+
+    await expect(
+      resolveCodexAppServerPreparedAuthHandoff({
+        authProfileId: "openai:remote",
+        authProfileStore,
+        homeScope: "agent",
+        requirePreparedAuth: true,
+        subscriptionProfileRequiredError: "unused",
+        subscriptionProfileUnusableError: "unused",
+      }),
+    ).resolves.toMatchObject({
+      authProfileId: "openai:remote",
+      preparedAuth: {
+        kind: "profile",
+        profileId: "openai:remote",
+        snapshot: { loginParams: { type: "apiKey", apiKey: "prepared-remote-key" } },
+      },
+    });
+  });
+
   it("keeps an inherited OpenAI API key for an explicit Codex api-key profile", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({ clearEnv: ["FOO"] });

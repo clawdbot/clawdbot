@@ -318,24 +318,32 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     withLock,
   });
 
+  const reconcileEnvironment = async (environmentId: string) => {
+    if (stopping) {
+      return;
+    }
+    await withLock(environmentId, async () => {
+      const current = store.get(environmentId);
+      if (!current || inState(current, "destroyed", "failed", "orphaned")) {
+        return;
+      }
+      await providerLifecycle.reconcileRecord(current);
+    });
+  };
+
   const reconcilePass = async () => {
-    const tasks = store.listForReconcile().map(
-      (candidate) => () =>
-        withLock(candidate.environmentId, async () => {
-          const current = store.get(candidate.environmentId);
-          if (!current || inState(current, "destroyed", "failed")) {
-            return;
-          }
-          await providerLifecycle
-            .reconcileRecord(current)
-            .catch(() =>
-              warn(
-                `Worker environment reconcile failed (${current.environmentId}, ${current.providerId})`,
-              ),
-            );
-        }),
-    );
+    const tasks = store
+      .listForReconcile()
+      .map(
+        (candidate) => () =>
+          reconcileEnvironment(candidate.environmentId).catch(() =>
+            warn(
+              `Worker environment reconcile failed (${candidate.environmentId}, ${candidate.providerId})`,
+            ),
+          ),
+      );
     await runTasksWithConcurrency({ tasks, limit: 8 });
+    store.pruneTerminalEnvironments();
   };
 
   const reconcileOnce = () => {
@@ -423,12 +431,31 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     cancelInferenceForSession: turnRpc.cancelInferenceForSession,
     hasInferenceForSession: turnRpc.hasInferenceForSession,
     resolveInferenceSessionForRunId: turnRpc.resolveInferenceSessionForRunId,
+    resolveSshIdentity: async (environmentId: string) => {
+      const record = store.get(environmentId);
+      if (!record) {
+        throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
+      }
+      if (!record.leaseId || !record.sshEndpoint) {
+        throw serviceError(
+          "invalid_state",
+          `Worker environment ${environmentId} has no active SSH endpoint`,
+        );
+      }
+      const provider = providerLifecycle.providerFor(record.providerId);
+      return await providerLifecycle.identityResolverFor(
+        record,
+        provider,
+        record.leaseId,
+      )(record.sshEndpoint.keyRef);
+    },
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
     startTunnel: environmentAccess.startTunnel,
     stopTunnel: environmentAccess.stopTunnel,
+    reconcileEnvironment,
     reconcileOnce,
     start,
     stop,

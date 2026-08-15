@@ -149,9 +149,8 @@ describe("AppSidebar interleaved zone", () => {
     // Pinning is not a status, so it must not claim the row's one leading slot.
     const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
     const plain = sidebar.querySelector('[data-session-key="agent:main:plain"]');
-    expect(row?.querySelector(".sidebar-session-indicator")?.innerHTML).toBe(
-      plain?.querySelector(".sidebar-session-indicator")?.innerHTML,
-    );
+    expect(row?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expect(plain?.querySelector(".sidebar-session-indicator")).toBeNull();
     expect(row?.querySelector(".nav-item__state")).toBeNull();
     expect(row?.querySelector(".session-row-state .sidebar-recent-session__state")).not.toBeNull();
   });
@@ -207,14 +206,12 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
   });
 
-  it("renders pinned sessions as their own labelled group below the Pages routes", async () => {
+  it("renders routes and pinned sessions in the canonical entry order", async () => {
     const { sidebar, sessions } = await mountZone();
     const result = sessions.sessions.state.result;
     if (!result) {
       throw new Error("expected session list");
     }
-    // Nothing pinned yet: the group must not reserve a label or its spacing.
-    expect(sidebar.querySelector(".sidebar-nav__head--pinned")).toBeNull();
     sessions.publish({
       result: {
         ...result,
@@ -231,14 +228,7 @@ describe("AppSidebar interleaved zone", () => {
     const labels = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-zone-entry")].map((entry) =>
       entry.textContent?.trim(),
     );
-    // Routes keep their configured order; the pinned session leaves the Pages
-    // list and heads its own group, so it renders after every route.
-    expect(labels).toEqual(["Usage", "Plugins", "Alpha"]);
-    const pinnedHead = sidebar.querySelector(".sidebar-nav__head--pinned");
-    expect(pinnedHead?.textContent?.trim()).toBe("Pinned");
-    expect(
-      pinnedHead?.nextElementSibling?.contains(zoneEntry(sidebar, "session:agent:main:alpha")),
-    ).toBe(true);
+    expect(labels).toEqual(["Usage", "Alpha", "Plugins"]);
     expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();
     const pinnedRow = sidebar.querySelector('[data-session-key="agent:main:alpha"]');
     const pinnedTree = pinnedRow?.closest(".sidebar-session-tree");

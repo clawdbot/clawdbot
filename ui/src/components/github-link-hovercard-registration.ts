@@ -40,7 +40,12 @@ async function activateHovercard(event: Event, trigger: "focus" | "pointer"): Pr
   );
   await ensureCustomElementDefined(HOVERCARD_TAG, async () => {
     const runtime = await import("./github-link-hovercard.runtime.ts");
-    customElements.define(HOVERCARD_TAG, runtime.GitHubLinkHovercardProvider);
+    // Sibling module instances can share one document + registry (the
+    // non-isolated jsdom lane evaluates this module once per test file), so a
+    // concurrent instance may have defined the tag while our load resolved.
+    if (!customElements.get(HOVERCARD_TAG)) {
+      customElements.define(HOVERCARD_TAG, runtime.GitHubLinkHovercardProvider);
+    }
     for (const [provider, client] of pendingClients) {
       provider.client = client;
     }

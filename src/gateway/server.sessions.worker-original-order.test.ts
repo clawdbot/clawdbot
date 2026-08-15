@@ -448,6 +448,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     sessionKey: SESSION_KEY,
     agentId: "main",
     profileId: PROFILE_ID,
+    executionMode: "worker-turn",
   });
   expect(active).toMatchObject({ state: "active", environmentId: ENVIRONMENT_ID });
   expect(runner.starts).toHaveLength(1);

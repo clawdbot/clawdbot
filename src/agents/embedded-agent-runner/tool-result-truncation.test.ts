@@ -1611,6 +1611,16 @@ describe("truncateOversizedToolResultsInSession", () => {
     const staleCheckpointOwner = makeAssistantMessage("stale checkpoint owner");
     staleCheckpointOwner.providerReplay = staleCheckpointReplay;
     await appendTranscriptMessage(scope, { message: staleCheckpointOwner });
+    const staleAnthropicCheckpointReplay = {
+      ...staleCheckpointReplay,
+      type: "anthropic-compaction",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      model: "claude-sonnet-4-6",
+    } satisfies NonNullable<AssistantMessage["providerReplay"]>;
+    const staleAnthropicCheckpointOwner = makeAssistantMessage("stale Anthropic checkpoint owner");
+    staleAnthropicCheckpointOwner.providerReplay = staleAnthropicCheckpointReplay;
+    await appendTranscriptMessage(scope, { message: staleAnthropicCheckpointOwner });
     const suppressionReplay = {
       ...staleCheckpointReplay,
       type: "openai-responses-compaction-suppression",
@@ -1679,6 +1689,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       staleCheckpointReplay,
     );
     expect(findAssistant("stale checkpoint owner")?.providerReplay).toBeUndefined();
+    expect(findAssistant("stale Anthropic checkpoint owner")?.providerReplay).toBeUndefined();
     expect(findAssistant("suppression owner")?.providerReplay).toEqual(suppressionReplay);
   });
 

@@ -223,6 +223,7 @@ export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): strin
 export function resolveSystemAgentTargetAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
+  context?: AgentSelectionContext,
 ): string {
   const configuredAgentId =
     normalizeOptionalString(requestedAgentId) ??
@@ -231,10 +232,13 @@ export function resolveSystemAgentTargetAgentId(
     return normalizeAgentId(configuredAgentId);
   }
   return normalizeAgentId(
-    resolveSoleAgentId(cfg, {
-      surface: "system-agent consult routing",
-      hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
-    }),
+    resolveSoleAgentId(
+      cfg,
+      context ?? {
+        surface: "system-agent consult routing",
+        hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
+      },
+    ),
   );
 }
 

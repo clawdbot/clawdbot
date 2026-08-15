@@ -125,6 +125,21 @@ export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }):
   return !streamSegmentHasItemId(segment);
 }
 
+/** Advance the accumulated-text tracker only when the segment genuinely
+    extends it. A standalone (itemId-less) preamble whose text is not part of
+    the cumulative run text must not become the prefix baseline: the next
+    cumulative snapshot would fail the startsWith check and re-render every
+    earlier segment's text. */
+export function advanceAccumulatedStreamText(
+  previousText: string | null,
+  text: string,
+): string | null {
+  if (!text.trim()) {
+    return previousText;
+  }
+  return previousText === null || text.startsWith(previousText) ? text : previousText;
+}
+
 export function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {
   if (!previousText || !text.startsWith(previousText)) {
     return text;

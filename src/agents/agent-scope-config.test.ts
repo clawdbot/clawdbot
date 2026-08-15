@@ -107,6 +107,17 @@ describe("agent roster resolution", () => {
     expect(resolveAgentWorkspaceDir(cfg, "research")).toBe("/srv/ops/research");
   });
 
+  it("keeps the implicit default workspace inside an overridden state directory", () => {
+    const stateDir = "/srv/openclaw-scratch";
+
+    expect(
+      resolveAgentWorkspaceDir({}, "main", {
+        HOME: "/home/operator",
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    ).toBe(`${stateDir}/workspace`);
+  });
+
   it("offers a non-throwing diagnostic lookup for malformed rosters", () => {
     expect(tryResolveDefaultAgentId({ agents: { list: [{ id: "alpha" }] } })).toBe("alpha");
     for (const marker of ["false", 1]) {

@@ -480,6 +480,10 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
+    // A dropped compositionend (detach/blur mid-IME) must not wedge the
+    // composing flag: it persists across renders and kills Enter-send,
+    // history keys, and command menus until the Send button resets it.
+    state.composerComposing = false;
     if (state.composingDraft?.key === draftKey) {
       state.composingDraft = null;
     }

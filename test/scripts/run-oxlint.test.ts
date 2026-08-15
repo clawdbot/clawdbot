@@ -242,7 +242,7 @@ describe("run-oxlint", () => {
     expect(packageJson.scripts.check).toBe("node --import tsx scripts/check.mts");
     expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
     expect(packageJson.scripts["lint:core"]).toBe(
-      "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core",
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core",
     );
     expect(packageJson.scripts.check).not.toContain(
       "node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts",
@@ -536,7 +536,7 @@ describe("run-oxlint", () => {
     expect(parsed.oxlintArgs).toEqual(["--max-warnings", "0"]);
   });
 
-  it("partitions split core lint targets into deterministic disjoint stripes", () => {
+  it("aggregates split core targets into deterministic disjoint Programs", () => {
     const shards = createOxlintShards({
       cwd: "/repo",
       splitCore: true,
@@ -549,16 +549,16 @@ describe("run-oxlint", () => {
     }).filter((shard) => shard.name.startsWith("core:"));
     const stripes = [1, 2, 3].map((index) => selectCoreOxlintStripe(shards, { index, total: 3 }));
 
-    expect(
-      stripes
-        .flat()
-        .map((shard) => shard.name)
-        .toSorted(),
-    ).toEqual(shards.map((shard) => shard.name).toSorted());
-    expect(new Set(stripes.flat().map((shard) => shard.name))).toHaveProperty(
-      "size",
-      shards.length,
-    );
+    expect(stripes.map((stripe) => stripe.map((shard) => shard.name))).toEqual([
+      ["core:stripe:1"],
+      ["core:stripe:2"],
+      ["core:stripe:3"],
+    ]);
+    const stripeTargets = stripes.flatMap(([stripe]) => stripe?.args.slice(2) ?? []);
+    const sourceTargets = shards.flatMap((shard) => shard.args.slice(2));
+    expect(stripeTargets.toSorted()).toEqual(sourceTargets.toSorted());
+    expect(new Set(stripeTargets)).toHaveProperty("size", sourceTargets.length);
+    expect(selectCoreOxlintStripe(shards, { index: 6, total: 6 })).toEqual([]);
     expect(() =>
       selectCoreOxlintStripe(createOxlintShards({ cwd: "/repo" }), { index: 1, total: 2 }),
     ).toThrow("--core-stripe requires a non-empty core-only shard selection");

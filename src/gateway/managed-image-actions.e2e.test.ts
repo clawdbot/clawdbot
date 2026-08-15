@@ -26,6 +26,7 @@ describe("managed image actions Gateway E2E", () => {
       throw new Error("OPENCLAW_STATE_DIR is required for managed image E2E fixtures");
     }
     testState.gatewayAuth = { mode: "token", token: GATEWAY_TOKEN };
+    testState.gatewayControlUi = { basePath: "/rosita" };
     testState.sessionStorePath = path.join(stateDir, "sessions.sqlite");
 
     const source = await fs.readFile(
@@ -107,6 +108,13 @@ describe("managed image actions Gateway E2E", () => {
           expect(download.expiresAt).toEqual(expect.any(String));
           const fullUrl = new URL(download.url ?? "", `http://127.0.0.1:${port}`);
           expect(fullUrl.searchParams.get("mediaTicket")).toMatch(/^v1\./u);
+
+          const rootFull = await fetch(fullUrl);
+          expect(rootFull.status).toBe(200);
+          expect(rootFull.headers.get("content-type")).toBe("image/png");
+          expect(Buffer.from(await rootFull.arrayBuffer())).toEqual(source);
+
+          fullUrl.pathname = `/rosita${fullUrl.pathname}`;
 
           const full = await fetch(fullUrl);
           expect(full.status).toBe(200);

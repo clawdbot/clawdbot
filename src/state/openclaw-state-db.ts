@@ -55,6 +55,7 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
   assertOpenClawStateDatabaseV5ForMigration,
   assertOpenClawStateDatabaseV6ForMigration,
+  assertOpenClawStateDatabaseV7ForMigration,
   assertSupportedSchemaVersion,
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
@@ -68,6 +69,7 @@ import {
   dropLegacyStateTables,
   markCurrentStateSchemaVersion,
   migrateRetiredCommitmentsSchema,
+  migrateWorkerPlacementExecutionModeSchema,
   repairAgentDatabasesCompositePrimaryKey,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
@@ -84,6 +86,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 const STATE_MIGRATION_ASSERTIONS = {
   5: assertOpenClawStateDatabaseV5ForMigration,
   6: assertOpenClawStateDatabaseV6ForMigration,
+  7: assertOpenClawStateDatabaseV7ForMigration,
 } as const;
 
 export {
@@ -177,7 +180,7 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
           assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
           });
-        } else if (previousVersion === 5 || previousVersion === 6) {
+        } else if (previousVersion === 5 || previousVersion === 6 || previousVersion === 7) {
           STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
         }
         if (rebuiltIndexNames.size === 0) {
@@ -186,6 +189,9 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
         dropLegacyStateTables(db);
         if (migrateRetiredCommitmentsSchema(db, previousVersion)) {
           applied.push("Retired shared state commitments table and indexes");
+        }
+        if (migrateWorkerPlacementExecutionModeSchema(db, previousVersion)) {
+          applied.push("Migrated cloud worker placements to execution modes");
         }
         if (repairAgentDatabasesCompositePrimaryKey(db)) {
           applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
@@ -365,11 +371,12 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
           });
           ensureAdditiveStateColumns(db);
           assertCurrentStateRuntimeSchema(db, pathname);
-        } else if (previousVersion === 5 || previousVersion === 6) {
+        } else if (previousVersion === 5 || previousVersion === 6 || previousVersion === 7) {
           STATE_MIGRATION_ASSERTIONS[previousVersion](db, { pathname });
         }
         dropLegacyStateTables(db);
         migrateRetiredCommitmentsSchema(db, previousVersion);
+        migrateWorkerPlacementExecutionModeSchema(db, previousVersion);
         ensureAdditiveStateColumns(db);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);

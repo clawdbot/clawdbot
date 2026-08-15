@@ -1572,6 +1572,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
   res: ServerResponse,
   opts: {
     auth: ResolvedGatewayAuth;
+    basePath?: string;
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
@@ -1579,7 +1580,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
   },
 ): Promise<boolean> {
   const requestUrl = new URL(req.url ?? "/", "http://localhost");
-  const match = requestUrl.pathname.match(
+  const requestPath =
+    opts.basePath && requestUrl.pathname.startsWith(`${opts.basePath}/`)
+      ? requestUrl.pathname.slice(opts.basePath.length)
+      : requestUrl.pathname;
+  const match = requestPath.match(
     /^\/api\/chat\/media\/outgoing\/([^/]+)\/([^/]+)\/(full|thumbnail)$/,
   );
   if (!match) {

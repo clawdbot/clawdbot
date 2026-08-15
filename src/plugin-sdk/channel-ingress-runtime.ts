@@ -21,6 +21,7 @@ export type {
   ChannelIngressAccessGroupMembershipResolver,
   ChannelIngressCommandPresetInput,
   ChannelIngressConfigInput,
+  ChannelIngressContextBinding,
   ChannelIngressEventInput,
   ChannelIngressEventPresetInput,
   ChannelIngressIdentityDescriptor,

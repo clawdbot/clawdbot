@@ -18,6 +18,7 @@ import {
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { ensureTerminalUploadCleanup } from "../infra/terminal-file-upload.js";
 import { logDebug } from "../logger.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
@@ -43,6 +44,7 @@ const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 type NodeHostManifest = {
   caps: string[];
   commands: string[];
+  computerUse?: ComputerUseCapabilityDescriptor;
   pathEnv: string;
   workerRuns?: WorkerAdmissionHandshake;
 };
@@ -59,6 +61,7 @@ type PreparedNodeHostRuntime = {
     client: NodeHostClient;
     onInventoryChanged?: (inventory: NodeHostInventory) => void;
     onManifestChanged?: (manifest: NodeHostManifest) => void;
+    onRunnerAvailabilityChanged?: (available: boolean) => void;
   }): ActiveNodeHostRuntime;
 };
 
@@ -235,6 +238,7 @@ function sameManifest(left: NodeHostManifest, right: NodeHostManifest): boolean 
     left.pathEnv === right.pathEnv &&
     sameStringList(left.caps, right.caps) &&
     sameStringList(left.commands, right.commands) &&
+    JSON.stringify(left.computerUse) === JSON.stringify(right.computerUse) &&
     JSON.stringify(left.workerRuns) === JSON.stringify(right.workerRuns)
   );
 }
@@ -305,6 +309,7 @@ export async function prepareNodeHostRuntime(params?: {
         ...pluginManifest.commands,
       ]),
     ].toSorted(),
+    ...(pluginManifest.computerUse ? { computerUse: pluginManifest.computerUse } : {}),
     pathEnv,
     ...(workerRuns ? { workerRuns } : {}),
   });
@@ -317,14 +322,24 @@ export async function prepareNodeHostRuntime(params?: {
   return {
     manifest,
     initialInventory,
-    start({ client, onInventoryChanged, onManifestChanged }) {
+    start({ client, onInventoryChanged, onManifestChanged, onRunnerAvailabilityChanged }) {
       const mcpAbort = new AbortController();
-      const workerSupervisor = workerInstallation
-        ? createNodeWorkerSupervisor({ env, localInstallation: workerInstallation })
-        : undefined;
       const workerWorkspace = workerInstallation
         ? new NodeWorkerWorkspaceRuntime({ env })
         : undefined;
+      const workerSupervisor = workerInstallation
+        ? createNodeWorkerSupervisor({
+            env,
+            localInstallation: workerInstallation,
+            onAvailabilityChanged: onRunnerAvailabilityChanged,
+            workspace: workerWorkspace,
+          })
+        : undefined;
+      if (workerSupervisor) {
+        void workerSupervisor.initialize().catch((error: unknown) => {
+          logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
+        });
+      }
       const skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {

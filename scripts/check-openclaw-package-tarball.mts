@@ -112,6 +112,11 @@ const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
         whenExported: "./transports",
       },
       {
+        specifier: "@openclaw/ai/internal/openai-responses-payload-policy",
+        entry: "dist/internal/openai-responses-payload-policy.mjs",
+        whenExported: "./internal/openai-responses-payload-policy",
+      },
+      {
         specifier: "@openclaw/ai/internal/runtime",
         entry: "dist/internal/runtime.mjs",
       },

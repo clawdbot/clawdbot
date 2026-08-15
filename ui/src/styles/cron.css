@@ -358,6 +358,14 @@
   font-size: var(--control-ui-text-xs);
 }
 
+.cron-table__running {
+  color: var(--accent);
+}
+
+.cron-table__auto-disabled {
+  color: var(--danger);
+}
+
 .cron-table__cell {
   color: var(--text);
   font-size: 12.5px;

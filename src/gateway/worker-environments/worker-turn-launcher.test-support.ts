@@ -106,11 +106,14 @@ export function openSessionManager(): SessionManager {
   return SessionManager.open(sessionTarget);
 }
 
-export function seedActivePlacement(): void {
+export function seedActivePlacement(
+  executionMode: "worker-turn" | "remote-exec" = "worker-turn",
+): void {
   let placement = placements.startDispatch({
     sessionId: SESSION_ID,
     sessionKey: sessionTarget.sessionKey,
     agentId: sessionTarget.agentId,
+    executionMode,
   });
   placement = placements.transition({
     sessionId: SESSION_ID,
@@ -250,6 +253,9 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   const unexpected = () => new Error("unexpected worker environment call");
   return {
     get: vi.fn(() => undefined),
+    resolveSshIdentity: vi.fn(async () => {
+      throw unexpected();
+    }),
     acquireTurnCredential: vi.fn(async () => {
       throw unexpected();
     }),
