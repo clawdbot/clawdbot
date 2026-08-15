@@ -692,6 +692,155 @@ describe("GatewayPlugin", () => {
     );
   });
 
+  it("forces fresh IDENTIFY via connection watchdog when disconnected too long", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+    const debugSpy = vi.fn();
+    gateway.emitter.on("debug", debugSpy);
+    (gateway as unknown as { client: unknown }).client = {
+      options: { token: "token" },
+      dispatchGatewayEvent: vi.fn(async () => {}),
+    };
+
+    // Establish a session
+    gateway.connect(false);
+    const initialSocket = gateway.sockets[0];
+    initialSocket?.emit("open");
+    initialSocket?.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOpcodes.Hello,
+        d: { heartbeat_interval: 45_000 },
+        s: null,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    initialSocket?.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOpcodes.Dispatch,
+        t: GatewayDispatchEvents.Ready,
+        s: 42,
+        d: { session_id: "session-1", resume_gateway_url: "wss://resume.example.test" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Close the WS — scheduleReconnect starts the watchdog (delay + 90s = 92s)
+    const socketCountBefore = gateway.sockets.length;
+    initialSocket?.emit("close", 1006);
+    expect(debugSpy).toHaveBeenCalledWith(
+      "Gateway reconnect scheduled in 2000ms (close, resume=true)",
+    );
+
+    // Advance past the reconnect delay (2s) — the reconnect fires but the new
+    // socket never emits open, simulating a stalled/failed connection.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(gateway.connectCalls.at(-1)).toBe(true); // attempted RESUME
+    expect(gateway.sockets.length).toBe(socketCountBefore + 1); // new socket created
+
+    // The stuck socket closes before READY — scheduleReconnect fires again,
+    // but the watchdog deadline must NOT reset (it started at the first close).
+    gateway.sockets.at(-1)?.emit("close", 1006);
+    await vi.advanceTimersByTimeAsync(4_000); // second reconnect attempt (4s delay)
+
+    // Advance past the watchdog threshold (92s from the first close)
+    // Total elapsed: 2s + 4s + 86s = 92s
+    await vi.advanceTimersByTimeAsync(86_000);
+
+    // Watchdog should have fired — forcing fresh IDENTIFY
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway connection watchdog fired"),
+    );
+    expect(gateway.connectCalls.at(-1)).toBe(false); // forced IDENTIFY
+
+    // Verify a new socket was actually created (not just connect() called)
+    expect(gateway.sockets.length).toBeGreaterThan(socketCountBefore + 1);
+
+    // Verify the new connection sends IDENTIFY, not RESUME
+    const watchdogSocket = gateway.sockets.at(-1);
+    watchdogSocket?.emit("open");
+    watchdogSocket?.emit(
+      "message",
+      JSON.stringify({ op: GatewayOpcodes.Hello, d: { heartbeat_interval: 45_000 }, s: null }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sentGatewayOpcodes(watchdogSocket?.send ?? vi.fn())).toContain(GatewayOpcodes.Identify);
+    expect(sentGatewayOpcodes(watchdogSocket?.send ?? vi.fn())).not.toContain(
+      GatewayOpcodes.Resume,
+    );
+  });
+
+  it("does not revive connection after maxAttempts exhaustion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+      reconnect: { maxAttempts: 1 },
+    });
+    const debugSpy = vi.fn();
+    const errorSpy = vi.fn();
+    gateway.emitter.on("debug", debugSpy);
+    gateway.emitter.on("error", errorSpy);
+    (gateway as unknown as { client: unknown }).client = {
+      options: { token: "token" },
+      dispatchGatewayEvent: vi.fn(async () => {}),
+    };
+
+    // Establish a session
+    gateway.connect(false);
+    const initialSocket = gateway.sockets[0];
+    initialSocket?.emit("open");
+    initialSocket?.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOpcodes.Hello,
+        d: { heartbeat_interval: 45_000 },
+        s: null,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    initialSocket?.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOpcodes.Dispatch,
+        t: GatewayDispatchEvents.Ready,
+        s: 42,
+        d: { session_id: "session-1", resume_gateway_url: "wss://resume.example.test" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // First close — scheduleReconnect attempts=1, starts watchdog
+    const socketCountAfterConnect = gateway.sockets.length;
+    initialSocket?.emit("close", 1006);
+    await vi.advanceTimersByTimeAsync(2_000); // reconnect fires
+
+    // Second close — scheduleReconnect attempts=2 > maxAttempts=1 → exhaustion
+    gateway.sockets.at(-1)?.emit("close", 1006);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Error should be emitted for max attempts
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Max reconnect attempts") }),
+    );
+
+    // Advance past the watchdog threshold — it should NOT create a new socket
+    const socketCountAtExhaustion = gateway.sockets.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    // No watchdog debug log, no new socket, no new connect call
+    expect(debugSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("Gateway connection watchdog fired"),
+    );
+    expect(gateway.sockets.length).toBe(socketCountAtExhaustion);
+  });
+
   it("falls back to a fresh IDENTIFY after three failed resume attempts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

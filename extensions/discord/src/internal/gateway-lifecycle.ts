@@ -74,3 +74,42 @@ export class GatewayReconnectTimer {
     this.timeout.unref?.();
   }
 }
+
+/**
+ * Monitors gateway disconnection duration. If the gateway stays disconnected
+ * longer than the configured threshold (reconnect delay + 2x heartbeat
+ * interval), forces a fresh connection cycle. This catches cases where the
+ * event loop stalls past the reconnect window, leaving the gateway in
+ * "reconnect scheduled" state indefinitely.
+ *
+ * The watchdog is separate from the reconnect timer — it is not stopped when
+ * scheduleReconnect reschedules, so it survives reconnect retry cycles.
+ */
+export class GatewayConnectionWatchdog {
+  private timeout?: GatewayTimer;
+  private disconnectedAt?: number;
+
+  start(thresholdMs: number, onTimeout: () => void): void {
+    // Don't reset an existing watchdog — the deadline must survive across
+    // reconnect retries so repeated failures don't indefinitely push it out.
+    if (this.timeout) return;
+    this.disconnectedAt = Date.now();
+    this.timeout = setTimeout(() => {
+      this.timeout = undefined;
+      onTimeout();
+    }, thresholdMs);
+    this.timeout.unref?.();
+  }
+
+  stop(): void {
+    if (this.timeout) {
+      clearTimeout(this.timeout);
+      this.timeout = undefined;
+    }
+    this.disconnectedAt = undefined;
+  }
+
+  get elapsedMs(): number | undefined {
+    return this.disconnectedAt !== undefined ? Date.now() - this.disconnectedAt : undefined;
+  }
+}
