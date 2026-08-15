@@ -302,7 +302,7 @@ openclaw-chat-sidebar-region,
   left: 0;
   width: 1px;
   height: 14px;
-  background: color-mix(in srgb, var(--muted) 34%, transparent);
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
   content: "";
   transform: translateY(-50%);
 }
