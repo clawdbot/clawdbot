@@ -2044,8 +2044,6 @@ describe("gateway server chat", () => {
       });
       dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
 
-      const inboundDir = path.join(getMediaDir(), "inbound");
-      const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
       const params = makeChatSendParams({
