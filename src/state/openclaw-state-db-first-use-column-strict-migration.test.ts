@@ -3,12 +3,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -67,6 +69,40 @@ function makePreStrictDatabaseWithoutColumns(params: {
   legacy.close();
   return databasePath;
 }
+
+describe("first-use additive column definitions", () => {
+  // Materializing these columns early is only safe while every one of them is
+  // bare and nullable: the pre-STRICT rebuild adds them to tables that already
+  // hold rows, so anything NOT NULL, defaulted, constrained, or key-bearing
+  // would fail or silently rewrite existing data. Enforce that here rather than
+  // leaving it to the convention documented on the definition list.
+  it.each(
+    CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS.map((definition) => [
+      `${definition.tableName}.${definition.columnName}`,
+      definition,
+    ]),
+  )("keeps %s bare and nullable in the canonical schema", (_label, definition) => {
+    const { columnName, dataType, tableName } = definition as {
+      columnName: string;
+      dataType: string;
+      tableName: string;
+    };
+    const tableStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+      `CREATE TABLE IF NOT EXISTS ${tableName} (`,
+    );
+    expect(tableStart).toBeGreaterThanOrEqual(0);
+    const tableBody = OPENCLAW_STATE_SCHEMA_SQL.slice(
+      tableStart,
+      OPENCLAW_STATE_SCHEMA_SQL.indexOf(") STRICT;", tableStart),
+    );
+    const declaration = tableBody
+      .split("\n")
+      .find((line) => new RegExp(`^\\s*${columnName}\\s`, "u").test(line))
+      ?.trim()
+      .replace(/,$/u, "");
+    expect(declaration).toBe(`${columnName} ${dataType}`);
+  });
+});
 
 describe("first-use additive column STRICT migration", () => {
   it("repairs device_bootstrap_tokens without setup_id while migrating to STRICT", () => {
