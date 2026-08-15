@@ -38,14 +38,16 @@ const JOINER_CHARS = String.raw`\u200C\u200D`;
 const JOINER_SPACING = String.raw`[${JOINER_CHARS}]*`;
 const DECORATION_SPACING = String.raw`[${JOINER_CHARS}\s]*`;
 // A digit that heads a keycap sequence is an identity character spelling a
-// pictograph: the token split must not consume it into a word run, and the
-// boundary assertions must not read it as the first letter of a foreign word,
-// or "Bot1️⃣" would both demand its keycap and refuse the typed keycap as
-// glued text -- while "Bot#️⃣", whose base is not an identity character,
-// never had either problem. A bare digit stays a word character: "Bot1" keeps
-// requiring its 1, and a name matched inside "bot1x" stays rejected.
+// pictograph: the token split must not consume it into a word run, or
+// "Bot1️⃣" would demand its keycap. The guard stays out of the boundary
+// word class -- there it would excuse every message keycap for every
+// identity, handing a plain "Bot" the trigger "bot1️⃣" -- so a keycap the
+// name itself spells is instead accepted at the trailing seam, where the
+// full spelling and the boundary after it are both checked. A bare digit
+// stays a word character: "Bot1" keeps requiring its 1, and a name matched
+// inside "bot1x" stays rejected.
 const KEYCAP_HEAD_GUARD = String.raw`(?![0-9]\u{FE0F}?\u{20E3})`;
-const UNICODE_WORD_CHAR = String.raw`(?:${KEYCAP_HEAD_GUARD}[${NAME_TOKEN_CHARS}${JOINER_CHARS}])`;
+const UNICODE_WORD_CHAR = String.raw`[${NAME_TOKEN_CHARS}${JOINER_CHARS}]`;
 const JOINER_RUN = new RegExp(`[${JOINER_CHARS}]+`, "u");
 // A token starts at an identity character: marks attach to the character
 // before them, they never stand for one. So a mark run that trails decoration
@@ -99,9 +101,18 @@ function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
   // match stripping needs; each seam takes the joiners first. Backtracking
   // cannot cheat past that: a joiner the seam leaves behind is itself the
   // word character the assertion refuses.
+  // The trailing seam is an exhaustive alternation rather than an assertion
+  // over an optional group: either the name's full trailing decoration is
+  // present with a clean boundary after it, or nothing of it is taken and
+  // both original boundary checks hold. The first branch is what accepts a
+  // spelled keycap whose digit is itself a word character; every other text
+  // falls through to the second branch, which is the unchanged pair of
+  // assertions, so a keycap the name does not spell stays a foreign word.
   const leading = parts.leading ? `(?:${parts.leading}|)` : "";
-  const trailing = parts.trailing ? `(?:${parts.trailing}|)` : "";
-  return `(?:@|(?<!${UNICODE_WORD_CHAR}${leading}))${leading}${JOINER_SPACING}${parts.core}${JOINER_SPACING}(?!${trailing}${UNICODE_WORD_CHAR})${trailing}`;
+  const trailing = parts.trailing
+    ? `(?:${parts.trailing}(?!${UNICODE_WORD_CHAR})|(?!${parts.trailing}${UNICODE_WORD_CHAR})(?!${UNICODE_WORD_CHAR}))`
+    : `(?!${UNICODE_WORD_CHAR})`;
+  return `(?:@|(?<!${UNICODE_WORD_CHAR}${leading}))${leading}${JOINER_SPACING}${parts.core}${JOINER_SPACING}${trailing}`;
 }
 
 function escapeJoinerTolerantLiteral(literal: string): string {

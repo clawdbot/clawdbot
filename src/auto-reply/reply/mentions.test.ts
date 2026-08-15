@@ -404,8 +404,9 @@ describe("derived mention matching with decorated identity names", () => {
   it("treats a numeric keycap as decoration without freeing its bare digit", () => {
     // The keycap's digit is an identity character, so the token split would
     // absorb it and the marks that follow; the digit heading a keycap stays
-    // out of the token instead, and the boundary must not read it as a
-    // foreign word character when the member types the keycap.
+    // out of the token instead, and the trailing seam accepts the name's own
+    // typed keycap by checking the full spelling with a clean boundary after
+    // it rather than by excusing keycap digits from the word class.
     const cfg = configForName("Bot1️⃣");
     const regexes = buildMentionRegexes(cfg, "decorated-agent");
 
@@ -419,6 +420,33 @@ describe("derived mention matching with decorated identity names", () => {
     );
     expect(stripMentions("bot1 /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
       "bot1 /status",
+    );
+  });
+
+  it("keeps a message keycap a foreign word for a name that does not spell it", () => {
+    // A keycap digit is a word character like any other digit: only the very
+    // keycap the name spells, in the position it spells it, is accepted. A
+    // global excuse in the boundary class handed every plain identity the
+    // trigger "bot1️⃣" and stripped the name out from under the keycap.
+    const plain = configForName("Bot");
+    const plainRegexes = buildMentionRegexes(plain, "decorated-agent");
+    expect(matchesMentionPatterns("bot1️⃣ hello", plainRegexes)).toBe(false);
+    expect(matchesMentionPatterns("bot2⃣ hello", plainRegexes)).toBe(false);
+    expect(stripMentions("bot1️⃣ /status", {} as MsgContext, plain, "decorated-agent")).toBe(
+      "bot1️⃣ /status",
+    );
+
+    const cjk = configForName("小蝶");
+    expect(matchesMentionPatterns("小蝶1️⃣ 你好", buildMentionRegexes(cjk, "decorated-agent"))).toBe(
+      false,
+    );
+
+    // A keycap identity accepts its own keycap and refuses every other digit's.
+    const keycap = configForName("Bot1️⃣");
+    const keycapRegexes = buildMentionRegexes(keycap, "decorated-agent");
+    expect(matchesMentionPatterns("bot3️⃣ 早安", keycapRegexes)).toBe(false);
+    expect(stripMentions("bot3️⃣ /status", {} as MsgContext, keycap, "decorated-agent")).toBe(
+      "bot3️⃣ /status",
     );
   });
 
