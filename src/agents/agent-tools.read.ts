@@ -88,9 +88,10 @@ const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
 function eraseFileToolParameters<TParameters extends TSchema, TDetails>(
   tool: AgentTool<TParameters, TDetails>,
 ): AnyAgentTool {
+  const execute = tool.execute;
   return Object.assign(tool, {
     execute: (...args: Parameters<AnyAgentTool["execute"]>) =>
-      tool.execute(args[0], args[1] as Static<TParameters>, args[2], args[3]),
+      execute(args[0], args[1] as Static<TParameters>, args[2], args[3]),
   });
 }
 

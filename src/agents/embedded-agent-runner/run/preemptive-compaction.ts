@@ -176,12 +176,11 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   }
 
   if (message.role === "branchSummary" || message.role === "compactionSummary") {
-    const summary = message.summary;
     const [prefix, suffix] =
       message.role === "branchSummary"
         ? [BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX]
         : [COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX];
-    return tokens + estimateStringTokenPressure(prefix + summary + suffix);
+    return tokens + estimateStringTokenPressure(prefix + message.summary + suffix);
   }
 
   if (message.role === "assistant") {
