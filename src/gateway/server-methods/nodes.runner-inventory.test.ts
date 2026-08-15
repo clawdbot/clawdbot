@@ -181,7 +181,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         ],
       },
     },
-    { name: "wrong dialect", params: { protocolFeatures: ["node-worker-supervisor-v2"] } },
+    { name: "wrong dialect", params: { protocolFeatures: ["node-worker-supervisor-v1"] } },
     {
       name: "worker build without dialect",
       params: { protocolFeatures: [], workerRuns: WORKER_RUNS },
