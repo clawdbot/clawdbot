@@ -62,6 +62,31 @@ The CUA descriptor advertises window, element, and browser targets; background a
 
 Browser targets, pages, page elements, and dialogs are opaque capabilities. Retake browser state after navigation, reconnect, or a stale-reference refusal. The adapter never returns provider-native CDP target IDs, tab IDs, or page refs to the model.
 
+### Maintainer live-proof rig
+
+The repository includes a macOS-only development rig that preserves the real vertical path: agent-facing `computer` tool, Gateway `node.invoke`, paired Mac node, and the selected node-local provider. It is deliberately isolated from the operator app and Gateway.
+
+Build a signed app from a clean, committed checkout, choose a fresh profile and non-default loopback port, and prepare the two config views:
+
+```bash
+scratch="$(mktemp -d /tmp/openclaw-cu-live.XXXXXX)"
+scripts/dev/computer-use-macos-live-rig.sh prepare \
+  cu-live-proof 29431 "$PWD/dist/OpenClaw.app" "$scratch" peekaboo
+```
+
+Run the emitted `gateway` and `app` commands in separate terminals. The split config is intentional: the externally launched daemon reads a scratch config with `gateway.mode: "local"`, while the app profile reads `gateway.mode: "remote"`, direct transport, and the daemon's loopback URL. If the app reads local mode, its Port Guardian owns the route instead of joining the external daemon. The rig also seeds a dedicated `node` identity, completed onboarding, unpaused state, Computer Control, and the checkout path used to start the debug node worker. There is no separate node-mode toggle.
+
+In a third terminal, run the emitted `nodes` command. A fresh CLI identity first returns a device-approval request; approve that request from the isolated app's Devices settings or with `openclaw --profile cu-live-proof devices approve <requestId>`, then rerun `nodes` until the paired entry is connected and advertises `computer.act` plus a `computerUse` descriptor.
+
+Place a harmless editable fixture window behind a different frontmost app, then run the vertical:
+
+```bash
+scripts/dev/computer-use-macos-live-rig.sh proof \
+  "$scratch" "Computer Use Fixture" "background proof" "Editor"
+```
+
+The proof runner executes `screenshot`, `list_windows`, `get_window_state`, background element click and type, then re-observes the window. It saves the structured result and target-window before/after images under the scratch directory and fails unless the target started non-frontmost, the frontmost app and cursor stayed unchanged, target content changed, and the final effect was confirmed or a structured refusal. Restart the isolated app with the other provider and rerun the same proof. Do not use port `18789`, the default profile, or `/Applications/OpenClaw.app` for this rig.
+
 ### Windows and Linux (experimental, direct SDK)
 
 The bundled `cua-computer` plugin provides an experimental fulfiller for Windows and Linux node hosts. It is disabled by default and uses the pinned CUA Driver SDK 0.19.3 contract directly:
