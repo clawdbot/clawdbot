@@ -3113,11 +3113,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-nav__head {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   padding: 2px 8px 2px 12px;
-}
-
-.sidebar-nav__head .sidebar-recent-sessions__label-text {
-  flex: 1 1 auto;
 }
 
 .sidebar-nav__head-action {
@@ -3132,9 +3129,16 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
+  opacity: 0;
   transition:
     color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
+    background var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.sidebar-nav:hover .sidebar-nav__head-action,
+.sidebar-nav:focus-within .sidebar-nav__head-action {
+  opacity: 1;
 }
 
 .sidebar-nav__head-action:hover,
