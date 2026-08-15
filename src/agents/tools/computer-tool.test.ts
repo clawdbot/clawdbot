@@ -60,9 +60,9 @@ function v2Descriptor(actions: ComputerUseV2ActionName[]): ComputerUseCapability
     contractVersion: 2 as const,
     provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
     actions,
-    targets: ["screen", "window", "element"] as const,
+    targets: ["screen", "window", "element", "browser"] as const,
     deliveryModes: ["background", "foreground"] as const,
-    observations: ["image", "accessibility"] as const,
+    observations: ["image", "accessibility", "browser"] as const,
     features: { recording: false, agentCursor: false, multiDisplay: false },
   };
 }
@@ -468,12 +468,70 @@ describe("createComputerTool execution", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("rejects contract-only actions even when a node advertises them", async () => {
-    const actions: ComputerUseV2ActionName[] = ["browser_click"];
+  it("maps browser observations and opaque refs through the public tool", async () => {
+    const actions: ComputerUseV2ActionName[] = ["get_browser_state", "browser_pointer"];
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+    callGatewayToolMock.mockResolvedValueOnce({
+      payload: {
+        ok: true,
+        observation: { kind: "browser", observationId: "browser-observation-1" },
+        details: {
+          browserRef: "browser-1",
+          pageRef: "page-1",
+          elements: [{ elementRef: "element-1" }, { elementRef: "element-2" }],
+        },
+      },
+    });
+    const tool = createVisionComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
+
+    await tool.execute("observe-browser", {
+      action: "get_browser_state",
+      browserRef: "browser-1",
+      pageRef: "page-1",
+      snapshotFormat: "dom_refs_v1",
+      includeScreenshot: true,
+    });
+    expect(readLastComputerActParams()).toEqual({
+      action: "get_browser_state",
+      browserRef: "browser-1",
+      pageRef: "page-1",
+      snapshotFormat: "dom_refs_v1",
+      includeScreenshot: true,
+    });
+
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
+      (body as ComputerActBody).command === COMPUTER_ACT_COMMAND
+        ? { payload: { ok: true, effect: "confirmed" } }
+        : screenshotPayload(),
+    );
+    await tool.execute("drag-browser", {
+      action: "browser_pointer",
+      browserRef: "browser-1",
+      pageRef: "page-1",
+      observationId: "browser-observation-1",
+      pointerAction: "drag",
+      inputRoute: "dom_event",
+      elementRef: "element-1",
+      destinationElementRef: "element-2",
+    });
+    expect(readLastComputerActParams()).toEqual({
+      action: "browser_pointer",
+      browserRef: "browser-1",
+      pageRef: "page-1",
+      observationId: "browser-observation-1",
+      pointerAction: "drag",
+      inputRoute: "dom_event",
+      elementRef: "element-1",
+      destinationElementRef: "element-2",
+    });
+  });
+
+  it("rejects recording actions that remain contract-only", async () => {
+    const actions: ComputerUseV2ActionName[] = ["start_recording"];
     listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
     const tool = createVisionComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
 
-    await expect(tool.execute("browser", { action: "browser_click" })).rejects.toThrow(
+    await expect(tool.execute("record", { action: "start_recording" })).rejects.toThrow(
       "COMPUTER_CONTRACT_MISMATCH",
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
