@@ -640,7 +640,6 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         state,
         agentId: currentAgentId,
         desktopAvailable,
-        deferTerminalRestore: this.pendingPanelToggleRequests.has("terminal"),
       }),
       ...(state.sidebarContent
         ? {

@@ -20,6 +20,10 @@ import {
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
+import {
+  terminalIntentQueue,
+  terminalToggleIntent,
+} from "../../components/terminal/terminal-pending-actions.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
@@ -53,6 +57,7 @@ import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { invalidateChatMetadataCache, refreshPageChat } from "./chat-state-refresh.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
@@ -479,6 +484,17 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         if (detail?.open === false) {
           this.pendingPanelToggleRequests.delete(slot);
           state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
+          return;
+        }
+        if (slot === "terminal") {
+          // Record before the tab mounts: the terminal owns a durable intent
+          // queue, and the panel that will run it may not exist yet — a
+          // service-worker reload in that window must not lose the request.
+          const intent = terminalToggleIntent(event, resolveChatAgentId(state));
+          if (intent) {
+            void terminalIntentQueue.queue(intent);
+          }
+          state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
           return;
         }
         this.pendingPanelToggleRequests.set(slot, event);

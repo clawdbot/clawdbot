@@ -19,7 +19,6 @@ export function embeddedSurfaceTemplates(params: {
   state: ChatPageHost;
   agentId: string | null;
   desktopAvailable: boolean;
-  deferTerminalRestore: boolean;
 }): Partial<SidebarPanelTemplates> {
   const { state } = params;
   return {
@@ -27,7 +26,6 @@ export function embeddedSurfaceTemplates(params: {
       ? {
           terminal: html`<openclaw-terminal-panel
             embedded
-            .deferInitialRestore=${params.deferTerminalRestore}
             .client=${state.connected ? state.client : null}
             .available=${state.terminalAvailable}
             .agentId=${params.agentId}

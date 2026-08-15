@@ -66,7 +66,6 @@ describe("OpenClawTerminalPanel", () => {
     const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.available = true;
     panel.embedded = true;
-    panel.deferInitialRestore = true;
     document.body.append(panel);
     await panel.updateComplete;
 

@@ -77,7 +77,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ type: Boolean }) embedded = false;
   /** Shell instance reserved for a terminal explicitly moved below a chat session. */
   @property({ type: Boolean }) sessionBottomOnly = false;
-  @property({ type: Boolean, attribute: false }) deferInitialRestore = false;
 
   @state() terminalPanelErrorText: string | null = null;
   @state() private sessionPickerOpen = false;
@@ -180,7 +179,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     if (changed.has("themeMode")) {
       updateTerminalSessionTheme(this.terminalSessions.tabs, this.themeMode);
     }
-    if (changed.has("embedded") && this.embedded && !this.deferInitialRestore) {
+    if (changed.has("embedded") && this.embedded) {
       void this.terminalSessions.restoreSessions();
     }
     if (this.embedded || this.dockLayout.open) {
