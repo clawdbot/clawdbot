@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthOrderClearCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthOrderGetCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthOrderSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
@@ -25,6 +28,9 @@ const {
   modelsAuthListCommand,
   modelsAuthLoginCommand,
   modelsAuthLogoutCommand,
+  modelsAuthOrderClearCommand,
+  modelsAuthOrderGetCommand,
+  modelsAuthOrderSetCommand,
   modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
@@ -53,9 +59,9 @@ vi.mock("../commands/models/auth-logout.js", () => ({
   modelsAuthLogoutCommand: mocks.modelsAuthLogoutCommand,
 }));
 vi.mock("../commands/models/auth-order.js", () => ({
-  modelsAuthOrderClearCommand: mocks.noopAsync,
-  modelsAuthOrderGetCommand: mocks.noopAsync,
-  modelsAuthOrderSetCommand: mocks.noopAsync,
+  modelsAuthOrderClearCommand: mocks.modelsAuthOrderClearCommand,
+  modelsAuthOrderGetCommand: mocks.modelsAuthOrderGetCommand,
+  modelsAuthOrderSetCommand: mocks.modelsAuthOrderSetCommand,
 }));
 vi.mock("../commands/models/aliases.js", () => ({
   modelsAliasesAddCommand: mocks.noopAsync,
@@ -91,6 +97,9 @@ describe("models cli", () => {
     modelsAuthListCommand.mockClear();
     modelsAuthLoginCommand.mockClear();
     modelsAuthLogoutCommand.mockClear();
+    modelsAuthOrderClearCommand.mockClear();
+    modelsAuthOrderGetCommand.mockClear();
+    modelsAuthOrderSetCommand.mockClear();
     modelsAuthPasteApiKeyCommand.mockClear();
     modelsAuthPasteTokenCommand.mockClear();
     modelsAuthSetupTokenCommand.mockClear();
@@ -290,10 +299,22 @@ describe("models cli", () => {
       expected: { agent: "poe" },
     },
     {
+      label: "list",
+      args: ["models", "auth", "list", "--provider", "openai", "--agent", "poe"],
+      command: modelsAuthListCommand,
+      expected: { agent: "poe", provider: "openai" },
+    },
+    {
       label: "login",
       args: ["models", "auth", "login", "--provider", "openai", "--agent", "poe"],
       command: modelsAuthLoginCommand,
       expected: { agent: "poe", provider: "openai" },
+    },
+    {
+      label: "logout",
+      args: ["models", "auth", "logout", "openai:manual", "--yes", "--agent", "poe"],
+      command: modelsAuthLogoutCommand,
+      expected: { agent: "poe", profileId: "openai:manual", yes: true },
     },
     {
       label: "setup-token",
@@ -318,6 +339,39 @@ describe("models cli", () => {
       args: ["models", "auth", "login-github-copilot", "--agent", "poe", "--yes"],
       command: modelsAuthLoginCommand,
       expected: { agent: "poe", provider: "github-copilot", method: "device", yes: true },
+    },
+    {
+      label: "order get",
+      args: ["models", "auth", "order", "get", "--provider", "anthropic", "--agent", "poe"],
+      command: modelsAuthOrderGetCommand,
+      expected: { agent: "poe", provider: "anthropic" },
+    },
+    {
+      label: "order set",
+      args: [
+        "models",
+        "auth",
+        "order",
+        "set",
+        "--provider",
+        "anthropic",
+        "anthropic:first",
+        "anthropic:second",
+        "--agent",
+        "poe",
+      ],
+      command: modelsAuthOrderSetCommand,
+      expected: {
+        agent: "poe",
+        provider: "anthropic",
+        order: ["anthropic:first", "anthropic:second"],
+      },
+    },
+    {
+      label: "order clear",
+      args: ["models", "auth", "order", "clear", "--provider", "anthropic", "--agent", "poe"],
+      command: modelsAuthOrderClearCommand,
+      expected: { agent: "poe", provider: "anthropic" },
     },
   ])("passes leaf --agent to models auth $label", async ({ args, command, expected }) => {
     await runModelsCommand(args);
