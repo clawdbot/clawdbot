@@ -79,8 +79,7 @@ export function resolveToolTerminalPresentation(params: {
   result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
 }): string | undefined {
   try {
-    const taggedTool = params.tool as unknown as Record<symbol, unknown>;
-    const sourceTool = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];
+    const sourceTool = Reflect.get(params.tool, BEFORE_TOOL_CALL_SOURCE_TOOL);
     const presentationTool =
       sourceTool && typeof sourceTool === "object" ? (sourceTool as AnyAgentTool) : params.tool;
     const text = getToolTerminalPresentation(presentationTool)?.(

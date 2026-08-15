@@ -155,36 +155,37 @@ function estimateContentTokenPressure(
 }
 
 function estimateMessageTokenPressure(message: AgentMessage): number {
-  const record = message as unknown as Record<string, unknown>;
+  const role: unknown = Reflect.get(message, "role");
   let tokens = MESSAGE_BOUNDARY_OVERHEAD_TOKENS;
 
-  if (record.role === "toolResult" || record.role === "tool" || record.type === "toolResult") {
-    tokens += estimateContentTokenPressure(record.content, "tool-result");
-    tokens += estimateIdentifierTokenPressure(record.toolName ?? record.tool_name);
-    return tokens;
-  }
-
-  if (record.role === "bashExecution") {
-    if (record.excludeFromContext === true) {
-      return 0;
-    }
-    tokens += estimateStringTokenPressure(
-      bashExecutionToText(record as unknown as BashExecutionMessage),
+  if (role === "toolResult" || role === "tool" || Reflect.get(message, "type") === "toolResult") {
+    tokens += estimateContentTokenPressure(Reflect.get(message, "content"), "tool-result");
+    tokens += estimateIdentifierTokenPressure(
+      Reflect.get(message, "toolName") ?? Reflect.get(message, "tool_name"),
     );
     return tokens;
   }
 
-  if (record.role === "branchSummary" || record.role === "compactionSummary") {
-    const summary = typeof record.summary === "string" ? record.summary : "";
+  if (role === "bashExecution") {
+    if (Reflect.get(message, "excludeFromContext") === true) {
+      return 0;
+    }
+    tokens += estimateStringTokenPressure(bashExecutionToText(message as BashExecutionMessage));
+    return tokens;
+  }
+
+  if (role === "branchSummary" || role === "compactionSummary") {
+    const rawSummary = Reflect.get(message, "summary");
+    const summary = typeof rawSummary === "string" ? rawSummary : "";
     const [prefix, suffix] =
-      record.role === "branchSummary"
+      role === "branchSummary"
         ? [BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX]
         : [COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX];
     return tokens + estimateStringTokenPressure(prefix + summary + suffix);
   }
 
-  if (record.role === "assistant") {
-    const content = record.content;
+  if (role === "assistant") {
+    const content = Reflect.get(message, "content");
     if (Array.isArray(content)) {
       for (const block of content) {
         if (isRecord(block) && (block.type === "toolCall" || block.type === "tool_use")) {
@@ -197,7 +198,7 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
       tokens += estimateContentTokenPressure(content);
     }
 
-    const toolCalls = record.toolCalls ?? record.tool_calls;
+    const toolCalls = Reflect.get(message, "toolCalls") ?? Reflect.get(message, "tool_calls");
     if (Array.isArray(toolCalls)) {
       for (const toolCall of toolCalls) {
         tokens += isRecord(toolCall)
@@ -208,7 +209,7 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
     return tokens;
   }
 
-  tokens += estimateContentTokenPressure(record.content);
+  tokens += estimateContentTokenPressure(Reflect.get(message, "content"));
   return tokens;
 }
 

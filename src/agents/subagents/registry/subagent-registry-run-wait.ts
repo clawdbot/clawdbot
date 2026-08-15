@@ -195,11 +195,10 @@ export class SubagentWaitManager {
   }
 
   protected restoreRunRecord(entry: SubagentRunRecord, snapshot: SubagentRunRecord): void {
-    const target = entry as unknown as Record<string, unknown>;
-    for (const key of Object.keys(target)) {
-      delete target[key];
+    for (const key of Object.keys(entry)) {
+      Reflect.deleteProperty(entry, key);
     }
-    Object.assign(target, snapshot);
+    Object.assign(entry, snapshot);
   }
 
   protected markOlderKillReconciliationsSuperseded(next: SubagentRunRecord) {

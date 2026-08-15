@@ -688,9 +688,8 @@ export function rewrapToolWithBeforeToolCallHook(
   ctx?: HookContext,
   options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
-  const taggedTool = tool as unknown as Record<symbol, unknown>;
-  const source = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];
-  const wrappedContext = taggedTool[BEFORE_TOOL_CALL_HOOK_CONTEXT];
+  const source = Reflect.get(tool, BEFORE_TOOL_CALL_SOURCE_TOOL);
+  const wrappedContext = Reflect.get(tool, BEFORE_TOOL_CALL_HOOK_CONTEXT);
   const preservedContext =
     wrappedContext && typeof wrappedContext === "object"
       ? (wrappedContext as HookContext)
@@ -704,7 +703,7 @@ export function rewrapToolWithBeforeToolCallHook(
     ...tool,
     execute: sourceTool.execute,
   };
-  delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
+  Reflect.deleteProperty(rewrapSource, BEFORE_TOOL_CALL_WRAPPED);
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
   copyToolTerminalPresentation(tool, rewrapSource);
