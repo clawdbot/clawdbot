@@ -1,34 +1,6 @@
-/** Computer tool model-schema contract tests. */
 import { describe, expect, it } from "vitest";
-import type {
-  ComputerUseCapabilityDescriptor,
-  ComputerUseV2ActionName,
-} from "../../plugins/computer-use-contract.js";
-
-const { createComputerTool } = await import("./computer-tool.js");
-
-type ComputerTool = ReturnType<typeof createComputerTool>;
-
-function v2Descriptor(
-  actions: ComputerUseV2ActionName[],
-  overrides: Partial<ComputerUseCapabilityDescriptor> = {},
-): ComputerUseCapabilityDescriptor {
-  return {
-    contractVersion: 2 as const,
-    provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-    actions,
-    targets: ["screen", "window", "element", "browser"] as const,
-    deliveryModes: ["background", "foreground"] as const,
-    observations: ["image", "accessibility", "browser"] as const,
-    features: { recording: false, agentCursor: false, multiDisplay: false },
-    ...overrides,
-  };
-}
-
-function readActionEnum(tool: ComputerTool): string[] {
-  const schema = tool.parameters as { properties?: { action?: { enum?: string[] } } };
-  return schema.properties?.action?.enum ?? [];
-}
+import type { ComputerUseV2ActionName } from "../../plugins/computer-use-contract.js";
+import { createComputerTool, readActionEnum, v2Descriptor } from "./computer-tool.test-helpers.js";
 
 describe("createComputerTool schema", () => {
   it("keeps an undeclared node on the exact v1 action list", () => {
@@ -55,6 +27,21 @@ describe("createComputerTool schema", () => {
     const actions: ComputerUseV2ActionName[] = ["screenshot", "list_apps", "get_window_state"];
     const tool = createComputerTool({ capabilityDescriptor: v2Descriptor(actions) });
     expect(readActionEnum(tool)).toEqual(actions);
+  });
+
+  it("advertises resource actions only with an attempt cleanup owner", () => {
+    const actions: ComputerUseV2ActionName[] = ["browser_download", "start_recording"];
+    expect(
+      readActionEnum(createComputerTool({ capabilityDescriptor: v2Descriptor(actions) })),
+    ).toEqual([]);
+    expect(
+      readActionEnum(
+        createComputerTool({
+          capabilityDescriptor: v2Descriptor(actions),
+          registerRunCleanup: () => {},
+        }),
+      ),
+    ).toEqual(actions);
   });
 
   it("keeps the v2 guidance provider-neutral and free of host setup instructions", () => {

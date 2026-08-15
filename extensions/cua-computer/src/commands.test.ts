@@ -66,12 +66,16 @@ describe("cua-computer provider", () => {
         "browser_download",
         "browser_pointer",
         "escalate_scope",
+        "get_recording_state",
+        "start_recording",
+        "stop_recording",
+        "replay_trajectory",
         "invoke_menu",
       ],
       targets: ["screen", "window", "element", "browser"],
       deliveryModes: ["background", "foreground"],
       observations: ["image", "accessibility", "browser"],
-      features: { recording: false, agentCursor: false, multiDisplay: false },
+      features: { recording: true, agentCursor: false, multiDisplay: false },
     });
   });
 
@@ -82,6 +86,14 @@ describe("cua-computer provider", () => {
     expect(actions).not.toContain("left_mouse_down");
     expect(actions).not.toContain("left_mouse_up");
     expect(actions).toContain("get_window_state");
+    expect(actions).toEqual(
+      expect.arrayContaining([
+        "get_recording_state",
+        "start_recording",
+        "stop_recording",
+        "replay_trajectory",
+      ]),
+    );
   });
 
   it("advertises the macOS mapping only with a valid atomic app-provided endpoint", () => {
@@ -97,7 +109,7 @@ describe("cua-computer provider", () => {
     expect(provider.capabilities().actions).toContain("get_window_state");
     expect(provider.capabilities().actions).not.toContain("left_mouse_down");
     expect(provider.capabilities().features).toEqual({
-      recording: false,
+      recording: true,
       agentCursor: false,
       multiDisplay: false,
     });
@@ -140,7 +152,7 @@ describe("cua-computer provider", () => {
       imageProcessor: {
         encode: vi.fn(async () => ({ data: Buffer.from("png"), width: 100, height: 50 })),
       },
-    }).openExecution({});
+    }).openExecution({ executionId: "123e4567-e89b-42d3-a456-426614174000" });
     const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
       displayFrameId: string;
       width: number;
@@ -307,7 +319,9 @@ describe("cua-computer provider", () => {
     });
     expect(createDriver).not.toHaveBeenCalled();
 
-    const computer = await provider.openExecution({});
+    const computer = await provider.openExecution({
+      executionId: "123e4567-e89b-42d3-a456-426614174000",
+    });
     await computer.snapshot('{"format":"png","maxWidth":100}');
     expect(createDriver).toHaveBeenCalledOnce();
 
