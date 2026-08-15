@@ -356,6 +356,9 @@ openclaw-chat-sidebar-region,
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .side-panel__header .tabstrip-tab:not([active]):hover::part(base) {
@@ -407,6 +410,9 @@ openclaw-chat-sidebar-region,
   align-self: center;
   margin: 0;
   opacity: 1;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close {
@@ -439,6 +445,13 @@ openclaw-chat-sidebar-region,
 
 .side-panel__header .tabstrip-new-control {
   flex: 0 0 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side-panel__header .tabstrip-tab::part(base),
+  .side-panel__header .tabstrip-tab__close {
+    transition: none;
+  }
 }
 
 .side-panel__actions {
