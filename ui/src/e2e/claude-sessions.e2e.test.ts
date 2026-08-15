@@ -326,11 +326,14 @@ async function catalogHeaderAffordances(header: Locator) {
 
 async function expandCodingSection(page: Page) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
-  await page.waitForFunction(() =>
-    Boolean(
-      document.querySelector('[data-session-section="work"]') ??
-      document.querySelector('[data-session-section^="catalog:"]'),
-    ),
+  await page.waitForFunction(
+    () =>
+      Boolean(
+        document.querySelector('[data-session-section="work"]') ??
+        document.querySelector('[data-session-section^="catalog:"]'),
+      ),
+    undefined,
+    { timeout: 30_000 },
   );
   if ((await toggle.count()) === 0) {
     return;
@@ -340,14 +343,22 @@ async function expandCodingSection(page: Page) {
   }
 }
 
-async function openClaudeCatalogTerminal(page: Page) {
+async function navigateToClaudeCatalog(page: Page) {
   await page.goto(`${suite.server.baseUrl}chat`);
   await expandCodingSection(page);
+}
+
+async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boolean } = {}) {
   const row = page.locator('[data-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
   });
-  await row.click({ button: "right" });
-  await page.locator('wa-dropdown-item[value="terminal"]').click();
+  await row.click({ button: "right", force: options.force });
+  await page.locator('wa-dropdown-item[value="terminal"]').click({ force: options.force });
+}
+
+async function openClaudeCatalogTerminal(page: Page) {
+  await navigateToClaudeCatalog(page);
+  await triggerClaudeCatalogTerminal(page);
 }
 
 suite.define(() => {
@@ -614,8 +625,9 @@ suite.define(() => {
         terminalEnabled: true,
       });
 
+      await navigateToClaudeCatalog(page);
       await page.clock.install();
-      await openClaudeCatalogTerminal(page);
+      await triggerClaudeCatalogTerminal(page, { force: true });
       await expect
         .poll(async () =>
           (await gateway.getRequests("terminal.open")).map((request) => request.params),
@@ -624,7 +636,7 @@ suite.define(() => {
           expect.objectContaining({ catalog: expect.objectContaining({ catalogId: "claude" }) }),
         );
       await page.getByRole("status").filter({ hasText: "Connecting to session" }).waitFor();
-      await page.clock.runFor(30_001);
+      await page.clock.fastForward(30_001);
 
       await page.getByText("Session did not connect within 30 seconds.", { exact: true }).waitFor();
       const close = await gateway.waitForRequest("terminal.close");
@@ -635,7 +647,6 @@ suite.define(() => {
 
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
     const page = await suite.browser.newPage();
-    await page.clock.install();
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
       catalogs: [
         {
@@ -729,7 +740,13 @@ suite.define(() => {
       cursors: { "node:devbox": "catalog-page-2" },
     });
     const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-    await page.clock.runFor(30_000);
+    await page.clock.install();
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.clock.fastForward(50);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+      .toBeGreaterThanOrEqual(catalogRequestCount + 1);
+    await page.clock.fastForward(30_000);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
       .toBeGreaterThanOrEqual(catalogRequestCount + 2);
@@ -752,7 +769,7 @@ suite.define(() => {
       element.scrollTop = 0;
       element.dispatchEvent(new Event("scroll"));
     });
-    await page.clock.runFor(100);
+    await page.clock.fastForward(100);
     await catalogPane
       .locator('.chat-virtual-row:not([data-virtual-row-key="history"])')
       .first()
@@ -775,7 +792,7 @@ suite.define(() => {
           ),
         )
         .toBe(41);
-      await page.clock.runFor(100);
+      await page.clock.fastForward(100);
     } finally {
       paintResult = await stopVirtualRowPaintProbe(thread);
     }
@@ -821,10 +838,10 @@ suite.define(() => {
     const exhaustedReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
     await thread.hover();
     await page.mouse.wheel(0, -10_000);
-    await page.clock.runFor(100);
+    await page.clock.fastForward(100);
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
-    await page.clock.runFor(500);
+    await page.clock.fastForward(500);
     expect(await catalogPane.locator(".chat-history-loading").count()).toBe(0);
     expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);

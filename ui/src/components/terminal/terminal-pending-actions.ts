@@ -138,7 +138,10 @@ class TerminalIntentQueue {
     this.clearRefreshFailure();
   }
 
-  async queue(action: TerminalPanelAction): Promise<void> {
+  async queue(
+    action: TerminalPanelAction,
+    options: { deferUntilHostChange?: boolean } = {},
+  ): Promise<void> {
     let changed = false;
     if (action.kind !== "restore") {
       for (let index = this.actions.length - 1; index >= 0; index -= 1) {
@@ -155,6 +158,12 @@ class TerminalIntentQueue {
     }
     if (changed) {
       persistTerminalActions(this.actions);
+    }
+    // A session-route intent is persisted before its embedded panel mounts.
+    // The shell's bottom-only panel must not claim it in that gap; the next
+    // host binding drains it from the canonical document queue.
+    if (options.deferUntilHostChange) {
+      return;
     }
     this.armRefreshTimer();
     const host = this.host;

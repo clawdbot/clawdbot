@@ -14,6 +14,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
+import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -914,17 +915,17 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     });
   });
 
-  it("leaves panel toggle events to the active chat pane on session routes", () => {
+  it("buffers panel toggle events until the active chat pane mounts", () => {
     const terminalElement = createLazyElementSpec("session terminal panel");
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
     shell.terminalPanelElement = terminalElement;
     shell.routeState = { routeId: "chat" };
 
-    shell.handleDeferredTerminalToggle(
-      new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
-    );
+    const event = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, { detail: { open: true } });
+    shell.handleDeferredTerminalToggle(event);
 
     expect(customElements.get(terminalElement.tagName)).toBeUndefined();
+    expect(takeSessionPanelToggle("terminal")).toBe(event);
   });
 
   it("opens approvals after the modal module loads on demand", async () => {

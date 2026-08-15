@@ -58,7 +58,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     isAvailable: () => this.available,
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
-  private embeddedRefreshScheduled = false;
+  private embeddedRefreshTimer: number | null = null;
   private readonly viewportResizeObserver = new ResizeObserver((entries) => {
     const entry = entries[0];
     if (entry) {
@@ -86,6 +86,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   override disconnectedCallback(): void {
+    this.clearEmbeddedRefresh();
     super.disconnectedCallback();
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     this.viewportResizeObserver.disconnect();
@@ -140,16 +141,23 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   private scheduleEmbeddedRefresh(): void {
-    if (this.embeddedRefreshScheduled) {
+    if (this.embeddedRefreshTimer !== null) {
       return;
     }
-    this.embeddedRefreshScheduled = true;
-    queueMicrotask(() => {
-      this.embeddedRefreshScheduled = false;
+    this.embeddedRefreshTimer = window.setTimeout(() => {
+      this.embeddedRefreshTimer = null;
       if (this.isConnected && this.embedded && this.available) {
         void this.browserPanelController.refreshAll();
       }
-    });
+    }, 0);
+  }
+
+  private clearEmbeddedRefresh(): void {
+    if (this.embeddedRefreshTimer === null) {
+      return;
+    }
+    window.clearTimeout(this.embeddedRefreshTimer);
+    this.embeddedRefreshTimer = null;
   }
 
   toggle(): void {
@@ -165,10 +173,26 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   handleToggleRequest(event: Event): void {
+    this.clearEmbeddedRefresh();
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
         ? (event.detail as BrowserPanelToggleDetail)
         : null;
+    if (this.embedded) {
+      if (detail?.open === false || !this.available) {
+        return;
+      }
+      const normalizedRequestedUrl =
+        typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
+      if (normalizedRequestedUrl) {
+        void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
+      } else if (detail?.newTab === true) {
+        this.browserPanelController.beginNewTab();
+      } else {
+        void this.browserPanelController.refreshAll();
+      }
+      return;
+    }
     if (detail?.dock === "right" || detail?.dock === "bottom") {
       this.dockLayout.setDock(detail.dock, false);
     }

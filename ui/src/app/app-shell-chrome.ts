@@ -17,6 +17,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
 } from "../components/panel-toggle-contract.ts";
+import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
@@ -94,6 +95,14 @@ export interface ShellChromeHost extends HTMLElement {
 
 export class ShellChromeOwner {
   constructor(private readonly host: ShellChromeHost) {}
+
+  private isSessionRoute(): boolean {
+    const locationRouteId = routeIdFromPath(
+      globalThis.location?.pathname ?? "",
+      this.host.context?.basePath ?? "",
+    );
+    return isSessionRouteId(locationRouteId ?? this.host.routeState.routeId);
+  }
 
   connect(): void {
     const host = this.host;
@@ -475,10 +484,11 @@ export class ShellChromeOwner {
 
   readonly handleDeferredTerminalToggle = (event: Event): void => {
     const host = this.host;
-    if (
-      isSessionRouteId(host.routeState.routeId) ||
-      isOptionalElementDefined(host.terminalPanelElement)
-    ) {
+    if (this.isSessionRoute()) {
+      rememberSessionPanelToggle("terminal", event);
+      return;
+    }
+    if (isOptionalElementDefined(host.terminalPanelElement)) {
       return;
     }
     const context = host.context;
@@ -494,10 +504,11 @@ export class ShellChromeOwner {
 
   readonly handleDeferredBrowserToggle = (event: Event): void => {
     const host = this.host;
-    if (
-      isSessionRouteId(host.routeState.routeId) ||
-      isOptionalElementDefined(host.browserPanelElement)
-    ) {
+    if (this.isSessionRoute()) {
+      rememberSessionPanelToggle("browser", event);
+      return;
+    }
+    if (isOptionalElementDefined(host.browserPanelElement)) {
       return;
     }
     const snapshot = host.context?.gateway?.snapshot;
@@ -508,7 +519,8 @@ export class ShellChromeOwner {
 
   readonly handleDeferredDesktopToggle = (event: Event): void => {
     const host = this.host;
-    if (isSessionRouteId(host.routeState.routeId)) {
+    if (this.isSessionRoute()) {
+      rememberSessionPanelToggle("desktop", event);
       return;
     }
     const context = host.context;

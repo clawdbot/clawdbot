@@ -89,6 +89,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private launchOperationId = 0;
   private controlTakeoverRecoveryUsed = false;
   private documentSourceResolved = false;
+  private embeddedRefreshTimer: number | null = null;
   private readonly mobileKeyboard = new DesktopMobileKeyboard({
     connection: () => this.connection,
     controlling: () => this.controlling,
@@ -121,12 +122,13 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.dockLayout.setSuppressed(this.suppressed);
     if (this.documentMode && this.available) {
       void this.refreshEnvironments();
-    } else if (this.embedded || this.dockLayout.open) {
+    } else if (this.dockLayout.open) {
       void this.refreshEnvironments();
     }
   }
 
   override disconnectedCallback(): void {
+    this.clearEmbeddedRefresh();
     window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     this.disconnectConnection();
     this.credentials = undefined;
@@ -167,9 +169,10 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       }
     } else if (this.embedded && gatewayAvailabilityChanged) {
       if (!this.available) {
+        this.clearEmbeddedRefresh();
         this.returnToPicker();
       } else {
-        void this.refreshEnvironments();
+        this.scheduleEmbeddedRefresh();
       }
     } else if (gatewayAvailabilityChanged) {
       if (!this.available && this.dockLayout.open) {
@@ -183,6 +186,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   handleToggleRequest(event: Event): void {
+    this.clearEmbeddedRefresh();
     if (this.documentMode) {
       return;
     }
@@ -190,6 +194,21 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
         ? (event.detail as DesktopPanelToggleDetail)
         : null;
+    if (this.embedded) {
+      if (detail?.open === false) {
+        this.returnToPicker();
+        return;
+      }
+      if (!this.available) {
+        return;
+      }
+      if (detail?.environmentId) {
+        void this.connectRequestedEnvironment(detail.environmentId);
+      } else {
+        void this.refreshEnvironments();
+      }
+      return;
+    }
     if (detail?.dock === "right" || detail?.dock === "bottom") {
       this.dockLayout.setDock(detail.dock, false);
     }
@@ -209,6 +228,26 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     } else if (detail?.open !== true) {
       this.closePanel();
     }
+  }
+
+  private scheduleEmbeddedRefresh(): void {
+    if (this.embeddedRefreshTimer !== null) {
+      return;
+    }
+    this.embeddedRefreshTimer = window.setTimeout(() => {
+      this.embeddedRefreshTimer = null;
+      if (this.isConnected && this.embedded && this.available) {
+        void this.refreshEnvironments();
+      }
+    }, 0);
+  }
+
+  private clearEmbeddedRefresh(): void {
+    if (this.embeddedRefreshTimer === null) {
+      return;
+    }
+    window.clearTimeout(this.embeddedRefreshTimer);
+    this.embeddedRefreshTimer = null;
   }
 
   private closePanel(): void {

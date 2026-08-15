@@ -29,15 +29,13 @@ export const terminalPanelStyles = css`
     width: 100%;
     height: 100%;
   }
-  /* The whole row shares one axis: every level of the strip stretches to the
-     rail height so a tab's underline lands on the rail's bottom edge, which puts
-     its centred content on the same line as the management icons. */
+  /* The strip and its tabs stretch to the rail height so a tab's underline lands
+     on the rail's bottom edge. Management actions keep their shared 28px size. */
   .tp-header .tabstrip,
   .tp-header .tabstrip::part(base),
   .tp-header .tabstrip::part(nav),
   .tp-header .tabstrip::part(tabs),
   .tp-header .tabstrip-tab,
-  .tp-header .tabstrip-tab__close,
   .tp-header .tabstrip-new {
     height: 100%;
     align-self: stretch;
