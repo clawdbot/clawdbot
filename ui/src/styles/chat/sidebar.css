@@ -307,6 +307,14 @@ openclaw-chat-sidebar-region,
   transform: translateY(-50%);
 }
 
+.side-panel__header .tabstrip-tab[active]::before,
+.side-panel__header
+  .tabstrip-tab[active]
+  + .tabstrip-tab__close
+  + .tabstrip-tab::before {
+  opacity: 0;
+}
+
 .side-panel__header .tabstrip-tab::part(base) {
   display: flex;
   width: 100%;
