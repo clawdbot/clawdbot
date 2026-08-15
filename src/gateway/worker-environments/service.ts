@@ -20,6 +20,7 @@ import type {
 } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type { WorkerConnectionIdentity } from "./admission.js";
+import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
 import { createWorkerEnvironmentAccess } from "./environment-access.js";
@@ -198,13 +199,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     );
   };
 
-  const callBootstrap = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+  const callBootstrap = async <T>(
+    installation: WorkerInstallationArtifact,
+    run: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
     const controller = new AbortController();
     const operation = Promise.resolve().then(() => run(controller.signal));
     try {
       return await withTimeout(
         operation,
-        options.bootstrapCallTimeoutMs ?? 35 * 60_000,
+        options.bootstrapCallTimeoutMs ?? workerBootstrapOperationTimeoutMs(installation),
         "Worker bootstrap operation",
       );
     } catch (error) {
