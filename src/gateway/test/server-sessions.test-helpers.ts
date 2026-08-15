@@ -316,11 +316,13 @@ export function setupGatewaySessionsTestHarness() {
 function createGatewaySessionsTestHarness(startServer: boolean) {
   installGatewayTestHooks({ scope: "suite" });
 
+  const defaultAgentWorkspace = path.join(os.tmpdir(), "openclaw-gateway-test");
   let harness: GatewayServerHarness | undefined;
   let sharedSessionStoreDir: string | undefined;
   let sessionStoreCaseSeq = 0;
 
   beforeAll(async () => {
+    await fs.mkdir(defaultAgentWorkspace, { recursive: true });
     if (startServer) {
       const { startGatewayServerHarness } = await getGatewayServerHarnessModule();
       harness = await startGatewayServerHarness();
@@ -535,6 +537,7 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     createConfiguredGlobalAgentSessionStore,
     createSessionStoreDir,
     createSelectedGlobalSessionStore,
+    defaultAgentWorkspace,
     getHarness: requireHarness,
     openClient,
     resetConfiguredGlobalAgentSessionStore,
