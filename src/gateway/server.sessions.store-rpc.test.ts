@@ -23,6 +23,8 @@ import {
 const { createSessionStoreDir, defaultAgentWorkspace, openClient } =
   setupGatewaySessionsTestHarness();
 
+type SessionPatchResponse = { ok: true; key: string; entry: Record<string, unknown> };
+
 async function seedLinearTranscript(params: {
   contents: string[];
   sessionId: string;
@@ -59,39 +61,14 @@ async function loadTranscriptRows(params: {
   });
 }
 
-test("sessions.patch sets, clears, and validates the persistent emoji icon", async () => {
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
-  });
-
-  const patched = await directSessionHandlerReq<{
-    entry: Record<string, unknown>;
-  }>("sessions.patch", {
-    key: "agent:main:main",
-    icon: "🦞",
-  });
-
-  expect(patched.ok).toBe(true);
-  expect(patched.payload?.entry.icon).toBe("🦞");
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.icon).toBe("🦞");
-
-  const cleared = await directSessionHandlerReq<{ entry: Record<string, unknown> }>(
-    "sessions.patch",
-    { key: "agent:main:main", icon: "" },
-  );
-  expect(cleared.ok).toBe(true);
-  expect(cleared.payload?.entry).not.toHaveProperty("icon");
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty("icon");
-
+test("sessions.patch validates persistent emoji icons", async () => {
   const invalid = await directSessionHandlerReq("sessions.patch", {
     key: "agent:main:main",
     icon: "hand",
   });
-  expect(invalid.ok).toBe(false);
-  expect(invalid.error).toMatchObject({
-    code: "INVALID_REQUEST",
-    message: "icon must be a single emoji",
+  expect(invalid).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "icon must be a single emoji" },
   });
 });
 
@@ -327,14 +304,17 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(limited.payload?.sessions).toHaveLength(1);
   expect(limited.payload?.sessions[0]?.key).toBe("global");
 
-  const patched = await directSessionReq<{ ok: true; key: string }>("sessions.patch", {
+  const patched = await directSessionReq<SessionPatchResponse>("sessions.patch", {
     key: "agent:main:main",
     thinkingLevel: "medium",
     verboseLevel: "off",
+    icon: "🦞",
   });
   expect(patched.ok).toBe(true);
   expect(patched.payload?.ok).toBe(true);
   expect(patched.payload?.key).toBe("agent:main:main");
+  expect(patched.payload?.entry.icon).toBe("🦞");
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.icon).toBe("🦞");
 
   const sendPolicyPatched = await directSessionReq<{
     ok: true;
@@ -480,11 +460,14 @@ test("lists and patches session store via sessions.* RPC", async () => {
     isBackground: true,
   });
 
-  const clearedVerbose = await directSessionReq<{ ok: true; key: string }>("sessions.patch", {
+  const clearedVerbose = await directSessionReq<SessionPatchResponse>("sessions.patch", {
     key: "agent:main:main",
     verboseLevel: null,
+    icon: "",
   });
   expect(clearedVerbose.ok).toBe(true);
+  expect(clearedVerbose.payload?.entry).not.toHaveProperty("icon");
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty("icon");
 
   const list3 = await directSessionReq<{
     sessions: Array<{
