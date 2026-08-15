@@ -289,7 +289,30 @@ describe("handleWorkspaceIconHttpRequest", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("keeps a request made before chat startup retryable", async () => {
+  it("serves a request that arrives before chat startup publishes its snapshot", async () => {
+    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+
+    // The icon GET and chat.startup travel on different transports, so the
+    // request can land while nothing has been prepared for the session yet.
+    const responsePromise = fetch(iconRoute("agent:main:racing"));
+    const settled = vi.fn();
+    void responsePromise.then(settled);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(settled).not.toHaveBeenCalled();
+    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
+
+    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:racing" });
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
+    // One request, one answer: the client never had to poll for readiness.
+    expect(mocks.authorize).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a session no chat startup is preparing retryable", async () => {
     const response = await fetch(iconRoute("agent:main:one"));
     expect(response.status).toBe(503);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -351,6 +374,8 @@ describe("handleWorkspaceIconHttpRequest", () => {
     await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:newest" });
 
     expect((await fetch(iconRoute("agent:main:kept"))).status).toBe(200);
+    // Eviction is terminal until a new chat.startup republishes the session,
+    // so the evicted key answers only once the publish deadline passes.
     expect((await fetch(iconRoute("agent:main:filler-0"))).status).toBe(503);
   });
 
