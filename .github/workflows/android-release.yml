@@ -106,12 +106,12 @@ jobs:
             exit 1
           fi
 
-    - name: Upload Signed Android APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: OpenClaw-Android-Release
-        path: dist/
-        retention-days: 14
+      - name: Upload Signed Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClaw-Android-Release
+          path: dist/
+          retention-days: 14
 
       - name: Remove materialized signing files
         if: ${{ always() }}
