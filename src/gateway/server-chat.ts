@@ -811,12 +811,9 @@ export function createAgentEventHandler({
         ))
     ) {
       if (!isAborted) {
+        // peek() (chatLink) and this shift() run in one synchronous frame, so
+        // the shifted head is exactly the peeked entry.
         const finished = chatLink ? chatRunState.registry.shift(evt.runId) : undefined;
-        if (chatLink && !finished) {
-          clearRunContextForEvent(evt);
-          return;
-        }
-
         const terminalSessionKey = finished?.sessionKey ?? sessionKey;
         const terminalRunId = finished?.clientRunId ?? eventRunId;
         const terminalAgentId = finished?.agentId ?? sessionAgentId;

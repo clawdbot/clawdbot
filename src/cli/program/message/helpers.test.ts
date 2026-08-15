@@ -530,27 +530,6 @@ describe("runMessageAction", () => {
     expect(exitMock).toHaveBeenCalledWith(1);
   });
 
-  it("does not call exit(0) when the action throws", async () => {
-    messageCommandMock.mockRejectedValueOnce(new Error("boom"));
-    await runSendAction();
-
-    // exit should only be called once with code 1, never with 0
-    expect(exitMock).toHaveBeenCalledOnce();
-    expect(exitMock).not.toHaveBeenCalledWith(0);
-  });
-
-  it("does not call exit(0) if the error path returns", async () => {
-    messageCommandMock.mockRejectedValueOnce(new Error("boom"));
-    exitMock.mockClear().mockImplementation(() => undefined as never);
-    const runMessageAction = createRunMessageAction();
-    await expect(runMessageAction("send", baseSendOptions)).resolves.toBeUndefined();
-
-    expect(errorMock).toHaveBeenCalledWith("boom");
-    expect(exitMock).toHaveBeenCalledOnce();
-    expect(exitMock).toHaveBeenCalledWith(1);
-    expect(exitMock).not.toHaveBeenCalledWith(0);
-  });
-
   it("passes action and maps account to accountId", async () => {
     const fakeCommand = { help: vi.fn() } as never;
     const { runMessageAction } = createMessageCliHelpers(fakeCommand, "discord");

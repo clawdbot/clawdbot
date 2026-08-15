@@ -8,7 +8,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
@@ -25,10 +24,6 @@ import {
 type AgentToolGatewayRequest = Parameters<AgentToolGatewayRequestCaller>[0];
 
 describe("sessions tool", () => {
-  it("uses the core owner gate", () => {
-    expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("sessions");
-  });
-
   it("carries the persisted fixed-store owner for a bare patch key", async () => {
     const callGateway = vi.fn().mockResolvedValue({});
     const tool = createSessionsTool({

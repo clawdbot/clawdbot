@@ -1068,6 +1068,52 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("keeps older SQLite history reachable past an all-silent bounded tail", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-silent-tail";
+    const sessionKey = "agent:main:main";
+    await writeSessionStore({
+      entries: { main: { sessionId, updatedAt: Date.now() } },
+      storePath,
+    });
+    await replaceTranscriptEvents({ agentId: AGENT_ID, sessionId, sessionKey, storePath }, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "assistant", content: "reachable older history" } },
+      ...Array.from({ length: 40 }, () => ({
+        message: { role: "assistant", content: "NO_REPLY" },
+      })),
+    ]);
+
+    await withGatewayHarness(async (harness) => {
+      const firstPage = await readSessionHistoryBody(harness.port, sessionKey, {
+        query: "?limit=1",
+      });
+      expect(firstPage.messages).toEqual([]);
+      expect(firstPage.hasMore).toBe(true);
+      expect(firstPage.nextCursor).toBe("2");
+
+      const stream = await openSessionHistorySse(harness.port, sessionKey, {
+        query: "?limit=1",
+      });
+      try {
+        const event = await readSseEvent(stream.reader, stream.streamState);
+        expect(event.event).toBe("history");
+        expect(event.data).toMatchObject({ messages: [], hasMore: true, nextCursor: "2" });
+      } finally {
+        await stream.reader.cancel();
+      }
+
+      const olderPage = await readSessionHistoryBody(harness.port, sessionKey, {
+        query: "?limit=1&cursor=2",
+      });
+      expect(olderPage.messages?.map((message) => message.content)).toEqual([
+        "reachable older history",
+      ]);
+      expect(olderPage.hasMore).toBe(false);
+      expect(olderPage.nextCursor).toBeUndefined();
+    });
+  });
+
   test("caps all-digit direct REST history limits that exceed safe integer range", async () => {
     const { storePath } = await seedSession({ text: "first message" });
     await appendVisibleAssistantMessage({

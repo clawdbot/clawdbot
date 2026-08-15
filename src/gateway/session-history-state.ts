@@ -169,20 +169,19 @@ export function buildSessionHistorySnapshot(params: {
     resolveCurrentUserProfileDisplay,
   });
   const visibleMessages = toSessionHistoryMessages(projected.messages);
+  const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
   const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
   if (
     !params.cursor &&
     typeof params.totalRawMessages === "number" &&
-    params.totalRawMessages > params.rawMessages.length &&
-    history.messages.length > 0
+    params.totalRawMessages > params.rawMessages.length
   ) {
-    const firstSeq = resolveMessageSeq(history.messages[0]);
+    const firstSeq = resolveMessageSeq(history.messages[0] ?? rawHistoryMessages[0]);
     history.hasMore = true;
     if (typeof firstSeq === "number") {
       history.nextCursor = String(firstSeq);
     }
   }
-  const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
   return {
     history,
     rawTranscriptSeq:
