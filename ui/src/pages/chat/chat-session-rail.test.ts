@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -11,7 +10,6 @@ import {
   requestSessionCompanionState,
   resetSessionCompanion,
 } from "./chat-session-companion.ts";
-import { renderSessionRailToggle } from "./components/chat-session-rail-toggle.ts";
 import {
   ChatSessionRailElement,
   ChatSessionRailState,
@@ -697,20 +695,6 @@ describe("ChatSessionRailElement", () => {
     });
     expect(withoutDigest.querySelector(".chat-session-rail--expanded")).not.toBeNull();
     expect(withoutDigest.querySelector(".chat-session-rail__digest")).toBeNull();
-  });
-
-  it("reports the open panel to assistive technology", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    render(renderSessionRailToggle({ mode: "expanded", onToggle: () => {} }), host);
-    expect(host.querySelector(".chat-session-rail-toggle")?.getAttribute("aria-expanded")).toBe(
-      "true",
-    );
-
-    render(renderSessionRailToggle({ mode: "pill", onToggle: () => {} }), host);
-    expect(host.querySelector(".chat-session-rail-toggle")?.getAttribute("aria-expanded")).toBe(
-      "false",
-    );
   });
 
   it("auto-opens from pill without persisting card, then collapses persistently", async () => {

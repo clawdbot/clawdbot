@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import "./tooltip.ts";
 
-export type DockDestinationOption<Dock extends string> = {
+type DockDestinationOption<Dock extends string> = {
   dock: Dock;
   label: string;
   icon: TemplateResult;

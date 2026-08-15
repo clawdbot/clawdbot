@@ -2,7 +2,7 @@ import { css, html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
-export class OpenClawPanelEmptyState extends OpenClawLitElement {
+class OpenClawPanelEmptyState extends OpenClawLitElement {
   @property() heading = "";
   @property() description = "";
 

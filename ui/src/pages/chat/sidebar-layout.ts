@@ -210,14 +210,4 @@ export function isSidebarRegionCollapsed(_layout: SidebarLayout, availableWidth:
   return availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX;
 }
 
-export function sidebarPrimaryWidth(layout: SidebarLayout, availableWidth: number): number {
-  const sidePanelOpen = layout.open === true && sidebarDock(layout) === "right";
-  const sidebarWidth = sidePanelOpen ? (layout.columns[0]?.width ?? 0) : 0;
-  const dividerCount = sidePanelOpen && layout.columns.length > 0 ? 1 : 0;
-  return Math.max(
-    SIDEBAR_MAIN_MIN_WIDTH_PX,
-    availableWidth - sidebarWidth - dividerCount * SIDEBAR_DIVIDER_WIDTH_PX,
-  );
-}
-
 export { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";

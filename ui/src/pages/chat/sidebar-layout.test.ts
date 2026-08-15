@@ -11,7 +11,6 @@ import {
   setSidebarDock,
   setSidebarExpanded,
   setSidebarOpen,
-  sidebarPrimaryWidth,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
 
@@ -105,14 +104,7 @@ describe("sidebar layout", () => {
     expect(resized.dock).toBe("bottom");
     expect(resized.columns[0]?.height).toBe(480);
     expect(resized.columns[0]?.width).toBe(360);
-    expect(sidebarPrimaryWidth(resized, 1_000)).toBe(1_000);
     expect(fitSidebarLayout(resized, 560)).toEqual(resized);
-  });
-
-  it("only subtracts the panel width while the panel is open", () => {
-    const layout = openAll();
-    expect(sidebarPrimaryWidth(layout, 1_000)).toBe(636);
-    expect(sidebarPrimaryWidth(setSidebarOpen(layout, false), 1_000)).toBe(1_000);
   });
 
   it("flattens legacy multi-column layouts in stable order", () => {
