@@ -170,9 +170,9 @@ prepare() {
   codesign --verify --deep --strict "$app_path" >/dev/null 2>&1 ||
     fail "app is not a valid signed bundle: $app_path"
 
-  git -C "$repo_root" diff --quiet -- src packages extensions scripts/run-node.mjs scripts/run-node.mts ||
+  git -C "$repo_root" diff --quiet -- src packages extensions scripts ||
     fail "runtime sources are dirty; commit and rebuild before launching the node worker"
-  git -C "$repo_root" diff --cached --quiet -- src packages extensions scripts/run-node.mjs scripts/run-node.mts ||
+  git -C "$repo_root" diff --cached --quiet -- src packages extensions scripts ||
     fail "runtime sources are staged but uncommitted; commit and rebuild first"
 
   local app_state="$HOME/.openclaw-$profile"
@@ -257,9 +257,9 @@ prepare_linux() {
   [[ "$scratch" = /* ]] || fail "scratch path must be absolute"
   require_unoccupied_port "$port"
 
-  git -C "$repo_root" diff --quiet -- src packages extensions scripts/run-node.mjs scripts/run-node.mts ||
+  git -C "$repo_root" diff --quiet -- src packages extensions scripts ||
     fail "runtime sources are dirty; commit and rebuild before launching the node worker"
-  git -C "$repo_root" diff --cached --quiet -- src packages extensions scripts/run-node.mjs scripts/run-node.mts ||
+  git -C "$repo_root" diff --cached --quiet -- src packages extensions scripts ||
     fail "runtime sources are staged but uncommitted; commit and rebuild first"
 
   [[ ! -e "$scratch/rig.json" ]] || fail "$scratch already contains a rig"
