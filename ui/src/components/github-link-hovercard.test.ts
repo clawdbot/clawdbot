@@ -102,6 +102,11 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(card?.textContent).toContain("5m ago");
     expect(anchor.href).toBe(href);
     expect(anchor.getAttribute("aria-describedby")).toBe(card?.id);
+    const titleLink = card?.querySelector<HTMLAnchorElement>(".github-link-hovercard__title");
+    expect(titleLink?.tagName).toBe("A");
+    expect(titleLink?.getAttribute("href")).toBe(href);
+    expect(titleLink?.target).toBe("_blank");
+    expect(titleLink?.rel.split(/\s+/)).toEqual(expect.arrayContaining(["noopener", "noreferrer"]));
     expect(request).toHaveBeenCalledWith(
       "controlUi.githubPreview",
       {
@@ -158,6 +163,49 @@ describe("openclaw-github-link-hovercard-provider", () => {
     await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
     expect(hovercard()).toBeNull();
     expect(anchor.hasAttribute("aria-describedby")).toBe(false);
+  });
+
+  it("closes on pointer-out even after the title link inside the card was clicked", async () => {
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/issues/99815",
+      "#99815",
+    );
+    provider.client = {
+      request: vi.fn().mockResolvedValue({
+        comments: 2,
+        createdAt: "2026-07-05T08:00:00Z",
+        kind: "issue",
+        login: "octocat",
+        number: 99815,
+        owner: "openclaw",
+        repo: "openclaw",
+        state: "open",
+        title: "Keep hover previews reachable",
+        updatedAt: "2026-07-05T09:55:00Z",
+      }),
+    } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+    const card = hovercard();
+    expect(card).not.toBeNull();
+
+    // Pointer travels from the link onto the card, same as the traversal test above.
+    leave(anchor, card as EventTarget);
+    card?.dispatchEvent(new MouseEvent("pointerenter"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hovercard()).toBe(card);
+
+    // Clicking the title link focuses it (a click's real-world side effect); a
+    // pointer-initiated open must still release once the pointer leaves, with no
+    // click-outside required to dismiss the card.
+    const titleLink = card?.querySelector<HTMLAnchorElement>(".github-link-hovercard__title");
+    titleLink?.addEventListener("click", (event) => event.preventDefault());
+    titleLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+    titleLink?.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+
+    card?.dispatchEvent(new MouseEvent("pointerleave"));
+    await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+    expect(hovercard()).toBeNull();
   });
 
   it("renders issue comments and supports focus plus Escape", async () => {

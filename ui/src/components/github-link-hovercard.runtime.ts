@@ -6,6 +6,7 @@ import { ReactiveElement } from "lit";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import {
   GITHUB_HOVERCARD_OPEN_DELAY_MS,
@@ -173,8 +174,13 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
     formatRelativeTimestamp(Date.parse(preview.updatedAt)),
   );
 
-  const title = document.createElement("div");
+  const title = document.createElement("a");
   title.className = "github-link-hovercard__title";
+  // Reuse the href the card was activated with; the target is already
+  // resolved and validated by parseGitHubLinkTarget, so no new parsing here.
+  title.href = preview.href;
+  title.target = EXTERNAL_LINK_TARGET;
+  title.rel = buildExternalLinkRel();
   title.textContent = preview.title;
 
   const footer = document.createElement("div");
@@ -237,7 +243,12 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   private readonly cache = new Map<string, CacheEntry>();
   private activeAnchor: HTMLAnchorElement | null = null;
   private activeTarget: GitHubLinkTarget | null = null;
+  // Which surface opened the current card: gates whether focus landing inside
+  // the portaled card (e.g. clicking the title link) can hold it open, so a
+  // pointer-driven open still fully releases on mouse-out (see handleCardPointerLeave).
+  private activeTrigger: "focus" | "pointer" | null = null;
   private card: HTMLDivElement | null = null;
+  private cardFocusInside = false;
   private closeTimer: number | null = null;
   private describedBy: string | null = null;
   private focusInside = false;
@@ -355,6 +366,28 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
 
   private readonly handleCardPointerLeave = () => {
     this.pointerOverCard = false;
+    // A pointer-opened card must release fully on mouse-out even if a click
+    // inside the card (e.g. the title link) left it focused; otherwise it
+    // would stay stuck open with nothing left driving the intent.
+    if (this.activeTrigger === "pointer") {
+      this.cardFocusInside = false;
+    }
+    this.scheduleClose();
+  };
+
+  // The card is portaled to document.body, so focus landing on its title link
+  // never reaches the provider's delegated focusin/focusout listeners; track it
+  // directly so keyboard users can tab into the link without losing the card.
+  private readonly handleCardFocusIn = () => {
+    this.cardFocusInside = true;
+    this.clearCloseTimer();
+  };
+
+  private readonly handleCardFocusOut = (event: FocusEvent) => {
+    if (event.relatedTarget instanceof Node && this.card?.contains(event.relatedTarget)) {
+      return;
+    }
+    this.cardFocusInside = false;
     this.scheduleClose();
   };
 
@@ -408,7 +441,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   }
 
   private get hoverIntentHeld(): boolean {
-    return this.pointerInside || this.pointerOverCard || this.focusInside;
+    return this.pointerInside || this.pointerOverCard || this.focusInside || this.cardFocusInside;
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent) => {
@@ -428,6 +461,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     delay: number,
   ): void {
     this.activate(anchor, target, delay);
+    this.activeTrigger = trigger;
     if (trigger === "pointer") {
       this.pointerInside = true;
     } else {
@@ -468,6 +502,8 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     // listeners never see it; it reports its own hover to keep intent shared.
     card.addEventListener("pointerenter", this.handleCardPointerEnter);
     card.addEventListener("pointerleave", this.handleCardPointerLeave);
+    card.addEventListener("focusin", this.handleCardFocusIn);
+    card.addEventListener("focusout", this.handleCardFocusOut);
     document.body.append(card);
     this.card = card;
     anchor.setAttribute(
@@ -551,7 +587,9 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.renderedUnavailable = false;
     this.activeAnchor = null;
     this.activeTarget = null;
+    this.activeTrigger = null;
     this.describedBy = null;
+    this.cardFocusInside = false;
     this.focusInside = false;
     this.pointerInside = false;
     this.pointerOverCard = false;

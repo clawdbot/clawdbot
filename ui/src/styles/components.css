@@ -833,6 +833,7 @@ openclaw-github-link-hovercard-provider {
 }
 
 .github-link-hovercard__title {
+  display: block;
   margin: 15px 0 17px;
   color: var(--text-strong);
   font-size: var(--control-ui-text-lg);
@@ -840,6 +841,11 @@ openclaw-github-link-hovercard-provider {
   letter-spacing: -0.012em;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.github-link-hovercard__title:hover {
+  text-decoration: underline;
 }
 
 .github-link-hovercard__footer {
