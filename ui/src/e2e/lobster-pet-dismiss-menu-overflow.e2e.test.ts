@@ -82,7 +82,25 @@ async function measureDismissMenu(currentPage: Page) {
     const menuRect = menu.getBoundingClientRect();
     const host = document.querySelector<HTMLElement>("openclaw-lobster-pet");
     const hostStyle = host ? getComputedStyle(host) : null;
+    const firstItem = dropdown.querySelector("wa-dropdown-item");
+    const firstItemLabel = firstItem?.shadowRoot?.querySelector<HTMLElement>("#label") ?? null;
     return {
+      // The item's rendered label size comes from the app's own
+      // .session-menu__item light-DOM class (ui/src/styles/layout.css),
+      // which sets an explicit font-size from --control-ui-text-scale —
+      // not from wa-dropdown-item's shadow styles. Captured here so tests
+      // can prove the text-scale token actually reached the label instead
+      // of trusting an unrelated Web Awesome token override.
+      firstItemFontSizePx: firstItem
+        ? Number.parseFloat(getComputedStyle(firstItem).fontSize)
+        : null,
+      // The label's own unclamped box height: .session-menu__item's
+      // min-height design floor (28px, ui/src/styles/base.css) keeps a
+      // single short line and a single modestly-scaled line at the same
+      // 28px row height, so the row height alone can't tell a real
+      // font-size increase from a no-op. The label's own height isn't
+      // floor-clamped and grows with font-size regardless.
+      firstItemLabelHeightPx: firstItemLabel?.getBoundingClientRect().height ?? null,
       scrollHeight: menu.scrollHeight,
       clientHeight: menu.clientHeight,
       offsetHeight: menu.offsetHeight,
@@ -113,15 +131,26 @@ async function measureDismissMenu(currentPage: Page) {
   });
 }
 
-/** Rewrites the two dismissal items to long, wide labels and scales up the
- *  font/line-height tokens they read from. Stands in for a locale whose
- *  strings and type-scale are both larger than the pinned English default,
- *  without depending on the app's network-loaded locale chunks. */
+// The largest text-scale stop a user can actually pick from Appearance
+// settings (TEXT_SCALE_STOPS in ui/src/app/settings.ts), applied the same
+// way ui/src/app/bootstrap.ts:79 applies it at runtime.
+const ENLARGED_TEXT_SCALE = "1.4";
+
+/** Rewrites the two dismissal items to long, wide labels and applies the
+ *  real "enlarged type scale" setting. The dismiss menu's items render
+ *  through the app's own `.session-menu__item` light-DOM class
+ *  (ui/src/styles/layout.css), which sets an explicit
+ *  `font-size: calc(13px * var(--control-ui-text-scale))` — that wins over
+ *  wa-dropdown-item's inherited shadow-DOM styles, which never set
+ *  font-size themselves (confirmed in the installed Web Awesome 3.10.0
+ *  dropdown-item styles). So --control-ui-text-scale, not any
+ *  --wa-font-size-* token, is the lever that actually changes what the
+ *  operator sees. Stands in for a locale whose strings and type-scale are
+ *  both larger than the pinned English default, without depending on the
+ *  app's network-loaded locale chunks. */
 async function useOversizedDismissLabels(currentPage: Page) {
-  await currentPage.addStyleTag({
-    content: `:root { --wa-font-size-smaller: 22px; --wa-line-height-condensed: 2.4; }`,
-  });
-  await currentPage.evaluate(() => {
+  await currentPage.evaluate((scale) => {
+    document.documentElement.style.setProperty("--control-ui-text-scale", scale);
     const labels = [
       "Postpone this lobster visit notice until the next scheduled maintenance window",
       "Permanently suppress every future lobster visit notice across all workspaces",
@@ -131,7 +160,7 @@ async function useOversizedDismissLabels(currentPage: Page) {
       .forEach((item, index) => {
         item.textContent = labels[index] ?? item.textContent;
       });
-  });
+  }, ENLARGED_TEXT_SCALE);
 }
 
 suite.define(() => {
@@ -188,6 +217,9 @@ suite.define(() => {
 
     await sprite.click({ button: "right" });
     await page.locator("wa-dropdown.lobster-pet-dismiss-menu").waitFor();
+    await page.getByText("Dismiss and don't show again", { exact: true }).waitFor();
+    const baseline = await measureDismissMenu(page);
+
     await useOversizedDismissLabels(page);
 
     // Web Awesome's popup tracks anchor/floating element size with a
@@ -202,12 +234,17 @@ suite.define(() => {
     const measurement = await measureDismissMenu(page);
     await page.screenshot({ path: path.join(artifactDir, "long-labels-enlarged-scale.png") });
 
-    // Guards against the style/text injection silently no-opping: the
-    // enlarged content must actually be taller than the old guessed 80px
-    // pre-clamp, or this test would pass without exercising the fix.
-    for (const itemHeight of measurement.itemHeights) {
-      expect(itemHeight).toBeGreaterThan(40);
-    }
+    // Guards against --control-ui-text-scale/the label injection silently
+    // no-opping: the rendered label font-size and its unclamped box height
+    // must both actually grow, or this test would pass without exercising
+    // the real type-scale token (the row's own height can't tell a real
+    // increase from a no-op — see firstItemLabelHeightPx above).
+    expect(measurement.firstItemFontSizePx).not.toBeNull();
+    expect(measurement.firstItemFontSizePx).toBeGreaterThan(baseline.firstItemFontSizePx ?? 0);
+    expect(measurement.firstItemLabelHeightPx).not.toBeNull();
+    expect(measurement.firstItemLabelHeightPx).toBeGreaterThan(
+      baseline.firstItemLabelHeightPx ?? 0,
+    );
   });
 
   it("keeps the popup within the viewport at a compact footer-edge viewport height", async () => {
