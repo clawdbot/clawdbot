@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -17,6 +18,7 @@ import { getStatusSummary } from "./summary.js";
 
 describe("getStatusSummary read-only session access", () => {
   const previousRegistry = getActivePluginRegistry();
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
     const telegram = createOutboundTestPlugin({
@@ -92,9 +94,7 @@ describe("getStatusSummary read-only session access", () => {
   );
 
   it("reports and aggregates fixed logical stores by their physical SQLite targets", async () => {
-    const tempDir = fs.realpathSync(
-      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-session-stores-")),
-    );
+    const tempDir = tempDirs.make("openclaw-status-session-stores-");
     const storePath = path.join(tempDir, "sessions.json");
     const config = {
       agents: {
@@ -131,7 +131,6 @@ describe("getStatusSummary read-only session access", () => {
     } finally {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 });
