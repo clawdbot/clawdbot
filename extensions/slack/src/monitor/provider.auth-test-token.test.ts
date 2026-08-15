@@ -6,6 +6,7 @@ import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-run
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertSlackDetachedTargetAllowed } from "../detached-target-admission.js";
+import { SLACK_HOST_BRIDGE_SENTINEL_TOKEN } from "../host-bridge.js";
 import { getSlackInstallationKind } from "../installation-identity-state.js";
 import {
   disposeSlackTestRuntime,
@@ -680,6 +681,84 @@ describe("user identity provider transport", () => {
     expect(getSlackTestState().createSlackStartupAuthClientMock).toHaveBeenCalledWith(
       "test-user-token",
       expect.any(Object),
+    );
+
+    await stopSlackMonitor(monitor);
+  });
+
+  it("starts HTTP host bridge transport without Slack credentials", async () => {
+    const apiUrl = "https://connect-host.example.com/api/slack/";
+    const config = {
+      channels: {
+        slack: {
+          mode: "http",
+          hostBridge: { apiUrl, authToken: "host-auth-token" },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "allowlist",
+          channels: { C123: { requireMention: true, replyToMode: "all" } },
+        },
+      },
+    };
+    resetSlackTestState(config);
+    const monitor = await startWithoutBotToken(config);
+
+    const expectedClientOptions = expect.objectContaining({
+      slackApiUrl: apiUrl,
+      allowAbsoluteUrls: false,
+      headers: {
+        "x-openclaw-slack-host-authorization": "Bearer host-auth-token",
+      },
+    });
+    expect(getSlackTestState().appConstructorArgs).toMatchObject({
+      token: SLACK_HOST_BRIDGE_SENTINEL_TOKEN,
+      clientOptions: expectedClientOptions,
+      tokenVerificationEnabled: false,
+    });
+    expect(getSlackTestState().createSlackStartupAuthClientMock).toHaveBeenCalledWith(
+      SLACK_HOST_BRIDGE_SENTINEL_TOKEN,
+      expectedClientOptions,
+    );
+
+    getSlackTestState().replyMock.mockResolvedValue({ text: "native reply" });
+    const handler = await getSlackHandlerOrThrow("message");
+    const event = {
+      type: "message",
+      user: "U123",
+      text: "<@bot-user> hello",
+      channel: "C123",
+      channel_type: "channel",
+      ts: "1699999999.000001",
+    };
+    await handler({
+      event,
+      context: { botUserId: "bot-user" },
+      body: {
+        team_id: "T_TEST",
+        api_app_id: "A_TEST",
+        type: "event_callback",
+        event_id: "Ev-host-bridge",
+        event,
+      },
+    });
+
+    await vi.waitFor(() => expect(getSlackTestState().sendMock).toHaveBeenCalledTimes(1));
+    const replyContext = getSlackTestState().replyMock.mock.calls[0]?.[0] as
+      | { SessionKey?: string; WasMentioned?: boolean }
+      | undefined;
+    expect(replyContext).toMatchObject({
+      SessionKey: "agent:main:slack:channel:c123:thread:1699999999.000001",
+      WasMentioned: true,
+    });
+    expect(getSlackTestState().sendMock).toHaveBeenCalledWith(
+      "channel:C123",
+      "native reply",
+      expect.objectContaining({
+        token: SLACK_HOST_BRIDGE_SENTINEL_TOKEN,
+        client: getSlackClient(),
+        threadTs: "1699999999.000001",
+      }),
     );
 
     await stopSlackMonitor(monitor);

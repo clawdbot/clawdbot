@@ -876,8 +876,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       resolveAccountSnapshot: ({ account }) => {
         const mode = account.config.mode ?? "socket";
         const identity = account.config.postAs ?? "bot";
-        const credentialConfigured =
-          mode === "http"
+        const credentialConfigured = account.config.hostBridge
+          ? undefined
+          : mode === "http"
             ? resolveConfiguredFromRequiredCredentialStatuses(account, [
                 identity === "user" ? "userTokenStatus" : "botTokenStatus",
                 "signingSecretStatus",

@@ -80,6 +80,14 @@ const SlackRelaySchema = z
   })
   .strict();
 
+const SlackHostBridgeSchema = z
+  .object({
+    apiUrl: z.string().url(),
+    // Host-to-sandbox authentication only. This is never a Slack credential.
+    authToken: SecretInputSchema,
+  })
+  .strict();
+
 const SlackIdentitySchema = z.enum(["bot", "user"]);
 
 const SlackAccountSchema = z
@@ -91,6 +99,7 @@ const SlackAccountSchema = z
     postAs: SlackIdentitySchema.default("bot"),
     mode: z.enum(["socket", "http", "relay"]).optional(),
     relay: SlackRelaySchema.optional(),
+    hostBridge: SlackHostBridgeSchema.optional(),
     signingSecret: SecretInputSchema.optional(),
     webhookPath: z.string().optional(),
     execApprovals: buildChannelExecApprovalsSchema(z.union([z.string(), z.number()])),
@@ -152,12 +161,18 @@ type SlackAccountLike = {
   enabled?: unknown;
   mode?: unknown;
   signingSecret?: unknown;
+  hostBridge?: unknown;
 };
+
+function hasHostBridge(value: unknown): boolean {
+  return value !== undefined;
+}
 
 function validateSlackSigningSecretRequirements(
   value: {
     mode?: unknown;
     signingSecret?: unknown;
+    hostBridge?: unknown;
     accounts?: Record<string, SlackAccountLike | undefined>;
   },
   ctx: z.RefinementCtx,
@@ -171,6 +186,7 @@ function validateSlackSigningSecretRequirements(
   if (
     baseMode === "http" &&
     hasImplicitRootAccount &&
+    !hasHostBridge(value.hostBridge) &&
     !hasConfiguredSecretInput(value.signingSecret)
   ) {
     ctx.addIssue({
@@ -187,13 +203,44 @@ function validateSlackSigningSecretRequirements(
     if (accountMode !== "http") {
       continue;
     }
+    const accountHostBridge = account.hostBridge ?? value.hostBridge;
     const accountSecret = account.signingSecret ?? value.signingSecret;
-    if (!hasConfiguredSecretInput(accountSecret)) {
+    if (!hasHostBridge(accountHostBridge) && !hasConfiguredSecretInput(accountSecret)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
           'channels.slack.accounts.*.mode="http" requires channels.slack.signingSecret or channels.slack.accounts.*.signingSecret',
         path: ["accounts", accountId, "signingSecret"],
+      });
+    }
+  }
+}
+
+function validateSlackHostBridgeMode(
+  value: {
+    mode?: unknown;
+    hostBridge?: unknown;
+    accounts?: Record<string, SlackAccountLike | undefined>;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const baseMode = value.mode ?? "socket";
+  if (hasHostBridge(value.hostBridge) && baseMode !== "http") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'channels.slack.hostBridge requires channels.slack.mode="http"',
+      path: ["hostBridge"],
+    });
+  }
+  for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
+    if (!account || account.enabled === false || !hasHostBridge(account.hostBridge)) {
+      continue;
+    }
+    if ((account.mode ?? baseMode) !== "http") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'channels.slack.accounts.*.hostBridge requires mode="http"',
+        path: ["accounts", accountId, "hostBridge"],
       });
     }
   }
@@ -263,6 +310,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       requireRelayConfig(value.relay, ["relay"]);
     }
     validateSlackSigningSecretRequirements(value, ctx);
+    validateSlackHostBridgeMode(value, ctx);
     return;
   }
   for (const accountId of accountIds) {
@@ -301,6 +349,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
     }
   }
   validateSlackSigningSecretRequirements(value, ctx);
+  validateSlackHostBridgeMode(value, ctx);
 });
 
 export const SlackChannelConfigSchema = buildChannelConfigSchema(SlackConfigSchema, {

@@ -1,6 +1,6 @@
 // Slack plugin module implements replies behavior.
 import type { MessageMetadata } from "@slack/types";
-import type { Block, KnownBlock } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -117,6 +117,8 @@ export async function deliverReplies(params: {
   replies: ReplyPayload[];
   target: string;
   token: string;
+  /** Active Bolt listener client; preserves transport-scoped client options. */
+  client?: WebClient;
   accountId?: string;
   runtime: RuntimeEnv;
   textLimit: number;
@@ -159,6 +161,7 @@ export async function deliverReplies(params: {
     return await sendMessageSlack(params.target, input.text, {
       cfg: params.cfg,
       token: params.token,
+      ...(params.client ? { client: params.client } : {}),
       threadTs: input.threadTs,
       accountId: params.accountId,
       ...(input.mediaUrl ? { mediaUrl: input.mediaUrl } : {}),

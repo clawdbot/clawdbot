@@ -549,6 +549,27 @@ describe("createSlackBoltApp", () => {
     expect((app as unknown as FakeApp).middleware).toHaveLength(1);
   });
 
+  it("disables Slack HMAC verification only for an outer-authenticated HTTP receiver", () => {
+    const { receiver } = createSlackBoltApp({
+      interop: {
+        App: FakeApp as never,
+        HTTPReceiver: FakeHTTPReceiver as never,
+        SocketModeReceiver: FakeSocketModeReceiver as never,
+      },
+      slackMode: "http",
+      token: "openclaw-host-bridge",
+      signatureVerification: false,
+      slackWebhookPath: "/slack/events",
+      clientOptions: {},
+    });
+
+    expect((receiver as unknown as FakeHTTPReceiver).args).toEqual({
+      signingSecret: "",
+      endpoints: "/slack/events",
+      signatureVerification: false,
+    });
+  });
+
   it.each(["socket", "http"] as const)(
     "routes %s Events API receive through the durable receiver wrapper",
     async (slackMode) => {

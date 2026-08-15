@@ -113,6 +113,13 @@ export type SlackRelayConfig = {
   gatewayId?: string;
 };
 
+export type SlackHostBridgeConfig = {
+  /** Host Slack Web API proxy base URL. PoC transport, HTTP mode only. */
+  apiUrl?: string;
+  /** Host-to-sandbox bearer token. This is not a Slack credential. */
+  authToken?: SecretInput;
+};
+
 export type SlackAccountConfig = Omit<
   CommonChannelMessagingConfig<
     SlackCapabilitiesConfig,
@@ -139,6 +146,8 @@ export type SlackAccountConfig = Omit<
     /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
     /** Relay-delivered Slack event source. Used when mode is "relay". */
     relay?: SlackRelayConfig;
+    /** PoC credential-owning host transport. Used only with HTTP mode. */
+    hostBridge?: SlackHostBridgeConfig;
     /** Slack signing secret (required for HTTP mode). */
     signingSecret?: SecretInput;
     /** Slack Events API webhook path (default: /slack/events). */

@@ -405,6 +405,36 @@ describe("slack config schema", () => {
     expectSlackConfigIssue({ mode: "http", accounts: {} }, "signingSecret");
   });
 
+  it("accepts PoC host bridge HTTP mode without Slack credentials", () => {
+    expectSlackConfigValid({
+      mode: "http",
+      hostBridge: {
+        apiUrl: "https://connect-host.example.com/api/slack/",
+        authToken: { source: "env", provider: "default", id: "SLACK_HOST_BRIDGE_TOKEN" },
+      },
+    });
+  });
+
+  it("requires a complete PoC host bridge and limits it to HTTP mode", () => {
+    expectSlackConfigIssue(
+      {
+        mode: "http",
+        hostBridge: { apiUrl: "https://connect-host.example.com/api/slack/" },
+      },
+      "hostBridge.authToken",
+    );
+    expectSlackConfigIssue(
+      {
+        mode: "socket",
+        hostBridge: {
+          apiUrl: "https://connect-host.example.com/api/slack/",
+          authToken: "host-auth-token",
+        },
+      },
+      "hostBridge",
+    );
+  });
+
   it("accepts inherited account HTTP mode with an account signing secret", () => {
     expectSlackConfigValid({
       mode: "http",

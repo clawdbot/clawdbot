@@ -121,6 +121,15 @@ describe("deliverReplies identity passthrough", () => {
     expect(options.identity).toBe(identity);
   });
 
+  it("passes the active listener client to native reply delivery", async () => {
+    sendMock.mockResolvedValue(undefined);
+    const client = { chat: { postMessage: vi.fn() } };
+
+    await deliverReplies(baseParams({ client }));
+
+    expect(requireSendCall()[2].client).toBe(client);
+  });
+
   it("passes identity to sendMessageSlack for media replies", async () => {
     sendMock.mockResolvedValue(undefined);
     const identity = { username: "Bot", iconUrl: "https://example.com/icon.png" };

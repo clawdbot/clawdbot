@@ -41,6 +41,11 @@ import {
   resolveSlackWebClientOptions,
 } from "../client-options.js";
 import { createSlackStartupAuthClient, createSlackWebClient } from "../client.js";
+import {
+  createSlackHostBridgeHttpHandler,
+  resolveSlackHostBridgeClientOptions,
+  SLACK_HOST_BRIDGE_SENTINEL_TOKEN,
+} from "../host-bridge.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { registerSlackInstallationState } from "../installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
@@ -308,6 +313,29 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
 
   const slackMode = opts.mode ?? account.config.mode ?? "socket";
+  const hostBridgeConfig = account.config.hostBridge;
+  const hostBridge = hostBridgeConfig
+    ? {
+        apiUrl: normalizeOptionalString(hostBridgeConfig.apiUrl),
+        authToken: normalizeResolvedSecretInputString({
+          value: hostBridgeConfig.authToken,
+          path: `channels.slack.accounts.${account.accountId}.hostBridge.authToken`,
+        }),
+      }
+    : undefined;
+  if (hostBridge && (!hostBridge.apiUrl || !hostBridge.authToken)) {
+    throw new Error(
+      `Slack hostBridge requires apiUrl and authToken for account "${account.accountId}".`,
+    );
+  }
+  if (hostBridge && slackMode !== "http") {
+    throw new Error(`Slack hostBridge requires HTTP mode for account "${account.accountId}".`);
+  }
+  if (hostBridge && account.identity !== "bot") {
+    throw new Error(
+      `Slack hostBridge PoC supports bot identity only for account "${account.accountId}".`,
+    );
+  }
   const slackWebhookPath = normalizeSlackWebhookPath(account.config.webhookPath);
   const signingSecret = normalizeResolvedSecretInputString({
     value: account.config.signingSecret,
@@ -341,6 +369,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       );
     }
     token = userToken;
+  } else if (hostBridge) {
+    token = SLACK_HOST_BRIDGE_SENTINEL_TOKEN;
   } else {
     if (!botToken || (slackMode === "socket" && !appToken)) {
       const missing =
@@ -382,7 +412,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     log: (message) => runtime.log?.(warn(message)),
   });
 
-  const resolveToken = account.userToken || botToken;
+  const resolveToken = account.userToken || botToken || (hostBridge ? token : undefined);
   const useAccessGroups = true;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
@@ -398,7 +428,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const slackDispatcher = resolveSlackProxyDispatcher();
-  const clientOptions = resolveSlackWebClientOptions({}, slackDispatcher);
+  const clientOptions = resolveSlackWebClientOptions(
+    hostBridge
+      ? resolveSlackHostBridgeClientOptions({
+          apiUrl: hostBridge.apiUrl!,
+          authToken: hostBridge.authToken!,
+        })
+      : {},
+    slackDispatcher,
+  );
   const durableIngress = createSlackDurableIngress({
     accountId: account.accountId,
     ...(runtime.log ? { onLog: runtime.log } : {}),
@@ -411,6 +449,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     token,
     appToken: slackMode === "socket" ? (appToken ?? undefined) : undefined,
     signingSecret: slackMode === "http" ? (signingSecret ?? undefined) : undefined,
+    signatureVerification: hostBridge ? false : undefined,
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
     dispatcher: slackDispatcher,
@@ -474,8 +513,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           if (guard.isTripped()) {
             return;
           }
+          const requestListener = hostBridge
+            ? createSlackHostBridgeHttpHandler({
+                authToken: hostBridge.authToken!,
+                next: httpReceiver.requestListener.bind(httpReceiver),
+              })
+            : httpReceiver.requestListener.bind(httpReceiver);
           try {
-            await Promise.resolve(httpReceiver.requestListener(req, res));
+            await Promise.resolve(requestListener(req, res));
           } catch (err) {
             if (!guard.isTripped()) {
               throw err;

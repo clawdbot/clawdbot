@@ -4,6 +4,13 @@ import type { ResolvedSlackAccount } from "./accounts.js";
 
 export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): boolean {
   const mode = account.config.mode ?? "socket";
+  const hostBridge = account.config.hostBridge;
+  if (mode === "http" && hostBridge) {
+    return (
+      hasConfiguredAccountValue(hostBridge.apiUrl) &&
+      hasConfiguredAccountValue(hostBridge.authToken)
+    );
+  }
   const hasIdentityToken =
     account.identity === "user"
       ? Boolean(account.userToken?.trim())

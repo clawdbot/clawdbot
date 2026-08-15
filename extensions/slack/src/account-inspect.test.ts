@@ -12,6 +12,32 @@ function isInspectedSlackAccountUsable(account: ReturnType<typeof inspectSlackAc
 }
 
 describe("inspectSlackAccount", () => {
+  it("treats a complete HTTP host bridge as configured without Slack credentials", () => {
+    const account = inspectSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            mode: "http",
+            hostBridge: {
+              apiUrl: "https://connect-host.example.com/api/slack/",
+              authToken: "host-auth-token",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      envBotToken: "",
+      envAppToken: "",
+      envUserToken: "",
+    });
+
+    expect(account).toMatchObject({
+      configured: true,
+      botTokenStatus: "missing",
+      signingSecretStatus: "missing",
+    });
+    expect(isInspectedSlackAccountUsable(account)).toBe(true);
+  });
+
   it("reports user-token source and status for a configured user identity", () => {
     const account = inspectSlackAccount({
       cfg: {

@@ -65,9 +65,16 @@ const {
   resolveDefaultAccountId,
   resolveAccountConfig: resolveMergedSlackAccountConfig,
 } = createAccountListHelpers<SlackAccountConfig>("slack", {
-  nestedObjectKeys: ["botLoopProtection", "relay"],
+  nestedObjectKeys: ["botLoopProtection", "hostBridge", "relay"],
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
+    const hasHostBridge =
+      slack?.mode === "http" &&
+      hasConfiguredAccountValue(slack.hostBridge?.apiUrl) &&
+      hasConfiguredAccountValue(slack.hostBridge?.authToken);
+    if (hasHostBridge) {
+      return true;
+    }
     if (slack?.postAs === "user") {
       const hasUserToken =
         hasConfiguredAccountValue(slack.userToken) ||

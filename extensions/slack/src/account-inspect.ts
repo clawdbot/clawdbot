@@ -118,6 +118,10 @@ export function inspectSlackAccount(params: {
     Boolean(normalizeOptionalString(merged.relay?.url)) &&
     hasConfiguredSecretInput(merged.relay?.authToken) &&
     Boolean(normalizeOptionalString(merged.relay?.gatewayId));
+  const hostBridgeConfigured =
+    isHttpMode &&
+    Boolean(normalizeOptionalString(merged.hostBridge?.apiUrl)) &&
+    hasConfiguredSecretInput(merged.hostBridge?.authToken);
   const botTokenSource: SlackTokenSource = configBot.token
     ? "config"
     : configBot.status === "configured_unavailable"
@@ -195,7 +199,10 @@ export function inspectSlackAccount(params: {
           ? configUser.status !== "missing" || Boolean(envUser)
           : configBot.status !== "missing" || Boolean(envBot);
       if (isHttpMode) {
-        return identityTokenConfigured && configSigningSecret.status !== "missing";
+        return (
+          hostBridgeConfigured ||
+          (identityTokenConfigured && configSigningSecret.status !== "missing")
+        );
       }
       if (isRelayMode) {
         return identityTokenConfigured && relayConfigured;

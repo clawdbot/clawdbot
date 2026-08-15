@@ -332,6 +332,7 @@ export function createSlackBoltApp(params: {
   token: string;
   appToken?: string;
   signingSecret?: string;
+  signatureVerification?: boolean;
   slackWebhookPath: string;
   clientOptions: Record<string, unknown>;
   dispatcher?: SlackSocketModeReceiverOptions["dispatcher"];
@@ -363,6 +364,9 @@ export function createSlackBoltApp(params: {
     receiver = new params.interop.HTTPReceiver({
       signingSecret: params.signingSecret ?? "",
       endpoints: params.slackWebhookPath,
+      ...(params.signatureVerification === undefined
+        ? {}
+        : { signatureVerification: params.signatureVerification }),
       ...(params.wrapReceiver ? { processEventErrorHandler: async () => false } : {}),
     });
   } else {

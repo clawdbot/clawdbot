@@ -12,8 +12,22 @@ import {
 
 export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
   channelKey: "slack",
-  account: ["appToken", "relay.authToken", "botToken", "signingSecret", "userToken"],
-  channel: ["appToken", "botToken", "relay.authToken", "signingSecret", "userToken"],
+  account: [
+    "appToken",
+    "hostBridge.authToken",
+    "relay.authToken",
+    "botToken",
+    "signingSecret",
+    "userToken",
+  ],
+  channel: [
+    "appToken",
+    "botToken",
+    "hostBridge.authToken",
+    "relay.authToken",
+    "signingSecret",
+    "userToken",
+  ],
 });
 
 export function collectRuntimeConfigAssignments(params: {
@@ -81,6 +95,30 @@ export function collectRuntimeConfigAssignments(params: {
       resolveAccountMode(account) === "http",
     accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "http",
     topInactiveReason: "no enabled Slack HTTP-mode surface inherits this top-level signingSecret.",
+    accountInactiveReason: "Slack account is disabled or not running in HTTP mode.",
+  });
+  collectNestedChannelFieldAssignments({
+    channelKey: "slack",
+    nestedKey: "hostBridge",
+    field: "authToken",
+    channel: slack,
+    surface,
+    defaults: params.defaults,
+    context: params.context,
+    topLevelActive:
+      surface.channelEnabled &&
+      ((!surface.hasExplicitAccounts && baseMode === "http") ||
+        surface.accounts.some(
+          ({ account, enabled }) =>
+            enabled &&
+            resolveAccountMode(account) === "http" &&
+            !hasOwnProperty(account, "hostBridge"),
+        )),
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && resolveAccountMode(account) === "http" && !hasOwnProperty(account, "hostBridge"),
+    topInactiveReason:
+      "no enabled Slack HTTP-mode surface inherits this top-level hostBridge authToken.",
+    accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "http",
     accountInactiveReason: "Slack account is disabled or not running in HTTP mode.",
   });
   collectNestedChannelFieldAssignments({
