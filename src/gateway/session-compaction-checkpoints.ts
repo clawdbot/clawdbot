@@ -21,13 +21,13 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
   type SessionCompactionCheckpointMutationResult,
+  type SessionTranscriptRuntimeTarget,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
-  branchSqliteCompactionCheckpointSession,
-  restoreSqliteCompactionCheckpointSession,
+  branchCompactionCheckpointSession,
+  restoreCompactionCheckpointSession,
 } from "../config/sessions/session-accessor.sqlite-checkpoint.js";
-import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -92,6 +92,7 @@ type RestoreCheckpointSessionParams = {
 
 type PersistSessionCompactionCheckpointParams = {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   sessionId: string;
   reason: SessionCompactionCheckpointReason;
@@ -434,7 +435,7 @@ export async function readSessionLeafStateFromTranscriptAsync(
 }
 
 function readSessionLeafStateFromRecords(
-  records: readonly Record<string, unknown>[],
+  records: readonly { type?: unknown; id?: unknown }[],
 ): { entryId: string; leafId: string | null } | null {
   let latestEntryId: string | undefined;
   for (const record of records) {
@@ -539,7 +540,7 @@ async function branchCheckpointSessionFromStoredBoundary(
   const legacySource = await prepareLegacyCheckpointSource(
     findCheckpoint(entry, params.checkpointId),
   );
-  return await branchSqliteCompactionCheckpointSession({
+  return await branchCompactionCheckpointSession({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     storePath: params.storePath,
     sourceKey: params.sourceKey,
@@ -562,7 +563,7 @@ async function restoreCheckpointSessionFromStoredBoundary(
   const legacySource = await prepareLegacyCheckpointSource(
     findCheckpoint(entry, params.checkpointId),
   );
-  return await restoreSqliteCompactionCheckpointSession({
+  return await restoreCompactionCheckpointSession({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     storePath: params.storePath,
     sessionKey: params.sessionKey,
@@ -619,7 +620,7 @@ async function captureCompactionCheckpointSnapshotAsync(params: {
     if (typeof params.sessionManager?.getEntries !== "function") {
       return null;
     }
-    const entryRecords = params.sessionManager.getEntries() as unknown as Record<string, unknown>[];
+    const entryRecords = params.sessionManager.getEntries();
     const transcriptState = readSessionLeafStateFromRecords(entryRecords);
     const position = resolveCompactionCheckpointTranscriptPosition({
       preferredLeafId: liveLeafId,
@@ -722,6 +723,7 @@ async function persistSessionCompactionCheckpoint(
   const target = resolveGatewaySessionStoreTarget({
     cfg: params.cfg,
     key: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const createdAt = params.createdAt ?? Date.now();
   const checkpoint: SessionCompactionCheckpoint = {

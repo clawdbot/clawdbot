@@ -91,6 +91,7 @@ function pendingWorkerLossError(
 export async function recoverPendingWorkspaceResults(
   deps: PlacementRecoveryDeps,
   cleanupOrphans: boolean,
+  environmentId?: string,
 ): Promise<Set<string>> {
   const { environments, failure, placements } = deps;
   const stagedResultOwners = new Set<string>();
@@ -104,6 +105,9 @@ export async function recoverPendingWorkspaceResults(
       continue;
     }
     const placement = placements.get(pending.sessionId);
+    if (environmentId !== undefined && placement?.environmentId !== environmentId) {
+      continue;
+    }
     try {
       const claim = placement?.turnClaim;
       if (
@@ -221,6 +225,7 @@ export async function recoverPendingWorkspaceResults(
         }
         // Clean refs are deleted while their accepted fence still exists. A
         // crash after deletion resumes here and can safely finish ownership.
+        await placements.closeWorkerTurnToolState(turnClaim);
         if (
           environment &&
           environment.state !== "destroyed" &&
@@ -348,9 +353,11 @@ export async function recoverPendingWorkspaceResults(
           continue;
         }
         if (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed") {
+          await placements.closeWorkerTurnToolState(turnClaim);
           placements.completeWorkspaceResultAndReleaseTurn(turnClaim, { reclaim: true });
           continue;
         }
+        await placements.closeWorkerTurnToolState(turnClaim);
         const failed = placements.failWorkspaceResultAndReleaseTurn(
           pending,
           pendingWorkerLossError(environment, pending.sessionId),

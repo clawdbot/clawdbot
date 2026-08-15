@@ -5,7 +5,7 @@ import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair
 import {
   readPositiveIntegerParam,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam,
 } from "../../agents/tools/common.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
@@ -18,6 +18,7 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -30,7 +31,6 @@ import type {
   MessageActionResult,
   ResolvedActionContext,
 } from "./message-action-contracts.js";
-import { readBooleanParam } from "./message-action-params.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
 import {
@@ -415,7 +415,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
   } = ctx;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "poll";
-  const to = readStringParam(params, "to", { required: true });
+  const to = readToolStringParam(params, "to", { required: true });
   const silent = readBooleanParam(params, "silent");
 
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
@@ -461,7 +461,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       dryRun,
     }),
   });
-  const pollReplyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
+  const pollReplyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
     return annotateSourceDelivery(gatewayPluginAction, {
       cfg,
@@ -497,7 +497,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       silent: silent ?? undefined,
     },
     resolveCorePoll: () => {
-      const question = readStringParam(params, "pollQuestion", {
+      const question = readToolStringParam(params, "pollQuestion", {
         required: true,
       });
       const options = readStringArrayParam(params, "pollOption", { required: true });
@@ -599,7 +599,7 @@ export async function executeMessagePlugin(
       toolContext: input.toolContext,
       resolveAutoThreadId: channelPlugin.threading?.resolveAutoThreadId,
       resolveReplyTransport: channelPlugin.threading?.resolveReplyTransport,
-      replyToIsExplicit: Boolean(readStringParam(params, "replyTo")),
+      replyToIsExplicit: Boolean(readToolStringParam(params, "replyTo")),
     });
   }
 
@@ -623,7 +623,7 @@ export async function executeMessagePlugin(
       dryRun,
     }),
   });
-  const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
+  const replyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
     // Gateway-owned actions must execute where the live channel runtime exists.
     return annotateSourceDelivery(gatewayPluginAction, {

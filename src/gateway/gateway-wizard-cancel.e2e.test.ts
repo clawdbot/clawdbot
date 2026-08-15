@@ -13,7 +13,7 @@ import { startGatewayServer } from "./server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "./test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
@@ -77,7 +77,7 @@ describe("gateway wizard cancellation lifecycle", () => {
         setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
         setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
 
-        const port = await getFreeGatewayPort();
+        const port = await getGatewayE2ePortBlock();
         const server = await startGatewayServer(port, {
           bind: "loopback",
           auth: { mode: "token", token },

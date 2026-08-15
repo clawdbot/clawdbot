@@ -18,7 +18,7 @@ scenario:
     - docs/plugins/manifest.md
   codeRefs:
     - scripts/stage-bundled-plugin-runtime.mjs
-    - src/skills/loading/workspace.ts
+    - src/skills/loading/workspace-skill-loader.ts
     - src/skills/loading/plugin-skills.ts
   execution:
     kind: flow

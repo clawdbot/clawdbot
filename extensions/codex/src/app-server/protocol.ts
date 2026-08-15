@@ -1,3 +1,4 @@
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
 import type {
   CodexAppInfo,
@@ -127,6 +128,11 @@ export type CodexUserInput =
     }
   | {
       type: "localImage";
+      path: string;
+    }
+  | {
+      type: "skill";
+      name: string;
       path: string;
     };
 
@@ -707,7 +713,7 @@ type CodexAppServerRequestResultMap = {
 };
 
 export function isJsonObject(value: unknown): value is JsonObject {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  return isRecord(value);
 }
 
 export function isRpcResponse(message: RpcMessage): message is RpcResponse {

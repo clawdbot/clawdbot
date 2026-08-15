@@ -12,7 +12,6 @@ import {
   validateWizardStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OnboardOptions } from "../../commands/onboard-types.js";
-import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
@@ -21,7 +20,11 @@ import {
   type WizardStep,
 } from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
-import { createAdmittedWizardSession, SETUP_ADMISSION_BUSY_MESSAGE } from "./setup-admission.js";
+import {
+  createAdmittedWizardSession,
+  SETUP_ADMISSION_BUSY_MESSAGE,
+  whenAdmittedWizardSessionSettled,
+} from "./setup-admission.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -73,15 +76,6 @@ function readWizardStatus(session: WizardSession) {
 
 function sanitizeWizardResultForClient<T extends { step?: WizardStep }>(result: T): T {
   return result.step ? { ...result, step: sanitizeWizardStepForClient(result.step) } : result;
-}
-
-function retainGatewayWorkUntilSettled(session: WizardSession): void {
-  // Hosted wizard state spans RPC requests. Keep restart/suspend admission
-  // active between steps or a config reload can erase the process-local session.
-  const release = retainGatewayRootWorkAdmissionContinuation();
-  if (release) {
-    void session.whenSettled().then(release);
-  }
 }
 
 /** Resolves a live wizard session or sends the public not-found error. */
@@ -151,13 +145,12 @@ export const wizardHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    retainGatewayWorkUntilSettled(session);
     context.wizardSessions.set(sessionId, session);
     const result = await session.next();
     if (result.done) {
       // Let the runner release setup admission before the terminal response,
       // so an immediate replacement wizard is not rejected as still busy.
-      await session.whenSettled();
+      await whenAdmittedWizardSessionSettled(session);
       context.purgeWizardSession(sessionId);
     }
     respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
@@ -198,7 +191,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const result = await session.next();
     if (result.done) {
       // Keep terminal response ordering identical to wizard.start.
-      await session.whenSettled();
+      await whenAdmittedWizardSessionSettled(session);
       context.purgeWizardSession(sessionId);
     }
     respond(true, sanitizeWizardResultForClient(result), undefined);
@@ -215,13 +208,14 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const cancelled = session.cancel();
     const status = readWizardStatus(session);
     if (cancelled) {
-      void session.whenSettled().then(() => context.purgeWizardSession(sessionId));
+      const purge = () => context.purgeWizardSession(sessionId);
+      void whenAdmittedWizardSessionSettled(session).then(purge, purge);
     } else {
       context.purgeWizardSession(sessionId);
     }
     respond(true, status, undefined);
   },
-  "wizard.status": ({ params, respond, context }) => {
+  "wizard.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWizardStatusParams, "wizard.status", respond)) {
       return;
     }
@@ -231,6 +225,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
       return;
     }
     const status = readWizardStatus(session);
+    if (status.status !== "running") {
+      await whenAdmittedWizardSessionSettled(session);
+    }
     context.purgeWizardSession(sessionId);
     respond(true, status, undefined);
   },

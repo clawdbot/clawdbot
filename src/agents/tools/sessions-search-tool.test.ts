@@ -1,7 +1,15 @@
 /** sessions_search visibility, bounds, redaction, and input tests. */
+import path from "node:path";
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  applySessionStoreProjection,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
+import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
@@ -86,6 +94,35 @@ function createTool(params: {
 }
 
 describe("sessions_search tool", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("rejects a literal global target owned by another fixed-store agent", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createTool({
+      agentId: "research",
+      agentSessionKey: "agent:research:main",
+      config: {
+        session: { store: "/stores/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { research: {}, ops: {} },
+        },
+        tools: { sessions: { visibility: "all" } },
+      },
+      results: [hit({ sessionKey: "global", agentId: "ops" })],
+      requests,
+    });
+
+    const result = await tool.execute("foreign-global", {
+      query: "text",
+      sessionKey: "global",
+    });
+
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect(requests.some((request) => request.method === "sessions.search")).toBe(false);
+  });
+
   it("declares exact success and error result contracts", async () => {
     const tool = createTool({ results: [hit()] });
     const success = await tool.execute("success-contract", { query: "text" });
@@ -391,5 +428,58 @@ describe("sessions_search tool", () => {
       method: "sessions.search",
       params: { agentId: "main", query: "text", sessionKeys: ["main"], limit: 25 },
     });
+  });
+
+  it("rejects a scoped grant when the target incarnation changes before search", async () => {
+    const requesterSessionKey = "agent:main:clickclack:discussion-race";
+    const targetSessionKey = "agent:main:main";
+    const expectedSessionId = "old-incarnation";
+    const storePath = path.join(tempDirs.make("openclaw-sessions-search-"), "sessions.sqlite");
+    await applySessionStoreProjection({
+      storePath,
+      skipMaintenance: true,
+      update: (store) => {
+        store[targetSessionKey] = { sessionId: expectedSessionId, updatedAt: 1 };
+        return { persist: true, result: undefined };
+      },
+    });
+    const requests: CallGatewayRequest[] = [];
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) => {
+      if (
+        request.requesterSessionKey !== requesterSessionKey ||
+        request.targetSessionKey !== targetSessionKey
+      ) {
+        return undefined;
+      }
+      replaceSessionEntrySync(
+        { storePath, sessionKey: targetSessionKey },
+        { sessionId: "replacement-incarnation", updatedAt: 2 },
+      );
+      return { expectedSessionId };
+    });
+    try {
+      const tool = createSessionsSearchTool({
+        agentSessionKey: requesterSessionKey,
+        sandboxed: true,
+        config: {
+          session: { store: storePath },
+          tools: { sessions: { visibility: "self" } },
+          agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+        } as OpenClawConfig,
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayRequest,
+        ): Promise<T> => {
+          requests.push(request);
+          return { results: [hit({ sessionKey: targetSessionKey })] } as T;
+        },
+      });
+
+      await expect(
+        tool.execute("scoped-grant-race", { query: "text", sessionKey: targetSessionKey }),
+      ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
+      expect(requests.some((request) => request.method === "sessions.search")).toBe(false);
+    } finally {
+      unregister();
+    }
   });
 });

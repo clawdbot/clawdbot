@@ -13,6 +13,7 @@ import {
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
+import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import { getAgentDir } from "../config.js";
 import {
   Agent,
@@ -129,7 +130,7 @@ export interface CreateAgentSessionOptions {
 
 type CreateAgentSessionInternalOptions = Pick<
   AgentSessionConfig,
-  "contextOverflowRecoveryOwner"
+  "cleanupProviderSessionResourcesOnDispose" | "contextOverflowRecoveryOwner"
 > & { beforeToolBatch?: InternalBeforeToolBatchHook };
 
 /** Result from createAgentSession */
@@ -292,17 +293,18 @@ export async function createAgentSession(
   return await createAgentSessionImpl(options);
 }
 
-/** Internal embedded-runner seam; keep recovery ownership out of the public session SDK. */
+/** Internal factory for temporary embedded sessions that do not own durable provider resources. */
 export async function createAgentSessionForEmbeddedRunner(
   options: CreateAgentSessionOptions,
   internalOptions: CreateAgentSessionInternalOptions,
 ): Promise<CreateAgentSessionResult> {
-  return await createAgentSessionImpl(options, internalOptions);
+  return await createAgentSessionImpl(options, internalOptions, false);
 }
 
 async function createAgentSessionImpl(
   options: CreateAgentSessionOptions,
   internalOptions: CreateAgentSessionInternalOptions = {},
+  cleanupProviderSessionResourcesOnDispose = true,
 ): Promise<CreateAgentSessionResult> {
   const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
   const agentDir = options.agentDir ?? getDefaultAgentDir();
@@ -544,7 +546,7 @@ async function createAgentSessionImpl(
 
   // Restore messages if session has existing data
   if (hasExistingSession) {
-    agent.state.messages = existingSession.messages;
+    agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
     if (!hasThinkingEntry) {
       sessionManager.appendThinkingLevelChange(thinkingLevel);
     }
@@ -572,6 +574,7 @@ async function createAgentSessionImpl(
     sessionStartEvent: options.sessionStartEvent,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
     contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
+    cleanupProviderSessionResourcesOnDispose,
   });
   const extensionsResult = resourceLoader.getExtensions();
 

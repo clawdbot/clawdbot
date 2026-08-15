@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -134,7 +134,7 @@ describe("doctor reserved incognito session key repair", () => {
           "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, 'member-1', 'owner-1', 1)",
         )
         .run(oldKey);
-      expect(listSessionEntries({ agentId: "main", clone: false, env })[0]?.sessionKey).toBe(
+      expect(listSessionEntriesCore({ agentId: "main", clone: false, env })[0]?.sessionKey).toBe(
         oldKey,
       );
 
@@ -146,7 +146,7 @@ describe("doctor reserved incognito session key repair", () => {
         found: 1,
         repaired: 1,
       });
-      expect(listSessionEntries({ agentId: "main", clone: false, env })[0]?.sessionKey).toBe(
+      expect(listSessionEntriesCore({ agentId: "main", clone: false, env })[0]?.sessionKey).toBe(
         newKey,
       );
 
@@ -237,10 +237,10 @@ describe("doctor reserved incognito session key repair", () => {
           .get("agent:work:dashboard:regular"),
       ).toEqual({ entry_valid: 1 });
       closeOpenClawAgentDatabasesForTest();
-      expect(listSessionEntries({ agentId: "main", env })).toMatchObject([
+      expect(listSessionEntriesCore({ agentId: "main", env })).toMatchObject([
         { sessionKey: newKey, entry: { sessionId: "session-old", updatedAt: 1 } },
       ]);
-      expect(listSessionEntries({ agentId: "work", env })).toMatchObject([
+      expect(listSessionEntriesCore({ agentId: "work", env })).toMatchObject([
         {
           sessionKey: "agent:work:dashboard:regular",
           entry: { sessionId: "session-work", updatedAt: 1 },

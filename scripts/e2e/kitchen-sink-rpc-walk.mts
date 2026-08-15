@@ -13,10 +13,12 @@ import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
 } from "../lib/bounded-response.mjs";
+import { toErrorObject as coerceKitchenSinkError } from "../lib/error-format.mts";
 import {
   resolveWindowsPowerShellPath,
   resolveWindowsSystem32Path,
@@ -331,7 +333,11 @@ async function findAvailableLoopbackPort(options: { createServer?: typeof net.cr
   return await new Promise<number>((resolve, reject) => {
     const fail = (error: unknown) => {
       server.close?.(() => {});
-      reject(toLintErrorObject(error, "Unable to reserve Kitchen Sink RPC loopback port"));
+      const reservationError: Error = coerceKitchenSinkError(
+        error,
+        "Unable to reserve Kitchen Sink RPC loopback port",
+      );
+      reject(reservationError);
     };
     server.once("error", fail);
     server.listen(0, "127.0.0.1", () => {
@@ -340,7 +346,11 @@ async function findAvailableLoopbackPort(options: { createServer?: typeof net.cr
       const port = typeof address === "object" && address ? address.port : 0;
       server.close((error) => {
         if (error) {
-          reject(toLintErrorObject(error, "Unable to close Kitchen Sink RPC loopback port"));
+          const closeError: Error = coerceKitchenSinkError(
+            error,
+            "Unable to close Kitchen Sink RPC loopback port",
+          );
+          reject(closeError);
           return;
         }
         if (!Number.isSafeInteger(port) || port <= 0) {
@@ -582,9 +592,8 @@ export function runCommand(
       clearTimeout(forceKillTimer);
       forceKillAt = undefined;
       releaseCommandChild(child);
-      void stopResourceSampling().finally(() =>
-        reject(toLintErrorObject(error, "Command failed before exit")),
-      );
+      const commandError: Error = coerceKitchenSinkError(error, "Command failed before exit");
+      void stopResourceSampling().finally(() => reject(commandError));
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
@@ -877,8 +886,8 @@ function createGatewayClientRequestError(requestError: unknown): GatewayRequestE
   const candidate = asRecord(requestError);
   if (
     candidate.type !== "gateway_request_error" ||
-    !isNonEmptyString(candidate.code) ||
-    !isNonEmptyString(candidate.message) ||
+    !hasNonEmptyString(candidate.code) ||
+    !hasNonEmptyString(candidate.message) ||
     typeof candidate.retryable !== "boolean" ||
     (candidate.retryAfterMs !== undefined &&
       (typeof candidate.retryAfterMs !== "number" ||
@@ -1182,7 +1191,7 @@ async function retryRpcCall(method: string, params: unknown, options: RpcCallOpt
       await delay(500);
     }
   }
-  throw toLintErrorObject(
+  throw coerceKitchenSinkError(
     lastError ?? new Error(`gateway RPC ${method} timed out before retry`),
     "Non-Error thrown",
   );
@@ -1297,7 +1306,7 @@ export async function fetchJson(url: string | URL, options: FetchJsonOptions = {
       }
     }
   }
-  throw toLintErrorObject(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
+  throw coerceKitchenSinkError(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
 }
 
 function getExternalAbortReason(signal: AbortSignal) {
@@ -1702,7 +1711,7 @@ export function extractPluginCommandNames(payload: unknown) {
     }
   }
   return names
-    .filter(isNonEmptyString)
+    .filter(hasNonEmptyString)
     .map((name) => name.replace(/^\//u, ""))
     .filter((name, index, all) => all.indexOf(name) === index)
     .toSorted((left, right) => left.localeCompare(right));
@@ -1736,7 +1745,7 @@ export function assertExpectedKitchenSinkToolEntries(
   options: { requirePluginProvenance?: boolean } = {},
 ) {
   const { requirePluginProvenance = false } = options;
-  const ids = entries.map((entry) => asRecord(entry).id).filter(isNonEmptyString);
+  const ids = entries.map((entry) => asRecord(entry).id).filter(hasNonEmptyString);
   assertIncludesAll(ids, EXPECTED_TOOLS, label);
   if (requirePluginProvenance) {
     const wrongProvenance = entries
@@ -1764,7 +1773,7 @@ export function assertChannelAccountRunning(payload: unknown) {
   const accounts = Array.isArray(channelAccounts[CHANNEL_ID]) ? channelAccounts[CHANNEL_ID] : [];
   const account = accounts.find((entry) => asRecord(entry).accountId === CHANNEL_ACCOUNT_ID);
   if (!account) {
-    const accountIds = accounts.map((entry) => asRecord(entry).accountId).filter(isNonEmptyString);
+    const accountIds = accounts.map((entry) => asRecord(entry).accountId).filter(hasNonEmptyString);
     throw new Error(
       `Kitchen Sink channel account ${CHANNEL_ACCOUNT_ID} was not reported. Available account ids: ${boundedJsonPreview(
         accountIds,
@@ -1793,12 +1802,12 @@ export function assertTtsProviderCoverage(payload: unknown, surface: "providers"
       `tts.${surface} returned invalid provider list: ${boundedJsonPreview(payload)}`,
     );
   }
-  const ids = entries.map((entry) => asRecord(entry).id).filter(isNonEmptyString);
+  const ids = entries.map((entry) => asRecord(entry).id).filter(hasNonEmptyString);
   assertIncludesAny(ids, EXPECTED_SPEECH_PROVIDERS, `tts.${surface}`);
   const configuredEntry = entries.find((entry) => {
     const provider = asRecord(entry);
     return (
-      isNonEmptyString(provider.id) &&
+      hasNonEmptyString(provider.id) &&
       EXPECTED_SPEECH_PROVIDERS.includes(provider.id) &&
       provider.configured === true
     );
@@ -1982,7 +1991,7 @@ export async function assertOperatorRpcDenied(
 
 export function assertCreatedKitchenSinkSession(payload: unknown, expectedKey = SESSION_KEY) {
   const created = assertObjectPayload(payload, "sessions.create");
-  if (created.ok !== true || created.key !== expectedKey || !isNonEmptyString(created.sessionId)) {
+  if (created.ok !== true || created.key !== expectedKey || !hasNonEmptyString(created.sessionId)) {
     throw new Error(
       `sessions.create did not return the requested Kitchen Sink session: ${boundedJsonPreview(
         payload,
@@ -2068,11 +2077,11 @@ export function assertGatewayHealthPayload(payload: unknown) {
     [Number.isFinite(health.durationMs), "numeric durationMs"],
     [isRecord(health.channels), "channels object"],
     [Array.isArray(health.channelOrder), "channelOrder array"],
-    [isNonEmptyString(health.defaultAgentId), "defaultAgentId"],
+    [hasNonEmptyString(health.defaultAgentId), "defaultAgentId"],
     [Array.isArray(health.agents), "agents array"],
     [
       isRecord(sessions) &&
-        isNonEmptyString(sessions.path) &&
+        hasNonEmptyString(sessions.path) &&
         Number.isFinite(sessions.count) &&
         Array.isArray(sessions.recent),
       "sessions summary",
@@ -2091,7 +2100,7 @@ export function assertGatewayStatusPayload(payload: unknown) {
   const problems = failedPayloadChecks([
     [
       isRecord(heartbeat) &&
-        isNonEmptyString(heartbeat.defaultAgentId) &&
+        hasNonEmptyString(heartbeat.defaultAgentId) &&
         Array.isArray(heartbeat.agents),
       "heartbeat summary",
     ],
@@ -2266,9 +2275,9 @@ function parsePosixProcessRows(stdout: string) {
     ) {
       continue;
     }
-    const processId = parseStrictPositiveInteger(pidRaw);
+    const processId = parsePositivePosixProcessToken(pidRaw);
     const parentProcessId = parseStrictUnsignedInteger(ppidRaw);
-    const rssKb = parseStrictPositiveInteger(rssKbRaw);
+    const rssKb = parsePositivePosixProcessToken(rssKbRaw);
     const cpuPercent = parseStrictNonNegativeDecimal(cpuRaw);
     if (
       !Number.isInteger(processId) ||
@@ -2312,7 +2321,7 @@ function parseStrictUnsignedInteger(raw: string | undefined) {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function parseStrictPositiveInteger(raw: string | undefined) {
+function parsePositivePosixProcessToken(raw: string | undefined) {
   const parsed = parseStrictUnsignedInteger(raw);
   return parsed && parsed > 0 ? parsed : null;
 }
@@ -2722,10 +2731,6 @@ function tailText(text: string) {
   return text.split(/\r?\n/u).slice(-120).join("\n");
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 async function main() {
   const config = resolveKitchenSinkRpcConfig();
   let runner = resolveOpenClawRunner();
@@ -2996,18 +3001,4 @@ function isGatewayChild(value: unknown): value is GatewayChild {
 
 async function settlePendingSample(pending: Promise<unknown> | null) {
   await pending?.catch(() => {});
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  CONTEXT_WINDOW_HARD_MIN_TOKENS,
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
   formatContextWindowWarningMessage,
@@ -310,10 +309,6 @@ describe("context-window-guard", () => {
     expect(guard.warnBelowTokens).toBe(12_000);
     expect(guard.shouldWarn).toBe(true);
     expect(guard.shouldBlock).toBe(false);
-  });
-
-  it("exports the public hard-min floor as expected", () => {
-    expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(4_000);
   });
 
   it("derives percentage-based guard thresholds above the safe floors", () => {

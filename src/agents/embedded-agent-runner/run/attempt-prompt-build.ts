@@ -29,12 +29,12 @@ import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import {
   leasePendingAgentSteeringItems,
   prependAgentSteeringPrompt,
-} from "../../subagent-registry.js";
+} from "../../subagents/registry/subagent-registry.js";
 import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
-import { normalizeToolName } from "../../tool-policy.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
 import { log } from "../logger.js";
 import {
   beginPromptCacheObservation,
@@ -48,22 +48,23 @@ import {
 import {
   resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars,
+  reconcileToolResultPromptProjectionState,
   toolResultWarningDedupe,
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
-import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
-import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import {
   normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForCurrentPromptBoundary,
-} from "./attempt.llm-boundary.js";
+} from "./attempt-llm-boundary.js";
+import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import {
   prependSystemPromptAddition,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   shouldWarnOnOrphanedUserRepair,
-} from "./attempt.prompt-helpers.js";
-import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
+} from "./attempt-prompt-helpers.js";
+import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
+import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import {
   buildCurrentInboundPrompt,
@@ -170,7 +171,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
           bootstrapContextRunKind: attempt.bootstrapContextRunKind,
         });
   const promptCacheToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
-  const promptCacheToolNameSet = new Set(promptCacheToolNames.map(normalizeToolName));
+  const promptCacheToolNameSet = new Set(promptCacheToolNames.map(normalizeToolPolicyName));
   const promptBeforeResolvedToolFinalization = effectivePrompt;
   effectivePrompt = applyResolvedToolPromptFinalizer({
     prompt: effectivePrompt,
@@ -182,7 +183,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       ? promptBeforeResolvedToolFinalization
       : attempt.transcriptPrompt;
   const promptCacheTools = input.cache.tools.filter((tool) =>
-    promptCacheToolNameSet.has(normalizeToolName(tool.name)),
+    promptCacheToolNameSet.has(normalizeToolPolicyName(tool.name)),
   );
   const promptBeforePromptBuildHooks = effectivePrompt;
   const promptBuildPrependContext = hookResult?.prependContext;
@@ -219,6 +220,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     ? undefined
     : resolveAttemptMediaTaskSystemPromptAddition({
         sessionKey: attempt.sessionKey,
+        agentId: input.sessionAgentId,
         trigger: attempt.trigger,
       });
   if (mediaTaskSystemPromptAddition) {
@@ -473,6 +475,14 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   );
   if (sessionMessages.length < input.messages.length) {
     input.replaceSessionMessages(sessionMessages);
+  }
+  // Raw probes temporarily hide durable history; only normal prepared history
+  // is authoritative for reclaiming session-owned provider projections.
+  if (!input.isRawModelRun) {
+    reconcileToolResultPromptProjectionState(
+      sessionMessages,
+      input.toolResultPromptProjectionState,
+    );
   }
   const prePromptMessageCount = sessionMessages.length;
   const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;

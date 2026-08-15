@@ -2,9 +2,9 @@ import { readPackageVersion } from "./package-json.js";
 // Runs OpenClaw package update checks, package steps, and restart handoff.
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
-import { buildUpdateCommandRunner, DEFAULT_TIMEOUT_MS } from "./update-runner-command.js";
+import { buildUpdateCommandRunner, UPDATE_RUNNER_TIMEOUT_MS } from "./update-runner-command.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
-import { runGitUpdate } from "./update-runner-git.js";
+import { updateGitCheckout } from "./update-runner-git.js";
 import { runGlobalUpdate } from "./update-runner-global.js";
 import {
   buildStartDirs,
@@ -28,11 +28,11 @@ export { resolveUpdateDoctorExecutionPolicy, resolveUpdateInstallSurface };
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
   const startedAt = Date.now();
   const { defaultCommandEnv, runCommand } = await buildUpdateCommandRunner(opts.runCommand);
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
   const candidates = buildStartDirs(opts);
   const pkgRoot = await findPackageRoot(candidates);
 
-  let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs);
+  let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs, pkgRoot);
   if (!gitRoot && pkgRoot) {
     const cwdRoot = normalizeDir(opts.cwd);
     if (
@@ -42,9 +42,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     ) {
       gitRoot = resolveUpdateInstallRoot(cwdRoot);
     }
-  }
-  if (gitRoot && pkgRoot && !updateInstallRootsMatch(gitRoot, pkgRoot)) {
-    gitRoot = null;
   }
   if (gitRoot && !pkgRoot) {
     return {
@@ -56,8 +53,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       durationMs: Date.now() - startedAt,
     };
   }
-  if (gitRoot && pkgRoot && updateInstallRootsMatch(gitRoot, pkgRoot)) {
-    return await runGitUpdate({
+  if (gitRoot && pkgRoot) {
+    return await updateGitCheckout({
       opts,
       gitRoot,
       runCommand,

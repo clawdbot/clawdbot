@@ -13,6 +13,7 @@ import {
   type ChannelTurnDispatchResultLike,
   type ChannelTurnVisibleDeliverySignals,
 } from "./dispatch-result.js";
+import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 import type {
   ChannelTurnAdmission,
   ChannelTurnHistoryFinalizeOptions,
@@ -279,6 +280,7 @@ async function runPreparedChannelTurnCoreInTrace<
       },
     });
     await params.afterRecord?.();
+    await deliverPendingDeliveryNotice(recordSessionKey, params.storePath);
   } catch (err) {
     emit({
       ...params,

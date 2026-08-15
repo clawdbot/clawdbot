@@ -107,6 +107,50 @@ async function resolvePluginOriginTarget(sessionKey: string) {
 }
 
 describe("slack native approval adapter", () => {
+  it("reports each configured account as a raw route candidate", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            default: {
+              botToken: "xoxb-default",
+              appToken: "xapp-default",
+              execApprovals: { enabled: true, approvers: ["U123APPROVER"] },
+            },
+            ops: {
+              botToken: "xoxb-ops",
+              appToken: "xapp-ops",
+              execApprovals: { enabled: true, approvers: ["U123APPROVER"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-unbound",
+      request: { command: "echo hi", turnSourceChannel: "slack" },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "ops",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toBe(true);
+  });
+
   it("subscribes the native runtime to exec and plugin approval events", () => {
     expect(slackApprovalCapability.nativeRuntime?.eventKinds).toEqual(["exec", "plugin"]);
   });

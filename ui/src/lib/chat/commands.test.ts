@@ -328,10 +328,11 @@ describe("parseSlashCommand", () => {
     expect(getSkillCommandCompletions("pro").map((command) => command.name)).toEqual(["prose"]);
   });
 
-  it("normalizes hyphenated skill reference queries", () => {
+  it("matches skill queries against both display titles and command tokens", () => {
     applyRemoteEntries([
       {
         name: "release_notes",
+        skillDisplayName: "Release Notes",
         textAliases: ["/release_notes"],
         description: "Draft release notes.",
         source: "skill",
@@ -341,8 +342,11 @@ describe("parseSlashCommand", () => {
       },
     ]);
 
-    expect(getSkillCommandCompletions("release-n").map((command) => command.name)).toEqual([
-      "release_notes",
+    expect(getSkillCommandCompletions("notes")).toMatchObject([
+      { name: "release_notes", skillDisplayName: "Release Notes" },
+    ]);
+    expect(getSkillCommandCompletions("release_n")).toMatchObject([
+      { name: "release_notes", skillDisplayName: "Release Notes" },
     ]);
   });
 
@@ -467,6 +471,55 @@ describe("parseSlashCommand", () => {
     expect(first.args?.split(" ")).toHaveLength(20);
     expect(first.args?.split(" ")[0]).toBe("[" + "n".repeat(199) + "]");
     expect(first.argOptions).toHaveLength(50);
+  });
+
+  it("preserves only known closed plugin client presentation metadata", () => {
+    applyRemoteEntries([
+      {
+        name: "pair",
+        textAliases: ["/pair"],
+        description: "Pair a device.",
+        source: "plugin",
+        scope: "both",
+        acceptsArgs: true,
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing" },
+        },
+      },
+    ]);
+
+    expect(requireCommandByName("pair").clientPresentation).toEqual({
+      when: "no-arguments",
+      action: { kind: "device-pairing" },
+    });
+  });
+
+  it.each([
+    { when: "always", action: { kind: "device-pairing" } },
+    { when: "no-arguments", action: { kind: "open-route" } },
+    { when: "no-arguments", action: { kind: "device-pairing", callback: "run" } },
+    {
+      when: "no-arguments",
+      action: { kind: "device-pairing" },
+      route: "/settings/devices",
+    },
+  ])("drops malformed client presentation metadata %#", (clientPresentation) => {
+    applyCommandsListResult({
+      commands: [
+        {
+          name: "pair",
+          textAliases: ["/pair"],
+          description: "Pair a device.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+          clientPresentation,
+        },
+      ],
+    });
+
+    expect(requireCommandByName("pair").clientPresentation).toBeUndefined();
   });
 
   it("falls back safely when command payload shapes are malformed", () => {

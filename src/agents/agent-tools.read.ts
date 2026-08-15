@@ -14,7 +14,6 @@ import {
   root as fsRoot,
   FsSafeError,
 } from "../infra/fs-safe.js";
-import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import {
@@ -49,6 +48,7 @@ import {
   type ReadToolDetails,
   type ReadToolTruncationDetails,
 } from "./sessions/tools/index.js";
+import { expandOsHomePrefix } from "./sessions/tools/path-utils.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -154,13 +154,13 @@ function withToolResultText(
   if (replaced) {
     return {
       ...result,
-      content: nextContent as unknown as AgentToolResult<unknown>["content"],
+      content: nextContent,
     };
   }
-  const textBlock = { type: "text", text } as unknown as TextContentBlock;
+  const textBlock = { type: "text", text } satisfies TextContentBlock;
   return {
     ...result,
-    content: [textBlock] as unknown as AgentToolResult<unknown>["content"],
+    content: [textBlock],
   };
 }
 
@@ -1094,13 +1094,8 @@ async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: 
   }
 }
 
-function expandTildeToOsHome(filePath: string): string {
-  const home = resolveOsHomeDir();
-  return home ? expandHomePrefix(filePath, { home }) : filePath;
-}
-
 function resolveHostPath(filePath: string): string {
-  return path.resolve(expandTildeToOsHome(filePath));
+  return path.resolve(expandOsHomePrefix(filePath));
 }
 
 async function writeHostFile(absolutePath: string, content: string) {
@@ -1170,9 +1165,9 @@ function createHostWriteOperations(
         },
         writeFile: writeHostFile,
         readFile: async (absolutePath: string) =>
-          fs.readFile(path.resolve(expandTildeToOsHome(absolutePath))),
+          fs.readFile(path.resolve(expandOsHomePrefix(absolutePath))),
         statFile: (absolutePath: string) =>
-          statHostFile(path.resolve(expandTildeToOsHome(absolutePath))),
+          statHostFile(path.resolve(expandOsHomePrefix(absolutePath))),
       } as const,
       options?.memoryWriteProvenance,
     );

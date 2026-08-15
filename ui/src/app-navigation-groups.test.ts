@@ -47,6 +47,7 @@ describe("sidebar entries", () => {
       "custodian",
       "channels",
       "security",
+      "secrets",
       "notifications",
       "advanced",
     ] as const) {
@@ -61,6 +62,13 @@ describe("sidebar entries", () => {
       (group) => group.labelKey === "nav.settingsGroupSystem",
     );
     expect(system?.routes.slice(-2)).toEqual(["updates", "about"]);
+  });
+
+  it("places team secrets between Privacy & Security and Approvals", () => {
+    const security = SETTINGS_NAVIGATION_GROUPS.find(
+      (group) => group.labelKey === "nav.settingsGroupSecurity",
+    );
+    expect(security?.routes).toEqual(["security", "secrets", "approvals"]);
   });
 
   it("keeps model setup as a settings subpage without a sidebar entry", () => {
@@ -87,6 +95,14 @@ describe("sidebar entries", () => {
     expect(sidebarMoreRoutes(DEFAULT_SIDEBAR_ENTRIES)).toContain("apps");
     expect(settingsRoutes).not.toContain("apps");
     expect(isSettingsNavigationRoute("apps")).toBe(false);
+  });
+
+  it("keeps Portals as a first-class customizable workspace route", () => {
+    expect(SIDEBAR_NAV_ROUTES).toContain("portals");
+    expect(DEFAULT_SIDEBAR_ENTRIES).not.toContain("route:portals");
+    expect(sidebarMoreRoutes(DEFAULT_SIDEBAR_ENTRIES)).toContain("portals");
+    expect(settingsRoutes).not.toContain("portals");
+    expect(isSettingsNavigationRoute("portals")).toBe(false);
   });
 
   it("keeps the plugin manager in customizable workspace routes", () => {

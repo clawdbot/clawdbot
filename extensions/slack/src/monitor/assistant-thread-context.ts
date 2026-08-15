@@ -48,9 +48,9 @@ export function parseSlackAssistantThreadMetadata(value: unknown) {
   }
   const record = payload as Record<string, unknown>;
   return {
-    channelId: readStringField(record, "channel_id"),
-    teamId: readStringField(record, "team_id"),
-    enterpriseId: readStringField(record, "enterprise_id"),
+    channelId: readNonBlankStringField(record, "channel_id"),
+    teamId: readNonBlankStringField(record, "team_id"),
+    enterpriseId: readNonBlankStringField(record, "enterprise_id"),
   };
 }
 
@@ -101,7 +101,7 @@ export function createSlackAssistantThreadContextStore(params: { accountId: stri
   return { get, save };
 }
 
-function readStringField(record: Record<string, unknown>, key: string) {
+function readNonBlankStringField(record: Record<string, unknown>, key: string) {
   const raw = record[key];
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }

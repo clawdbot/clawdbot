@@ -421,13 +421,6 @@ export const legacyBillingACases = [
     expected: reason("auth"),
   },
   {
-    id: "legacy-billing-a-056",
-    source:
-      "src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts#classifyFailoverReason",
-    signal: { provider: "openrouter", message: "HTTP 401: 401 Key limit exceeded (monthly limit)" },
-    expected: reason("billing"),
-  },
-  {
     id: "legacy-billing-a-057",
     source: "src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts#isBillingErrorMessage",
     signal: { message: "http 402" },
@@ -532,17 +525,6 @@ export const legacyBillingACases = [
     source:
       "src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts#classifyFailoverReason",
     signal: { message: "HTTP 402: Your usage limit has been reached. Please upgrade your plan." },
-    expected: reason("billing"),
-  },
-  {
-    id: "legacy-billing-a-071",
-    source:
-      "src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts#classifyFailoverReason",
-    signal: {
-      provider: "openrouter",
-      message:
-        "HTTP 403: 403 API key budget limit exceeded (monthly limit). Contact your org admin.",
-    },
     expected: reason("billing"),
   },
   {

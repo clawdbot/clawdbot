@@ -81,6 +81,42 @@ describe("Claude CLI adapter equivalence", () => {
 
     expect(prepared).toEqual({ env: {}, isolatedCompletionEnforced: true });
   });
+
+  it("builds Claude Code's native manual compaction command", () => {
+    const backend = buildAnthropicCliBackend();
+    const manualCompaction = backend.manualCompaction;
+    // Redacted fixtures preserve the control fields observed from Claude Code 2.0.76-2.1.226.
+    const compactingStatus = { type: "system", subtype: "status", status: "compacting" };
+    const compactResult = { compact_result: "success" };
+    const compactBoundary = { type: "system", subtype: "compact_boundary" };
+
+    expect(manualCompaction?.buildPrompt()).toBe("/compact");
+    expect(manualCompaction?.buildPrompt(" keep operator decisions ")).toBe(
+      "/compact keep operator decisions",
+    );
+    expect(manualCompaction?.input).toBe("arg");
+    expect(
+      manualCompaction?.validateOutput(
+        [compactingStatus, compactResult, compactBoundary]
+          .map((event) => JSON.stringify(event))
+          .join("\n"),
+      ),
+    ).toEqual({ ok: true });
+    expect(manualCompaction?.validateOutput(`${JSON.stringify(compactResult)}\n`)).toEqual({
+      ok: true,
+    });
+    expect(manualCompaction?.validateOutput(`${JSON.stringify(compactBoundary)}\n`)).toEqual({
+      ok: true,
+    });
+    expect(
+      manualCompaction?.validateOutput(
+        `${JSON.stringify(compactingStatus)}\n${JSON.stringify({ type: "system", subtype: "local_command" })}\n`,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "Claude CLI did not confirm that native compaction ran.",
+    });
+  });
 });
 
 describe("resolveClaudeCliAutoCompactEnv", () => {
@@ -205,6 +241,31 @@ describe("Claude CLI model aliases", () => {
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
+  it("keeps the real resumed manual-compaction command enabled", () => {
+    const backend = buildAnthropicCliBackend();
+    const manualCompaction = backend.manualCompaction;
+    const baseArgs = backend.config.resumeArgs?.map((arg) =>
+      arg.replaceAll("{sessionId}", "native-session"),
+    );
+    if (!manualCompaction || !baseArgs) {
+      throw new Error("Anthropic CLI backend must expose resumed manual compaction");
+    }
+
+    const argv = [
+      ...resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-8",
+        useResume: true,
+        baseArgs,
+      }),
+      manualCompaction.buildPrompt(),
+    ];
+
+    expect(argv).toContain("/compact");
+    expect(argv).not.toContain("--disable-slash-commands");
+  });
+
   it("isolates OpenClaw from Claude user customizations while preserving exact MCP", () => {
     expect(
       resolveClaudeCliExecutionArgs({

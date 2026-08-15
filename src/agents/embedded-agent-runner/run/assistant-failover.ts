@@ -4,7 +4,6 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { classifyRateLimitWindow } from "../../../llm/utils/rate-limit-window.js";
 import {
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
@@ -17,6 +16,8 @@ import {
   type FailoverReason,
 } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
+import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
 import {
   mergeRetryFailoverReason,
   resolveRunFailoverDecision,
@@ -77,6 +78,7 @@ export async function handleAssistantFailover(params: {
   lastProfileId?: string;
   modelId: string;
   provider: string;
+  providerOwner?: PreparedProviderFailoverOwner;
   activeErrorContext: { provider: string; model: string };
   lastAssistant: AssistantMessage | undefined;
   config: OpenClawConfig | undefined;
@@ -331,6 +333,7 @@ function resolveAssistantFailoverErrorMessage(params: {
   config: OpenClawConfig | undefined;
   sessionKey?: string;
   activeErrorContext: { provider: string; model: string };
+  providerOwner?: PreparedProviderFailoverOwner;
   terminal: AgentRunAttemptTerminal;
   rateLimitFailure: boolean;
   billingFailure: boolean;
@@ -346,6 +349,7 @@ function resolveAssistantFailoverErrorMessage(params: {
           cfg: params.config,
           sessionKey: params.sessionKey,
           provider: params.activeErrorContext.provider,
+          providerOwner: params.providerOwner,
           model: params.activeErrorContext.model,
           authMode: params.authMode,
         })

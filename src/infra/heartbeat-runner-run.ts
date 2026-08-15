@@ -1,7 +1,7 @@
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
-import { sendDurableMessageBatch } from "../channels/message/runtime.js";
+import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { formatErrorMessage } from "./errors.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import {
@@ -22,7 +22,11 @@ import {
   type HeartbeatRunOptions,
 } from "./heartbeat-runner-execution.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
-import { HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, type HeartbeatRunResult } from "./heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_PREEMPTED,
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  type HeartbeatRunResult,
+} from "./heartbeat-wake.js";
 import { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 
@@ -115,7 +119,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           return false;
         }
       }
-      const send = await sendDurableMessageBatch({
+      const send = await sendDurableMessageBatchCore({
         cfg,
         channel: delivery.channel,
         to: delivery.to,
@@ -146,6 +150,14 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         durationMs: Date.now() - startedAt,
       });
       return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+    }
+    if (agentRun.kind === "preempted") {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: HEARTBEAT_SKIP_PREEMPTED,
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED };
     }
     const outcome = classifyHeartbeatAgentOutcome({
       agentRun,

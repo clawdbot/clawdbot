@@ -38,14 +38,14 @@ vi.mock("../../media-generation-task-status.js", () => ({
 }));
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
-import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import {
   forgetPromptBuildDrainCacheForRun,
   mergeOrphanedTrailingUserPrompt,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   shouldInjectHeartbeatPrompt,
-} from "./attempt.prompt-helpers.js";
+} from "./attempt-prompt-helpers.js";
+import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 
 function hasLoneSurrogate(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
@@ -128,13 +128,13 @@ describe("resolveAttemptMediaTaskSystemPromptAddition", () => {
 
     expect(
       imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(
       videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(result).toBe("Image task hint\n\nActive task hint\n\nMusic task hint");
   });
 

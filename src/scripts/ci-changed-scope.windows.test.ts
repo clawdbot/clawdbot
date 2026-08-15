@@ -65,6 +65,28 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes port diagnostics and their native proof to Windows", () => {
+    for (const portPath of ["src/infra/ports-inspect.ts", "src/infra/ports.test.ts"]) {
+      expect(detectChangedScope([portPath]), portPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes LAN advertisement and its native PowerShell proof to Windows", () => {
+    for (const lanPath of [
+      "src/infra/advertised-lan-host.ts",
+      "src/infra/advertised-lan-host.test.ts",
+      "src/infra/advertised-lan-host.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([lanPath]), lanPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes MXC runtime changes and Windows-only suites to Windows", () => {
     for (const mxcPath of [
       "extensions/mxc/src/mxc-backend.ts",
@@ -117,6 +139,11 @@ describe("detectChangedScope Windows routing", () => {
 
   it("routes web and Teams file URL handling to Windows", () => {
     for (const fileUrlPath of [
+      "src/agents/tools/media-tool-file-url.windows.test.ts",
+      "src/agents/tools/media-tool-shared.test.ts",
+      "src/agents/tools/media-tool-shared.ts",
+      "src/agents/tools/pdf-tool.test.ts",
+      "src/agents/tools/pdf-tool.ts",
       "src/media/local-media-path.ts",
       "src/media/local-media-path.windows.test.ts",
       "src/media/local-roots.ts",
@@ -201,7 +228,72 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
-  it("routes SecretRef path-security changes and native fixtures to Windows", () => {
+  it("routes OS-home path owners and native tool coverage to Windows", () => {
+    for (const homePath of [
+      "src/infra/home-dir.ts",
+      "src/infra/home-dir.test.ts",
+      "src/agents/agent-tools.read.ts",
+      "src/agents/agent-tools.read.host-operations.test.ts",
+      "src/agents/agent-tools.read.windows.test.ts",
+      "src/agents/sessions/tools/path-utils.ts",
+      "src/agents/sessions/tools/path-utils.test.ts",
+    ]) {
+      expect(detectChangedScope([homePath]), homePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes child environment resolution and native doctor coverage to Windows", () => {
+    for (const envPath of [
+      "src/agents/provider-local-service.ts",
+      "src/agents/provider-local-service.env-case.test.ts",
+      "src/cli/mcp-cli.ts",
+      "src/cli/mcp-cli.test.ts",
+      "src/cli/mcp-cli.path-case.windows.test.ts",
+      "src/infra/process-env.ts",
+      "src/infra/process-env.test.ts",
+    ]) {
+      expect(detectChangedScope([envPath]), envPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes node-host executable resolution and native coverage to Windows", () => {
+    for (const executablePath of [
+      "src/plugin-sdk/node-host.ts",
+      "src/plugin-sdk/node-host.test.ts",
+      "src/process/terminal-pty.test.ts",
+      "src/tui/tui.ts",
+      "src/tui/tui.resolve-codex-bin.test.ts",
+    ]) {
+      expect(detectChangedScope([executablePath]), executablePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes explicit memory extra-file owners and native coverage to Windows", () => {
+    for (const memoryPath of [
+      "packages/memory-host-sdk/src/host/explicit-extra-markdown.ts",
+      "packages/memory-host-sdk/src/host/internal.ts",
+      "packages/memory-host-sdk/src/host/internal.test.ts",
+      "packages/memory-host-sdk/src/host/read-file.ts",
+      "extensions/memory-core/src/cli-runtime-common.ts",
+      "extensions/memory-core/src/memory-extra-file-path.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([memoryPath]), memoryPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes SecretRef path-security changes and focused owner coverage to Windows", () => {
     for (const secretRefPath of [
       "src/commands/doctor-gateway-auth-token.ts",
       "src/commands/doctor-gateway-auth-token.windows.test.ts",
@@ -214,11 +306,7 @@ describe("detectChangedScope Windows routing", () => {
       "src/infra/permissions.ts",
       "src/secrets/resolve-errors.ts",
       "src/secrets/resolve.ts",
-      "src/secrets/test-node-command.test-support.ts",
       "src/security/audit-fs.ts",
-      "src/test-utils/vitest-spies.ts",
-      "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
-      "test/fixtures/windows-acl-tools-unavailable.mjs",
     ]) {
       expect(detectChangedScope([secretRefPath]), secretRefPath).toMatchObject({
         runNode: true,
@@ -227,10 +315,11 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
-  it("does not route SecretRef unit tests omitted from the Windows shard", () => {
+  it("does not route SecretRef tests owned by non-Windows lanes", () => {
     for (const testPath of [
       "src/gateway/resolve-configured-secret-input-string.test.ts",
       "src/secrets/resolve.test.ts",
+      "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
     ]) {
       expect(detectChangedScope([testPath]).runWindows, testPath).toBe(false);
     }

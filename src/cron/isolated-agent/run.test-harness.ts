@@ -137,7 +137,6 @@ vi.mock("./run.runtime.js", async () => ({
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
   resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
-  resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
   resolveCronStyleNow: resolveCronStyleNowMock,
   DEFAULT_CONTEXT_TOKENS: 128000,
   isCliProvider: isCliProviderMock,
@@ -243,7 +242,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   getModelRefStatus: getModelRefStatusMock,
   normalizeModelSelection: normalizeModelSelectionForTest,
-  resolveAllowedModelRef: resolveAllowedModelRefMock,
+  resolveAllowedModelRefCore: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
   resolveSubagentModelConfigSelectionResult: ({
@@ -381,7 +380,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   return {
     ...actual,
     replaceSessionEntry: replaceSessionEntryMock,
-    patchSessionEntry: patchSessionEntryMock,
+    patchSessionEntryCore: patchSessionEntryMock,
   };
 });
 
@@ -789,7 +788,7 @@ function resetRunSessionMocks(): void {
 }
 
 /**
- * In-memory stand-in for the SQLite accessor `patchSessionEntry` used by the
+ * In-memory stand-in for the SQLite accessor `patchSessionEntryCore` used by the
  * cron persist path. Prod flips real session storage to per-agent SQLite, but
  * these orchestration tests must stay off disk. The store keys on
  * storePath+sessionKey so successive persists in one run observe the row the

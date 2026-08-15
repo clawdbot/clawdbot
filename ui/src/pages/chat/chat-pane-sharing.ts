@@ -27,6 +27,7 @@ import {
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
   type ChatPaneConnectionScope,
 } from "./chat-pane-shared.ts";
+import { resetSessionCompanion } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import {
@@ -35,6 +36,26 @@ import {
 } from "./components/chat-session-sharing.ts";
 
 export abstract class ChatPaneSharing extends ChatPaneBase {
+  protected readonly clearSessionCompanion = async () => {
+    const scope = this.captureConnectionScope();
+    const key = scope?.state.sessionKey;
+    if (!scope || !key) {
+      return;
+    }
+    const agentId = resolveChatAgentId(scope.state);
+    await this.sessionCompanionThreads
+      .reset(key, (sessionKey) => resetSessionCompanion(scope.client, sessionKey, agentId), agentId)
+      .catch((error: unknown) => {
+        if (
+          this.presented &&
+          this.isConnectionScopeCurrent(scope) &&
+          scope.state.sessionKey === key
+        ) {
+          this.publishHeaderError(error);
+        }
+      });
+  };
+
   protected setSessionSharingState(cacheKey: string, state: ChatSessionSharingState): void {
     this.sessionSharingStates = new Map(this.sessionSharingStates).set(cacheKey, state);
   }
@@ -142,8 +163,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       loading: false,
       error: String(error),
     });
-    // Sharing errors stay with their session; the visible page slot belongs
-    // only to the selected session after same-connection navigation.
+    // Sharing errors stay with their session; the visible slot belongs only to the selected session.
     if (areUiSessionKeysEquivalent(this.state?.sessionKey, sessionKey)) {
       this.publishHeaderError(error);
     }
@@ -252,33 +272,24 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
   }
 
   protected captureConnectionScope(): ChatPaneConnectionScope | null {
-    const context = this.context;
     const state = this.state;
-    const client = state?.client;
-    if (
-      !this.isConnected ||
-      !state?.connected ||
-      !client ||
-      this.connectedClient !== client ||
-      context.gateway.snapshot.phase !== "connected" ||
-      context.gateway.snapshot.client !== client
-    ) {
+    if (!state?.client) {
       return null;
     }
-    return {
-      context,
+    const scope = {
+      context: this.context,
       state,
-      client,
+      client: state.client,
       generation: this.connectionGeneration,
-      sessions: context.sessions,
+      sessions: this.context.sessions,
     };
+    return this.isConnectionScopeCurrent(scope) ? scope : null;
   }
 
   protected isConnectionScopeCurrent(scope: ChatPaneConnectionScope): boolean {
     return (
       this.isConnected &&
       this.context === scope.context &&
-      this.context.sessions === scope.sessions &&
       this.state === scope.state &&
       scope.state.connected &&
       scope.state.client === scope.client &&

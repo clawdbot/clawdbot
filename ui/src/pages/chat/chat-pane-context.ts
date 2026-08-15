@@ -1,3 +1,4 @@
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { invalidateAssistantIdentityCache } from "../../app/assistant-identity.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
@@ -22,6 +23,7 @@ import {
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
+import { reclaimChatPanePlacement } from "./chat-pane-placement.ts";
 import { applySelectedSessionProjection } from "./chat-pane-state.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
@@ -48,9 +50,33 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
 
   override disconnectedCallback() {
+    this.continueInTerminalDialog = null;
     this.gatewayConnectionLifecycle?.dispose();
     this.gatewayConnectionLifecycle = undefined;
     super.disconnectedCallback();
+  }
+
+  protected async reclaimHeaderPlacement(row: GatewaySessionRow): Promise<void> {
+    const onReclaimingChange = (reclaimingKey: string | null) => {
+      // A later reclaim may take ownership before this request settles. Only
+      // the request that still owns the row may clear the pane's progress key.
+      if (reclaimingKey !== null || this.headerPlacementReclaimingKey === row.key) {
+        this.headerPlacementReclaimingKey = reclaimingKey;
+      }
+    };
+    await reclaimChatPanePlacement({
+      client: this.connectedClient,
+      connectionGeneration: this.connectionGeneration,
+      gatewaySnapshot: this.context.gateway.snapshot,
+      reclaimingKey: this.headerPlacementReclaimingKey,
+      row,
+      isCurrent: (client, generation) =>
+        this.connectedClient === client && this.connectionGeneration === generation,
+      onReclaimingChange,
+      publishError: (error) => this.publishHeaderError(error),
+      refreshReplacement: (agentId) => this.context.sessions.refreshReplacement(agentId),
+      requestUpdate: () => this.requestUpdate(),
+    });
   }
 
   protected applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {
@@ -79,7 +105,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     this.refreshSwarmRoster();
     const selectedSession = selectedChatSessionRow(state);
     if (applySelectedSessionProjection(state, selectedSession)) {
-      this.markSessionRead(selectedSession);
+      // Hidden retained panes keep this subscription alive; only the pane the
+      // user is actually looking at may clear unread/attention state.
+      if (this.presented) {
+        this.markSessionRead(selectedSession);
+      }
     }
     this.syncSessionSuggestionTarget(
       stateValue.agentId ?? resolveChatAgentId(state) ?? "main",
@@ -90,8 +120,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         parseAgentSessionKey(state.sessionKey)?.agentId ??
         this.context.agentSelection.state.selectedId ??
         "main";
-      this.onPaneSessionChange?.(
+      this.onSessionDeleted?.(
         this.paneId,
+        state.sessionKey,
         buildAgentMainSessionKey({
           agentId,
           mainKey: resolveUiConfiguredMainKey({
@@ -179,6 +210,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presencePayload = presence ? { presence } : undefined;
     }
     if (sourceChanged) {
+      this.continueInTerminalDialog = null;
       this.cancelHeaderRename();
       cancelChatScroll(state);
       releaseChatMediaResourceSubscriber(state.requestUpdate);
@@ -209,6 +241,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.sessionDiscussionOpenUrls.clear();
       this.sessionDiscussionPanels.clear();
       this.sessionParticipationTracker.reset();
+      if (state.client !== snapshot.client) {
+        this.sessionCompanionThreads.retire();
+      }
       // A new gateway/account owns its own membership + identity data; drop the
       // previous connection's sharing cache so a stale loading entry cannot
       // suppress the fresh load or leak the prior account's identities.
@@ -281,7 +316,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (
       routeSessionKey &&
       canonicalRouteSessionKey &&
-      canonicalRouteSessionKey !== routeSessionKey
+      canonicalRouteSessionKey !== routeSessionKey &&
+      this.active &&
+      this.presented
     ) {
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
       state.requestUpdate?.();

@@ -15,7 +15,6 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
-import { renderDevicePairSetup } from "../pages/devices/view-pairing.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -26,7 +25,12 @@ import { findInlineApproval } from "./approval-presentation.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { isOptionalElementDefined, type OptionalCustomElement } from "./lazy-custom-element.ts";
+import { readScopeUpgradeAvailability } from "./device-scope-upgrade.ts";
+import {
+  ensureOptionalElementForHost,
+  isOptionalElementDefined,
+  type OptionalCustomElement,
+} from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
@@ -38,12 +42,45 @@ import {
   loadSettings,
   normalizeCatalogOpenTarget,
 } from "./settings.ts";
+import type { UpdateProgress } from "./update-confirmation.ts";
 
 const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
 const EMPTY_SESSION_HAS_DRAFT = () => false;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
+
+const SCOPE_UPGRADE_BANNER_ELEMENT = {
+  tagName: "openclaw-device-scope-upgrade-banner",
+  label: "device scope upgrade banner",
+  loadModule: () => import("./device-scope-upgrade.runtime.ts"),
+} satisfies OptionalCustomElement;
+
+function renderScopeUpgradeBanner(
+  host: ShellViewHost,
+  snapshot: ApplicationContext["gateway"]["snapshot"],
+) {
+  const state = readScopeUpgradeAvailability(snapshot);
+  if (state.phase === "hidden") {
+    return nothing;
+  }
+  void ensureOptionalElementForHost(host, SCOPE_UPGRADE_BANNER_ELEMENT).catch(() => undefined);
+  if (isOptionalElementDefined(SCOPE_UPGRADE_BANNER_ELEMENT)) {
+    return html`<openclaw-device-scope-upgrade-banner
+      .props=${{
+        snapshot,
+      }}
+    ></openclaw-device-scope-upgrade-banner>`;
+  }
+  return html`<openclaw-update-banner
+    .props=${{
+      statusBanner: {
+        tone: "warn",
+        text: t("connection.scopeUpgrade.guidance"),
+      },
+    }}
+  ></openclaw-update-banner>`;
+}
 
 export interface ShellViewHost {
   readonly context: ApplicationContext<RouteId> | undefined;
@@ -63,8 +100,12 @@ export interface ShellViewHost {
   readonly settingsSearchQuery: string;
   readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
   readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
+  readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
+  readonly devicePairSetupLoadFailed: boolean;
+  loadDevicePairSetupRenderer(): void;
+  retryDevicePairSetupRenderer(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
-  draftSessionAgentId(): string;
+  newSessionRouteAgentId(): string;
   enabledRouteIds(): readonly RouteId[];
   exitSettings(): void;
   handleCommandPaletteSlashCommand(command: string): void;
@@ -78,10 +119,90 @@ export interface ShellViewHost {
   openPalette(): void;
   refreshControlUi(): void;
   replaceChatWithCurrentSession(): boolean;
+  requestUpdate(): void;
   resizeNavigation(splitRatio: number): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost;
   toggleNavigationSurface(trigger?: HTMLElement): void;
+}
+
+type DevicePairSetupModule = typeof import("../pages/devices/view-pairing.runtime.ts");
+type DevicePairSetupProps = Parameters<DevicePairSetupModule["renderDevicePairSetup"]>[0];
+
+// Lazy: the pairing modal stays out of the startup chunk (perf budget); it is
+// fetched the first time an operator opens Pair mobile device. The eager shell
+// stays visible during that import so the action never appears to do nothing.
+function renderLazyDevicePairSetup(host: ShellViewHost, props: DevicePairSetupProps) {
+  if (!props.open) {
+    return nothing;
+  }
+  const renderer = host.devicePairSetupRenderer;
+  if (renderer) {
+    return renderer(props);
+  }
+  if (host.devicePairSetupLoadFailed) {
+    return renderDevicePairSetupLoadFailure(host, props);
+  }
+  host.loadDevicePairSetupRenderer();
+  return renderDevicePairSetupLoading(props);
+}
+
+function renderDevicePairSetupLoading(props: DevicePairSetupProps) {
+  const title = t("devices.pairing.title");
+  const message = t("common.loading");
+  return html`<openclaw-modal-dialog
+    label=${title}
+    description=${message}
+    @modal-cancel=${props.onClose}
+  >
+    <section class="device-pair-setup" aria-busy="true">
+      <header class="device-pair-setup__header">
+        <div>
+          <h2>${title}</h2>
+          <p role="status">${message}</p>
+        </div>
+      </header>
+      <footer class="device-pair-setup__footer">
+        <button class="btn btn--ghost" type="button" @click=${props.onClose}>
+          ${t("common.close")}
+        </button>
+      </footer>
+    </section>
+  </openclaw-modal-dialog>`;
+}
+
+// The pairing chunk failed to load while its overlay is open. Reuse the eager
+// modal chrome so the operator still gets a dialog, a reason, and a retry
+// instead of a silently empty surface.
+function renderDevicePairSetupLoadFailure(host: ShellViewHost, props: DevicePairSetupProps) {
+  const title = t("devices.pairing.title");
+  const message = t("devices.pairing.loadFailed");
+  return html`<openclaw-modal-dialog
+    label=${title}
+    description=${message}
+    @modal-cancel=${props.onClose}
+  >
+    <section class="device-pair-setup">
+      <header class="device-pair-setup__header">
+        <div>
+          <h2>${title}</h2>
+          <p>${message}</p>
+        </div>
+      </header>
+      <footer class="device-pair-setup__footer">
+        <button
+          class="btn btn--primary"
+          type="button"
+          @click=${() => host.retryDevicePairSetupRenderer()}
+        >
+          ${t("common.retry")}
+        </button>
+        <button class="btn btn--ghost" type="button" @click=${props.onClose}>
+          ${t("common.close")}
+        </button>
+      </footer>
+    </section>
+  </openclaw-modal-dialog>`;
 }
 
 export function renderApplicationShell(host: ShellViewHost) {
@@ -122,6 +243,29 @@ export function renderApplicationShell(host: ShellViewHost) {
     : EMPTY_SESSION_HAS_DRAFT;
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
+  // The install keeps running after `update.run` answers, so the reconciliation
+  // — not the request — decides how long the update surfaces stay busy.
+  const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
+  // The update dialog outlives this render and the connection, so it reads live
+  // snapshots rather than the values captured here.
+  const watchUpdateProgress = (listener: (progress: UpdateProgress) => void) => {
+    const emit = () => {
+      const update = context.overlays.snapshot;
+      const banner = update.updateStatusBanner;
+      listener({
+        busy: update.updateRunning || update.updateReconciliationPending,
+        connected: context.gateway.snapshot.phase === "connected",
+        failure: banner && banner.tone !== "info" ? banner.text : null,
+      });
+    };
+    const stopOverlays = context.overlays.subscribe(emit);
+    const stopGateway = context.gateway.subscribe(emit);
+    emit();
+    return () => {
+      stopOverlays();
+      stopGateway();
+    };
+  };
   const terminalAvailable = isTerminalAvailable(
     gatewaySnapshot,
     context.config.current.terminalEnabled ?? false,
@@ -172,12 +316,18 @@ export function renderApplicationShell(host: ShellViewHost) {
     mobileNavLayout,
   });
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
-  // Mirror the sidebar brand action: an open new-session draft wins over the
-  // persisted selection so the collapsed cluster "+" targets the same agent.
-  const selectedAgentId = normalizeAgentId(
-    host.draftSessionAgentId() ||
-      (context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId),
-  );
+  // A route query is navigation input, not an owner record. Let it override the
+  // live selection only after the roster proves that agent exists.
+  const requestedRouteAgentId = host.newSessionRouteAgentId();
+  const routeAgentId = requestedRouteAgentId ? normalizeAgentId(requestedRouteAgentId) : null;
+  const routeAgentIsKnown =
+    routeAgentId !== null &&
+    context.agents.state.agentsList?.agents.some(
+      (agent) => normalizeAgentId(agent.id) === routeAgentId,
+    ) === true;
+  const selectedAgentId = routeAgentIsKnown
+    ? routeAgentId
+    : normalizeAgentId(context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId);
   const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
     method: "sessions.create",
     params: {},
@@ -232,7 +382,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
       updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
       heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
-      updateRunning: overlaySnapshot.updateRunning,
+      updateBusy,
+      updateStatusBanner: overlaySnapshot.updateStatusBanner,
+      watchUpdateProgress,
       canUpdate,
       canHoldUpdate,
       onUpdate: () => void context.overlays.runUpdate(),
@@ -242,13 +394,11 @@ export function renderApplicationShell(host: ShellViewHost) {
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
-      draftSessionAgentId: host.draftSessionAgentId(),
       onUpdateSidebarEntries: (entries: string[]) =>
         context.navigation.update({ sidebarEntries: entries }),
       onPairMobile: () => void context.overlays.openDevicePairSetup(),
       onNavigate: (routeId: string, options?: ApplicationNavigationOptions) =>
         host.navigate(routeId, options),
-      onCloseNavDrawer: () => host.closeNavDrawer({ restoreFocus: true }),
       onPreloadRoute: (routeId: string) =>
         isRouteId(routeId) ? context.preload(routeId) : Promise.resolve(),
     });
@@ -268,7 +418,9 @@ export function renderApplicationShell(host: ShellViewHost) {
         updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
         updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
-        updateRunning: overlaySnapshot.updateRunning,
+        updateBusy,
+        updateStatusBanner: overlaySnapshot.updateStatusBanner,
+        watchUpdateProgress,
         canUpdate,
         canHoldUpdate,
         onUpdate: () => void context.overlays.runUpdate(),
@@ -295,8 +447,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             runtimeConfig.configLoading ||
             runtimeConfig.configSaving ||
             (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
-            overlaySnapshot.updateRunning ||
-            overlaySnapshot.updateReconciliationPending,
+            updateBusy,
           onRetry: () => void context.runtimeConfig.save(),
           onReload: () => void context.runtimeConfig.discardDraft(),
           onApply: () => void context.runtimeConfig.apply(),
@@ -431,6 +582,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
       >
+        ${renderScopeUpgradeBanner(host, gatewaySnapshot)}
         ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
           ? // The migration banner is registered by a rare-flow dynamic import after first render.
             customElements.get("openclaw-device-auth-migration-banner")
@@ -451,18 +603,15 @@ export function renderApplicationShell(host: ShellViewHost) {
                 }}
               ></openclaw-update-banner>`
           : nothing}
-        <openclaw-update-banner
-          .props=${{
-            statusBanner: overlaySnapshot.updateStatusBanner,
-          }}
-        ></openclaw-update-banner>
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           onboarding,
           updateAvailable: overlaySnapshot.updateAvailable,
           updateSchedule: overlaySnapshot.updateSchedule,
           heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
-          updateRunning: overlaySnapshot.updateRunning,
+          updateBusy,
+          statusBanner: overlaySnapshot.updateStatusBanner,
+          watchUpdateProgress,
           canUpdate,
           canHoldUpdate,
           onUpdate: () => void context.overlays.runUpdate(),
@@ -480,11 +629,13 @@ export function renderApplicationShell(host: ShellViewHost) {
       <openclaw-terminal-panel
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
+        .agentId=${selectedAgentId}
         .suppressed=${settingsTakeover}
         .themeMode=${resolveTerminalThemeMode()}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
       <openclaw-browser-panel
+        data-chat-autotype-exempt
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${browserPanelAvailable}
         .suppressed=${settingsTakeover}
@@ -496,6 +647,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         })}
       ></openclaw-browser-panel>
       <openclaw-desktop-panel
+        data-chat-autotype-exempt
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${desktopPanelAvailable}
         .suppressed=${settingsTakeover}
@@ -520,12 +672,10 @@ export function renderApplicationShell(host: ShellViewHost) {
             }}
           ></openclaw-exec-approval>`
         : nothing}
-      ${renderDevicePairSetup({
+      ${renderLazyDevicePairSetup(host, {
         open: overlaySnapshot.devicePairSetupOpen,
-        loading: overlaySnapshot.devicePairSetupLoading,
-        error: overlaySnapshot.devicePairSetupError,
-        setup: overlaySnapshot.devicePairSetup,
-        access: overlaySnapshot.devicePairSetupAccess,
+        lifecycle: overlaySnapshot.devicePairSetupLifecycle,
+        nowMs: Date.now(),
         pendingCount: overlaySnapshot.devicePairPendingCount,
         onRefresh: () => void context.overlays.refreshDevicePairSetup(),
         onAccessChange: (access) => void context.overlays.setDevicePairSetupAccess(access),

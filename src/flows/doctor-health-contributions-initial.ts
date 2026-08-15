@@ -59,6 +59,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:write-config-migrations",
       label: "Write config migrations",
+      required: true,
       run: runInitialConfigWriteHealth,
     }),
     createDoctorHealthContribution({

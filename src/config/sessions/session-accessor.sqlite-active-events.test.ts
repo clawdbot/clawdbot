@@ -11,7 +11,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptActiveLeafEvents,
+  readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageAnchorPage,
@@ -113,9 +113,8 @@ describe("SQLite active transcript event projection", () => {
       "root",
       "active",
     ]);
-    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
-      expect.objectContaining({ id: "active" }),
-    ]);
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "active")).toBe("exact");
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "root")).toBe("ancestor");
     expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(page.totalMessages).toBe(2);
     expect(
@@ -343,11 +342,38 @@ describe("SQLite active transcript event projection", () => {
         maxMessages: 1,
       }).activeLeafEntryId,
     ).toBe("newer-compaction");
-    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
-      expect.objectContaining({ id: "newer-compaction" }),
-    ]);
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "newer-compaction")).toBe("exact");
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "post-reset")).toBe("ancestor");
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(5);
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
+  });
+
+  it("fails closed when the latest indexed reset payload is malformed", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "old", parentId: null, message: { role: "user", content: "old" } },
+        {
+          eventId: "kept",
+          parentId: "old",
+          message: { role: "assistant", content: "kept" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "kept",
+      timestamp: "2026-08-12T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: "kept",
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    database.db
+      .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 3")
+      .run(scope.sessionId);
+
+    expect(() => readSessionTranscriptMessageEventCount(scope)).toThrow();
   });
 
   it("recomputes a cached reset window after a branch-changing message", async () => {

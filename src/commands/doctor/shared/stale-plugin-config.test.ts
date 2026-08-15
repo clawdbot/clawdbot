@@ -41,7 +41,7 @@ describe("doctor stale plugin config helpers", () => {
   beforeEach(() => {
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReset();
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReturnValue({});
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue({
       plugins: [manifest("discord"), manifest("voice-call"), manifest("openai")],
       diagnostics: [],
     });
@@ -473,7 +473,7 @@ describe("doctor stale plugin config helpers", () => {
 
     expect(scanStalePluginConfig(cfg)).toStrictEqual([]);
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
-    expect(manifestRegistry.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(manifestRegistry.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
   });
 
   it("uses missing persisted install records as stale channel evidence", () => {
@@ -500,7 +500,7 @@ describe("doctor stale plugin config helpers", () => {
   });
 
   it("does not auto-repair stale refs while plugin discovery has errors", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue({
       plugins: [],
       diagnostics: [
         { level: "error", message: "plugin path not found: /missing", source: "/missing" },

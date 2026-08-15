@@ -41,6 +41,7 @@ const loadChannelBootstrapRuntime = createLazyRuntimeModule(
 );
 export async function resolveChannelOutboundDirectiveOptions(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   channel: string;
 }): Promise<{ extractMarkdownImages?: boolean }> {
   const { outbound } = await loadBootstrappedOutboundAdapter(params);
@@ -63,6 +64,7 @@ export async function createChannelHandler(params: ChannelHandlerParams): Promis
 
 async function loadBootstrappedOutboundAdapter(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   channel: string;
 }): Promise<{ outbound?: ChannelOutboundAdapter; pluginRegistry?: PluginRegistry }> {
   let outbound = await loadChannelOutboundAdapter(params.channel);
@@ -73,6 +75,7 @@ async function loadBootstrappedOutboundAdapter(params: {
   const pluginRegistry = bootstrapOutboundChannelPlugin({
     channel: params.channel,
     cfg: params.cfg,
+    agentId: params.agentId,
   });
   outbound = pluginRegistry?.channels.find((entry) => entry.plugin.id === params.channel)?.plugin
     .outbound;
@@ -157,6 +160,7 @@ async function runChannelMessageSendWithLifecycle<
 
 export async function resolveOutboundDurableFinalDeliverySupport(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   channel: string;
   requirements?: DurableFinalDeliveryRequirements;
 }): Promise<OutboundDurableDeliverySupport> {
@@ -372,6 +376,14 @@ function createPluginHandler(
             target,
             payload,
             results,
+          })
+      : undefined,
+    adoptTargetFromDelivery: outbound?.adoptTargetFromDelivery
+      ? ({ target, result }) =>
+          outbound.adoptTargetFromDelivery!({
+            cfg: params.cfg,
+            target,
+            result,
           })
       : undefined,
     shouldSkipPlainTextSanitization: outbound?.shouldSkipPlainTextSanitization

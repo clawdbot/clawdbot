@@ -24,15 +24,11 @@ function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
 ): GatewayRequestContextParams {
   const config = {} as never;
-  const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
+  const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: "/tmp/cron",
       cronEnabled: true,
-    },
-    configReloader: {
-      stop: vi.fn(async () => {}),
-      notifyPluginMetadataChanged: vi.fn(),
     },
   };
   return {
@@ -48,11 +44,13 @@ function makeContextParams(
     isTerminalEnabled: vi.fn(() => false),
     execApprovalManager: undefined,
     pluginApprovalManager: undefined,
+    validateAgentRuntimeApprovalAuthority: () => false,
     listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
     loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
       agentId: "main",
       agentDir: "/tmp/model-catalog-agent",
+      catalogComplete: false,
       workspaceDir: "/tmp/model-catalog-workspace",
       config,
       entries: [],
@@ -102,6 +100,8 @@ function makeContextParams(
     channelWizardRunner: vi.fn(async () => undefined),
     broadcastVoiceWakeChanged: vi.fn(),
     broadcastVoiceWakeRoutingChanged: vi.fn(),
+    notifyPluginMetadataChanged: vi.fn(),
+    getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
     unavailableGatewayMethods: new Set(),
     ...overrides,
   };
@@ -160,15 +160,11 @@ describe("createGatewayRequestContext", () => {
   it("reads cron state live from runtime state", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
     const cronB = { start: vi.fn(), stop: vi.fn() } as never;
-    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
+    const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
       cronState: {
         cron: cronA,
         storePath: "/tmp/cron-a",
         cronEnabled: true,
-      },
-      configReloader: {
-        stop: vi.fn(async () => {}),
-        notifyPluginMetadataChanged: vi.fn(),
       },
     };
 
@@ -187,36 +183,37 @@ describe("createGatewayRequestContext", () => {
     expect(context.cronStorePath).toBe("/tmp/cron-b");
   });
 
-  it("reads config hot-reload status live from runtime state", () => {
-    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
-      cronState: {
-        cron: { start: vi.fn(), stop: vi.fn() } as never,
-        storePath: "/tmp/cron",
-        cronEnabled: true,
-      },
-      configReloader: {
-        stop: vi.fn(async () => {}),
-        notifyPluginMetadataChanged: vi.fn(),
-      },
-    };
-
-    const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
+  it("reads config hot-reload status through the live kernel bridge", () => {
+    let status: "active" | "disabled" | undefined;
+    const context = createGatewayRequestContext(
+      makeContextParams({ getConfigReloaderHotReloadStatus: () => status }),
+    );
 
     expect(context.getConfigReloaderHotReloadStatus?.()).toBeUndefined();
 
-    runtimeState.configReloader = {
-      stop: vi.fn(async () => {}),
-      hotReloadStatus: () => "active",
-      notifyPluginMetadataChanged: vi.fn(),
-    };
+    status = "active";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("active");
 
-    runtimeState.configReloader = {
-      stop: vi.fn(async () => {}),
-      hotReloadStatus: () => "disabled",
-      notifyPluginMetadataChanged: vi.fn(),
-    };
+    status = "disabled";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
+  });
+
+  it("publishes the worker disk-space reader through the kernel bridge", () => {
+    const workerPlacementDiskSpaceReader = { read: vi.fn(), version: vi.fn(() => 1) };
+    const context = createGatewayRequestContext(
+      makeContextParams({ workerPlacementDiskSpaceReader }),
+    );
+
+    expect(context.workerPlacementDiskSpaceReader).toBe(workerPlacementDiskSpaceReader);
+  });
+
+  it("routes plugin metadata changes through the kernel bridge", () => {
+    const notifyPluginMetadataChanged = vi.fn();
+    const context = createGatewayRequestContext(makeContextParams({ notifyPluginMetadataChanged }));
+
+    context.notifyPluginMetadataChanged();
+
+    expect(notifyPluginMetadataChanged).toHaveBeenCalledOnce();
   });
 
   it("does not treat scoped CLI or backend callers as approval delivery routes", () => {

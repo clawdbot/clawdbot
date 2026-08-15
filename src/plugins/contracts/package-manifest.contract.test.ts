@@ -1,5 +1,5 @@
-import { describePackageManifestContract } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
+import { describePackageManifestContract } from "../../plugin-sdk/test-helpers/package-manifest-contract.js";
 import { validatePackageExtensionEntriesForInstall } from "../package-entry-resolution.js";
 import {
   getPackageManifestMetadata,
@@ -71,10 +71,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "openshell" },
-  {
-    pluginId: "qqbot",
-    pluginLocalRuntimeDeps: ["@tencent-connect/qqbot-connector", "mpg123-decoder", "silk-wasm"],
-  },
   { pluginId: "slack" },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "telegram" },

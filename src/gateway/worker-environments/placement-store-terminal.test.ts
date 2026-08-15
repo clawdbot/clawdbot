@@ -7,7 +7,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import type { WorkerSessionPlacementIdentity, WorkerSessionTurnClaim } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -143,7 +143,11 @@ describe("worker placement terminal persistence", () => {
 
   it("atomically fails a pending result and preserves its bounded reason across restart", () => {
     advanceToActive();
-    const { active, pending } = pendingResult();
+    const { active, claim, pending } = pendingResult();
+    const closedClaims: WorkerSessionTurnClaim[] = [];
+    const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
+      closedClaims.push(closedClaim);
+    });
     nowMs = 2_000;
     const disappearance = `cloud worker disappeared: ${"provider-detail ".repeat(100)}`;
 
@@ -158,6 +162,8 @@ describe("worker placement terminal persistence", () => {
     expect(failed.terminalReason).toMatch(/^cloud worker disappeared: provider-detail/u);
     expect(failed.recoveryError).toBe(failed.terminalReason);
     expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(closedClaims).toEqual([claim]);
+    unregister();
 
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
@@ -165,6 +171,51 @@ describe("worker placement terminal persistence", () => {
     const reopened = store.get(SESSION.sessionId);
     expect(reopened).toMatchObject({ state: "failed", terminalAtMs: 2_000 });
     expect(reopened?.terminalReason).toBe(failed.terminalReason);
+  });
+
+  it("does not fail a pending result while its session operation is running", () => {
+    advanceToActive();
+    const { active, claim, pending } = pendingResult();
+    const binding = {
+      sessionId: claim.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      runId: claim.runId,
+    };
+    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        binding,
+        toolName: "sessions_send",
+        toolCallId: "call-pending-send",
+        requestDigest: "digest-pending-send",
+      }),
+    ).toMatchObject({ kind: "execute" });
+
+    expect(() =>
+      store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
+    ).toThrow("running worker session operation");
+    expect(store.get(claim.sessionId)).toMatchObject({
+      state: "active",
+      turnClaim: { claimId: claim.claimId },
+    });
+    expect(store.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: claim.sessionId, claimId: claim.claimId },
+    ]);
+
+    expect(
+      store.completeWorkerSessionToolOperation({
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "call-pending-send",
+        requestDigest: "digest-pending-send",
+        resultJson: '{"status":"ok"}',
+      }),
+    ).toBe(true);
+    expect(
+      store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
+    ).toMatchObject({ state: "failed", turnClaim: null });
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
 
   it("does not leak terminal diagnostics between sessions sharing an environment", () => {

@@ -16,6 +16,7 @@ import {
   sendCronAnnouncePayloadStrict,
   sendFailureNotificationAnnounce,
 } from "../cron/delivery.js";
+import { cronFailureDetailLines } from "../cron/failure-notification-text.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import type { CronEvent } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
@@ -152,13 +153,12 @@ function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> 
 }
 
 function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }) {
-  const failureMessage = `Automation "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
   return {
     jobId: params.job.id,
     jobName: params.job.name,
-    message: failureMessage,
+    message: `Automation "${params.job.name}" ${params.evt.status === "error" ? "failed" : "delivery failed"}: ${params.evt.error ?? params.evt.deliveryError ?? "unknown error"}`,
     status: params.evt.status,
-    error: params.evt.error,
+    error: params.evt.error ?? params.evt.deliveryError,
     runAtMs: params.evt.runAtMs,
     durationMs: params.evt.durationMs,
     nextRunAtMs: params.evt.nextRunAtMs,
@@ -515,12 +515,16 @@ function dispatchCronFailureDestinationNotifications(params: {
   ssrfPolicy?: SsrFPolicy;
   globalFailureDestination?: CronFailureDestinationConfig;
 }): void {
-  if (params.evt.status !== "error" || !params.job || params.job.delivery?.bestEffort === true) {
+  if (!params.job || params.job.delivery?.bestEffort === true) {
     return;
   }
 
   const job = params.job;
   const failureDest = resolveFailureDestination(job, params.globalFailureDestination);
+  const deliveryFailed = params.evt.deliveryStatus === "not-delivered";
+  if (params.evt.status !== "error" && (!deliveryFailed || !failureDest)) {
+    return;
+  }
   const deliverySessionKey = resolveCronDeliverySessionKey(job);
   const failurePayload = buildCronFailureWebhookPayload({ evt: params.evt, job });
 
@@ -569,7 +573,7 @@ function dispatchCronFailureDestinationNotifications(params: {
         to: failureDest.to,
         accountId: failureDest.accountId,
         sessionKey: deliverySessionKey,
-        // Explicit failure routes keep run context without inheriting the primary topic.
+        // Explicit failure routes escape rejected primary delivery without inheriting its topic.
         inheritSessionThread: false,
       }
     : primaryPlan.mode === "announce" && primaryPlan.requested
@@ -586,16 +590,16 @@ function dispatchCronFailureDestinationNotifications(params: {
   }
 
   const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(job.agentId);
+  const failureAlertText = [
+    `Automation "${job.name}" ${params.evt.status === "error" ? "failed" : "delivery failed"}`,
+    ...cronFailureDetailLines(job.state.lastErrorReason),
+  ].join("\n");
   dispatchDetachedCronNotification({
     jobId: job.id,
     logger: params.logger,
     deliver: () =>
       sendFailureNotificationAnnounce(params.deps, runtimeConfig, agentId, job.id, announceTarget, {
-        text: appendCronRunStarted(
-          `⚠️ ${failurePayload.message}`,
-          params.evt.runAtMs,
-          runtimeConfig,
-        ),
+        text: appendCronRunStarted(`⚠️ ${failureAlertText}`, params.evt.runAtMs, runtimeConfig),
       }),
   });
 }

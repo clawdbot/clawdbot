@@ -184,6 +184,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         ? (event.detail as TerminalPanelToggleDetail)
         : null;
     const dock = detail?.dock === "right" || detail?.dock === "bottom" ? detail.dock : null;
+    if (detail?.agentId !== undefined) {
+      this.agentId = detail.agentId;
+    }
     if (dock) {
       this.dockLayout.setDock(dock, false);
     }
@@ -196,7 +199,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         return;
       }
       if (detail.catalog) {
-        this.dockLayout.setDock("main");
+        this.dockLayout.setRestorableDock("main");
       }
       this.dockLayout.setOpen(true);
       void (detail.terminalSessionId
@@ -211,6 +214,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   closeTerminalPanel(): void {
     this.closeSessionPicker(false);
+    this.terminalSessions.cancelPendingActions();
     this.dockLayout.setOpen(false);
   }
 
@@ -313,7 +317,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   private setDock(dock: TerminalDock): void {
-    this.dockLayout.setDock(dock);
+    if (dock === "main") {
+      this.dockLayout.toggleDock(dock);
+    } else {
+      this.dockLayout.setDock(dock);
+    }
     void this.updateComplete.then(() => fitAllTerminalSessions(this.terminalSessions.tabs));
   }
 
@@ -346,6 +354,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       (tab) => tab.id === this.terminalSessions.activeId,
     );
     const connecting =
+      this.terminalSessions.waitingForRefresh ||
       (this.terminalSessions.booting && this.terminalSessions.tabs.length === 0) ||
       activeTab?.status === "connecting";
     const sessionPicker = renderTerminalSessionPicker({
@@ -384,7 +393,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
           this.terminalSessions.booting,
           toolbar,
           (id) => this.terminalSessions.switchTo(id),
-          (id) => this.terminalSessions.closeTab(id),
+          (id) => {
+            this.terminalSessions.closeTab(id);
+            return this.updateComplete.then(() => undefined);
+          },
           () => void this.terminalSessions.openSession(),
         )}
         ${renderTerminalPanelViewport(

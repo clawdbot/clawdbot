@@ -5,12 +5,13 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
-import { readStringArrayParam, readStringParam } from "../../agents/tools/common.js";
+import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
@@ -34,7 +35,6 @@ import {
   normalizeSandboxMediaParams,
   parseInteractiveParam,
   parseJsonMessageParam,
-  readBooleanParam,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
@@ -57,6 +57,34 @@ function withSendNormalization(
   return normalization && result.kind === "send" ? { ...result, normalization } : result;
 }
 
+function deriveBroadcastEntryOutcome(
+  sendResult?: MessageSendResult,
+): { ok: true } | { ok: false; error: string; sentBeforeError?: true } {
+  if (
+    !sendResult ||
+    sendResult.deliveryStatus === undefined ||
+    sendResult.deliveryStatus === "sent"
+  ) {
+    return { ok: true };
+  }
+  switch (sendResult.deliveryStatus) {
+    case "suppressed":
+      return {
+        ok: false,
+        error: `Broadcast send suppressed: ${sendResult.suppressionReason ?? "unknown reason"}.`,
+      };
+    case "failed":
+      return { ok: false, error: sendResult.error ?? "Broadcast send failed." };
+    case "partial_failed":
+      return {
+        ok: false,
+        error: sendResult.error ?? "Broadcast send partially failed.",
+        sentBeforeError: true,
+      };
+  }
+  return sendResult.deliveryStatus satisfies never;
+}
+
 async function handleBroadcastAction(
   input: MessageActionInput,
   params: Record<string, unknown>,
@@ -72,10 +100,10 @@ async function handleBroadcastAction(
   if (rawTargets.length === 0) {
     throw new Error("Broadcast requires at least one target in --targets.");
   }
-  const channelHint = readStringParam(params, "channel");
+  const channelHint = readToolStringParam(params, "channel");
   const explicitAccountId = validateExplicitMessageAccountSelection({
     cfg: input.cfg,
-    accountId: readStringParam(params, "accountId"),
+    accountId: readToolStringParam(params, "accountId"),
     checkResolvedAccount: false,
   });
   if (input.broadcastAccountPlan && input.broadcastAccountPlan.accountId !== explicitAccountId) {
@@ -89,6 +117,7 @@ async function handleBroadcastAction(
               cfg: input.cfg,
               channel: channelHint,
               fallbackChannel: input.toolContext?.currentChannelProvider,
+              agentId: input.agentId,
             })
           ).channel,
         ]
@@ -147,7 +176,9 @@ async function handleBroadcastAction(
         results.push({
           channel: targetChannel,
           to: resolved.to,
-          ok: true,
+          ...deriveBroadcastEntryOutcome(
+            sendResult.kind === "send" ? sendResult.sendResult : undefined,
+          ),
           payload: sendResult.kind === "send" ? sendResult.payload : undefined,
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });
@@ -294,7 +325,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     action,
   });
   if (action === "broadcast") {
-    return handleBroadcastAction(input, params);
+    return handleBroadcastAction({ ...input, agentId: resolvedAgentId }, params);
   }
   if (action === "send" && hasPollCreationParams(params)) {
     throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');

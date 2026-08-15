@@ -12,7 +12,7 @@ import {
   ConnectErrorDetailCodes,
   createSignedDevice,
   expectHelloOkServerVersion,
-  getFreePort,
+  getGatewayTestPort,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -25,7 +25,7 @@ import {
   resolvePreauthHandshakeTimeoutMs,
   rpcReq,
   sendRawConnectReq,
-  startGatewayServer,
+  startTestGatewayServer,
   TEST_OPERATOR_CLIENT,
   waitForWsClose,
   withGatewayServer,
@@ -34,12 +34,12 @@ import {
 
 export function registerDefaultAuthTokenSuite(): void {
   describe("default auth (token)", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let port: number;
 
     beforeAll(async () => {
-      port = await getFreePort();
-      server = await startGatewayServer(port);
+      port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port);
     });
 
     afterAll(async () => {
@@ -158,6 +158,9 @@ export function registerDefaultAuthTokenSuite(): void {
       );
       expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+      );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
       );
       expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
@@ -325,6 +328,7 @@ export function registerDefaultAuthTokenSuite(): void {
       );
       const wsInitial = await openWs(port);
       let pairedDeviceToken: string | undefined;
+      let recoveryScope: string | undefined;
       try {
         const initial = await connectReq(wsInitial, {
           token,
@@ -336,13 +340,18 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(auth?.role).toBe("operator");
         expect(auth?.scopes).toEqual(["operator.admin"]);
         expect(typeof auth?.deviceToken).toBe("string");
+        expect(auth?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
+        expect(auth?.recoveryMigrationAllowed).toBe(true);
         expect(Object.keys(auth ?? {}).toSorted()).toEqual([
           "deviceToken",
           "issuedAtMs",
+          "recoveryMigrationAllowed",
+          "recoveryScope",
           "role",
           "scopes",
         ]);
         pairedDeviceToken = auth?.deviceToken as string | undefined;
+        recoveryScope = auth?.recoveryScope;
       } finally {
         wsInitial.close();
       }
@@ -358,10 +367,14 @@ export function registerDefaultAuthTokenSuite(): void {
         const auth = readHelloOkAuth(reconnect.payload);
         expect(auth?.role).toBe("operator");
         expect(auth?.deviceToken).toBe(pairedDeviceToken);
+        expect(auth?.recoveryScope).toBe(recoveryScope);
+        expect(auth?.recoveryMigrationAllowed).toBe(true);
         expect(auth?.scopes).toEqual(["operator.read"]);
         expect(Object.keys(auth ?? {}).toSorted()).toEqual([
           "deviceToken",
           "issuedAtMs",
+          "recoveryMigrationAllowed",
+          "recoveryScope",
           "role",
           "scopes",
         ]);

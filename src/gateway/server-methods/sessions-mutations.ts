@@ -11,6 +11,8 @@ import {
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { executeSessionPatch, executeSessionPatchMany } from "./sessions-patch-engine.js";
@@ -48,18 +50,14 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
       return;
     }
-    // Beta v4 clients may still send the retired icon field. Drop it at the
-    // Gateway boundary so it cannot re-enter session state or patch hooks.
-    const canonicalParams = { ...params } as typeof params & { icon?: unknown };
-    delete canonicalParams.icon;
-    const key = requireSessionKey(canonicalParams.key, respond);
+    const key = requireSessionKey(params.key, respond);
     if (!key) {
       return;
     }
     const executed = await executeSessionPatch({
       client,
       context,
-      patch: { ...canonicalParams, key },
+      patch: { ...params, key },
       sessionMutationAuthorization,
     });
     if (!executed.ok) {
@@ -128,9 +126,24 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const requestedAgent = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      key,
+      params.agentId,
+    );
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const canonicalKey = resolveStoredSessionKeyForAgentStore({
+      cfg: context.getRuntimeConfig(),
+      agentId: requestedAgent.agentId,
+      sessionKey: key,
+    });
     const patched = await patchPluginSessionExtension({
       cfg: context.getRuntimeConfig(),
-      sessionKey: key,
+      sessionKey: canonicalKey,
+      agentId: requestedAgent.agentId,
       pluginId,
       namespace,
       value: params.value,
@@ -144,6 +157,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     respond(true, { ok: true, key: patched.key, value: patched.value }, undefined);
     emitSessionsChanged(context, {
       sessionKey: patched.key,
+      agentId: requestedAgent.agentId,
       reason: "plugin-patch",
     });
   },
@@ -175,9 +189,11 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     if ("incognitoDeleted" in result) {
       respond(true, { ok: true, key: result.key, deleted: true }, undefined);
+      // The session is gone, not reset: clients drop rows and navigate away
+      // only on "delete" (a non-delete reason merges a rowless no-op event).
       emitSessionsChanged(context, {
         sessionKey: result.key,
-        reason,
+        reason: "delete",
       });
       return;
     }
@@ -188,7 +204,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     );
     emitSessionsChanged(context, {
       sessionKey: result.key,
-      ...(result.key === "global" ? { agentId: result.agentId } : {}),
+      agentId: result.agentId,
       reason,
     });
   },

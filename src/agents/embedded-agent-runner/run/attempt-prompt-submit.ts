@@ -11,7 +11,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { ackPendingAgentSteeringItems } from "../../subagent-registry.js";
+import { ackPendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import {
@@ -25,13 +25,13 @@ import { snapshotRecentMessages } from "./attempt-context-summary.js";
 import {
   installModelPromptTransform,
   installRuntimeContextMessageForPrompt,
-} from "./attempt.llm-boundary.js";
+} from "./attempt-llm-boundary.js";
 import {
   isSessionsYieldAbortError,
   persistSessionsYieldContextMessage,
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
-} from "./attempt.sessions-yield.js";
+} from "./attempt-sessions-yield.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
@@ -320,7 +320,13 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   prompt: string;
   sandbox?: SandboxContext | null;
   skipPromptSubmission: boolean;
-}): Promise<PromptImageResult> {
+  pluginHarness?: boolean;
+}): Promise<
+  PromptImageResult & {
+    imageOrder?: PromptExecutionAttempt["imageOrder"];
+    media?: PromptExecutionAttempt["media"];
+  }
+> {
   if (input.skipPromptSubmission) {
     return emptyPromptImages();
   }
@@ -331,7 +337,7 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     (await attempt.userTurnTranscriptRecorder?.resolveMessage());
   const persistedMedia = persistedMessage ? (readPersistedMediaFacts(persistedMessage) ?? []) : [];
 
-  return await detectAndLoadPromptImages({
+  const result = await detectAndLoadPromptImages({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
     model: attempt.model,
@@ -349,4 +355,17 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
         ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
         : undefined,
   });
+  if (!input.pluginHarness) {
+    return result;
+  }
+  if (result.failedMediaCount) {
+    throw new Error(
+      `failed to hydrate ${result.failedMediaCount} structured image attachment(s) for plugin harness input`,
+    );
+  }
+  return {
+    ...result,
+    imageOrder: result.images.length ? result.images.map(() => "inline" as const) : undefined,
+    media: undefined,
+  };
 }

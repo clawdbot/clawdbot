@@ -5,13 +5,14 @@ import {
   asSafeIntegerInRange,
   MAX_DATE_TIMESTAMP_MS,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   FAILOVER_REASONS,
   type FailoverReason,
 } from "../../packages/gateway-protocol/src/failover-reasons.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
-import { normalizeCronRunDiagnostics } from "./run-diagnostics-normalize.js";
+import { normalizeCronRunDiagnosticsCore } from "./run-diagnostics-normalize.js";
 
 type JsonValue = import("../tasks/task-registry.types.js").JsonValue;
 type TaskRecord = import("../tasks/task-registry.types.js").TaskRecord;
@@ -29,7 +30,7 @@ function toJsonValue(value: unknown): JsonValue | undefined {
 }
 
 function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function normalizeTimestamp(value: unknown): number | undefined {
@@ -105,7 +106,7 @@ export function parseCronRunLogEntryObject(
     errorReason: normalizeCronRunLogErrorReason(entryObj.errorReason) ?? undefined,
     summary: typeof entryObj.summary === "string" ? entryObj.summary : undefined,
     runId: typeof entryObj.runId === "string" && entryObj.runId.trim() ? entryObj.runId : undefined,
-    diagnostics: normalizeCronRunDiagnostics(entryObj.diagnostics),
+    diagnostics: normalizeCronRunDiagnosticsCore(entryObj.diagnostics),
     runAtMs: normalizeTimestamp(entryObj.runAtMs),
     durationMs: asSafeIntegerInRange(entryObj.durationMs, { min: 0 }),
     nextRunAtMs: normalizeTimestamp(entryObj.nextRunAtMs),
@@ -201,6 +202,21 @@ export function cronRunLogEntryToTaskDetail(
   return detail ?? { kind: CRON_TASK_DETAIL_KIND };
 }
 
+/** Stores quiet-trigger recovery facts without creating a run-history detail row. */
+export function cronQuietTriggerTaskDetail(
+  storeKey: string,
+  triggerEval: { fired: false; stateChanged: boolean; state?: unknown },
+): JsonValue {
+  return (
+    toJsonValue({
+      storeKey,
+      triggerFired: false,
+      triggerStateChanged: triggerEval.stateChanged,
+      ...(triggerEval.stateChanged ? { triggerState: triggerEval.state } : {}),
+    }) ?? { storeKey, triggerFired: false, triggerStateChanged: false }
+  );
+}
+
 /** Returns the cron store partition recorded on a task row. */
 export function cronTaskRecordStoreKey(task: TaskRecord): string | undefined {
   return isJsonObject(task.detail) && typeof task.detail.storeKey === "string"
@@ -218,12 +234,12 @@ export function resolveCronTaskRecordTimestamp(
 /** Reads internal trigger recovery data without adding it to run-history responses. */
 export function cronTaskRecordToTriggerEval(
   task: TaskRecord,
-): { fired: true; stateChanged: boolean; state?: JsonValue } | undefined {
-  if (!isJsonObject(task.detail) || task.detail.triggerFired !== true) {
+): { fired: boolean; stateChanged: boolean; state?: JsonValue } | undefined {
+  if (!isJsonObject(task.detail) || typeof task.detail.triggerFired !== "boolean") {
     return undefined;
   }
   return {
-    fired: true,
+    fired: task.detail.triggerFired,
     stateChanged: task.detail.triggerStateChanged === true,
     ...(task.detail.triggerStateChanged === true && "triggerState" in task.detail
       ? { state: task.detail.triggerState }
@@ -246,12 +262,12 @@ export function cronTaskRecordToScriptRunResult(
 
 /** Maps the cron outcome vocabulary onto generic task terminal states. */
 export function cronRunStatusToTaskStatus(
-  entry: CronRunLogEntry,
+  entry: Pick<CronRunLogEntry, "status" | "error"> & Partial<CronRunLogEntry>,
 ): Extract<TaskStatus, "succeeded" | "failed" | "timed_out"> {
-  if (entry.status === "ok" || entry.status === "skipped") {
+  if (entry.status === "ok") {
     return "succeeded";
   }
-  return isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
+  return entry.status === "error" && isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
 }
 
 /** Reconstructs the unchanged CronRunLogEntry wire shape from a cron task row. */

@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
+import { attachAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -12,13 +14,13 @@ import {
   type ExecApprovalContinuationPromptRange,
 } from "../../agents/bash-tools.exec-approval-output.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery-lifecycle.js";
-import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
+import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
-} from "../../agents/main-session-recovery-store.js";
+} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
@@ -27,7 +29,6 @@ import {
   setChannelSourceTurnSameThreadRequired,
 } from "../../auto-reply/reply/source-turn-id.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -40,6 +41,7 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
@@ -138,7 +140,7 @@ export function startAgentRunExecution(params: {
         setAbortedAgentDedupeEntries({
           dedupe: params.context.dedupe,
           keys: params.agentDedupeKeys,
-          agentId: params.resolvedSessionKey === "global" ? params.activeSessionAgentId : undefined,
+          agentId: params.activeSessionAgentId,
           runId: params.runId,
           stopReason,
         });
@@ -222,18 +224,14 @@ export function startAgentRunExecution(params: {
       ) {
         emitSessionsChanged(params.context, {
           sessionKey: params.resolvedSessionKey,
-          ...(params.resolvedSessionKey === "global"
-            ? { agentId: params.activeSessionAgentId }
-            : {}),
+          agentId: params.activeSessionAgentId,
           reason: "create",
         });
       }
       if (!params.suppressVisibleSessionEffects && params.resolvedSessionKey) {
         emitSessionsChanged(params.context, {
           sessionKey: params.resolvedSessionKey,
-          ...(params.resolvedSessionKey === "global"
-            ? { agentId: params.activeSessionAgentId }
-            : {}),
+          agentId: params.activeSessionAgentId,
           reason: "send",
         });
       }
@@ -315,14 +313,9 @@ export function startAgentRunExecution(params: {
             })
           : undefined;
 
-      const ingressAgentId =
-        params.resolvedSessionKey === "global"
-          ? params.activeSessionAgentId
-          : params.agentId &&
-              (!params.resolvedSessionKey ||
-                resolveAgentIdFromSessionKey(params.resolvedSessionKey) === params.agentId)
-            ? params.agentId
-            : undefined;
+      const ingressAgentId = params.resolvedSessionKey
+        ? params.activeSessionAgentId
+        : params.agentId;
       // Plugin-owned additive grants stay internal to the authenticated in-process run.
       // Public agent params cannot supply them, and normal tool policy still filters them.
       const runtimePluginToolGrant =
@@ -365,6 +358,10 @@ export function startAgentRunExecution(params: {
         restartRecoveryChannelContext?.sameChannelThreadRequired,
       );
 
+      const localUserIngress = getGatewayLocalUserIngress(params.client);
+      if (localUserIngress) {
+        attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
+      }
       dispatchAgentRunFromGateway({
         cronCreatorAuthority: prepared.cronCreatorAuthority,
         ingressOpts: {
@@ -436,6 +433,18 @@ export function startAgentRunExecution(params: {
           forceRestartSafeTools: params.request.forceRestartSafeTools,
           forceCodeModeTools: params.request.forceCodeModeTools,
           ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
+          operationalRunInstance: prepared.operationalRunInstance,
+          onAdmittedRunContext: (admittedRunContext) => {
+            const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+            if (!authority) {
+              throw new Error("agent run delegated authority was not admitted");
+            }
+            // Sessionless runs intentionally have no abort-map owner. Their
+            // prepared admission retains authority until agentCommand closes it.
+            if (prepared.activeRunAbort.registered) {
+              prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
+            }
+          },
           internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
           internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
           suppressPromptPersistence:
@@ -480,6 +489,11 @@ export function startAgentRunExecution(params: {
             ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
             : {}),
           ...(params.isRestartRecoveryResumeRun ? { mainRestartRecoveryAdmitted: true } : {}),
+          ...(params.request.internalExecutionIdentityRecoveryAttempt !== undefined
+            ? {
+                mainRestartRecoveryAttempt: params.request.internalExecutionIdentityRecoveryAttempt,
+              }
+            : {}),
           allowModelOverride: prepared.effectiveAllowModelOverride,
         },
         runId: params.runId,

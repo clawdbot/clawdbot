@@ -1219,6 +1219,11 @@ describe("openclaw agent database", () => {
     );
     expect(
       database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'state_leases'")
+        .get(),
+    ).toBeUndefined();
+    expect(
+      database.db
         .prepare(
           `SELECT name FROM pragma_table_list
            WHERE schema = 'main'
@@ -1251,7 +1256,7 @@ describe("openclaw agent database", () => {
   });
 
   it("opens a v13 database that already contains additive board storage", () => {
-    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(16);
+    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(17);
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeV13WorkerAgentDatabase(stateDir);
@@ -1477,7 +1482,7 @@ describe("openclaw agent database", () => {
   });
 
   it("keeps additive heartbeat repair while upgrading schema version 12", () => {
-    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(16);
+    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(17);
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeV13WorkerAgentDatabase(stateDir);
@@ -1548,7 +1553,7 @@ describe("openclaw agent database", () => {
     ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
   });
 
-  it("upgrades version 10 with agent state intact and adds lease storage", () => {
+  it("upgrades version 10 with agent state intact without retired lease storage", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeV13WorkerAgentDatabase(stateDir);
@@ -1561,9 +1566,6 @@ describe("openclaw agent database", () => {
       )
       .run("last-good", '{"profile":"primary"}', 10);
     legacy.exec(`
-      DROP INDEX idx_agent_state_leases_owner;
-      DROP INDEX idx_agent_state_leases_expiry;
-      DROP TABLE state_leases;
       PRAGMA user_version = 10;
       UPDATE schema_meta SET schema_version = 10 WHERE meta_key = 'primary';
     `);
@@ -1587,7 +1589,55 @@ describe("openclaw agent database", () => {
       migrated.db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'state_leases'")
         .get(),
-    ).toEqual({ name: "state_leases" });
+    ).toBeUndefined();
+  });
+
+  it("retires tenant-free lease storage when upgrading version 16", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      CREATE TABLE state_leases (
+        scope TEXT NOT NULL,
+        lease_key TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        expires_at INTEGER,
+        heartbeat_at INTEGER,
+        payload_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, lease_key)
+      ) STRICT;
+      CREATE INDEX idx_agent_state_leases_expiry
+        ON state_leases(expires_at, scope, lease_key)
+        WHERE expires_at IS NOT NULL;
+      CREATE INDEX idx_agent_state_leases_owner
+        ON state_leases(owner, updated_at DESC);
+      INSERT INTO state_leases (
+        scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at
+      ) VALUES ('retired', 'orphan', 'nobody', NULL, NULL, NULL, 1, 1);
+      PRAGMA user_version = 16;
+      UPDATE schema_meta SET schema_version = 16 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    const migrated = migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(
+      migrated.db
+        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE name IN ('state_leases', 'idx_agent_state_leases_expiry', 'idx_agent_state_leases_owner')",
+        )
+        .all(),
+    ).toEqual([]);
   });
 
   it("upgrades version 11 with agent state intact and adds ACP parent-stream storage", () => {

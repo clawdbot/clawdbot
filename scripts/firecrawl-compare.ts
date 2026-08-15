@@ -174,8 +174,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 }
 
 export const testing = {
-  FETCH_HTML_MAX_BYTES,
   fetchHtml,
-  readBoundedResponseText,
   truncate,
 };

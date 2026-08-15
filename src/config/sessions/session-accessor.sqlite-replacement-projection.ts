@@ -12,14 +12,14 @@ import type {
 import {
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
-  readSqliteSessionEntryStore,
+  readSessionEntryStore,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
-import type { SqliteSessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
+import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
-  applySqliteSessionEntryMaintenance,
-  finalizeSqliteSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
+  applySessionEntryMaintenance,
+  finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
 } from "./session-accessor.sqlite-maintenance.js";
 import {
   cloneSessionEntry,
@@ -28,7 +28,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { readSqliteSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
+import { readSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryReplacement } from "./session-accessor.types.js";
 import type { SessionEntry } from "./types.js";
 
@@ -72,13 +72,13 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     const selectedKeys = params.sessionKeys ? new Set(params.sessionKeys) : undefined;
     const selectedStatuses = params.statuses ? new Set(params.statuses) : undefined;
     const entries = selectedStatuses
-      ? readSqliteSessionEntriesByStatus(database, [...selectedStatuses], params.sessionKeys)
+      ? readSessionEntriesByStatus(database, [...selectedStatuses], params.sessionKeys)
       : selectedKeys
         ? [...selectedKeys].flatMap((sessionKey) => {
             const entry = readExactSessionEntryRow(database, sessionKey)?.entry;
             return entry ? [{ entry: cloneSessionEntry(entry), sessionKey }] : [];
           })
-        : Object.entries(readSqliteSessionEntryStore(database)).map(([sessionKey, entry]) => ({
+        : Object.entries(readSessionEntryStore(database)).map(([sessionKey, entry]) => ({
             entry: cloneSessionEntry(entry),
             sessionKey,
           }));
@@ -145,7 +145,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       ]),
     );
 
-    const maintenancePlans: SqliteSessionEntryMaintenancePlan[] = [];
+    const maintenancePlans: SessionEntryMaintenancePlan[] = [];
     const previous = new Map<string, SessionEntry>();
     const current = new Map<string, SessionEntry>();
     runOpenClawAgentWriteTransaction(
@@ -189,7 +189,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
           current.set(replacement.sessionKey, replacement.entry);
         }
         maintenancePlans.push(
-          applySqliteSessionEntryMaintenance(transactionDb, {
+          applySessionEntryMaintenance(transactionDb, {
             activeSessionKey: params.activeSessionKey ?? "",
             archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
             skipMaintenance: params.skipMaintenance ?? true,
@@ -203,14 +203,14 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     emitCommittedSessionIdentityDiff(previous, current);
     return { maintenancePlans, result: operation.result };
   });
-  await finalizeSqliteSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+  await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
     resolved,
     committed.maintenancePlans,
   );
   return committed.result;
 }
 
-export async function applySqliteSessionEntryExactReplacements<T>(params: {
+export async function applySessionEntryExactReplacements<T>(params: {
   activeSessionKey?: string;
   agentId?: string;
   requireWriteSuccess?: boolean;
@@ -231,7 +231,7 @@ export async function applySqliteSessionEntryExactReplacements<T>(params: {
 }
 
 /** Internal alias-aware owner; public SDK replacements remain exact-key only. */
-export async function applySqliteSessionEntryCanonicalReplacements<T>(
+export async function applySessionEntryCanonicalReplacements<T>(
   params: ReplacementProjectionParams<T, SessionEntryCanonicalReplacement>,
 ): Promise<T> {
   return await applySqliteSessionEntryReplacementProjection(

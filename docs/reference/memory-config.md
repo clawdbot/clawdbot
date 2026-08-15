@@ -315,13 +315,15 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     ```
 
   </Accordion>
-  <Accordion title="Local (GGUF + llama.cpp)">
+  <Accordion title="Local (managed llama.cpp server)">
     | Key               | Type     | Default         | Description             |
     | ----------------- | -------- | --------------- | ----------------------- |
     | `local.modelPath` | `string` | auto-downloaded | Path to GGUF model file |
 
-    Install the official llama.cpp provider first: `openclaw plugins install @openclaw/llama-cpp-provider`.
-    Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded). Source checkouts still require native build approval: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
+    Install the official llama.cpp provider, then choose llama.cpp once in
+    interactive setup. OpenClaw installs a pinned, verified `llama-server` and
+    writes its loopback `localService` configuration. Default model:
+    `embeddinggemma-300m-qat-Q8_0.gguf` (~0.3 GB, auto-downloaded).
 
     Use the standalone CLI to verify the same provider path the Gateway uses:
 
@@ -330,9 +332,13 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     openclaw memory index --force --agent main
     ```
 
-    Cache placement and embedding context sizing are provider-owned. `openclaw memory status --deep` reports last-known llama.cpp backend, device, offload, requested-context, and timestamped memory facts after the runtime has loaded; passive status does not load a model.
+    Cache placement is provider-owned. `openclaw memory status --deep` reports
+    server build, model path, capability, and endpoint facts observed from the
+    managed server after it has handled an embedding request.
 
-    Set `provider: "local"` explicitly for local GGUF embeddings. `hf:` and HTTP(S) model references are supported for explicit local configs (via node-llama-cpp's model resolution), but they do not change the default provider.
+    Set `provider: "local"` explicitly for local GGUF embeddings. Full `hf:`
+    file references and integrity-bearing HTTPS GGUF URLs are supported for
+    explicit local configs, but they do not change the default provider.
 
   </Accordion>
 </AccordionGroup>
@@ -469,7 +475,7 @@ when you intentionally want both representations.
 </Note>
 
 Ordinary model-invoked session transcript search obeys
-[`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
+[`tools.sessions.visibility`](/gateway/config-tools#tools-sessions). The default
 `tree` visibility exposes the current session, sessions it spawned, and
 same-agent group sessions watched through ambient group awareness. Other
 unrelated sessions require `agent` visibility (or `all` only when cross-agent

@@ -17,7 +17,7 @@ import {
  *
  * Reads text and image files through local or injected operations with highlighting, resizing, and bounded output.
  */
-import { toPosixPath } from "../../../shared/ignore-rules.js";
+import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
@@ -275,7 +275,7 @@ function getOpenClawDocsClassification(
     return undefined;
   }
 
-  const label = toPosixPath(relativePath);
+  const label = normalizeNativePathSeparators(relativePath);
   if (label === "README.md" || label.startsWith("docs/") || label.startsWith("examples/")) {
     return { kind: "docs", label };
   }

@@ -686,8 +686,8 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
 
   const seamKinds = [];
   const isAnnounceDispatchPath =
-    relativePath === "src/agents/subagent-announce.ts" ||
-    relativePath === "src/agents/subagent-announce-dispatch.ts";
+    relativePath === "src/agents/subagents/announce/subagent-announce.ts" ||
+    relativePath === "src/agents/subagents/announce/subagent-announce-dispatch.ts";
   const importsSpawnRuntime = hasAnyImportSource(source, [
     "./subagent-spawn.js",
     "./acp-spawn.js",
@@ -718,6 +718,8 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
   const importsAnnounceDelivery = hasAnyImportSource(source, [
     "./subagent-announce.js",
     "./subagent-announce-dispatch.js",
+    "../announce/subagent-announce.js",
+    "../announce/subagent-announce-dispatch.js",
     "./subagent-announce-queue.js",
     "../infra/outbound/bound-delivery-router.js",
     "../utils/delivery-context.shared.js",

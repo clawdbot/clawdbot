@@ -28,6 +28,15 @@ import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 
+const pluginToolMetadata = vi.hoisted(() => new WeakMap<object, unknown>());
+
+vi.mock("../plugins/tools.js", () => ({
+  getPluginToolMeta: (tool: object) => pluginToolMetadata.get(tool),
+  setPluginToolMeta: (tool: object, metadata: unknown) => {
+    pluginToolMetadata.set(tool, metadata);
+  },
+}));
+
 vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./embedded-agent-mcp.js")>();
   return {
@@ -51,6 +60,13 @@ vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./mcp-auth-profile.js", () => ({
+  resolveMcpAuthProfileId: () => undefined,
+  withMcpAuthProfileBearer: () => {
+    throw new Error("Unexpected auth-profile transport in MCP runtime test");
+  },
+}));
+
 const tempDirs: string[] = [];
 const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
 
@@ -66,6 +82,7 @@ async function writeListToolsMcpServer(params: {
   filePath: string;
   logPath: string;
   delayMs?: number;
+  listToolsReleasePath?: string;
   initializeDelayMs?: number;
   hang?: boolean;
   inputSchema?: unknown;
@@ -105,6 +122,7 @@ import fs from "node:fs/promises";
 
 const logPath = ${JSON.stringify(params.logPath)};
 const delayMs = ${params.delayMs ?? 0};
+const listToolsReleasePath = ${JSON.stringify(params.listToolsReleasePath)};
 const initializeDelayMs = ${params.initializeDelayMs ?? 0};
 const hang = ${params.hang === true};
 const capabilities = ${JSON.stringify(params.capabilities ?? { tools: {} })};
@@ -233,7 +251,7 @@ function handle(message) {
     const currentListCount = listCount;
     const toolPageCursor = toolPageCursors?.[currentListCount - 1];
     log("delay tools/list " + delayMs);
-    pendingTimer = setTimeout(() => {
+    const sendListResponse = () => {
       send({
         jsonrpc: "2.0",
         id: message.id,
@@ -250,7 +268,20 @@ function handle(message) {
         log("notify tools/list_changed");
         send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
       }
-    }, delayMs);
+    };
+    void (async () => {
+      while (listToolsReleasePath) {
+        const released = await fs
+          .access(listToolsReleasePath)
+          .then(() => true)
+          .catch(() => false);
+        if (released) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      pendingTimer = setTimeout(sendListResponse, delayMs);
+    })();
   }
   if (message.method === "tools/call") {
     if (hangToolCallsUntilRestart) {
@@ -1462,46 +1493,6 @@ describe("session MCP runtime", () => {
 
       expect(catalog.tools).toHaveLength(1);
       expect(catalog.tools[0]?.description).toBe(`${safePrefix}...`);
-    } finally {
-      await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects adversarial MCP tool filters without regex backtracking", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-linear-filter-"));
-    const serverPath = path.join(tempDir, "linear-filter.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      tools: [
-        {
-          name: `${"a".repeat(64)}c`,
-          inputSchema: { type: "object", properties: {} },
-        },
-      ],
-    });
-
-    const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-linear-tool-filter",
-      sessionKey: "agent:test:session-linear-tool-filter",
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            docs: {
-              command: process.execPath,
-              args: [serverPath],
-              toolFilter: { include: [`${"*a".repeat(24)}*b`] },
-            },
-          },
-        },
-      },
-    });
-
-    try {
-      expect((await runtime.getCatalog()).tools).toEqual([]);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -3697,67 +3688,84 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeAll();
   });
 
-  it("evicts LRU idle requester runtimes past the per-session cap", async () => {
-    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
-    resolverTesting.setMcpServerConnectionResolversForTest([
-      {
-        serverName: "user-mail",
-        resolve: async (ctx) => ({ url: `https://mcp.example.test/${ctx.requesterSenderId}` }),
-      },
-    ]);
+  it.each([
+    ["full", 3],
+    ["requester-only", 2],
+  ] as const)(
+    "evicts LRU idle requester runtimes past the per-session cap via %s materialization",
+    async (entrypoint, expectedRuntimeCount) => {
+      const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+      resolverTesting.setMcpServerConnectionResolversForTest([
+        {
+          serverName: "user-mail",
+          resolve: async (ctx) => ({ url: `https://mcp.example.test/${ctx.requesterSenderId}` }),
+        },
+      ]);
 
-    const disposedSenders: string[] = [];
-    let syntheticLastUsedAt = 100_000;
-    const createRuntime: RuntimeFactory = (params) => {
-      const sender = params.requesterScope?.requesterSenderId;
-      const base = makeRuntime([{ toolName: "probe", description: "probe" }]);
-      // Distinct ascending lastUsedAt per runtime so LRU ordering is deterministic.
-      const lastUsedAt = (syntheticLastUsedAt += 1_000);
-      return {
-        ...base,
-        sessionId: params.sessionId,
-        workspaceDir: params.workspaceDir,
-        configFingerprint: params.configFingerprint ?? "fingerprint",
-        requesterScope: params.requesterScope,
-        get lastUsedAt() {
-          return lastUsedAt;
-        },
-        markUsed: () => {},
-        dispose: async () => {
-          if (sender) {
-            disposedSenders.push(sender);
-          }
-        },
+      const disposedSenders: string[] = [];
+      let syntheticLastUsedAt = 100_000;
+      const createRuntime: RuntimeFactory = (params) => {
+        const sender = params.requesterScope?.requesterSenderId;
+        const base = makeRuntime([{ toolName: "probe", description: "probe" }]);
+        // Distinct ascending lastUsedAt per runtime so LRU ordering is deterministic.
+        const lastUsedAt = (syntheticLastUsedAt += 1_000);
+        return {
+          ...base,
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: params.configFingerprint ?? "fingerprint",
+          requesterScope: params.requesterScope,
+          get lastUsedAt() {
+            return lastUsedAt;
+          },
+          markUsed: () => {},
+          dispose: async () => {
+            if (sender) {
+              disposedSenders.push(sender);
+            }
+          },
+        };
       };
-    };
-    const manager = testing.createSessionMcpRuntimeManager({
-      createRuntime,
-      // Pin the sweep clock near the synthetic lastUsedAt values so the idle
-      // TTL sweep never fires; this test exercises only the cap eviction.
-      now: () => 150_000,
-      maxIdleRequesterRuntimesPerSession: 2,
-    });
-    const cfg = {
-      mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
-    };
-
-    for (const sender of ["sender-a", "sender-b", "sender-c"]) {
-      await manager.getOrCreate({
-        sessionId: "session-cap",
-        workspaceDir: "/workspace",
-        cfg: cfg as never,
-        requesterSenderId: sender,
-        messageChannel: "telegram",
+      const manager = testing.createSessionMcpRuntimeManager({
+        createRuntime,
+        // Pin the sweep clock near the synthetic lastUsedAt values so the idle
+        // TTL sweep never fires; this test exercises only the cap eviction.
+        now: () => 150_000,
+        maxIdleRequesterRuntimesPerSession: 2,
       });
-    }
+      const cfg = {
+        mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
+      };
 
-    // sender-a is the least recently used zero-lease scoped runtime.
-    expect(disposedSenders).toEqual(["sender-a"]);
-    // Bare static reconcile key + two newest requester keys survive.
-    expect(manager.listRuntimeKeys()).toHaveLength(3);
+      for (const sender of ["sender-a", "sender-b", "sender-c"]) {
+        const runtimeParams = {
+          sessionId: "session-cap",
+          workspaceDir: "/workspace",
+          cfg: cfg as never,
+          requesterSenderId: sender,
+          messageChannel: "telegram",
+        };
+        if (entrypoint === "full") {
+          await manager.getOrCreate(runtimeParams);
+        } else {
+          await manager.getOrCreateRequesterScoped(runtimeParams);
+        }
+      }
 
-    await manager.disposeAll();
-  });
+      // sender-a is the least recently used zero-lease scoped runtime.
+      expect(disposedSenders).toEqual(["sender-a"]);
+      const runtimeKeys = manager.listRuntimeKeys();
+      expect(runtimeKeys).toHaveLength(expectedRuntimeCount);
+      expect(runtimeKeys.includes("session-cap")).toBe(entrypoint === "full");
+      expect(
+        runtimeKeys
+          .filter((key) => key.startsWith("{"))
+          .map((key) => (JSON.parse(key) as { requesterSenderId: string }).requesterSenderId),
+      ).toEqual(["sender-b", "sender-c"]);
+
+      await manager.disposeAll();
+    },
+  );
 
   it("re-merges the combined catalog after a part refreshes on tools/list_changed", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
@@ -4620,7 +4628,7 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeAll();
   });
 
-  it("reuses requester cache keys for getOrCreateRequesterScoped", async () => {
+  it("reuses one requester runtime across full and requester-only entrypoints", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     let resolveCount = 0;
     resolverTesting.setMcpServerConnectionResolversForTest([
@@ -4648,23 +4656,27 @@ describe("requester-scoped MCP connection resolution", () => {
       },
     };
 
-    const first = await manager.getOrCreateRequesterScoped({
+    const full = await manager.getOrCreate({
       sessionId: "session-reuse",
       workspaceDir: "/workspace",
       cfg: cfg as never,
       requesterSenderId: "sender-a",
       messageChannel: "telegram",
     });
-    const second = await manager.getOrCreateRequesterScoped({
+    const fullRuntimeKey = manager.listRuntimeKeys().find((key) => key.startsWith("{"));
+    const requesterOnly = await manager.getOrCreateRequesterScoped({
       sessionId: "session-reuse",
       workspaceDir: "/workspace",
       cfg: cfg as never,
       requesterSenderId: "sender-a",
       messageChannel: "telegram",
     });
-    expect(first).toBe(second);
+    const requesterOnlyRuntimeKey = manager.listRuntimeKeys().find((key) => key.startsWith("{"));
+    expect(requesterOnly).toBe(full);
     expect(resolveCount).toBe(1);
-    expect(manager.listRuntimeKeys()).toHaveLength(1);
+    expect(requesterOnlyRuntimeKey).toBe(fullRuntimeKey);
+    expect(requesterOnly?.configFingerprint).toBe(full.configFingerprint);
+    expect(manager.listRuntimeKeys()).toHaveLength(2);
 
     await manager.disposeAll();
   });
@@ -5308,20 +5320,24 @@ process.stdin.on("end", () => {
   );
 
   it(
-    "parallelizes MCP server catalog loading across multiple slow servers",
+    "starts MCP server catalog loading concurrently",
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async () => {
       const tempDir = makeTempDir(tempDirs, "bundle-mcp-parallel-");
-      const delays = [200, 400, 600];
-      const serverPaths = delays.map((delay, i) => {
+      const releasePath = path.join(tempDir, "release-list-tools");
+      const serverPaths = Array.from({ length: 3 }, (_, i) => {
         const serverPath = path.join(tempDir, `slow-server-${i}.mjs`);
         const logPath = path.join(tempDir, `server-${i}.log`);
-        return { serverPath, logPath, delay, serverName: `slowServer${i}` };
+        return { serverPath, logPath, serverName: `slowServer${i}` };
       });
 
       await Promise.all(
-        serverPaths.map(({ serverPath, logPath, delay }) =>
-          writeListToolsMcpServer({ filePath: serverPath, logPath, delayMs: delay }),
+        serverPaths.map(({ serverPath, logPath }) =>
+          writeListToolsMcpServer({
+            filePath: serverPath,
+            logPath,
+            listToolsReleasePath: releasePath,
+          }),
         ),
       );
 
@@ -5347,30 +5363,25 @@ process.stdin.on("end", () => {
         },
       });
 
+      const catalogPromise = runtime.getCatalog();
       try {
-        const sumDelays = delays.reduce((a, b) => a + b, 0);
-        const maxDelay = Math.max(...delays);
-        const parallelBudgetMs = maxDelay + 500;
+        await Promise.all(
+          serverPaths.map(({ logPath }) =>
+            waitForFileText(logPath, "tools/list cursor", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS),
+          ),
+        );
+        await fs.writeFile(releasePath, "released", "utf8");
+        const catalog = await catalogPromise;
 
-        const t0 = performance.now();
-        const catalog = await runtime.getCatalog();
-        const wallTime = performance.now() - t0;
-
-        // Must have successfully connected to all servers
-        expect(Object.keys(catalog.servers)).toHaveLength(delays.length);
+        expect(Object.keys(catalog.servers)).toHaveLength(serverPaths.length);
         expect(catalog.tools.map((t) => t.toolName)).toEqual([
           "slow_tool",
           "slow_tool",
           "slow_tool",
         ]);
-
-        // Sequential listing would have to wait roughly sumDelays before overhead;
-        // parallel listing should stay near the slowest server plus launch overhead.
-        expect(wallTime).toBeLessThan(parallelBudgetMs);
-        expect(parallelBudgetMs).toBeLessThan(sumDelays);
-
-        expect(wallTime).toBeGreaterThanOrEqual(maxDelay * 0.7);
       } finally {
+        await fs.writeFile(releasePath, "released", "utf8").catch(() => {});
+        await catalogPromise.catch(() => {});
         await runtime.dispose();
       }
     },

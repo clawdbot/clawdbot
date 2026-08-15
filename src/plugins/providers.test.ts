@@ -18,7 +18,7 @@ type GetRuntimePluginRegistryForLoadOptions =
 type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
 type IsPluginRegistryLoadInFlight = typeof import("./loader.js").isPluginRegistryLoadInFlight;
 type LoadPluginManifestRegistry =
-  typeof import("./manifest-registry.js").loadPluginManifestRegistry;
+  typeof import("./manifest-registry.js").loadPluginManifestRegistryCore;
 type LoadPluginMetadataSnapshot =
   typeof import("./plugin-metadata-snapshot.js").loadPluginMetadataSnapshot;
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
@@ -45,7 +45,7 @@ let resolveUsageHookProviderPluginContracts: typeof import("./providers.js").res
 let resolveExternalAuthProfileProviderPluginIds: typeof import("./providers.js").resolveExternalAuthProfileProviderPluginIds;
 let resolveDiscoveredProviderPluginIds: typeof import("./providers.js").resolveDiscoveredProviderPluginIds;
 let resolveDiscoverableProviderOwnerPluginIds: typeof import("./providers.js").resolveDiscoverableProviderOwnerPluginIds;
-let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
+let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProvidersCore;
 let setActivePluginRegistry: SetActivePluginRegistry;
 
 type ManifestProviderPluginFixture = {
@@ -477,7 +477,7 @@ describe("resolvePluginProviders", () => {
         applyPluginAutoEnableMock(...args),
     }));
     vi.doMock("./manifest-registry.js", () => ({
-      loadPluginManifestRegistry: (...args: Parameters<LoadPluginManifestRegistry>) =>
+      loadPluginManifestRegistryCore: (...args: Parameters<LoadPluginManifestRegistry>) =>
         loadPluginManifestRegistryMock(...args),
     }));
     vi.doMock("./plugin-metadata-snapshot.js", () => {
@@ -527,7 +527,8 @@ describe("resolvePluginProviders", () => {
       resolveDiscoveredProviderPluginIds,
       resolveDiscoverableProviderOwnerPluginIds,
     } = await import("./providers.js"));
-    ({ resolvePluginProviders } = await import("./providers.runtime.js"));
+    ({ resolvePluginProvidersCore: resolvePluginProviders } =
+      await import("./providers.runtime.js"));
     ({ setActivePluginRegistry } = await import("./runtime.js"));
   });
 
@@ -925,40 +926,6 @@ describe("resolvePluginProviders", () => {
       }),
     ).toEqual(["external-auth-owner"]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-  });
-
-  it("filters bundled provider plugins by allowlist by default", () => {
-    setManifestPlugins([
-      createManifestProviderPlugin({
-        id: "kilocode",
-        providerIds: ["kilocode"],
-        origin: "bundled",
-        enabledByDefault: true,
-      }),
-      createManifestProviderPlugin({
-        id: "moonshot",
-        providerIds: ["moonshot"],
-        origin: "bundled",
-        enabledByDefault: true,
-      }),
-      createManifestProviderPlugin({
-        id: "openrouter",
-        providerIds: ["openrouter"],
-        origin: "bundled",
-        enabledByDefault: true,
-      }),
-    ]);
-
-    const discovered = resolveDiscoveredProviderPluginIds({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-        },
-      },
-      env: {} as NodeJS.ProcessEnv,
-    });
-
-    expect(discovered).toEqual(["openrouter"]);
   });
 
   it("filters bundled provider plugins through restrictive allowlists", () => {

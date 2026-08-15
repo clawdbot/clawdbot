@@ -2,8 +2,12 @@
  * Prepares transcript boundaries, session management, and active resources.
  * It may assume attempt configuration and tool inputs are ready.
  */
-import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
+import {
+  attachRuntimePromptMediaFacts,
+  readPersistedMediaFacts,
+} from "../../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
@@ -14,7 +18,9 @@ import {
   resolveEffectiveCompactionMode,
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
+import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -32,20 +38,17 @@ import { log } from "../logger.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
+import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import {
   replayTrailingEntriesForOrphanRepair,
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
+import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
-import {
-  type AttemptContextEngine,
-  runAttemptContextEngineBootstrap,
-} from "./attempt.context-engine-helpers.js";
-import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
-import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
-import { createUserTranscriptContextRegistry } from "./attempt.user-transcript-context-registry.js";
+import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
 import { installCodeModeRepairHook } from "./code-mode-repair.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { reconcilePrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
@@ -315,7 +318,9 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     // discard the merged replacement prompt.
     sessionManager.clearNextUserMessagePersistenceSuppression?.();
     attempt.onUserMessagePersistenceInvalidated?.();
-    activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+    activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+      sessionManager.buildSessionContext().messages,
+    );
   }
 
   // This is the single timestamping source for user messages sent to the LLM.
@@ -446,12 +451,20 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
         latestPersistedUserMessage = message;
         latestRuntimeUserMessage = runtimeMessage;
         if (runtimeMessage) {
+          const media = readPersistedMediaFacts(message);
+          if (media?.length) {
+            attachRuntimePromptMediaFacts(runtimeMessage, media);
+          }
           userTranscriptContextRegistry.record(runtimeMessage, message);
         }
         attempt.onUserMessagePersisted?.(message);
       },
-      onUserMessagePersistenceSuppressed: (_message, runtimeMessage) => {
+      onUserMessagePersistenceSuppressed: (message, runtimeMessage) => {
         latestRuntimeUserMessage = runtimeMessage;
+        const media = runtimeMessage ? readPersistedMediaFacts(message) : undefined;
+        if (runtimeMessage && media?.length) {
+          attachRuntimePromptMediaFacts(runtimeMessage, media);
+        }
       },
       onUserMessageBlocked: () => {
         attempt.userTurnTranscriptRecorder?.markBlocked();
@@ -472,7 +485,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   input.onSessionManagerCreated(sessionManager);
 
   await input.withOwnedTranscriptWrite(async () => {
-    await runAttemptContextEngineBootstrap({
+    await bootstrapHarnessContextEngine({
       hadSessionFile: transcriptState.hasBootstrapTranscriptState,
       contextEngine: input.activeContextEngine,
       sessionId: attempt.sessionId,

@@ -1,10 +1,10 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
-import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { extractAssistantPhaseText } from "../../../../src/shared/chat-message-content.js";
 import { stripThinkingTags } from "../strip-thinking-tags.ts";
 
 const textCache = new WeakMap<object, string | null>();
@@ -37,8 +37,7 @@ export function extractText(message: unknown): string | null {
   }
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
-  const raw =
-    role === "assistant" ? extractSharedAssistantVisibleText(message) : extractRawText(message);
+  const raw = role === "assistant" ? extractAssistantPhaseText(message) : extractRawText(message);
   if (!raw) {
     return null;
   }

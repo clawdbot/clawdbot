@@ -782,6 +782,10 @@ extension OnboardingAISetupModel {
         guard let context = beginAttemptContext(
             supersededAttemptDeadline: supersededAttemptDeadline)
         else { return }
+        // A fresh user-picked attempt owns the verdict; keeping the stale
+        // "none of the found options worked" card up during its test would
+        // contradict the visible Testing state.
+        self.exhaustedAutoCandidates = false
         if let supersededKind {
             self.statuses[supersededKind] = .untried
             self.selectedKind = kind

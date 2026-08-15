@@ -1,13 +1,43 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
-import { resolveCodeModeConfig } from "./code-mode.js";
-import { testing } from "./code-mode.test-support.js";
+import { applyCodeModeCatalog, resolveCodeModeConfig } from "./code-mode.js";
+import {
+  createCodeModeHarness,
+  fakeTool,
+  runUntilCompleted,
+  testing,
+} from "./code-mode.test-support.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "./subagents/swarm/swarm-code-mode.js";
+import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+
+const swarmMocks = vi.hoisted(() => ({
+  emitSessionLifecycleEvent: vi.fn(),
+  getSwarmRunByLaunchReplayKey: vi.fn(),
+  initSubagentRegistry: vi.fn(),
+  waitForCollectorCompletion: vi.fn(),
+}));
+
+vi.mock("../sessions/session-lifecycle-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sessions/session-lifecycle-events.js")>()),
+  emitSessionLifecycleEvent: swarmMocks.emitSessionLifecycleEvent,
+}));
+
+vi.mock("./subagents/registry/subagent-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagents/registry/subagent-registry.js")>()),
+  getSwarmRunByLaunchReplayKey: swarmMocks.getSwarmRunByLaunchReplayKey,
+  initSubagentRegistry: swarmMocks.initSubagentRegistry,
+}));
+
+vi.mock("./tools/agents-wait-tool.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tools/agents-wait-tool.js")>()),
+  waitForCollectorCompletion: swarmMocks.waitForCollectorCompletion,
+}));
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
@@ -66,9 +96,78 @@ function swarmContext() {
   };
 }
 
+function collectorRecord(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+  return {
+    runId: "collector-1",
+    childSessionKey: "agent:main:subagent:1",
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "agent:main:main",
+    task: "Research",
+    cleanup: "delete",
+    createdAt: 1,
+    execution: { status: "running" },
+    ...overrides,
+  };
+}
+
+function collectorFingerprint(task = "Research"): string {
+  return `sha256:${createHash("sha256")
+    .update(
+      stableStringify({
+        task,
+        collect: true,
+        groupId: "swarm:agent:main:main:run-swarm",
+      }),
+    )
+    .digest("hex")}`;
+}
+
+function createSwarmHarness(execute?: AnyAgentTool["execute"]) {
+  const harness = createCodeModeHarness();
+  const toolsConfig = (harness.config as { tools: Record<string, unknown> }).tools;
+  toolsConfig.swarm = { enabled: true };
+  Object.assign(harness.ctx, {
+    sessionId: "session-swarm",
+    runId: "run-swarm",
+  });
+  const spawnTool = fakeTool("sessions_spawn", "Spawn a collector");
+  spawnTool.execute = vi.fn(
+    execute ?? (async () => jsonResult({ status: "accepted", runId: "collector-1" })),
+  ) as AnyAgentTool["execute"];
+  applyCodeModeCatalog({
+    tools: [...harness.tools, spawnTool],
+    config: harness.config,
+    sessionId: harness.ctx.sessionId,
+    sessionKey: harness.ctx.sessionKey,
+    runId: harness.ctx.runId,
+    catalogRef: harness.catalogRef,
+  });
+  return { ...harness, spawnTool };
+}
+
+async function runSwarmCode(harness: ReturnType<typeof createSwarmHarness>, code: string) {
+  const execTool = harness.tools[0];
+  const waitTool = harness.tools[1];
+  if (!execTool || !waitTool) {
+    throw new Error("expected Code Mode exec and wait tools");
+  }
+  return await runUntilCompleted({ execTool, waitTool, code });
+}
+
+beforeEach(() => {
+  swarmMocks.emitSessionLifecycleEvent.mockReset();
+  swarmMocks.getSwarmRunByLaunchReplayKey.mockReset().mockReturnValue(undefined);
+  swarmMocks.initSubagentRegistry.mockReset();
+  swarmMocks.waitForCollectorCompletion.mockReset().mockResolvedValue({
+    runId: "collector-1",
+    status: "done",
+    result: "restored",
+    sessionKey: "agent:main:subagent:1",
+  });
+});
+
 afterEach(() => {
   testing.activeRuns.clear();
-  testing.setSwarmDepsForTest();
 });
 
 describe("Code Mode swarm guest", () => {
@@ -186,6 +285,41 @@ describe("Code Mode swarm guest", () => {
     }
   });
 
+  it.each([
+    { name: "blank result", schemaError: undefined },
+    { name: "schema error", schemaError: "structured output was invalid" },
+  ])("prefers an authoritative execution error over $name", async ({ schemaError }) => {
+    const first = await workerExec('return await agents.run("Fail after output");', true);
+    expectWaiting(first);
+    const second = await workerResume(first, [
+      { id: first.pendingRequests[0]!.id, ok: true, value: { runId: "collector-4" } },
+    ]);
+    expectWaiting(second);
+
+    const failed = await workerResume(second, [
+      {
+        id: second.pendingRequests[0]!.id,
+        ok: true,
+        value: {
+          runId: "collector-4",
+          status: "failed",
+          result: "",
+          structured: { partial: true },
+          error: "provider failed after tool output",
+          ...(schemaError ? { schemaError } : {}),
+        },
+      },
+    ]);
+
+    expect(failed).toMatchObject({ status: "failed", code: "internal_error" });
+    if (failed.status === "failed") {
+      expect(failed.error).toContain(
+        "SwarmAgentError: Swarm agent collector-4 failed: provider failed after tool output",
+      );
+      expect(failed.error).not.toContain("structured output was invalid");
+    }
+  });
+
   it("sends phase and log as fire-and-forget swarm notes", async () => {
     const first = await workerExec('phase("Plan"); log("Working"); return "ok";', true);
     expectWaiting(first);
@@ -237,24 +371,10 @@ describe("Code Mode swarm host bridge", () => {
   });
 
   it("dispatches notes with the canonical swarm group", async () => {
-    const emitSessionLifecycleEvent = vi.fn();
-    testing.setSwarmDepsForTest({ emitSessionLifecycleEvent });
+    const result = await runSwarmCode(createSwarmHarness(), 'phase("Plan"); return "ok";');
 
-    const result = await testing.runBridgeRequest({
-      runtime: {},
-      namespaceRuntime: {},
-      parentToolCallId: "parent",
-      codeModeRunId: "cm-note",
-      ctx: swarmContext(),
-      request: {
-        id: "bridge:1",
-        method: "swarmNote",
-        args: [{ kind: "phase", text: "Plan" }],
-      },
-    });
-
-    expect(result).toMatchObject({ ok: true, value: { ok: true } });
-    expect(emitSessionLifecycleEvent).toHaveBeenCalledWith({
+    expect(result).toMatchObject({ status: "completed", value: "ok" });
+    expect(swarmMocks.emitSessionLifecycleEvent).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       reason: "swarm-note",
       swarmGroupId: "swarm:agent:main:main:run-swarm",
@@ -264,298 +384,81 @@ describe("Code Mode swarm host bridge", () => {
   });
 
   it("re-settles a persisted collector after restart without double-spawn", async () => {
-    let persisted: Record<string, unknown> | undefined;
-    let replayId = "";
-    const callExactId = vi.fn(async (_id: string, input: Record<PropertyKey, unknown>) => {
-      const idempotencyKey = input[SWARM_CODE_MODE_IDEMPOTENCY_KEY];
-      const requestFingerprint = input[SWARM_CODE_MODE_REQUEST_FINGERPRINT];
-      expect(idempotencyKey).toBe(`${replayId}:bridge:1`);
+    let persisted: SubagentRunRecord | undefined;
+    const harness = createSwarmHarness(async (_toolCallId, input) => {
+      const spawnInput = input as Record<PropertyKey, unknown>;
+      const replayKey = spawnInput[SWARM_CODE_MODE_IDEMPOTENCY_KEY];
+      const requestFingerprint = spawnInput[SWARM_CODE_MODE_REQUEST_FINGERPRINT];
+      expect(replayKey).toEqual(
+        expect.stringMatching(/^cm_replay_[0-9a-f]{24}:bridge:agentSpawn:1$/u),
+      );
       expect(requestFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/u);
-      persisted = {
-        runId: "collector-1",
+      persisted = collectorRecord({
         swarmRunId: "collector-1",
-        childSessionKey: "agent:main:subagent:1",
         collect: true,
-        swarmLaunchReplayKey: idempotencyKey,
-        swarmLaunchRequestFingerprint: requestFingerprint,
-      };
-      return {
-        result: { details: { status: "accepted", runId: "collector-1" } },
-      };
-    });
-    const runtime = {
-      namespaceEntries: () => [
-        { id: "openclaw:core:sessions_spawn", source: "openclaw", name: "sessions_spawn" },
-      ],
-      callExactId,
-    };
-    const getSwarmRunByLaunchReplayKey = vi.fn(() => persisted);
-    const waitForCollectorCompletion = vi.fn(async () => ({
-      runId: "collector-1",
-      status: "done",
-      result: "restored",
-      sessionKey: "agent:main:subagent:1",
-    }));
-    testing.setSwarmDepsForTest({
-      getSwarmRunByLaunchReplayKey,
-      waitForCollectorCompletion,
-    });
-    const spawnRequest = {
-      id: "bridge:1",
-      method: "agentSpawn",
-      args: ["Research", { label: "facts" }],
-    };
-    const globalAliasContext = {
-      ...swarmContext(),
-      sessionKey: "main",
-      config: { tools: { codeMode: true, swarm: { enabled: true } }, session: { scope: "global" } },
-      runtimeConfig: {
-        tools: { codeMode: true, swarm: { enabled: true } },
-        session: { scope: "global" },
-      },
-    } as const;
-    const code = 'return await agents.run("Research", { label: "facts" });';
-    replayId = testing.codeModeReplayIdForToolCall(
-      globalAliasContext,
-      "call_0",
-      code,
-      "response-turn-1",
-    );
-    const restoredReplayId = testing.codeModeReplayIdForToolCall(
-      globalAliasContext,
-      "call_0",
-      code,
-      structuredClone("response-turn-1"),
-    );
-    expect(restoredReplayId).toBe(replayId);
-    const bridgeBase = {
-      runtime,
-      namespaceRuntime: {},
-      parentToolCallId: "parent",
-      codeModeRunId: restoredReplayId,
-      ctx: globalAliasContext,
-    };
-
-    const first = await testing.runBridgeRequest({ ...bridgeBase, request: spawnRequest });
-    const replayed = await testing.runBridgeRequest({ ...bridgeBase, request: spawnRequest });
-    const waited = await testing.runBridgeRequest({
-      ...bridgeBase,
-      request: { id: "bridge:2", method: "agentWait", args: ["collector-1"] },
-    });
-
-    expect(first).toMatchObject({ ok: true, value: { runId: "collector-1" } });
-    expect(replayed).toMatchObject({ ok: true, value: { runId: "collector-1" } });
-    expect(waited).toMatchObject({ ok: true, value: { status: "done", result: "restored" } });
-    expect(callExactId).toHaveBeenCalledTimes(1);
-    expect(getSwarmRunByLaunchReplayKey).toHaveBeenNthCalledWith(
-      1,
-      `${replayId}:bridge:1`,
-      "global",
-    );
-    expect(getSwarmRunByLaunchReplayKey).toHaveBeenNthCalledWith(
-      2,
-      `${replayId}:bridge:1`,
-      "global",
-    );
-    expect(waitForCollectorCompletion).toHaveBeenCalledWith({
-      runId: "collector-1",
-      currentSessionKeys: new Set(["main", "global"]),
-      signal: undefined,
-    });
-  });
-
-  it("spawns two collectors when later turns reuse the tool-call id and source", async () => {
-    const persistedByReplayKey = new Map<string, Record<string, unknown>>();
-    const callExactId = vi.fn(async (_id: string, input: Record<PropertyKey, unknown>) => {
-      const replayKey = String(input[SWARM_CODE_MODE_IDEMPOTENCY_KEY]);
-      const runId = `collector-${persistedByReplayKey.size + 1}`;
-      persistedByReplayKey.set(replayKey, {
-        runId,
-        childSessionKey: `agent:main:subagent:${persistedByReplayKey.size + 1}`,
-        swarmLaunchReplayKey: replayKey,
-        swarmLaunchRequestFingerprint: input[SWARM_CODE_MODE_REQUEST_FINGERPRINT],
+        swarmLaunchReplayKey: String(replayKey),
+        swarmLaunchRequestFingerprint: String(requestFingerprint),
       });
-      return { result: { details: { status: "accepted", runId } } };
+      return jsonResult({ status: "accepted", runId: "collector-1" });
     });
-    testing.setSwarmDepsForTest({
-      getSwarmRunByLaunchReplayKey: (key) => persistedByReplayKey.get(key),
-    });
-    const runtime = {
-      namespaceEntries: () => [
-        { id: "openclaw:core:sessions_spawn", source: "openclaw", name: "sessions_spawn" },
-      ],
-      callExactId,
-    };
-    const ctx = swarmContext();
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockImplementation(() => persisted);
     const code = 'return await agents.run("Research");';
-    const firstReplayId = testing.codeModeReplayIdForToolCall(
-      ctx,
-      "call_0",
-      code,
-      "response-turn-1",
-    );
-    const secondReplayId = testing.codeModeReplayIdForToolCall(
-      ctx,
-      "call_0",
-      code,
-      "response-turn-2",
-    );
-    const bridgeBase = {
-      runtime,
-      namespaceRuntime: {},
-      parentToolCallId: "parent",
-      ctx,
-      request: { id: "bridge:1", method: "agentSpawn", args: ["Research", {}] },
-    };
 
-    const first = await testing.runBridgeRequest({
-      ...bridgeBase,
-      codeModeRunId: firstReplayId,
-    });
-    const second = await testing.runBridgeRequest({
-      ...bridgeBase,
-      codeModeRunId: secondReplayId,
-    });
+    const first = await runSwarmCode(harness, code);
+    const replayed = await runSwarmCode(harness, code);
 
-    expect(secondReplayId).not.toBe(firstReplayId);
-    expect(first).toMatchObject({ ok: true, value: { runId: "collector-1" } });
-    expect(second).toMatchObject({ ok: true, value: { runId: "collector-2" } });
-    expect(callExactId).toHaveBeenCalledTimes(2);
-    expect([...persistedByReplayKey.keys()]).toEqual([
-      `${firstReplayId}:bridge:1`,
-      `${secondReplayId}:bridge:1`,
-    ]);
+    expect(first).toMatchObject({ status: "completed", value: "restored" });
+    expect(replayed).toMatchObject({ status: "completed", value: "restored" });
+    expect(harness.spawnTool.execute).toHaveBeenCalledTimes(1);
+    expect(swarmMocks.getSwarmRunByLaunchReplayKey).toHaveBeenCalledTimes(2);
+    expect(swarmMocks.waitForCollectorCompletion).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects replay when the collector request payload changes", async () => {
-    const callExactId = vi.fn(async (_id: string, input: Record<PropertyKey, unknown>) => ({
-      result: { details: { status: "accepted", runId: "collector-1" } },
-      fingerprint: input[SWARM_CODE_MODE_REQUEST_FINGERPRINT],
-    }));
-    const runtime = {
-      namespaceEntries: () => [
-        { id: "openclaw:core:sessions_spawn", source: "openclaw", name: "sessions_spawn" },
-      ],
-      callExactId,
-    };
-    const persisted: { value?: Record<string, unknown> } = {};
-    testing.setSwarmDepsForTest({
-      getSwarmRunByLaunchReplayKey: () => persisted.value,
-    });
-    const bridgeBase = {
-      runtime,
-      namespaceRuntime: {},
-      parentToolCallId: "parent",
-      codeModeRunId: "cm-restart",
-      ctx: swarmContext(),
-    };
-    const first = await testing.runBridgeRequest({
-      ...bridgeBase,
-      request: { id: "bridge:1", method: "agentSpawn", args: ["Research one", {}] },
-    });
-    expect(first.ok).toBe(true);
-    const spawnInput = callExactId.mock.calls[0]?.[1] as Record<PropertyKey, unknown>;
-    persisted.value = {
-      runId: "collector-1",
-      childSessionKey: "agent:main:subagent:1",
-      swarmLaunchRequestFingerprint: spawnInput[SWARM_CODE_MODE_REQUEST_FINGERPRINT],
-    };
+  it("rejects a persisted collector whose request fingerprint does not match", async () => {
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockReturnValue(
+      collectorRecord({ swarmLaunchRequestFingerprint: collectorFingerprint("Different task") }),
+    );
+    const harness = createSwarmHarness();
 
-    const replay = await testing.runBridgeRequest({
-      ...bridgeBase,
-      request: { id: "bridge:1", method: "agentSpawn", args: ["Research two", {}] },
-    });
+    const result = await runSwarmCode(harness, 'return await agents.run("Research");');
 
-    expect(replay).toMatchObject({ ok: false });
-    expect(replay.ok ? "" : replay.error).toContain("does not match the persisted collector");
-    expect(callExactId).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: "failed", code: "internal_error" });
+    expect(String(result.error)).toContain("does not match the persisted collector");
+    expect(harness.spawnTool.execute).not.toHaveBeenCalled();
   });
 
   it("rejects a pending reservation without durable launch state", async () => {
-    const callExactId = vi.fn(async (_id: string, _input: Record<PropertyKey, unknown>) => ({
-      result: { details: { status: "accepted", runId: "collector-1" } },
-    }));
-    const runtime = {
-      namespaceEntries: () => [
-        { id: "openclaw:core:sessions_spawn", source: "openclaw", name: "sessions_spawn" },
-      ],
-      callExactId,
-    };
-    const persisted: { value?: Record<string, unknown> } = {};
-    const initSubagentRegistry = vi.fn();
-    testing.setSwarmDepsForTest({
-      getSwarmRunByLaunchReplayKey: () => persisted.value,
-      initSubagentRegistry,
-    });
-    const bridgeBase = {
-      runtime,
-      namespaceRuntime: {},
-      parentToolCallId: "parent",
-      codeModeRunId: "cm-restart",
-      ctx: swarmContext(),
-    };
-    await testing.runBridgeRequest({
-      ...bridgeBase,
-      request: { id: "bridge:1", method: "agentSpawn", args: ["Research", {}] },
-    });
-    const spawnInput = callExactId.mock.calls[0]?.[1] as Record<PropertyKey, unknown>;
-    persisted.value = {
-      runId: "collector-1",
-      childSessionKey: "agent:main:subagent:1",
-      swarmLaunchPending: true,
-      swarmLaunchRequestFingerprint: spawnInput[SWARM_CODE_MODE_REQUEST_FINGERPRINT],
-    };
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockReturnValue(
+      collectorRecord({
+        swarmLaunchPending: true,
+        swarmLaunchRequestFingerprint: collectorFingerprint(),
+      }),
+    );
+    const harness = createSwarmHarness();
 
-    const replay = await testing.runBridgeRequest({
-      ...bridgeBase,
-      request: { id: "bridge:1", method: "agentSpawn", args: ["Research", {}] },
-    });
+    const result = await runSwarmCode(harness, 'return await agents.run("Research");');
 
-    expect(replay).toMatchObject({ ok: false });
-    expect(replay.ok ? "" : replay.error).toContain("launch reservation cannot be recovered");
-    expect(initSubagentRegistry).not.toHaveBeenCalled();
-    expect(callExactId).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: "failed", code: "internal_error" });
+    expect(String(result.error)).toContain("launch reservation cannot be recovered");
+    expect(swarmMocks.initSubagentRegistry).not.toHaveBeenCalled();
+    expect(harness.spawnTool.execute).not.toHaveBeenCalled();
   });
 
   it("re-enqueues a durable pending reservation before returning its handle", async () => {
-    const initSubagentRegistry = vi.fn();
-    testing.setSwarmDepsForTest({
-      initSubagentRegistry,
-      getSwarmRunByLaunchReplayKey: () => ({
-        runId: "collector-1",
-        childSessionKey: "agent:main:subagent:1",
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockReturnValue(
+      collectorRecord({
         swarmLaunchPending: true,
-        swarmLaunchRequestFingerprint: `sha256:${createHash("sha256")
-          .update(
-            stableStringify({
-              task: "Research",
-              collect: true,
-              groupId: "swarm:agent:main:main:run-swarm",
-            }),
-          )
-          .digest("hex")}`,
+        swarmLaunchRequestFingerprint: collectorFingerprint(),
         queuedLaunch: { request: {}, timeoutMs: 1, schedulerGroupKey: "group", maxConcurrent: 1 },
       }),
-    });
-    const runtime = {
-      namespaceEntries: () => [
-        { id: "openclaw:core:sessions_spawn", source: "openclaw", name: "sessions_spawn" },
-      ],
-      callExactId: vi.fn(),
-    };
+    );
+    const harness = createSwarmHarness();
 
-    const replay = await testing.runBridgeRequest({
-      runtime,
-      namespaceRuntime: {},
-      parentToolCallId: "parent",
-      codeModeRunId: "cm-restart",
-      ctx: swarmContext(),
-      request: { id: "bridge:1", method: "agentSpawn", args: ["Research", {}] },
-    });
+    const result = await runSwarmCode(harness, 'return await agents.run("Research");');
 
-    expect(replay).toMatchObject({ ok: true, value: { runId: "collector-1" } });
-    expect(initSubagentRegistry).toHaveBeenCalledOnce();
-    expect(runtime.callExactId).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: "completed", value: "restored" });
+    expect(swarmMocks.initSubagentRegistry).toHaveBeenCalledOnce();
+    expect(harness.spawnTool.execute).not.toHaveBeenCalled();
   });
 
   it("renews expired snapshots while agentWait remains pending", () => {

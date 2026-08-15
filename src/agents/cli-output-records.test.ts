@@ -65,6 +65,17 @@ const OPENAI_COMPATIBLE_CLI_USAGE_CASES = [
     },
     normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
   },
+  {
+    name: "all-zero token fields are treated as absent usage",
+    raw: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cached_input_tokens: 0,
+      cache_write_input_tokens: 0,
+      total_tokens: 0,
+    },
+    normalized: undefined,
+  },
 ] as const;
 
 function parseCliJson(raw: string, backend: ParseCliOutputParams["backend"], providerId = "") {

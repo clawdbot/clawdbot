@@ -431,6 +431,7 @@ export function admitStoredChatComposerQueueItem(
   sessionKey: string,
   item: ChatQueueItem,
   agentId?: string,
+  replacesId?: string,
 ): boolean {
   const storage = getSafeSessionStorage();
   if (!storage || !sessionKey.trim()) {
@@ -455,7 +456,11 @@ export function admitStoredChatComposerQueueItem(
       sessionKey,
       scope.agentScope === UNRESOLVED_GLOBAL_AGENT_SCOPE ? undefined : scope.agentScope,
     );
-    const queue = session?.queue ?? [];
+    // An edited row and its replacement are one write: the source is retired only
+    // by the write that stores the replacement, so a rejected write leaves the
+    // original queued instead of losing both copies. Filtering before the cap
+    // check also keeps a replacement admissible on a full queue.
+    const queue = (session?.queue ?? []).filter((entry) => entry.id !== replacesId);
     const existing = queue.find((entry) => entry.id === serialized.id);
     if (existing) {
       if (!queueItemsEqual(existing, serialized, scope)) {

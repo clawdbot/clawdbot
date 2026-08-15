@@ -199,14 +199,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(ensureSpy).not.toHaveBeenCalled();
   });
 
-  it("exposes assertSupportedRuntimeSessionMode as a typed guard", () => {
-    expect(testing.assertSupportedRuntimeSessionMode("persistent")).toBeUndefined();
-    expect(testing.assertSupportedRuntimeSessionMode("oneshot")).toBeUndefined();
-    expect(() => testing.assertSupportedRuntimeSessionMode("run" as never)).toThrow(
-      AcpRuntimeError,
-    );
-  });
-
   it("adds the OpenClaw session key to both managed tools MCP bridges", () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
@@ -617,7 +609,18 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it("strips the OpenClaw Anthropic provider prefix for Claude ACP startup", async () => {
+  it.each([
+    {
+      name: "strips the OpenClaw Anthropic provider prefix for Claude ACP startup",
+      model: "anthropic/claude-sonnet-4-6",
+      expectedModel: "claude-sonnet-4-6",
+    },
+    {
+      name: "preserves custom Claude ACP startup models",
+      model: "custom-model",
+      expectedModel: "custom-model",
+    },
+  ])("$name", async ({ model, expectedModel }) => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -639,32 +642,16 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       sessionKey: "agent:claude:acp:test",
       agent: "claude",
       mode: "persistent",
-      model: "anthropic/claude-sonnet-4-6",
+      model,
     });
 
     expect(readFirstEnsureSessionInput(ensure)).toEqual({
       sessionKey: "agent:claude:acp:test",
       agent: "claude",
       mode: "persistent",
-      model: "claude-sonnet-4-6",
-      sessionOptions: { model: "claude-sonnet-4-6" },
+      model: expectedModel,
+      sessionOptions: { model: expectedModel },
     });
-  });
-
-  it("keeps Claude ACP model ids intact after stripping the OpenClaw provider prefix", () => {
-    expect(testing.normalizeClaudeAcpModelOverride("anthropic/claude-sonnet-4-6")).toBe(
-      "claude-sonnet-4-6",
-    );
-    expect(testing.normalizeClaudeAcpModelOverride("anthropic/claude-opus-4-8")).toBe(
-      "claude-opus-4-8",
-    );
-    expect(testing.normalizeClaudeAcpModelOverride("anthropic/claude-haiku-4-5")).toBe(
-      "claude-haiku-4-5",
-    );
-    expect(testing.normalizeClaudeAcpModelOverride("anthropic/claude-sonnet-4-6-1m")).toBe(
-      "claude-sonnet-4-6-1m",
-    );
-    expect(testing.normalizeClaudeAcpModelOverride("custom-model")).toBe("custom-model");
   });
 
   it("leaves Codex ACP startup defaults alone when no model or thinking is provided", async () => {
@@ -1302,56 +1289,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     ).not.toContain("gpt-5.6-sol/medium");
   });
 
-  it.each<{ model: string | undefined; thinking?: string; override: Record<string, string> }>([
-    { model: "openai/gpt-5.4", override: { model: "gpt-5.4" } },
-    {
-      model: "openai/gpt-5.4",
-      thinking: "high",
-      override: { model: "gpt-5.4", reasoningEffort: "high" },
-    },
-    { model: "gpt-5.4/high", override: { model: "gpt-5.4", reasoningEffort: "high" } },
-    { model: "gpt-5.4", override: { model: "gpt-5.4" } },
-    { model: undefined, thinking: "low", override: { reasoningEffort: "low" } },
-    { model: "", override: {} },
-  ])(
-    "classifies supported Codex ACP model request ($model, $thinking) as an override",
-    ({ model, thinking, override }) => {
-      expect(testing.classifyCodexAcpModelRequest(model, thinking)).toEqual({
-        kind: "override",
-        override,
-      });
-    },
-  );
-
-  it.each<{ model: string; thinking?: string; expected: Record<string, unknown> }>([
-    { model: "google/gemini-3.1-flash-lite", expected: { kind: "unsupported" } },
-    {
-      model: "google/gemini-3.1-flash-lite",
-      thinking: "low",
-      expected: { kind: "unsupported", thinkingOverride: { reasoningEffort: "low" } },
-    },
-    { model: "gpt-5.4/ultra", expected: { kind: "unsupported" } },
-    { model: "/high", expected: { kind: "unsupported" } },
-  ])(
-    "classifies unsupported Codex ACP model request ($model, $thinking) without thinking-slot routing",
-    ({ model, thinking, expected }) => {
-      expect(testing.classifyCodexAcpModelRequest(model, thinking)).toEqual(expected);
-    },
-  );
-
-  it.each(["openai/foo/bar", "openai/", "openai//high"])(
-    "fails closed on malformed openai-qualified Codex ACP model request %s",
-    (model) => {
-      expect(() => testing.classifyCodexAcpModelRequest(model)).toThrow(AcpRuntimeError);
-    },
-  );
-
-  it("fails closed on an unsupported Codex ACP thinking value", () => {
-    expect(() => testing.classifyCodexAcpModelRequest(undefined, "superhigh")).toThrow(
-      AcpRuntimeError,
-    );
-  });
-
   it("starts Codex ACP without injecting a leaked non-openai default model", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
@@ -1565,7 +1502,13 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it("normalizes Codex ACP model config controls to adapter ids", async () => {
+  it.each([
+    {
+      name: "normalizes OpenClaw-qualified Codex ACP model controls",
+      value: "openai/gpt-5.4",
+    },
+    { name: "passes bare Codex ACP model controls through", value: "gpt-5.4" },
+  ])("$name", async ({ value }) => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:codex:acp:test",
@@ -1585,42 +1528,45 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     await runtime.setConfigOption({
       handle,
       key: "model",
-      value: "openai/gpt-5.4",
+      value,
     });
 
-    expect(setConfigOption).toHaveBeenNthCalledWith(1, {
+    expect(setConfigOption).toHaveBeenCalledOnce();
+    expect(setConfigOption).toHaveBeenCalledWith({
       handle,
       key: "model",
       value: "gpt-5.4",
     });
-    expect(setConfigOption).toHaveBeenCalledOnce();
   });
 
-  it.each(["google/gemini-3.1-flash-lite", "gpt-5.4/ultra", "openai/foo/bar"])(
-    "fails closed on Codex ACP model config control %s without re-injecting it",
-    async (value) => {
-      const baseStore: TestSessionStore = {
-        load: vi.fn(async () => ({
-          acpxRecordId: "agent:codex:acp:test",
-          agentCommand: CODEX_ACP_COMMAND,
-        })),
-        save: vi.fn(async () => {}),
-      };
-      const { runtime, delegate } = makeRuntime(baseStore);
-      const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
-      const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
-        sessionKey: "agent:codex:acp:test",
-        backend: "acpx",
-        runtimeSessionName: "agent:codex:acp:test",
+  it.each([
+    "google/gemini-3.1-flash-lite",
+    "gpt-5.4/ultra",
+    "openai/foo/bar",
+    "openai/",
+    "openai//high",
+  ])("fails closed on Codex ACP model config control %s without re-injecting it", async (value) => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
         acpxRecordId: "agent:codex:acp:test",
-      };
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
 
-      await expect(runtime.setConfigOption({ handle, key: "model", value })).rejects.toMatchObject({
-        code: "ACP_INVALID_RUNTIME_OPTION",
-      });
-      expect(setConfigOption).not.toHaveBeenCalled();
-    },
-  );
+    await expect(runtime.setConfigOption({ handle, key: "model", value })).rejects.toMatchObject({
+      code: "ACP_INVALID_RUNTIME_OPTION",
+    });
+    expect(setConfigOption).not.toHaveBeenCalled();
+  });
 
   it("normalizes Codex ACP slash reasoning suffixes to config controls", async () => {
     const baseStore: TestSessionStore = {
@@ -1689,9 +1635,24 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it.each([
-    { key: "thinking", value: "minimal", expected: "low" },
-    { key: "reasoning_effort", value: "x-high", expected: "xhigh" },
-  ])("normalizes Codex ACP $key=$value to reasoning effort", async ({ key, value, expected }) => {
+    {
+      name: "normalizes Codex ACP thinking=minimal to reasoning effort",
+      key: "thinking",
+      value: "minimal",
+      expected: "low",
+    },
+    {
+      name: "normalizes Codex ACP reasoning_effort=x-high",
+      key: "reasoning_effort",
+      value: "x-high",
+      expected: "xhigh",
+    },
+    {
+      name: "rejects unsupported Codex ACP thinking controls",
+      key: "thinking",
+      value: "superhigh",
+    },
+  ])("$name", async ({ key, value, expected }) => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:codex:acp:test",
@@ -1708,12 +1669,18 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       acpxRecordId: "agent:codex:acp:test",
     };
 
-    await runtime.setConfigOption({
+    const update = runtime.setConfigOption({
       handle,
       key,
       value,
     });
+    if (!expected) {
+      await expect(update).rejects.toMatchObject({ code: "ACP_INVALID_RUNTIME_OPTION" });
+      expect(setConfigOption).not.toHaveBeenCalled();
+      return;
+    }
 
+    await update;
     expect(setConfigOption).toHaveBeenCalledWith({
       handle,
       key: "reasoning_effort",

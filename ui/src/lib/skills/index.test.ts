@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createRuntimeConfigCapability } from "../config/index.ts";
+import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import { searchClawHub } from "./clawhub-search.ts";
 import {
   clawhubVerdictKey,
@@ -49,7 +49,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
         }
       },
     },
-    skillsAgentId: null,
+    skillsAgentId: "main",
     skillsAgentRevision: 0,
     skillsLoading: false,
     skillsReport: null,
@@ -70,7 +70,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     clawhubSearchLoading: false,
     clawhubSearchError: "old error",
     clawhubDetail: null,
-    clawhubDetailSlug: null,
+    clawhubDetailRef: null,
     clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,
@@ -113,6 +113,15 @@ function mockSkillMutationRequests(
 }
 
 describe("loadSkills", () => {
+  it("does not issue an ownerless status request", async () => {
+    const { state, request } = createState();
+    state.skillsAgentId = null;
+
+    await loadSkills(state);
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("does not request ClawHub verdicts when no installed skills are linked", async () => {
     const { state, request } = createState();
     request.mockResolvedValueOnce({
@@ -124,7 +133,7 @@ describe("loadSkills", () => {
     await loadSkills(state);
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith("skills.status", {});
+    expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
     expect(state.clawhubVerdicts).toEqual({});
     expect(state.clawhubVerdictsError).toBeNull();
   });
@@ -179,8 +188,8 @@ describe("loadSkills", () => {
     await loadSkills(state);
 
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "skills.status", {});
-    expect(request).toHaveBeenNthCalledWith(2, "skills.securityVerdicts", {});
+    expect(request).toHaveBeenNthCalledWith(1, "skills.status", { agentId: "main" });
+    expect(request).toHaveBeenNthCalledWith(2, "skills.securityVerdicts", { agentId: "main" });
     expect(state.clawhubVerdicts).toEqual({
       [clawhubVerdictKey({
         registry: "https://clawhub.ai",
@@ -760,7 +769,7 @@ describe("skill mutations", () => {
     await refresh;
 
     expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("skills.status", {});
+    expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
     expect(state.skillOperation).toBeNull();
   });
 
@@ -827,6 +836,7 @@ describe("skill mutations", () => {
       expectedRequest: [
         "skills.install",
         {
+          agentId: "main",
           name: "GitHub",
           installId: "install-123",
           dangerouslyForceUnsafeInstall: true,
@@ -996,7 +1006,7 @@ describe("skill mutations", () => {
       firstMethod: "skills.install",
       start: (state: SkillsState) => installFromClawHub(state, "github"),
       blocked: (state: SkillsState) => updateSkillEnabled(state, "calendar", true),
-      expectedMutation: { kind: "clawhub", slug: "github" } as const,
+      expectedMutation: { kind: "clawhub", ref: "github" } as const,
     },
   ])("serializes $name and locks API key edits", async (fixture) => {
     const { state, request } = createState();
@@ -1288,7 +1298,7 @@ describe("skill mutations", () => {
       text:
         "Review the ClawHub warning before installing this skill.\n\n" +
         "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-      acknowledgeSlug: "github",
+      acknowledgeRef: "github",
       acknowledgeVersion: "1.2.3",
       acknowledgeLabel: "Acknowledge risk and install",
     });
@@ -1301,6 +1311,7 @@ describe("skill mutations", () => {
     );
 
     expect(request).toHaveBeenNthCalledWith(2, "skills.install", {
+      agentId: "main",
       source: "clawhub",
       slug: "github",
       version: "1.2.3",
@@ -1365,7 +1376,7 @@ describe("skill mutations", () => {
 });
 
 describe("reconcileSkillsAgentId", () => {
-  it("resets a deleted selected agent without releasing its active operation", () => {
+  it("selects the roster default after the selected agent is deleted", () => {
     const { state } = createState();
     state.skillsAgentId = "deleted";
     state.skillsReport = {
@@ -1373,7 +1384,7 @@ describe("reconcileSkillsAgentId", () => {
       managedSkillsDir: "/tmp/skills",
       skills: [],
     };
-    state.skillOperation = { kind: "clawhub", slug: "calendar" };
+    state.skillOperation = { kind: "clawhub", ref: "calendar" };
 
     reconcileSkillsAgentId(state, {
       defaultId: "main",
@@ -1382,10 +1393,10 @@ describe("reconcileSkillsAgentId", () => {
       agents: [{ id: "main" }],
     });
 
-    expect(state.skillsAgentId).toBeNull();
+    expect(state.skillsAgentId).toBe("main");
     expect(state.skillsAgentRevision).toBe(1);
     expect(state.skillsReport).toBeNull();
-    expect(state.skillOperation).toEqual({ kind: "clawhub", slug: "calendar" });
+    expect(state.skillOperation).toEqual({ kind: "clawhub", ref: "calendar" });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

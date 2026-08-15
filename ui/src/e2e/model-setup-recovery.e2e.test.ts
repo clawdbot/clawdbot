@@ -112,7 +112,7 @@ suite.define(() => {
         }
 
         const verify = await gateway.waitForRequest("openclaw.setup.verify");
-        expect(verify.params).toEqual({});
+        expect(verify.params).toEqual({ agentId: "main" });
       },
     );
   });

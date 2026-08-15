@@ -97,10 +97,21 @@ export function replacePaneStagedAttachmentGatewayOwner(
   if (!nextOwner || previousOwner === nextOwner) {
     return previousOwner;
   }
-  discardStateStagedAttachments(state);
-  state?.requestUpdate?.();
+  // Rotating the client invalidates annotation Undo context owned by the old
+  // client, but plain file/image payloads are client-local data URLs — a gap
+  // reconnect or plugin-install rotation must not silently discard them.
+  if (state) {
+    const dropAnnotations = (attachments: readonly ChatAttachment[]) => {
+      releaseAttachments(attachments.filter((attachment) => attachment.browserAnnotation));
+      return attachments.filter((attachment) => !attachment.browserAnnotation);
+    };
+    state.chatAttachments = dropAnnotations(state.chatAttachments);
+    for (const fallback of Object.values(state.chatComposerFallbackByScope)) {
+      fallback.attachments = dropAnnotations(fallback.attachments);
+    }
+    state.requestUpdate?.();
+  }
   context.chatAttachmentHandoff.clearPane(paneId);
-  // Rotating the token also invalidates any pending annotation Undo owned by the old client.
   return nextOwner;
 }
 
@@ -116,11 +127,9 @@ export function resumeStagedPanes(
   layout: ChatSplitLayout,
   narrow: boolean,
 ): void {
-  const visibleSessions = new Map(
-    visiblePanesOf(layout, narrow).map((pane) => [pane.id, pane.sessionKey]),
-  );
+  const visiblePaneIds = new Set(visiblePanesOf(layout, narrow).map((pane) => pane.id));
   for (const pane of root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")) {
-    if (visibleSessions.get(pane.paneId) === pane.sessionKey) {
+    if (visiblePaneIds.has(pane.paneId)) {
       pane.resumeStagedAttachments?.();
     }
   }
@@ -133,11 +142,14 @@ export function closeStagedPane(
   paneId: string,
 ) {
   const survivingPane = panesOf(layout).find((candidate) => candidate.id !== paneId);
-  const pane = [...root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")].find(
+  const mounted = [...root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")].filter(
     (candidate) => candidate.paneId === paneId,
   );
-  // Clear a mounted pane first so its disconnect cannot restage the closed package.
-  pane?.discardStagedAttachments?.();
+  // Clear every retained presentation first so their disconnects cannot
+  // restage a package under a later reused logical pane id.
+  for (const pane of mounted) {
+    pane.discardStagedAttachments?.();
+  }
   context.chatAttachmentHandoff.clearPane(paneId);
   return survivingPane;
 }

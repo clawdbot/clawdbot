@@ -1,4 +1,9 @@
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
+import { listAgentIds, resolveSystemAgentTargetAgentId } from "../../agents/agent-scope-config.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import {
   listProfilesForProvider,
   loadAuthProfileStoreForRuntime,
@@ -9,10 +14,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  parseStrictFiniteNumber,
-  parseStrictPositiveInteger,
-} from "../../infra/parse-finite-number.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
@@ -101,8 +102,32 @@ export function resolveSelectedProviderFromModelRef(
   return resolveModelRefOverride(modelRef).provider;
 }
 
-function getAuthProfileIdsForProvider(cfg: OpenClawConfig, providerId: string): string[] {
-  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
+export function resolveCapabilityProviderAgentId(
+  cfg: OpenClawConfig,
+  rawAgentId: string | undefined,
+): string {
+  const requestedAgentId = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !requestedAgentId) {
+    throw new Error("--agent must not be blank");
+  }
+  const agentId = resolveSystemAgentTargetAgentId(cfg, requestedAgentId, {
+    surface: "inference provider inspection",
+    hint: "Pass --agent <id> or set agents.defaults.systemAgent.agentId.",
+  });
+  if (!listAgentIds(cfg).includes(agentId)) {
+    throw new Error(
+      `Unknown agent id "${agentId}". Run \`openclaw agents list\` to see configured agents.`,
+    );
+  }
+  return agentId;
+}
+
+function getAuthProfileIdsForProvider(
+  cfg: OpenClawConfig,
+  providerId: string,
+  agentId: string,
+): string[] {
+  const agentDir = resolveAgentDir(cfg, agentId);
   const store = loadAuthProfileStoreForRuntime(agentDir);
   return listProfilesForProvider(store, providerId);
 }
@@ -110,6 +135,8 @@ function getAuthProfileIdsForProvider(cfg: OpenClawConfig, providerId: string): 
 export function providerHasGenericConfig(params: {
   cfg: OpenClawConfig;
   providerId: string;
+  /** Omit only for aggregate/global callers that intentionally exclude agent auth stores. */
+  agentId?: string;
   envVars?: string[];
 }): boolean {
   const modelsProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
@@ -123,7 +150,9 @@ export function providerHasGenericConfig(params: {
     });
   const envConfigured = envVars.some((envVar) => Boolean(process.env[envVar]?.trim()));
   return (
-    getAuthProfileIdsForProvider(params.cfg, params.providerId).length > 0 ||
+    (params.agentId
+      ? getAuthProfileIdsForProvider(params.cfg, params.providerId, params.agentId).length > 0
+      : false) ||
     hasOwnKeys(modelsProviders[params.providerId]) ||
     hasOwnKeys(pluginEntries[params.providerId]?.config) ||
     hasOwnKeys(ttsProviders[params.providerId]) ||

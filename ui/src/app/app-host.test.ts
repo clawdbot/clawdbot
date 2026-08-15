@@ -11,7 +11,6 @@ import {
 } from "../components/command-palette-contract.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
@@ -20,6 +19,7 @@ import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
+import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import "./app-host.ts";
 import type {
   ApplicationContext,
@@ -61,11 +61,6 @@ type ShellInitializationState = {
   ) => void;
 };
 
-type ShellGatewaySynchronizationState = {
-  outboxStoreImport: { load: () => Promise<unknown> };
-  synchronizeGateway: (snapshot: ApplicationGatewaySnapshot) => void;
-};
-
 type I18nRecoveryWiring = {
   localeLoadRecovery?: {
     isUnrecoverableError: (error: unknown) => boolean;
@@ -87,9 +82,7 @@ type TestOptionalCustomElement = {
 type ShellLazySurfaceState = ShellKeyboardState & {
   browserPanelElement: TestOptionalCustomElement;
   commandPaletteElement: TestOptionalCustomElement;
-  custodianPanelElement: TestOptionalCustomElement;
   handleDeferredBrowserToggle: (event: Event) => void;
-  handleDeferredCustodianToggle: (event: Event) => void;
   handleDeferredTerminalToggle: (event: Event) => void;
   terminalPanelElement: TestOptionalCustomElement;
 };
@@ -322,10 +315,27 @@ describe("OpenClaw shell source initialization", () => {
 
   it("retries a pending locale once when the Gateway becomes connected", () => {
     const retryPendingLocale = vi.spyOn(i18n, "retryPendingLocale").mockImplementation(() => {});
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellGatewaySynchronizationState;
-    shell.outboxStoreImport = { load: vi.fn(async () => undefined) };
+    // Owner-direct: the shared jsdom lane can retain a sibling graph's
+    // openclaw-app-shell class bound to a different i18n instance; constructing
+    // the owner keeps the spy and the callee in the current module graph.
+    const host = {
+      activeSessionKey: "",
+      agentRosterRefreshTimer: null,
+      agentsListClient: null,
+      agentsListSource: null,
+      context: undefined,
+      criticalNoticeRuntime: null,
+      lastLocalePrefSignature: null,
+      outboxStoreImport: { load: vi.fn(async () => undefined) },
+      previousGatewayPhase: null,
+      routeState: {},
+      runtimeConfigClient: null,
+      runtimeConfigSource: null,
+      sessionKeyClient: null,
+      sidebarWorkboardRuntime: null,
+      syncSidebarWorkboard: vi.fn(),
+    } as unknown as ShellGatewayHost;
+    const owner = new ShellGatewayOwner(host);
     const reconnecting = {
       client: null,
       phase: "reconnecting",
@@ -337,10 +347,10 @@ describe("OpenClaw shell source initialization", () => {
       sessionKey: "",
     } as ApplicationGatewaySnapshot;
 
-    shell.synchronizeGateway(reconnecting);
-    shell.synchronizeGateway(connected);
-    shell.synchronizeGateway({ ...connected });
-    shell.synchronizeGateway({ ...connected });
+    owner.synchronizeGateway(reconnecting);
+    owner.synchronizeGateway(connected);
+    owner.synchronizeGateway({ ...connected });
+    owner.synchronizeGateway({ ...connected });
 
     expect(retryPendingLocale).toHaveBeenCalledOnce();
     retryPendingLocale.mockRestore();
@@ -869,14 +879,11 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   it("delivers first panel toggles after their lazy modules load", async () => {
     const terminalElement = createLazyElementSpec("terminal panel");
     const browserElement = createLazyElementSpec("browser panel");
-    const custodianElement = createLazyElementSpec("custodian panel");
     const terminalToggle = vi.fn();
     const browserToggle = vi.fn();
-    const custodianToggle = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
     shell.terminalPanelElement = terminalElement;
     shell.browserPanelElement = browserElement;
-    shell.custodianPanelElement = custodianElement;
     shell.runtime = {
       context: {
         gateway: {
@@ -904,9 +911,6 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         if (selector === browserElement.tagName) {
           return { handleToggleRequest: browserToggle };
         }
-        if (selector === custodianElement.tagName) {
-          return { handleToggleRequest: custodianToggle };
-        }
         return null;
       },
     });
@@ -914,16 +918,13 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       detail: { dock: "right", open: true },
     });
     const browserEvent = new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT);
-    const custodianEvent = new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT);
 
     shell.handleDeferredTerminalToggle(terminalEvent);
     shell.handleDeferredBrowserToggle(browserEvent);
-    shell.handleDeferredCustodianToggle(custodianEvent);
 
     await vi.waitFor(() => {
       expect(terminalToggle).toHaveBeenCalledWith(terminalEvent);
       expect(browserToggle).toHaveBeenCalledWith(browserEvent);
-      expect(custodianToggle).toHaveBeenCalledWith(custodianEvent);
     });
   });
 

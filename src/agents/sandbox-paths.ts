@@ -236,7 +236,7 @@ export async function resolveSandboxedMediaSource(params: {
     return raw;
   }
   let candidate = raw;
-  if (/^file:\/\//i.test(candidate)) {
+  if (/^file:/i.test(candidate)) {
     const workspaceMappedFromUrl = mapContainerWorkspaceFileUrl({
       fileUrl: candidate,
       sandboxRoot: params.sandboxRoot,

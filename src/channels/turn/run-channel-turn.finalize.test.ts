@@ -1,11 +1,17 @@
 // Channel turn finalize tests cover orchestration, dispatch, and completion behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import {
+  configureChannelAdmissionEvidenceCollection,
+  consumeChannelAdmissionEvidence,
+  readChannelContextAdmissionEvidence,
+} from "../message-access/admission-evidence.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import { recordOutboundMessageIdentity } from "../message/outbound-echo.js";
 import type { RecordInboundSession } from "../session.types.js";
@@ -37,7 +43,7 @@ vi.mock("../../auto-reply/reply/provider-dispatcher.js", async (importOriginal) 
     await importOriginal<typeof import("../../auto-reply/reply/provider-dispatcher.js")>();
   return {
     ...actual,
-    dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
+    dispatchReplyWithBufferedBlockDispatcherCore,
   };
 });
 
@@ -62,7 +68,7 @@ vi.mock("../message/send.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../message/send.js")>();
   return {
     ...actual,
-    sendDurableMessageBatch,
+    sendDurableMessageBatchCore: sendDurableMessageBatch,
   };
 });
 
@@ -765,6 +771,47 @@ describe("channel turn finalize", () => {
     });
     expect(finalizedResult.dispatched).toBe(true);
     expect(finalizedResult.routeSessionKey).toBe("agent:observer:test:peer");
+  });
+
+  it("degrades private channel admission evidence when routing changes the DM scope", async () => {
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const ctx = createCtx();
+      bindTestChannelParticipantAdmissionEvidence({
+        context: ctx,
+        channelId: "test",
+        participantId: "person-1",
+      });
+      dispatchReplyWithRoutedChannelDispatcherCore.mockImplementation(createDispatch());
+
+      await runChannelTurn({
+        channel: "test",
+        raw: {},
+        adapter: {
+          ingest: () => ({ id: "msg-evidence", rawText: "hello" }),
+          resolveTurn: () => ({
+            cfg,
+            channel: "test",
+            route: {
+              agentId: "main",
+              dmScope: "per-channel-peer",
+              sessionKey: "agent:main:test:peer",
+            },
+            ctxPayload: ctx,
+            delivery: { deliver: vi.fn() },
+            record: { onRecordError: vi.fn() },
+          }),
+        },
+      });
+
+      const dispatched = dispatchReplyWithRoutedChannelDispatcherCore.mock.calls[0]?.[0];
+      expect(dispatched?.ctx.DmScope).toBe("per-channel-peer");
+      expect(
+        consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(dispatched?.ctx ?? {})),
+      ).toMatchObject({ ingressState: "unknown", invoker: { state: "unknown" } });
+    } finally {
+      clearCollection();
+    }
   });
 
   it("finalizes failed dispatches before rethrowing", async () => {

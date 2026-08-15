@@ -15,6 +15,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
+import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -50,12 +51,13 @@ import {
   createAgentAttemptLifecycleCallbacks,
   type AgentAttemptLifecycleState,
 } from "./attempt-callbacks.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 import { normalizeAgentCommandModelRef } from "./model-ref.js";
 import type { EmbeddedModelSelection } from "./model-selection.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
-import { persistSessionEntry, resolveInternalSessionEffectsSource } from "./session-helpers.js";
+import { resolveInternalSessionEffectsSource } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -63,6 +65,7 @@ const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
 
 export async function runEmbeddedAgentAttempt(params: {
+  preparedRunAdmission: PreparedAgentRunAdmission;
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
   sessionEntry?: SessionEntry;
@@ -311,7 +314,7 @@ export async function runEmbeddedAgentAttempt(params: {
             }
             const nextSessionEntry = { ...sessionEntry };
             clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
-            sessionEntry = await persistSessionEntry({
+            sessionEntry = await persistAgentSession({
               sessionStore,
               sessionKey,
               storePath,
@@ -396,16 +399,16 @@ export async function runEmbeddedAgentAttempt(params: {
             })
           ) {
             attemptedThinkingCatalogHydration = true;
-            const { loadPreparedModelCatalogSnapshot } =
+            const { loadProviderScopedThinkingCatalog } =
               await import("../model-catalog.runtime.js");
             const runtimeCatalog = normalizeThinkingCatalogProviders(
-              (
-                await loadPreparedModelCatalogSnapshot({
-                  config: cfg,
-                  agentId: sessionAgentId,
-                  workspaceDir,
-                })
-              ).entries,
+              await loadProviderScopedThinkingCatalog({
+                config: cfg,
+                provider: providerOverride,
+                model: modelOverride,
+                agentId: sessionAgentId,
+                workspaceDir,
+              }),
             );
             const allowedRuntimeCatalog = createModelVisibilityPolicy({
               cfg,
@@ -444,6 +447,7 @@ export async function runEmbeddedAgentAttempt(params: {
             }) ?? candidateRequestedThinkLevel;
           effectiveTurnThinkLevel = candidateThinkLevel;
           return attemptExecutionRuntime.runAgentAttempt({
+            preparedRunAdmission: params.preparedRunAdmission,
             providerOverride,
             modelOverride,
             configuredAuthProfileId,

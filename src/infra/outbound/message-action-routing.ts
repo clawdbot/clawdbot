@@ -2,7 +2,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readStringParam } from "../../agents/tools/common.js";
+import { readToolStringParam } from "../../agents/tools/common.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import {
@@ -16,6 +16,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
@@ -26,7 +27,6 @@ import {
   resolveImplicitMessageActionTarget,
 } from "./message-action-normalization.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
-import { readBooleanParam } from "./message-action-params.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
 import { enforceCrossContextPolicy } from "./outbound-policy.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
@@ -37,8 +37,9 @@ async function resolveChannel(
   params: Record<string, unknown>,
   toolContext?: { currentChannelProvider?: string },
   action?: ChannelMessageActionName,
+  agentId?: string,
 ) {
-  const channel = readStringParam(params, "channel");
+  const channel = readToolStringParam(params, "channel");
   // Explicit reads must never switch to the source conversation when their
   // requested provider is unknown or unavailable.
   const fallbackChannel =
@@ -47,6 +48,7 @@ async function resolveChannel(
     cfg,
     channel,
     fallbackChannel,
+    agentId,
   });
   if (selection.source === "tool-context-fallback") {
     params.channel = selection.channel;
@@ -349,13 +351,13 @@ export async function prepareMessageRoute(params: {
     throw new Error(`Action ${action} requires a target.`);
   }
 
-  const selection = await resolveChannel(cfg, actionParams, input.toolContext, action);
+  const selection = await resolveChannel(cfg, actionParams, input.toolContext, action, agentId);
   const { channel, plugin: channelPlugin } = selection;
   actionParams.channel = channel;
   const explicitAccountId = validateExplicitMessageAccountSelection({
     cfg,
     channel,
-    accountId: readStringParam(actionParams, "accountId"),
+    accountId: readToolStringParam(actionParams, "accountId"),
     plugin: channelPlugin,
   });
   const pluginOwnedAction = action !== "send" && action !== "poll";

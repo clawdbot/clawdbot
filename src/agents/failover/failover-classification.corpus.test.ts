@@ -22,15 +22,7 @@ import {
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./classify.js";
-import { authFormatCases } from "./failover-classification.auth-format.cases.js";
-import { billingCases } from "./failover-classification.billing.cases.js";
-import { legacyBillingACases } from "./failover-classification.legacy-billing-a.cases.js";
-import { legacyBillingBCases } from "./failover-classification.legacy-billing-b.cases.js";
-import { legacyProviderMatcherCases } from "./failover-classification.legacy-provider-matchers.cases.js";
-import { overflowServerMiscCases } from "./failover-classification.overflow-server-misc.cases.js";
-import { overflowCases } from "./failover-classification.overflow.cases.js";
-import { rateLimitOverloadCases } from "./failover-classification.rate-limit-overload.cases.js";
-import { structuredMiscCases } from "./failover-classification.structured-misc.cases.js";
+import { failoverClassificationCorpus } from "./failover-classification.corpus.cases.test-support.js";
 import { classifyProviderRequestFacets } from "./request-error-facets.js";
 import type { FailoverSignal } from "./signal.js";
 
@@ -38,18 +30,7 @@ afterEach(() => {
   providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockClear();
 });
 
-const failoverClassificationCorpus = [
-  ...overflowCases,
-  ...billingCases,
-  ...rateLimitOverloadCases,
-  ...overflowServerMiscCases,
-  ...authFormatCases,
-  ...structuredMiscCases,
-  ...legacyBillingACases,
-  ...legacyBillingBCases,
-  ...legacyProviderMatcherCases,
-];
-import { formatRateLimitOrOverloadedErrorCopy } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
 
 function classifyReplyRequest(signal: FailoverSignal) {
   return resolveReplyFailoverFacts(signal, signal.message ?? "").providerRequestError;
@@ -74,13 +55,10 @@ describe("golden failover classification corpus", () => {
 });
 
 describe("cross-layer drift (documents current behavior, see refactor-02)", () => {
-  it.each([
+  it("ignores an embedded 429 substring outside a status context", () => {
+    const message = "request id req-4291 failed";
+
     // FIXED(refactor-02): was rate_limit, now null
-    // FOLLOW-UP(refactor-06): reclaim this wording in the canonical overflow table.
-    "input length 14295 tokens exceeds the model limit",
-    // FIXED(refactor-02): was rate_limit, now null
-    "request id req-4291 failed",
-  ])("ignores an embedded 429 substring outside a status context: %s", (message) => {
     expect(isRateLimitErrorMessage(message)).toBe(false);
     expect(classifyFailoverSignal({ message })).toBeNull();
   });
@@ -107,16 +85,16 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     });
   });
 
-  it("uses rate-limit retry semantics but overloaded user copy", () => {
+  it("renders rate-limit copy from the classified reason", () => {
     const message = "429 Too Many Requests: model overloaded";
 
-    // BUG(refactor-02): retry classification and user-copy precedence are inverted.
+    // FIXED(refactor-02): user copy follows the canonical failover reason.
     expect(classifyFailoverSignal({ message })).toEqual({
       kind: "reason",
       reason: "rate_limit",
     });
-    expect(formatRateLimitOrOverloadedErrorCopy(message)).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
+    expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
     );
   });
 

@@ -16,6 +16,10 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import {
+  copyAgentToolSourceExecutionGuard,
+  runAgentToolSourceExecutionGuard,
+} from "./agent-tool-source-execution-guard.js";
+import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
   emitToolBlockedSecurityEvent,
@@ -59,6 +63,9 @@ import {
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
   BEFORE_TOOL_CALL_SOURCE_TOOL,
   BEFORE_TOOL_CALL_WRAPPED,
+  clearBeforeToolCallWrappedMarker,
+  getBeforeToolCallHookContext,
+  getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
@@ -69,7 +76,7 @@ import {
 } from "./code-mode-control-tools.js";
 import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { buildToolMutationState } from "./tool-mutation.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
@@ -299,7 +306,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
-      const normalizedToolName = normalizeToolName(toolName || "tool");
+      const normalizedToolName = normalizeToolPolicyName(toolName || "tool");
       const trace =
         hookOptions.emitDiagnostics && ctx?.trace
           ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace))
@@ -491,6 +498,9 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
         });
       }
+      // Host capabilities can close while hooks, approval, validation, or
+      // steering awaits. Recheck at the final synchronous source boundary.
+      runAgentToolSourceExecutionGuard(tool);
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
@@ -681,14 +691,8 @@ export function rewrapToolWithBeforeToolCallHook(
   ctx?: HookContext,
   options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
-  const taggedTool = tool as unknown as Record<symbol, unknown>;
-  const source = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];
-  const wrappedContext = taggedTool[BEFORE_TOOL_CALL_HOOK_CONTEXT];
-  const preservedContext =
-    wrappedContext && typeof wrappedContext === "object"
-      ? (wrappedContext as HookContext)
-      : undefined;
-  const sourceTool = source && typeof source === "object" ? (source as AnyAgentTool) : tool;
+  const preservedContext = getBeforeToolCallHookContext(tool);
+  const sourceTool = getBeforeToolCallSourceTool(tool) ?? tool;
   if (sourceTool === tool) {
     return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, options);
   }
@@ -697,10 +701,11 @@ export function rewrapToolWithBeforeToolCallHook(
     ...tool,
     execute: sourceTool.execute,
   };
-  delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
+  clearBeforeToolCallWrappedMarker(rewrapSource);
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
   copyToolTerminalPresentation(tool, rewrapSource);
+  copyAgentToolSourceExecutionGuard(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
 }
 

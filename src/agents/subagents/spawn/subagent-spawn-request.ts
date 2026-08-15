@@ -2,16 +2,12 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
-import {
-  isValidAgentId,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../../routing/session-key.js";
+import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { listAgentIds } from "../../agent-scope-config.js";
+import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
-import { listSwarmRunsForGroup } from "../../subagent-registry.js";
-import { normalizeSubagentTaskName } from "../../subagent-task-name.js";
+import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
 import { reserveSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -26,6 +22,7 @@ import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 import { loadSubagentConfig } from "./subagent-spawn-session-patch.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./subagent-spawn.runtime.js";
+import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 
 type ResolvedSubagentSpawnRequest = {
   request: {
@@ -158,9 +155,11 @@ export function resolveSubagentSpawnRequest(
     completionOwnerKey: ctx.completionOwnerKey,
   });
 
-  const requesterAgentId = normalizeAgentId(
-    ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
-  );
+  const requesterAgentId = resolveSessionAgentId({
+    config: cfg,
+    sessionKey: requesterInternalKey,
+    agentId: ctx.requesterAgentIdOverride,
+  });
   const swarmConfig = resolveSwarmConfig(cfg, requesterAgentId);
   const hasSwarmParams =
     params.collect !== undefined ||
@@ -218,7 +217,7 @@ export function resolveSubagentSpawnRequest(
   const resolveAdmission = (pendingChildren = 0) => {
     const collectorRuns = params.collect
       ? swarmGroupId
-        ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey)
+        ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId)
         : []
       : undefined;
     return resolveSpawnAdmission({
@@ -273,7 +272,7 @@ export function resolveSubagentSpawnRequest(
     : crypto.randomUUID();
   let reservationPending = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
-    const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey);
+    const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId);
     if (
       !reserveSwarmRun({
         groupId: swarmSchedulerGroupKey,

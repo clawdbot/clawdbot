@@ -127,31 +127,8 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:extra"]')).toBeNull();
   });
 
-  it("renders the generic icon for pinned sessions", async () => {
-    const keys = ["agent:main:main", "agent:main:pinned"];
-    const sessions = createSessionsHarness("main", keys);
-    const result = sessions.sessions.state.result;
-    expect(result).not.toBeNull();
-    if (!result) {
-      return;
-    }
-    for (const row of result.sessions) {
-      if (row.key === "agent:main:pinned") {
-        Object.assign(row, { pinned: true });
-      }
-    }
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
-
-    expect(
-      sidebar.querySelector(
-        '[data-session-key="agent:main:pinned"] .sidebar-pinned-session__icon svg',
-      ),
-    ).not.toBeNull();
-  });
-
-  it("keeps a pinned icon leading while activity trails the row", async () => {
-    const keys = ["agent:main:main", "agent:main:page"];
+  it("leads a pinned row like any other session row while activity trails it", async () => {
+    const keys = ["agent:main:main", "agent:main:page", "agent:main:plain"];
     const sessions = createSessionsHarness("main", keys);
     const result = sessions.sessions.state.result;
     expect(result).not.toBeNull();
@@ -162,16 +139,19 @@ describe("AppSidebar interleaved zone", () => {
       if (row.key === "agent:main:page") {
         Object.assign(row, { pinned: true, hasActiveRun: true, unread: true });
       }
+      if (row.key === "agent:main:plain") {
+        Object.assign(row, { hasActiveRun: true, unread: true });
+      }
     }
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
 
+    // Pinning is not a status, so it must not claim the row's one leading slot.
     const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
-    const glyph = row?.querySelector(".sidebar-session-indicator .session-glyph");
-    expect(glyph?.querySelector(".sidebar-pinned-session__icon svg")).not.toBeNull();
-    expect(glyph?.classList.contains("session-glyph--running")).toBe(false);
-    expect(glyph?.querySelector(".session-glyph__ring")).toBeNull();
-    expect(glyph?.querySelector(".session-glyph__badge--unread")).toBeNull();
+    const plain = sidebar.querySelector('[data-session-key="agent:main:plain"]');
+    expect(row?.querySelector(".sidebar-session-indicator")?.innerHTML).toBe(
+      plain?.querySelector(".sidebar-session-indicator")?.innerHTML,
+    );
     expect(row?.querySelector(".nav-item__state")).toBeNull();
     expect(row?.querySelector(".session-row-state .sidebar-recent-session__state")).not.toBeNull();
   });
@@ -227,7 +207,7 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
   });
 
-  it("renders routes and pinned sessions in entry order while Home stays fixed", async () => {
+  it("renders routes and pinned sessions in the canonical entry order", async () => {
     const { sidebar, sessions } = await mountZone();
     const result = sessions.sessions.state.result;
     if (!result) {

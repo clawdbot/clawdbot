@@ -1,5 +1,6 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { isReplayUnsafeAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import {
@@ -13,6 +14,7 @@ import {
   parseImageDimensionError,
   pickFallbackThinkingLevel,
 } from "../../embedded-agent-helpers.js";
+import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import {
   resolveSessionSuspensionReason,
@@ -21,9 +23,10 @@ import {
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
 import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./assistant-failover.js";
+import { isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { resolveRunFailoverDecision } from "./failover-policy.js";
-import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn.js";
+import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn-recovery.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import {
   isEmbeddedRunTerminalInterrupted,
@@ -54,6 +57,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   terminalState: EmbeddedRunTerminalState;
   activeErrorContext: { provider: string; model: string };
   provider: string;
+  providerOwner: PreparedProviderFailoverOwner | undefined;
   modelId: string;
   model: string;
   thinkLevel: ThinkLevel;
@@ -88,7 +92,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     typeof handleAssistantFailover
   >[0]["advanceRateLimitAuthProfile"];
   traceAttempts: TraceAttempt[];
-  suspendForFailure: (params: Omit<SessionSuspensionParams, "laneId">) => void;
+  suspendForFailure: (params: SessionSuspensionParams) => void;
   suspensionSessionId: string;
   agentDir: string;
   isProbeSession: boolean;
@@ -101,23 +105,13 @@ export async function handleEmbeddedAssistantFailure(input: {
     message: input.attemptAssistant?.errorMessage,
     attempted: input.attemptedThinking,
   });
-  if (fallbackThinking && !terminalInterrupted) {
-    log.warn(
-      `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
-    );
-    return buildOutcome(input, {
-      action: "retry",
-      thinkLevel: fallbackThinking,
-      preserveSameModelRateLimitRetryCount: true,
-      assistantProfileFailureReason: null,
-    });
-  }
-
   const authFailure = isAuthAssistantError(input.attemptAssistant);
   const rateLimitFailure = isRateLimitAssistantError(input.attemptAssistant);
   const billingFailure = isBillingAssistantError(input.attemptAssistant);
   const failoverFailure = isFailoverAssistantError(input.attemptAssistant);
-  const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant);
+  const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant, {
+    provider: input.providerOwner?.id,
+  });
   const assistantProviderStarted =
     Boolean(input.currentAttemptAssistant?.provider) ||
     input.terminalState.outcome.providerStarted === true;
@@ -133,6 +127,26 @@ export async function handleEmbeddedAssistantFailure(input: {
         isShortWindowRateLimitMessage(input.attemptAssistant?.errorMessage),
     },
   );
+  const replayUnsafeAssistantError = isReplayUnsafeAssistantError(input.attemptAssistant);
+  if (replayUnsafeAssistantError || !isCurrentAttemptReplaySafe(input.attempt)) {
+    return buildOutcome(input, {
+      action: "proceed",
+      assistantProfileFailureReason: replayUnsafeAssistantError
+        ? null
+        : assistantProfileFailureReason,
+    });
+  }
+  if (fallbackThinking && !terminalInterrupted) {
+    log.warn(
+      `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
+    );
+    return buildOutcome(input, {
+      action: "retry",
+      thinkLevel: fallbackThinking,
+      preserveSameModelRateLimitRetryCount: true,
+      assistantProfileFailureReason,
+    });
+  }
   const cloudCodeAssistFormatError = input.attempt.cloudCodeAssistFormatError;
   const imageDimensionError = parseImageDimensionError(input.attemptAssistant?.errorMessage ?? "");
   const genericUnknownReasoningError =
@@ -270,6 +284,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     lastProfileId: input.authProfileId,
     modelId: input.modelId,
     provider: input.provider,
+    providerOwner: input.providerOwner,
     activeErrorContext: input.activeErrorContext,
     lastAssistant: input.attemptAssistant,
     config: input.runParams.config,

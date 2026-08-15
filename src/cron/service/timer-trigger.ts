@@ -64,7 +64,6 @@ export function resolveNextRunAtMsOrDisable(params: {
     reason: "schedule-errors",
     atMs: params.state.deps.nowMs(),
     consecutiveErrors: 1,
-    error: "next run is outside the supported Date range",
     deferredNotifications: params.deferredNotifications,
   });
   return undefined;

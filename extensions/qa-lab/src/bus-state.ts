@@ -140,6 +140,7 @@ export function createQaBusState() {
     senderId: string;
     senderName?: string;
     text: string;
+    isError?: boolean;
     timestamp?: number;
     threadId?: string;
     threadTitle?: string;
@@ -174,6 +175,7 @@ export function createQaBusState() {
       senderId: params.senderId,
       senderName: params.senderName,
       text: params.text,
+      ...(params.isError === true ? { isError: true } : {}),
       timestamp: params.timestamp ?? Date.now(),
       threadId: params.threadId,
       threadTitle: params.threadTitle,
@@ -246,6 +248,7 @@ export function createQaBusState() {
         senderId: input.senderId?.trim() || DEFAULT_BOT_ID,
         senderName: input.senderName?.trim() || DEFAULT_BOT_NAME,
         text: input.text,
+        isError: input.isError,
         timestamp: input.timestamp,
         threadId: input.threadId ?? threadId,
         replyToId: input.replyToId,

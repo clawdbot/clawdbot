@@ -9,4 +9,12 @@ describe("isLikelyContextOverflowError", () => {
       ),
     ).toBe(true);
   });
+
+  it("does not mistake LM Studio prompt-template override guidance for overflow", () => {
+    expect(
+      isLikelyContextOverflowError(
+        'Error rendering prompt with jinja template: "Cannot apply filter upper to type UndefinedValue". You can override the prompt template in model settings.',
+      ),
+    ).toBe(false);
+  });
 });

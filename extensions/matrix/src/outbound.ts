@@ -13,6 +13,7 @@ import {
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 import type { MatrixExtraContentFields } from "./matrix/send/types.js";
 import {
@@ -29,15 +30,9 @@ type MatrixChannelData = {
   extraContent?: MatrixExtraContentFields;
 };
 
-function toRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function resolveMatrixChannelData(payload: ReplyPayload): MatrixChannelData {
-  const raw = toRecord(payload.channelData)?.matrix;
-  return (toRecord(raw) as MatrixChannelData | undefined) ?? {};
+  const raw = asOptionalRecord(payload.channelData)?.matrix;
+  return (asOptionalRecord(raw) as MatrixChannelData | undefined) ?? {};
 }
 
 function buildMatrixPresentationContent(presentation: MessagePresentation) {
@@ -51,8 +46,8 @@ function buildMatrixPresentationContent(presentation: MessagePresentation) {
 function resolveMatrixPresentationContent(
   payload: ReplyPayload,
 ): Record<string, unknown> | undefined {
-  const extraContent = toRecord(resolveMatrixChannelData(payload).extraContent);
-  const presentation = toRecord(extraContent?.[MATRIX_OPENCLAW_PRESENTATION_KEY]);
+  const extraContent = asOptionalRecord(resolveMatrixChannelData(payload).extraContent);
+  const presentation = asOptionalRecord(extraContent?.[MATRIX_OPENCLAW_PRESENTATION_KEY]);
   if (
     !presentation ||
     presentation.version !== 1 ||

@@ -11,6 +11,7 @@ import { resetConfigRuntimeState } from "../config/config.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
 import {
@@ -405,7 +406,7 @@ function expectFailureAnnounceCall(params: {
   if (params.includeRunStarted) {
     const lines = expectDefined(payload.text, "failure reply text").split("\n");
     expect(lines).toEqual([
-      params.message,
+      ...params.message.split("\n"),
       expect.stringMatching(/^Run started: \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? \S+$/),
     ]);
   } else {
@@ -1470,6 +1471,23 @@ describe("gateway server cron", () => {
         expect.objectContaining({ jobId: writerJobId }),
       );
 
+      const removeWriter = await directCronReq(cronState, "cron.remove", { id: writerJobId });
+      expect(removeWriter.ok).toBe(true);
+      expect(
+        listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+          runtime: "cron",
+          sourceId: writerJobId,
+        }),
+      ).toEqual([expect.objectContaining({ agentId: "writer" })]);
+      const retainedWriterRuns = await directCronReq(cronState, "cron.runs", {
+        scope: "all",
+        agentId: "writer",
+      });
+      expect(retainedWriterRuns.payload).toMatchObject({
+        entries: [expect.objectContaining({ jobId: writerJobId })],
+        total: 1,
+      });
+
       const statusRes = await directCronReq(cronState, "cron.status", {});
       expect(statusRes.ok).toBe(true);
       const statusPayload = statusRes.payload as
@@ -1608,6 +1626,67 @@ describe("gateway server cron", () => {
         action: "finished",
         status: "ok",
         summary: "background finished",
+      });
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("reports skipped isolated cron runs as failed tasks", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-run-skipped-task-",
+      cronEnabled: false,
+    });
+    cronIsolatedRun.mockResolvedValueOnce({
+      status: "skipped",
+      error: "model endpoint unavailable",
+    });
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "skipped task projection",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "do work" },
+        delivery: { mode: "none" },
+      });
+      const jobId = expectCronJobIdFromResponse(addRes);
+      const finished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+      );
+
+      await runCronJobForce(ws, jobId);
+      expect(await finished).toMatchObject({
+        jobId,
+        status: "skipped",
+        error: "model endpoint unavailable",
+      });
+
+      const history = await rpcReq(ws, "cron.runs", { id: jobId, limit: 1 });
+      expect(history.ok).toBe(true);
+      expect(history.payload).toMatchObject({
+        entries: [
+          expect.objectContaining({
+            jobId,
+            status: "skipped",
+            error: "model endpoint unavailable",
+          }),
+        ],
+      });
+
+      const taskList = await rpcReq(ws, "tasks.list", {});
+      expect(taskList.ok).toBe(true);
+      const tasks = (taskList.payload as { tasks?: Array<Record<string, unknown>> } | undefined)
+        ?.tasks;
+      expect(tasks?.find((task) => task.sourceId === jobId)).toMatchObject({
+        runtime: "cron",
+        status: "failed",
+        error: "model endpoint unavailable",
       });
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
@@ -2044,7 +2123,9 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:main:telegram:direct:123:thread:99",
-        message: '⚠️ Automation "primary delivery fallback" failed: unknown error',
+        message:
+          '⚠️ Automation "primary delivery fallback" failed\n' +
+          "Check automation history for details.",
         includeRunStarted: true,
       });
     } finally {
@@ -2103,7 +2184,7 @@ describe("gateway server cron", () => {
         to: "#alerts",
         sessionKey: undefined,
         inheritSessionThread: false,
-        message: '⚠️ Automation "channel fd no mode" failed: unknown error',
+        message: '⚠️ Automation "channel fd no mode" failed\nCheck automation history for details.',
         includeRunStarted: true,
       });
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -2156,7 +2237,9 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:avery:feishu:direct:ou_founder",
-        message: '⚠️ Automation "session target failure fallback" failed: unknown error',
+        message:
+          '⚠️ Automation "session target failure fallback" failed\n' +
+          "Check automation history for details.",
         includeRunStarted: true,
       });
     } finally {

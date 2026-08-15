@@ -198,6 +198,23 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
+  it.each([
+    { codexErrorInfo: "serverOverloaded", expected: true },
+    { codexErrorInfo: "usageLimitExceeded", expected: false },
+    { codexErrorInfo: "unauthorized", expected: false },
+  ])(
+    "projects $codexErrorInfo terminal error recovery eligibility as $expected",
+    async ({ codexErrorInfo, expected }) => {
+      const projector = await createProjector();
+
+      await projector.handleNotification(
+        appServerError({ message: "provider failure", willRetry: false, codexErrorInfo }),
+      );
+
+      expect(projector.settledTurnFailureFinalizationAllowed).toBe(expected);
+    },
+  );
+
   it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
     const projector = await createProjector(undefined, {

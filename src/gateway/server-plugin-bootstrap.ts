@@ -12,7 +12,7 @@ import {
   findActiveDegradedPlugin,
   formatPluginVerificationDiagnostic,
 } from "../plugins/runtime-degraded-state.js";
-import { resolveDurableWorkerProviderAutoEnabledReasons } from "../plugins/worker-provider-registry.js";
+import { resolveDurableWorkerProviderAutoEnabledReasons } from "../plugins/worker-provider-manifest.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import { loadGatewayPlugins, setPluginSubagentOverridePolicies } from "./server-plugins.js";
@@ -33,7 +33,7 @@ type GatewayStartupTrace = {
 type GatewayPluginBootstrapParams = {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  workspaceDir: string;
+  workspaceDir?: string;
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];

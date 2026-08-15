@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -18,13 +19,15 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [],
   })),
   listReadOnlyChannelPluginsForConfig: vi.fn<() => ChannelPlugin[]>(() => []),
-  buildChannelAccountSnapshot: vi.fn(),
+  resolveChannelAccountSnapshot: vi.fn(),
   listTrustedChannelPluginCatalogEntries: vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
   listManifestInstalledChannelIds: vi.fn<() => Set<string>>(() => new Set()),
   resolveMissingOfficialExternalChannelPluginRepairHint: vi.fn(),
   callGateway: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultAgentId: vi.fn(() => "main"),
+  resolvePluginControlPlaneWorkspace: vi.fn<typeof resolvePluginControlPlaneWorkspace>(() => ({
+    workspaceDir: "/tmp/workspace",
+    workspaceScope: "selected",
+  })),
   resolvePluginMetadataSnapshot: vi.fn(),
 }));
 
@@ -44,6 +47,10 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
+vi.mock("../plugins/control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: mocks.resolvePluginControlPlaneWorkspace,
+}));
+
 vi.mock("../cli/command-secret-targets.js", () => ({
   getChannelsCommandSecretTargetIds: () => new Set<string>(),
 }));
@@ -53,7 +60,7 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 }));
 
 vi.mock("../channels/plugins/status.js", () => ({
-  buildChannelAccountSnapshot: mocks.buildChannelAccountSnapshot,
+  resolveChannelAccountSnapshot: mocks.resolveChannelAccountSnapshot,
 }));
 
 vi.mock("./channel-setup/trusted-catalog.js", () => ({
@@ -67,11 +74,6 @@ vi.mock("./channel-setup/discovery.js", () => ({
 vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
   resolveMissingOfficialExternalChannelPluginRepairHint:
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint,
-}));
-
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
 }));
 
 import { channelsListCommand } from "./channels/list.js";
@@ -130,7 +132,7 @@ describe("channels list", () => {
     mocks.resolveCommandConfigWithSecrets.mockClear();
     mocks.listReadOnlyChannelPluginsForConfig.mockReset();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-    mocks.buildChannelAccountSnapshot.mockReset();
+    mocks.resolveChannelAccountSnapshot.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
     mocks.listManifestInstalledChannelIds.mockReset();
@@ -139,6 +141,11 @@ describe("channels list", () => {
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
     mocks.callGateway.mockReset();
     mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
+    mocks.resolvePluginControlPlaneWorkspace.mockReset();
+    mocks.resolvePluginControlPlaneWorkspace.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      workspaceScope: "selected",
+    });
     mocks.resolvePluginMetadataSnapshot.mockReturnValue(mocks.metadataSnapshot);
   });
 
@@ -192,6 +199,88 @@ describe("channels list", () => {
     });
   });
 
+  it("keeps shared inventory when an explicit multi-agent roster has no system owner", async () => {
+    const runtime = createTestRuntime();
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: { main: {}, research: {} },
+      },
+    };
+    mocks.resolvePluginControlPlaneWorkspace.mockReturnValue({
+      workspaceScope: "omitted",
+      diagnostic: {
+        level: "warn",
+        code: "workspace-scope-omitted",
+        message: "Workspace plugin discovery was skipped for this explicit roster.",
+      },
+    });
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("qqbot", "QQ Bot"),
+    ]);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["qqbot"]));
+    mocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot, config });
+
+    await channelsListCommand({ all: true, json: true }, runtime);
+
+    expect(mocks.resolvePluginControlPlaneWorkspace).toHaveBeenCalledWith({
+      config,
+      env: process.env,
+    });
+    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
+      config,
+      env: process.env,
+      allowWorkspaceScopedCurrent: true,
+    });
+    expect(mocks.listTrustedChannelPluginCatalogEntries).toHaveBeenCalledWith({
+      cfg: config,
+      discovery: mocks.metadataSnapshot.discovery,
+    });
+    const payload = JSON.parse(loggedText(runtime)) as {
+      chat: Record<string, { installed: boolean }>;
+      diagnostics?: Array<{ code?: string }>;
+    };
+    expect(payload.chat.qqbot?.installed).toBe(true);
+    expect(payload.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "workspace-scope-omitted" }),
+    );
+  });
+
+  it("uses the named system owner for workspace-scoped channel inventory", async () => {
+    const runtime = createTestRuntime();
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "research" } },
+        entries: { main: {}, research: { workspace: "/tmp/research-workspace" } },
+      },
+    };
+    mocks.resolvePluginControlPlaneWorkspace.mockReturnValue({
+      workspaceDir: "/tmp/research-workspace",
+      workspaceScope: "selected",
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot, config });
+
+    await channelsListCommand({ all: true, json: true }, runtime);
+
+    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
+      config,
+      env: process.env,
+      workspaceDir: "/tmp/research-workspace",
+      allowWorkspaceScopedCurrent: true,
+    });
+    expect(mocks.listTrustedChannelPluginCatalogEntries).toHaveBeenCalledWith({
+      cfg: config,
+      workspaceDir: "/tmp/research-workspace",
+      discovery: mocks.metadataSnapshot.discovery,
+    });
+    expect(mocks.listManifestInstalledChannelIds).toHaveBeenCalledWith({
+      cfg: config,
+      workspaceDir: "/tmp/research-workspace",
+      index: mocks.metadataSnapshot.index,
+    });
+  });
+
   it("keeps JSON output valid when only channels are provided (no usage field)", async () => {
     const runtime = createTestRuntime();
     mocks.readConfigFileSnapshot.mockResolvedValue({
@@ -213,7 +302,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: true,
       tokenSource: "config",
@@ -248,12 +337,47 @@ describe("channels list", () => {
     expect(output).not.toContain("Auth providers");
   });
 
+  it("sanitizes channel labels only in terminal output", async () => {
+    const control = "\u001B]0;channels-list-injection\u0007";
+    const accountId = `${control}default\nforged-row`;
+    const channelLabel = `${control}Telegram 🦞\r\nAdmin`;
+    const accountName = `${control}Primary\tAccount`;
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      createMockChannelPlugin({ label: channelLabel, accountIds: [accountId] }),
+    ]);
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
+      accountId,
+      name: accountName,
+      configured: true,
+      enabled: true,
+    });
+    const config = { channels: { telegram: { accounts: { [accountId]: {} } } } };
+    mocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot, config });
+
+    const textRuntime = createTestRuntime();
+    await channelsListCommand({}, textRuntime);
+
+    const textOutput = loggedText(textRuntime);
+    expect(textOutput).not.toContain("\u001B");
+    expect(textOutput).not.toContain("\nforged-row");
+    expect(textOutput).toContain("Telegram 🦞\\r\\nAdmin");
+    expect(textOutput).toContain("\\nforged-row");
+    expect(textOutput).toContain("Primary\\tAccount");
+
+    const jsonRuntime = createTestRuntime();
+    await channelsListCommand({ json: true }, jsonRuntime);
+    const payload = JSON.parse(loggedText(jsonRuntime)) as {
+      chat?: Record<string, { accounts: string[] }>;
+    };
+    expect(payload.chat?.telegram?.accounts).toStrictEqual([accountId]);
+  });
+
   it("prefers reachable gateway account snapshots over command-local token state", async () => {
     const runtime = createTestRuntime();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       tokenSource: "none",
@@ -302,7 +426,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       tokenSource: "none",
@@ -331,7 +455,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: true,
       tokenSource: "config",
@@ -488,7 +612,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: [] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       enabled: false,
@@ -520,7 +644,7 @@ describe("channels list", () => {
       createMockChannelPlugin({ id: "telegram", accountIds: ["default"] }),
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: [] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       enabled: false,

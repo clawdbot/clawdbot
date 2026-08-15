@@ -7,7 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   detectLegacyAcpReplayLedger,
   migrateLegacyAcpReplayLedger,
@@ -56,7 +56,7 @@ describe("legacy ACP replay doctor migration", () => {
   });
 
   it("detects legacy state only for explicit doctor repair", async () => {
-    await withTempDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
       await writeLegacyStore(stateDir);
       expect(detectLegacyAcpReplayLedger({ stateDir }).hasLegacy).toBe(false);
       expect(
@@ -66,7 +66,7 @@ describe("legacy ACP replay doctor migration", () => {
   });
 
   it("imports, verifies, and removes the retired JSON ledger", async () => {
-    await withTempDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
       const sourcePath = await writeLegacyStore(stateDir);
       const result = await migrateLegacyAcpReplayLedger({
         detected: detectLegacyAcpReplayLedger({
@@ -114,7 +114,7 @@ describe("legacy ACP replay doctor migration", () => {
   });
 
   it("resumes a claimed source without deleting a replacement ledger", async () => {
-    await withTempDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
       const sourcePath = await writeLegacyStore(stateDir);
       const claimPath = `${sourcePath}.doctor-import`;
       await fs.rename(sourcePath, claimPath);
@@ -169,7 +169,7 @@ describe("legacy ACP replay doctor migration", () => {
   });
 
   it("retains malformed state without partially importing it", async () => {
-    await withTempDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
       const sourcePath = await writeLegacyStore(stateDir, {
         ...legacyStore(),
         sessions: { broken: { sessionId: "broken" } },
@@ -194,7 +194,7 @@ describe("legacy ACP replay doctor migration", () => {
   });
 
   it("removes a retry source when its prior import already exists", async () => {
-    await withTempDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const ledger = createSqliteAcpEventLedger({ env, now: () => 1_000 });
       await ledger.startSession({
@@ -250,7 +250,7 @@ describe("legacy ACP replay doctor migration", () => {
   });
 
   it("retains a conflicting retry source instead of discarding changed events", async () => {
-    await withTempDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const ledger = createSqliteAcpEventLedger({ env, now: () => 2_000 });
       await ledger.startSession({
@@ -300,7 +300,7 @@ describe("legacy ACP replay doctor migration", () => {
   });
 
   it("retains a source containing an impossible zero event sequence", async () => {
-    await withTempDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
       const store = legacyStore();
       store.sessions["session-1"].events[0]!.seq = 0;
       const sourcePath = await writeLegacyStore(stateDir, store);
@@ -320,7 +320,7 @@ describe("legacy ACP replay doctor migration", () => {
   });
 
   it("runtime ignores the retired JSON ledger until doctor imports it", async () => {
-    await withTempDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-acp-replay-migration-" }, async (stateDir) => {
       await writeLegacyStore(stateDir);
       await expect(
         createSqliteAcpEventLedger({

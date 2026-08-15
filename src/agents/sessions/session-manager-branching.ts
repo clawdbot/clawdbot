@@ -9,7 +9,7 @@ import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-e
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
-import { createSessionId, generateSessionEntryId } from "./session-manager-id.js";
+import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import type {
   LabelEntry,
   PreservedOpaqueFileEntry,
@@ -108,7 +108,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
       throw new Error(`Entry ${leafId} not found`);
     }
 
-    const newSessionId = createSessionId();
+    const newSessionId = createManagedSessionId();
     const timestamp = new Date().toISOString();
     const persistenceTarget = this.persistenceTarget;
 
@@ -165,9 +165,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
     const updatedAt = Date.now();
     const nextTarget = { ...persistenceTarget, sessionId: newSessionId };
     const nextEntry = {
-      ...(previousEntry
-        ? projectCanonicalSessionEntryShape(previousEntry as unknown as Record<string, unknown>)
-        : { updatedAt }),
+      ...(previousEntry ? projectCanonicalSessionEntryShape({ ...previousEntry }) : { updatedAt }),
       sessionId: newSessionId,
       updatedAt,
     };

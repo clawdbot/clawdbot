@@ -293,7 +293,6 @@ export const en = {
         "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
       controlUiPreparing: "Preparing the Control UI…",
       custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
-      failedOptionLine: "{label}: {reason}",
       failedOptionsIntro: "These didn't work just now:",
       findMeLater:
         "You can always find me later — run `openclaw` in a terminal, or open Settings in the dashboard.",
@@ -931,6 +930,13 @@ export const en = {
       outgoingWebhookPathKeep: "Outgoing webhook path set ({value}). Keep it?",
       outgoingWebhookPathPrompt: "Outgoing webhook path (optional)",
       outgoingWebhookPathTitle: "Synology Chat outgoing webhook path",
+      publicWebhookUrlHelp:
+        "Use the exact externally reachable HTTPS outgoing-webhook callback URL configured in Synology Chat.",
+      publicWebhookUrlKeep: "Public attachment webhook URL already configured. Keep it?",
+      publicWebhookUrlPrompt: "Public attachment webhook URL (optional)",
+      publicWebhookUrlScope:
+        "Expose only this webhook route; OpenClaw uses it for short-lived attachment downloads.",
+      publicWebhookUrlTitle: "Synology Chat public attachment route",
       setupTitle: "Synology Chat webhook setup",
       tokenEnvPrompt: "SYNOLOGY_CHAT_TOKEN detected. Use env var?",
       tokenInput: "Enter Synology Chat outgoing webhook token",

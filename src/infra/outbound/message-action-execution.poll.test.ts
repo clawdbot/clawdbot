@@ -1,56 +1,12 @@
-// Covers message-action poll handling through plugin dispatch and core gateway
-// poll fallback.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { runMessageAction } from "./message-action-runner.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+// Covers message-action poll normalization and direct provider delivery.
+import type {
+  ChannelPlugin,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { executeMessagePoll } from "./message-action-execution.js";
 
-const mocks = vi.hoisted(() => ({
-  executePollAction: vi.fn(),
-  resolveOutboundChannelPlugin: vi.fn(),
-}));
-
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error(`expected ${label} params to be an object`);
-  }
-  return arg as Record<string, unknown>;
-}
-
-vi.mock("./channel-resolution.js", () => ({
-  normalizeDeliverableOutboundChannel: (value?: string | null) =>
-    typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
-  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
-  resetOutboundChannelResolutionStateForTest: vi.fn(),
-}));
-
-vi.mock("./outbound-send-service.js", () => ({
-  executeSendAction: vi.fn(async () => {
-    throw new Error("executeSendAction should not run in poll tests");
-  }),
-  executePollAction: mocks.executePollAction,
-}));
-
-vi.mock("./outbound-session.js", () => ({
-  ensureOutboundSessionEntry: vi.fn(async () => undefined),
-  resolveOutboundSessionRoute: vi.fn(async () => null),
-}));
-
-vi.mock("./message-action-threading.js", async () => {
-  const { createOutboundThreadingMock } =
-    await import("./message-action-threading.test-helpers.js");
-  return createOutboundThreadingMock();
-});
 const pollerConfig = {
   channels: {
     poller: {
@@ -58,6 +14,12 @@ const pollerConfig = {
     },
   },
 } as OpenClawConfig;
+
+type PollerSendPoll = NonNullable<NonNullable<ChannelPlugin["outbound"]>["sendPoll"]>;
+
+const pollerSendPoll = vi.fn<PollerSendPoll>(async () => ({
+  messageId: "poll-test",
+}));
 
 const pollerTestPlugin: ChannelPlugin = {
   id: "poller",
@@ -75,10 +37,8 @@ const pollerTestPlugin: ChannelPlugin = {
     isConfigured: () => true,
   },
   outbound: {
-    deliveryMode: "gateway",
-    sendPoll: async () => ({
-      messageId: "poll-test",
-    }),
+    deliveryMode: "direct",
+    sendPoll: pollerSendPoll,
   },
   messaging: {
     targetResolver: {
@@ -92,10 +52,7 @@ const pollerTestPlugin: ChannelPlugin = {
   },
   threading: {
     resolveAutoThreadId: ({ toolContext, to, replyToId }) => {
-      if (replyToId) {
-        return undefined;
-      }
-      if (toolContext?.currentChannelId !== to) {
+      if (replyToId || toolContext?.currentChannelId !== to) {
         return undefined;
       }
       return toolContext.currentThreadTs;
@@ -104,70 +61,45 @@ const pollerTestPlugin: ChannelPlugin = {
 };
 
 async function runPollAction(params: {
-  cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
-  toolContext?: Record<string, unknown>;
-  inboundEventKind?: "user_request" | "room_event";
+  toolContext?: ChannelThreadingToolContext;
 }) {
-  await runMessageAction({
-    cfg: params.cfg,
-    action: "poll",
-    params: params.actionParams as never,
-    toolContext: params.toolContext as never,
-    inboundEventKind: params.inboundEventKind,
+  const target = params.actionParams.target;
+  if (typeof target !== "string") {
+    throw new Error("poll test target is required");
+  }
+  const actionParams = { ...params.actionParams, to: target };
+  await executeMessagePoll({
+    cfg: pollerConfig,
+    params: actionParams,
+    channel: "poller",
+    channelPlugin: pollerTestPlugin,
+    mediaAccess: {},
+    accountId: "default",
+    dryRun: false,
+    input: {
+      cfg: pollerConfig,
+      action: "poll",
+      params: actionParams,
+      toolContext: params.toolContext,
+    },
   });
-  const call = firstMockArg(mocks.executePollAction, "executePollAction") as {
-    resolveCorePoll?: () => {
-      durationHours?: number;
-      maxSelections?: number;
-      threadId?: string;
-    };
-    ctx?: {
-      plugin?: ChannelPlugin;
-      inboundEventKind?: string;
-      idempotencyKey?: string;
-      params?: Record<string, unknown>;
-    };
-  };
-  return {
-    ...call.resolveCorePoll?.(),
-    ctx: call.ctx,
-  };
+  const call = pollerSendPoll.mock.calls[0]?.[0];
+  if (!call) {
+    throw new Error("expected poller sendPoll call");
+  }
+  return call;
 }
 
-describe("runMessageAction poll handling", () => {
+describe("executeMessagePoll", () => {
   beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "poller",
-          source: "test",
-          plugin: pollerTestPlugin,
-        },
-      ]),
-    );
-    mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(
-      ({ channel }: { channel: string }) =>
-        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
-    );
-    mocks.executePollAction.mockReset();
-    mocks.executePollAction.mockImplementation(async (input) => ({
-      handledBy: "core",
-      payload: { ok: true, corePoll: input.resolveCorePoll() },
-      pollResult: { ok: true },
-    }));
+    pollerSendPoll.mockReset();
+    pollerSendPoll.mockResolvedValue({ messageId: "poll-test" });
   });
 
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-    mocks.executePollAction.mockReset();
-  });
-  it("passes shared poll fields and auto threadId to executePollAction", async () => {
+  it("passes normalized poll fields and auto threadId to the provider", async () => {
     const call = await runPollAction({
-      cfg: pollerConfig,
       actionParams: {
-        channel: "poller",
         target: "poller:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi"],
@@ -179,11 +111,13 @@ describe("runMessageAction poll handling", () => {
       },
     });
 
-    expect(call?.durationHours).toBe(2);
-    expect(call?.threadId).toBe("42");
-    expect(call?.ctx?.params?.threadId).toBe("42");
-    expect(call?.ctx?.plugin).toBe(pollerTestPlugin);
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledTimes(1);
+    expect(call.poll).toMatchObject({
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      durationHours: 2,
+      maxSelections: 1,
+    });
+    expect(call.threadId).toBe("42");
   });
 
   it.each([0, -1, 1.5, "1.5", "soon"])(
@@ -191,9 +125,7 @@ describe("runMessageAction poll handling", () => {
     async (pollDurationHours) => {
       await expect(
         runPollAction({
-          cfg: pollerConfig,
           actionParams: {
-            channel: "poller",
             target: "poller:123",
             pollQuestion: "Lunch?",
             pollOption: ["Pizza", "Sushi"],
@@ -204,41 +136,9 @@ describe("runMessageAction poll handling", () => {
     },
   );
 
-  it("passes inbound event kind to poll execution", async () => {
-    const call = await runPollAction({
-      cfg: pollerConfig,
-      actionParams: {
-        channel: "poller",
-        target: "poller:123",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi"],
-      },
-      inboundEventKind: "room_event",
-    });
-
-    expect(call?.ctx?.inboundEventKind).toBe("room_event");
-  });
-
-  it("copies the normalized idempotency key into poll execution context", async () => {
-    const call = await runPollAction({
-      cfg: pollerConfig,
-      actionParams: {
-        channel: "poller",
-        target: "poller:123",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi"],
-        idempotencyKey: " run-1:message-tool:poll-1:fingerprint ",
-      },
-    });
-
-    expect(call?.ctx?.idempotencyKey).toBe("run-1:message-tool:poll-1:fingerprint");
-  });
-
   it("expands maxSelections when pollMulti is enabled", async () => {
     const call = await runPollAction({
-      cfg: pollerConfig,
       actionParams: {
-        channel: "poller",
         target: "poller:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi", "Soup"],
@@ -246,20 +146,30 @@ describe("runMessageAction poll handling", () => {
       },
     });
 
-    expect(call?.maxSelections).toBe(3);
+    expect(call.poll.maxSelections).toBe(3);
   });
 
   it("defaults maxSelections to one choice when pollMulti is omitted", async () => {
     const call = await runPollAction({
-      cfg: pollerConfig,
       actionParams: {
-        channel: "poller",
         target: "poller:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi", "Soup"],
       },
     });
 
-    expect(call?.maxSelections).toBe(1);
+    expect(call.poll.maxSelections).toBe(1);
+  });
+
+  it("requires at least two poll options", async () => {
+    await expect(
+      runPollAction({
+        actionParams: {
+          target: "poller:123",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza"],
+        },
+      }),
+    ).rejects.toThrow(/pollOption requires at least two values/i);
   });
 });

@@ -15,14 +15,17 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 const repositoryScriptEntries = [
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-  ".github/actions/setup-node-env/verify-importers.mjs!",
-  ".github/actions/register-bind-mount-cleanup/main.cjs!",
-  ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
+  "scripts/check-control-ui-performance.mts!",
+  "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
+  // Cloudflare deployment template: wrangler bundles the Worker from this entry.
+  "scripts/cloudflare/src/index.ts!",
+  // Invoked by the documented macOS Computer Use live-proof shell rig.
+  "scripts/dev/computer-use-macos-live-proof.ts!",
   "scripts/dev/ios-node-e2e.ts!",
   "scripts/diffs-shiki-curated.ts!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
@@ -88,6 +91,8 @@ const repositoryScriptEntries = [
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
+  // Changed-file checks invoke this targeted UI Stylelint entrypoint by path.
+  "scripts/run-stylelint.mts!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sqlite-session-entry-cache-lifetime-proof.ts!",
   "scripts/sync-labels.ts!",
@@ -153,12 +158,13 @@ const rootEntries = [
   "src/config/sessions/session-accessor.sqlite-archive.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
+  "src/agents/prepared-model-catalog.worker.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
-  "src/agents/subagent-registry.runtime.ts!",
+  "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
-  "src/agents/subagent-registry-restart-recovery.ts!",
+  "src/agents/subagents/registry/subagent-registry-restart-recovery.ts!",
   // Task cancellation loads this control facade by string path to avoid a registry cycle.
   "src/tasks/task-registry-control.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
@@ -190,10 +196,6 @@ const rootEntries = [
   "src/plugins/contracts/rootdir-boundary-canary.ts!",
   // Mintlify executes every JavaScript file in the docs content directory on each page.
   "docs/nav-tabs-underline.js!",
-  // Knip loads these audit configurations by command-line path.
-  "config/knip.config.ts!",
-  "config/knip.all-exports.config.ts!",
-  "config/knip.scripts-exports.config.ts!",
   // Native applications load these JavaScript assets directly rather than through Node imports.
   "apps/android/app/src/main/assets/katex/katex.min.js!",
   "apps/android/app/src/main/assets/katex/renderer.js!",
@@ -211,6 +213,8 @@ const rootEntries = [
 const bundledPluginEntries = [
   "index.ts!",
   "setup-entry.ts!",
+  // Setup APIs may lazy-load this top-level package artifact by string specifier.
+  "setup-surface.ts!",
   // Core resolves these public plugin artifacts by basename rather than by a
   // static import from the plugin entry module.
   "*-api.ts!",
@@ -412,6 +416,10 @@ const config = {
     "src/plugins/memory-state.ts": ["exports", "types"],
     "src/plugins/session-discussion-registry.ts": ["exports"],
     "src/tasks/detached-task-runtime-state.ts": ["exports"],
+    // Focused Control UI tests consume these explicit state-machine seams;
+    // production uses them through their owning module/controller.
+    "ui/src/pages/chat/chat-state-refresh.ts": ["exports"],
+    "ui/src/pages/chat/composer-persistence.ts": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
@@ -432,6 +440,9 @@ const config = {
     ".": {
       ignoreDependencies: [
         "@openclaw/*",
+        // Cloudflare template dependency: declared in scripts/cloudflare/package.json
+        // (isolated deploy tooling), not in the root manifest.
+        "@cloudflare/containers",
         // Docker packaging stages @openclaw/ai without nested dependencies after
         // verifying the root owns its exact runtime dependency versions.
         "@mistralai/mistralai",
@@ -498,6 +509,7 @@ const config = {
       // Mirror the published export map so knip sees every dist entry point.
       entry: [
         "src/index.ts!",
+        "src/provider-types.ts!",
         "src/providers.ts!",
         "src/types.ts!",
         "src/validation.ts!",
@@ -568,6 +580,7 @@ const config = {
         "src/boolean-coercion.ts!",
         "src/error-coercion.ts!",
         "src/expect.ts!",
+        "src/json-coercion.ts!",
         "src/number-coercion.ts!",
         "src/phone-presentation.ts!",
         "src/record-coerce.ts!",
@@ -599,6 +612,7 @@ const config = {
     "packages/media-core": {
       entry: [
         "src/index.ts!",
+        "src/attachment-classify.ts!",
         "src/base64.ts!",
         "src/constants.ts!",
         "src/content-length.ts!",
@@ -651,7 +665,7 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/memory-host-sdk": {
-      entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
+      entry: ["src/*.ts!", "src/host/embeddings.types.ts!"],
       project: ["src/**/*.ts!"],
     },
     "packages/*": {
@@ -660,10 +674,7 @@ const config = {
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock-mantle`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: bundledPluginWorkspace([
-      // The plugin-SDK anthropic-cli facade resolves this shipped artifact by basename.
-      "cli-api.ts!",
-    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic-vertex`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/acpx`]: bundledPluginWorkspace([
       // Copied as executable runtime internals by the package artifact manifest.
@@ -676,16 +687,14 @@ const config = {
       "browser-control-auth.ts!",
       "browser-config.ts!",
       "browser-doctor.ts!",
-      "browser-host-inspection.ts!",
       "browser-maintenance.ts!",
       "browser-profiles.ts!",
+      // Built by tsdown as the native messaging executable; Chrome launches it by path.
+      "native-host-entry.ts!",
       // Chrome manifest/package scripts load these without TypeScript imports.
       "chrome-extension/background.js!",
+      "chrome-extension/options.js!",
       "chrome-extension/popup.js!",
-      "chrome-extension/sidepanel.js!",
-      "scripts/build-copilot-runtime.mjs!",
-      // esbuild receives this browser bootstrap by an assembled path.
-      "scripts/copilot-runtime-entry.ts!",
       "scripts/copy-chrome-extension.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
@@ -823,12 +832,7 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
       entry: bundledPluginEntries,
       project: ["**/*.{js,mjs,ts}!"],
-      ignoreDependencies: [
-        // The provider resolves node-llama-cpp from its own package at runtime
-        // so local embeddings use the plugin-owned native dependency.
-        "node-llama-cpp",
-        ...bundledPluginIgnoredRuntimeDependencies,
-      ],
+      ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/lmstudio`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/reef`]: {

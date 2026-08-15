@@ -12,7 +12,7 @@ const hoisted = vi.hoisted(() => ({
   withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
 }));
 
-vi.mock("./attempt.sessions-yield.js", () => ({
+vi.mock("./attempt-sessions-yield.js", () => ({
   isSessionsYieldAbortError: hoisted.isSessionsYieldAbortError,
   persistSessionsYieldContextMessage: hoisted.persistSessionsYieldContextMessage,
   stripSessionsYieldArtifacts: hoisted.stripSessionsYieldArtifacts,

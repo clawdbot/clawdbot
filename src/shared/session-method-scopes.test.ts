@@ -2,14 +2,17 @@ import { describe, expect, it } from "vitest";
 import { resolveDynamicSessionMutationRequiredScope } from "./session-method-scopes.js";
 
 describe("resolveDynamicSessionMutationRequiredScope", () => {
-  it("keeps ordinary session creation write-scoped", () => {
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.create", {
-        agentId: "main",
-        message: "hello",
-        worktree: true,
-      }),
-    ).toBe("operator.write");
+  it("keeps explicit restart recovery at write scope", () => {
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.recover")).toBe("operator.write");
+  });
+
+  it.each([
+    { agentId: "main", message: "hello", worktree: true },
+    { agentId: "main", message: "hello", projectId: "openclaw" },
+  ])("keeps ordinary session creation write-scoped %#", (params) => {
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.create", params)).toBe(
+      "operator.write",
+    );
   });
 
   it.each([
@@ -34,6 +37,8 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   it.each([
     { name: "model set", patch: { model: "openai/gpt-5.6-luna" } },
     { name: "model reset", patch: { model: null } },
+    { name: "icon set", patch: { icon: "🦞" } },
+    { name: "icon reset", patch: { icon: null } },
     {
       name: "safe mixed patch",
       patch: { label: "Renamed", archived: true, model: "openai/gpt-5.6-luna" },
@@ -79,7 +84,13 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
             expectedLifecycleRevision: "revision-1",
           },
         ],
-        patch: { label: "Renamed", archived: true, unread: false, model: "openai/gpt-5.6-luna" },
+        patch: {
+          label: "Renamed",
+          icon: "🦞",
+          archived: true,
+          unread: false,
+          model: "openai/gpt-5.6-luna",
+        },
       }),
     ).toBe("operator.write");
     expect(

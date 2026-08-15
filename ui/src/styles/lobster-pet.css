@@ -47,13 +47,14 @@ openclaw-lobster-pet {
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
   transition: left 1.15s ease-in-out;
+  /* Seeded glint tint is mapped before the palette rules so palette and
+     offline class rules still out-cascade it on both look surfaces. */
+  --lob-glint: var(--lob-glint-seed, #00e5cc);
 }
 
-/* Seeded glint tint rides its own variable, mapped here (before the palette
-   rules) so palette and offline class rules still out-cascade it on both
-   look surfaces. */
-.lobster-pet {
-  --lob-glint: var(--lob-glint-seed, #00e5cc);
+/* Restore hit testing beneath the pointer-inert decorative pet host. */
+wa-dropdown.lobster-pet-dismiss-menu {
+  pointer-events: auto;
 }
 
 /* The Elder does everything at Elder speed. */
@@ -1767,7 +1768,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   filter: drop-shadow(0 0 4px rgba(244, 184, 64, 0.4));
 }
 
-@media (max-width: 540px) {
+@media (max-width: 560px) {
   .lobsterdex-page__header {
     align-items: flex-start;
     flex-direction: column;

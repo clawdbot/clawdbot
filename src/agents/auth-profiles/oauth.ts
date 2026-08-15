@@ -40,7 +40,7 @@ import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import {
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
   hasRuntimeAuthProfileStoreSnapshot,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
@@ -311,7 +311,7 @@ function resolveRuntimeAuthProfile(params: {
   profile: AuthProfileCredential;
   defaults: SecretDefaults | undefined;
 }): { profile: AuthProfileCredential; published: boolean } {
-  const runtimeProfile = getRuntimeAuthProfileStoreSnapshot(params.agentDir)?.profiles[
+  const runtimeProfile = getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)?.profiles[
     params.profileId
   ];
   const inputRefKey = authProfileSecretRefKey(params.profile, params.defaults);
@@ -514,7 +514,7 @@ export async function resolveApiKeyForProfile(
         params.agentDir !== ownerAgentDir &&
         hasRuntimeAuthProfileStoreSnapshot(params.agentDir)
       ) {
-        const snapshot = getRuntimeAuthProfileStoreSnapshot(params.agentDir);
+        const snapshot = getRuntimeAuthProfileStoreSnapshotCore(params.agentDir);
         const providerKey = resolveProviderIdForAuth(cred.provider);
         if (snapshot?.lastGood?.[providerKey] === profileId) {
           delete snapshot.lastGood[providerKey];

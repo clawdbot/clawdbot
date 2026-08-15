@@ -3,13 +3,13 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.test-helpers.js";
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -17,6 +17,8 @@ import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { bumpSessionAutomationVersion } from "../session-automation-index.js";
+import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -31,15 +33,15 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-utils.js")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: (
-      ...args: Parameters<typeof actual.loadCombinedSessionStoreForGateway>
+    loadCombinedSessionStoreForGatewayCore: (
+      ...args: Parameters<typeof actual.loadCombinedSessionStoreForGatewayCore>
     ) => {
       loader.calls(...args);
       if (loader.failNext) {
         loader.failNext = false;
         throw new Error("synthetic store load failure");
       }
-      return actual.loadCombinedSessionStoreForGateway(...args);
+      return actual.loadCombinedSessionStoreForGatewayCore(...args);
     },
     listSessionsFromStoreAsync: async (
       ...args: Parameters<typeof actual.listSessionsFromStoreAsync>
@@ -53,6 +55,7 @@ vi.mock("../session-utils.js", async (importOriginal) => {
 
 const { sessionReadHandlers } = await import("./sessions-read.js");
 const { emitSessionsChanged } = await import("./session-change-event.js");
+const { emitSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js");
 
 function identifiedClient(profileId: string): GatewayClient {
   return {
@@ -108,7 +111,7 @@ async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
     agents: { list: [{ id: "main", default: true }, { id: "work" }] },
   };
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: "main", sessionKey: "agent:main:active" },
     {
       sessionId: "main-active",
@@ -117,7 +120,7 @@ async function seedSessions(): Promise<OpenClawConfig> {
       visibility: "shared",
     },
   );
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: "main", sessionKey: "agent:main:draft" },
     {
       sessionId: "main-draft",
@@ -126,7 +129,7 @@ async function seedSessions(): Promise<OpenClawConfig> {
       visibility: "draft",
     },
   );
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: "main", sessionKey: "agent:main:archived" },
     {
       sessionId: "main-archived",
@@ -136,7 +139,7 @@ async function seedSessions(): Promise<OpenClawConfig> {
       visibility: "shared",
     },
   );
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: "work", sessionKey: "agent:work:active" },
     {
       sessionId: "work-active",
@@ -224,10 +227,17 @@ describe("sessions.list single-flight", () => {
     });
   });
 
-  it("reuses a completed result until the session mutation version advances", async () => {
+  it("reuses a completed result until a projection fence advances", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();
-      const context = requestContext(config);
+      let diskSpaceVersion = 0;
+      const context = {
+        ...requestContext(config),
+        workerPlacementDiskSpaceReader: {
+          read: () => undefined,
+          version: () => diskSpaceVersion,
+        },
+      };
       const client = identifiedClient("owner@example.com");
       const request = { archived: "all" as const, limit: 100 };
       const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
@@ -238,7 +248,85 @@ describe("sessions.list single-flight", () => {
       expect(cached).toBe(first);
       expect(loader.calls).toHaveBeenCalledTimes(1);
 
+      diskSpaceVersion += 1;
+      await listSessions({ client, context, request });
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+
       emitSessionsChanged(context, { reason: "test", sessionKey: "agent:main:active" });
+      await listSessions({ client, context, request });
+      expect(loader.calls).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("invalidates a completed result after terminal lifecycle persistence lands", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+      const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
+
+      const first = await listSessions({ client, context, request });
+      clock.mockReturnValue(60_401);
+      expect(await listSessions({ client, context, request })).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      // The terminal entry write (status/endedAt/runtimeMs) commits after the
+      // run-index fence bumped at lifecycle end. A list computed in that
+      // window cached the pre-terminal row; the persistence fence evicts it.
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey: "agent:main:active",
+        agentId: "main",
+        event: {
+          ts: 60_500,
+          runId: "run-terminal-fence",
+          data: { phase: "end", startedAt: 60_000, endedAt: 60_450 },
+        },
+      });
+      await listSessions({ client, context, request });
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("invalidates a completed result after a committed transcript update", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+      const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
+
+      const first = await listSessions({ client, context, request });
+      clock.mockReturnValue(60_401);
+
+      // A transcript commit changes row previews/derived titles without any
+      // session-entry mutation; serving the cached page would hide it forever.
+      emitSessionTranscriptUpdate({
+        target: { agentId: "main", sessionId: "main-active", sessionKey: "agent:main:active" },
+      });
+      const refreshed = await listSessions({ client, context, request });
+      expect(refreshed).not.toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("invalidates a completed result when a cron automation binding changes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+      const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
+
+      const first = await listSessions({ client, context, request });
+      clock.mockReturnValue(60_401);
+      expect(await listSessions({ client, context, request })).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      // Cron job add/remove/enable changes hasAutomation on projected rows but
+      // historically bumped only the automation memo, so cached lists served
+      // stale badges forever.
+      bumpSessionAutomationVersion();
       await listSessions({ client, context, request });
       expect(loader.calls).toHaveBeenCalledTimes(2);
     });
@@ -299,7 +387,7 @@ describe("sessions.list single-flight", () => {
       const request = { archived: "all" as const, limit: 100 };
 
       const first = await listSessions({ client, context, request });
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:external" },
         {
           sessionId: "main-external",
@@ -380,7 +468,7 @@ describe("sessions.list single-flight", () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const parentSessionKey = "agent:main:active";
       const childSessionKey = "agent:main:zzz-child";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: childSessionKey },
         {
           sessionId: "completed-hidden-child",
@@ -524,7 +612,7 @@ describe("sessions.list single-flight", () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const parentSessionKey = "agent:main:active";
       const childSessionKey = "agent:main:child";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: childSessionKey },
         {
           sessionId: "completed-child",
@@ -674,7 +762,7 @@ describe("sessions.list single-flight", () => {
         ["second", 600],
         ["first", 700],
       ] as const) {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:page-${name}` },
           {
             sessionId: `page-${name}`,
@@ -697,7 +785,7 @@ describe("sessions.list single-flight", () => {
         request: { agentId: "main", archived: "all", limit: 1 },
       });
       await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledOnce());
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:page-first" },
         { visibility: "draft", updatedAt: 800 },
       );
@@ -755,7 +843,7 @@ describe("sessions.list single-flight", () => {
 
       const beforeMutation = listSessions({ client, context, request });
       await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledTimes(1));
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:created-mid-list" },
         { sessionId: "created-mid-list", updatedAt: 500, visibility: "shared" },
       );

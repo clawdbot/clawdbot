@@ -7,7 +7,7 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
-type WebSocketEvent = "open" | "message" | "close" | "error";
+type WebSocketEvent = "open" | "message" | "close" | "error" | "unexpected-response";
 
 const webSockets = vi.hoisted((): ProbeWebSocket[] => []);
 
@@ -25,6 +25,7 @@ class ProbeWebSocket {
     message: [],
     close: [],
     error: [],
+    "unexpected-response": [],
   };
 
   constructor(_url: string, _options?: unknown) {
@@ -76,6 +77,7 @@ vi.mock("ws", () => ({ WebSocket: ProbeWebSocket }));
 const { probeGateway } = await import("./probe.js");
 
 type ConnectFrame = {
+  id?: string;
   params?: {
     auth?: { token?: string; deviceToken?: string; password?: string };
     device?: { id?: string };
@@ -121,8 +123,20 @@ async function captureProbeConnectFrame(params: {
     throw new Error("missing probe connect frame");
   }
   const connect = JSON.parse(rawConnect) as ConnectFrame;
-  socket.emitClose(1008, "test complete");
+  socket.emitMessage(
+    JSON.stringify({
+      type: "res",
+      id: connect.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        auth: { role: "operator", scopes: ["operator.read"] },
+        server: { connId: "probe-scope-test", version: "test" },
+      },
+    }),
+  );
   await probePromise;
+  expect(socket.readyState).toBe(ProbeWebSocket.CLOSED);
   return connect;
 }
 

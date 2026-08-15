@@ -208,9 +208,22 @@ async function runSessionsLifecycleCommand(
   const results = keys.map((key): SessionsLifecycleResult | undefined =>
     key && sessions.has(key) ? undefined : notFoundResult(key, opts.agent),
   );
-  const validTargets = keys.flatMap((key, index) => {
+  const listedTargets = keys.flatMap((key, index) => {
     const session = sessions.get(key);
     return session ? [{ index, session }] : [];
+  });
+  const validTargets = listedTargets.filter(({ index, session }) => {
+    const needsMutation = !opts.dryRun && !(operation === "archive" && session.archived === true);
+    if (!needsMutation || session.sessionId) {
+      return true;
+    }
+    results[index] = {
+      key: session.key,
+      ok: false,
+      status: "failed",
+      error: "Session has no durable identity; lifecycle mutation was not attempted.",
+    };
+    return false;
   });
 
   if (operation === "delete" && !opts.dryRun && !opts.yes && validTargets.length > 0) {

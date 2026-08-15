@@ -11,6 +11,8 @@ type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   category: string | null;
+  icon: string | null;
+  categoryClearReturnsToGroups: boolean;
 };
 type SessionMenuElement = HTMLElement & {
   anchor: { x: number; y: number };
@@ -43,6 +45,7 @@ async function mountMenu(
     onAction?: (action: SessionMenuAction) => void;
     onClose?: () => void;
     actionDisabledReasons?: Partial<Record<SessionMenuActionKind, string>>;
+    forkFromLastCompleted?: boolean;
   } = {},
 ): Promise<SessionMenuElement> {
   const container = document.createElement("div");
@@ -54,6 +57,8 @@ async function mountMenu(
     unread: false,
     archived: false,
     category: null,
+    icon: null,
+    categoryClearReturnsToGroups: false,
     ...options.session,
   };
   render(
@@ -66,6 +71,7 @@ async function mountMenu(
       .disabled=${false}
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${false}
+      .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
       .deleteAllowed=${options.deleteAllowed ??
       (session.archived || (options.archiveAllowed ?? true))}
@@ -149,12 +155,19 @@ describe("session menu", () => {
       "Pin session",
       "Mark as unread",
       "Rename…",
+      "Set icon",
       "Fork",
       "Add to Workboard",
       "Move to group",
       "Archive session",
       "Delete…",
     ]);
+  });
+
+  it("names the stable fork boundary for an active session", async () => {
+    const menu = await mountMenu({ forkFromLastCompleted: true });
+
+    expect(menuItemLabels(menu)).toContain("Fork from last completed message");
   });
 
   it("renders only batch actions with counts for a multi-selection", async () => {
@@ -279,12 +292,58 @@ describe("session menu", () => {
     expect(onAction).toHaveBeenCalledWith({ kind: "new-group" });
   });
 
+  it("offers emoji-only icon choices, marks the current icon, and dispatches set and remove", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({ session: { icon: "🦞" }, onAction });
+    const submenu = menuItem(menu, "Set icon");
+    (submenu as SessionMenuItem & { submenuOpen: boolean }).submenuOpen = true;
+
+    expect(menuItemLabels(submenu)).toEqual([
+      "🦞",
+      "🚀",
+      "🐛",
+      "✅",
+      "🔥",
+      "📝",
+      "⭐",
+      "📦",
+      "Remove icon",
+    ]);
+    const current = menuItem(submenu, "🦞");
+    await current.updateComplete;
+    await Promise.resolve();
+    expect(current.getAttribute("role")).toBe("menuitemradio");
+    expect(current.getAttribute("aria-checked")).toBe("true");
+    expect(current.querySelector(".session-menu__check")).not.toBeNull();
+
+    menuItem(submenu, "🚀").click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: "🚀" });
+    menuItem(submenu, "Remove icon").click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: null });
+  });
+
   it("omits Remove from group when the session has no category", async () => {
     const menu = await mountMenu({ groups: ["Research"] });
 
     const submenu = menuItem(menu, "Move to group");
 
     expect(menuItemLabels(submenu)).not.toContain("Remove from group");
+  });
+
+  it("names Groups as the destination when clearing the category returns there", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({
+      session: { category: "Done", categoryClearReturnsToGroups: true },
+      groups: ["Done"],
+      onAction,
+    });
+    const submenu = menuItem(menu, "Move to group");
+
+    expect(menuItemLabels(submenu)).toContain("Move back to Groups");
+    expect(menuItemLabels(submenu)).not.toContain("Remove from group");
+
+    menuItem(submenu, "Move back to Groups").click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: null });
   });
 
   it("uses Web Awesome submenu slots when New group is the only entry", async () => {

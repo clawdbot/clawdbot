@@ -1,6 +1,6 @@
 import {
-  publishSqliteSessionEntryCacheInvalidation,
-  trackSqliteSessionEntryCacheWrite,
+  publishSessionEntryCacheInvalidation,
+  trackSessionEntryCacheWrite,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -24,7 +24,7 @@ export function writeValidatedDoctorSessionEntryJson(
     throw new Error(`Refusing invalid SQLite session entry rewrite for ${row.session_key}`);
   }
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
-  const writeGeneration = trackSqliteSessionEntryCacheWrite(database, () => {
+  const writeGeneration = trackSessionEntryCacheWrite(database, () => {
     executeSqliteQuerySync(
       database.db,
       db
@@ -44,7 +44,7 @@ export function writeValidatedDoctorSessionEntryJson(
   });
   // The transaction owner defers this row publication until commit; rollback must never
   // expose repaired JSON through a warm connection-local session cache.
-  publishSqliteSessionEntryCacheInvalidation(
+  publishSessionEntryCacheInvalidation(
     database,
     { ...row, entry_json: entryJson },
     writeGeneration,

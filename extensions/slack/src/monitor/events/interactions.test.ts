@@ -76,7 +76,11 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
   return {
     ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    enqueueRoutedSystemEvent: (
+      text: unknown,
+      route: { sessionKey: unknown },
+      options: Record<string, unknown>,
+    ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
   };
 });
 
@@ -354,7 +358,10 @@ function createContext(overrides?: {
     client: listenerClient,
   };
   const runtimeLog = vi.fn();
-  const resolveSessionKey = vi.fn().mockReturnValue("agent:ops:slack:channel:C1");
+  const resolveSessionKey = vi.fn().mockReturnValue({
+    agentId: "ops",
+    sessionKey: "agent:ops:slack:channel:C1",
+  });
   const isChannelAllowed = vi
     .fn<
       (params: {
@@ -406,7 +413,7 @@ function createContext(overrides?: {
     isChannelAllowed,
     resolveUserName,
     resolveChannelName,
-    resolveSlackSystemEventSessionKey: resolveSessionKey,
+    resolveSlackSystemEventRoute: resolveSessionKey,
   };
   return {
     ctx,
@@ -1307,6 +1314,7 @@ describe("registerSlackInteractionEvents", () => {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
+      agentId: "ops",
       sessionKey: "agent:ops:slack:channel:C1",
       heartbeat: { target: "last" },
     });
@@ -1559,6 +1567,7 @@ describe("registerSlackInteractionEvents", () => {
       decision: "allow-once",
       senderId: "U123",
       channel: "slack",
+      accountId: "default",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
@@ -1687,6 +1696,7 @@ describe("registerSlackInteractionEvents", () => {
       decision: "allow-once",
       senderId: "U123",
       channel: "slack",
+      accountId: "default",
     });
     expectRecordFields(chatUpdateCall(app), {
       channel: "C1",
@@ -1890,6 +1900,7 @@ describe("registerSlackInteractionEvents", () => {
       decision: "allow-always",
       senderId: "U123OWNER",
       channel: "slack",
+      accountId: "default",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
@@ -1969,6 +1980,7 @@ describe("registerSlackInteractionEvents", () => {
       senderId: "U123OWNER",
       resolveMethod: "plugin",
       channel: "slack",
+      accountId: "default",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
@@ -2042,6 +2054,7 @@ describe("registerSlackInteractionEvents", () => {
       decision: "allow-once",
       senderId: "U123OWNER",
       channel: "slack",
+      accountId: "default",
     };
     expect(resolveApprovalOverGatewayMock).toHaveBeenNthCalledWith(1, {
       ...expectedCommon,
@@ -2121,6 +2134,7 @@ describe("registerSlackInteractionEvents", () => {
       senderId: "U999EXEC",
       resolveMethod: "exec",
       channel: "slack",
+      accountId: "default",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
@@ -2136,6 +2150,7 @@ describe("registerSlackInteractionEvents", () => {
 
   it.each([
     { name: "current", actionId: "openclaw:reply_link:1:1", value: undefined },
+    { name: "session", actionId: "openclaw:session_link", value: undefined },
     {
       name: "legacy",
       actionId: "openclaw:reply_button:1:1",
@@ -3170,6 +3185,7 @@ describe("registerSlackInteractionEvents", () => {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
+      agentId: "ops",
       sessionKey: "agent:ops:slack:channel:C1",
       heartbeat: { target: "last" },
     });
@@ -3994,6 +4010,7 @@ describe("registerSlackInteractionEvents", () => {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
+      agentId: "main",
       sessionKey: "agent:main:slack:channel:C99",
       heartbeat: { target: "last" },
     });

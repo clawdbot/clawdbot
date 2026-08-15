@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/index.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -543,6 +545,8 @@ async function runSkillExperienceReviewInner(
   }
 
   const sessionId = randomUUID();
+  const runId = `skill-workshop-review:${randomUUID()}`;
+  const config = candidate.config ?? getRuntimeConfig();
   const proposalMutationBudget: SkillWorkshopProposalMutationBudget = {
     remaining: 1,
     readSkillHashes: new Map(),
@@ -550,68 +554,79 @@ async function runSkillExperienceReviewInner(
   const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
   const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
   const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
-    config: candidate.config,
+    config,
     agentId: candidate.ctx.agentId,
   }).map((skill) =>
     skill.description ? { name: skill.name, description: skill.description } : { name: skill.name },
   );
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-  await runEmbeddedAgent({
-    sessionId,
-    sessionKey: reviewSessionKey,
-    sandboxSessionKey: sessionKey,
-    sessionManager: SessionManager.inMemory(workspaceDir),
-    ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
-    trigger: "manual",
-    // Never occupy the foreground agent lane after the idle gate opens.
-    lane: CommandLane.SkillWorkshopReview,
-    messageChannel: candidate.ctx.messageChannel ?? undefined,
-    messageProvider: candidate.ctx.messageProvider ?? undefined,
-    ...(candidate.ctx.chatType ? { chatType: candidate.ctx.chatType } : {}),
-    ...(candidate.ctx.agentAccountId ? { agentAccountId: candidate.ctx.agentAccountId } : {}),
-    groupId: candidate.ctx.groupId,
-    groupChannel: candidate.ctx.groupChannel,
-    groupSpace: candidate.ctx.groupSpace,
-    memberRoleIds: candidate.ctx.memberRoleIds ? [...candidate.ctx.memberRoleIds] : undefined,
-    spawnedBy: candidate.ctx.spawnedBy,
-    senderId: candidate.ctx.senderId,
-    senderName: candidate.ctx.senderName,
-    senderUsername: candidate.ctx.senderUsername,
-    senderE164: candidate.ctx.senderE164,
-    senderIsOwner: candidate.ctx.senderIsOwner,
-    agentHarnessId: "openclaw",
-    agentHarnessRuntimeOverride: "openclaw",
-    workspaceDir,
-    ...(candidate.config ? { config: candidate.config } : {}),
-    prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
-    provider: modelProviderId,
-    model: modelId,
-    modelSelectionLocked: true,
-    modelFallbacksOverride: [],
-    ...(candidate.ctx.authProfileId
-      ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
-      : {}),
-    timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
-    runId: `skill-workshop-review:${randomUUID()}`,
-    toolsAllow: ["skill_workshop"],
-    disableMessageTool: true,
-    disableTrajectory: true,
-    skillWorkshopProposalOnly: true,
-    skillWorkshopUpdateProposals: true,
-    skillWorkshopAutonomousCapture: true,
-    skillWorkshopProposalMutationBudget: proposalMutationBudget,
-    skillWorkshopOrigin: {
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    config,
+    runId,
+    candidate.ctx.agentId ?? "main",
+    "skill-workshop.experience",
+  );
+  try {
+    await runEmbeddedAgent({
+      preparedRunAdmission,
+      sessionId,
+      sessionKey: reviewSessionKey,
+      sandboxSessionKey: sessionKey,
+      sessionManager: SessionManager.inMemory(workspaceDir),
       ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
-      sessionKey,
-      ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
-    },
-    cleanupBundleMcpOnRunEnd: true,
-    bootstrapContextMode: "lightweight",
-    skillsSnapshot: { prompt: "", skills: [] },
-    verboseLevel: "off",
-    reasoningLevel: "off",
-    suppressToolErrorWarnings: true,
-  });
+      trigger: "manual",
+      // Never occupy the foreground agent lane after the idle gate opens.
+      lane: CommandLane.SkillWorkshopReview,
+      messageChannel: candidate.ctx.messageChannel ?? undefined,
+      messageProvider: candidate.ctx.messageProvider ?? undefined,
+      ...(candidate.ctx.chatType ? { chatType: candidate.ctx.chatType } : {}),
+      ...(candidate.ctx.agentAccountId ? { agentAccountId: candidate.ctx.agentAccountId } : {}),
+      groupId: candidate.ctx.groupId,
+      groupChannel: candidate.ctx.groupChannel,
+      groupSpace: candidate.ctx.groupSpace,
+      memberRoleIds: candidate.ctx.memberRoleIds ? [...candidate.ctx.memberRoleIds] : undefined,
+      spawnedBy: candidate.ctx.spawnedBy,
+      senderId: candidate.ctx.senderId,
+      senderName: candidate.ctx.senderName,
+      senderUsername: candidate.ctx.senderUsername,
+      senderE164: candidate.ctx.senderE164,
+      senderIsOwner: candidate.ctx.senderIsOwner,
+      agentHarnessId: "openclaw",
+      agentHarnessRuntimeOverride: "openclaw",
+      workspaceDir,
+      config,
+      prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
+      provider: modelProviderId,
+      model: modelId,
+      modelSelectionLocked: true,
+      modelFallbacksOverride: [],
+      ...(candidate.ctx.authProfileId
+        ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
+        : {}),
+      timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
+      runId,
+      toolsAllow: ["skill_workshop"],
+      disableMessageTool: true,
+      disableTrajectory: true,
+      skillWorkshopProposalOnly: true,
+      skillWorkshopUpdateProposals: true,
+      skillWorkshopAutonomousCapture: true,
+      skillWorkshopProposalMutationBudget: proposalMutationBudget,
+      skillWorkshopOrigin: {
+        ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
+        sessionKey,
+        ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
+      },
+      cleanupBundleMcpOnRunEnd: true,
+      bootstrapContextMode: "lightweight",
+      skillsSnapshot: { prompt: "", skills: [] },
+      verboseLevel: "off",
+      reasoningLevel: "off",
+      suppressToolErrorWarnings: true,
+    });
+  } finally {
+    preparedRunAdmission.close();
+  }
 
   const currentConfig = deps.getCurrentConfig
     ? await deps.getCurrentConfig()

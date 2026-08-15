@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 // OpenClaw test helpers build runtime environments for rescue tests.
@@ -152,7 +152,7 @@ export function expectSystemAgentAuditRecord(
 export async function createSystemAgentVerifiedInferenceTestFixture(
   config: OpenClawConfig,
 ): Promise<SystemAgentVerifiedInferenceTestFixture> {
-  const routeAgentId = resolveDefaultAgentId(config);
+  const routeAgentId = resolveSystemAgentTargetAgentId(config);
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: config,
     agentId: routeAgentId,
@@ -297,7 +297,7 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
   const agentHarnessId =
     configuredRoute.agentHarnessRuntimeOverride === "auto"
       ? "openclaw"
-      : configuredRoute.agentHarnessRuntimeOverride;
+      : (configuredRoute.agentHarnessRuntimeOverride ?? "codex");
   const authFingerprint =
     profileId && agentHarnessId !== "openclaw"
       ? fingerprintResolvedAuthProfileCredential({ profileId, credential, resolvedAuth })

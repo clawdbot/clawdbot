@@ -7,7 +7,7 @@ export {
   jsonResult,
   readFiniteNumberParam,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../agents/tools/common.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";

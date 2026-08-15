@@ -74,6 +74,14 @@ export type McpToolCatalog = {
   diagnostics?: readonly McpToolCatalogDiagnostic[];
 };
 
+/** Transient requester sign-in surface kept outside the remembered live catalog. */
+export type RequesterMcpConnect = {
+  catalog: McpToolCatalog;
+  authorizedServerNames: readonly string[];
+  configFingerprint: string;
+  createExecute: (serverName: string) => AnyAgentTool["execute"] | undefined;
+};
+
 export type McpToolCatalogDiagnostic = {
   serverName: string;
   safeServerName: string;
@@ -101,6 +109,7 @@ export type SessionMcpRuntime = {
   configFingerprint: string;
   /** Present when this runtime is keyed by requester-scoped connection identity. */
   requesterScope?: SessionMcpRequesterScope;
+  requesterConnect?: RequesterMcpConnect;
   /**
    * True when the named server's connection is requester-scoped. App views for
    * such servers stay fail-closed: views outlive the requester-authenticated

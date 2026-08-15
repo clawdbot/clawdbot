@@ -309,7 +309,7 @@ describe("scripts/run-vitest", () => {
   });
 
   it("keeps boundary tests on existing routing", () => {
-    const argv = ["run", "test/web-provider-boundary.test.ts"];
+    const argv = ["run", "test/plugin-extension-import-boundary.test.ts"];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
 
@@ -348,11 +348,11 @@ describe("scripts/run-vitest", () => {
       [["run", file], [file]],
       [
         ["run", file, "--reporter=verbose"],
-        [file, "--reporter=verbose"],
+        [file, "--", "--reporter=verbose"],
       ],
       [
         ["--reporter=verbose", "run", file],
-        ["--reporter=verbose", file],
+        [file, "--", "--reporter=verbose"],
       ],
       [
         ["run", file, "--", "--watch"],
@@ -373,6 +373,7 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs([file])).toEqual([file]);
     expect(resolveTestProjectsDelegationArgs(["run", file, "--reporter=verbose"])).toEqual([
       file,
+      "--",
       "--reporter=verbose",
     ]);
   });
@@ -381,7 +382,7 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs(["test/scripts"])).toEqual(["test/scripts"]);
     expect(
       resolveTestProjectsDelegationArgs(["run", "test/scripts", "--reporter=verbose"]),
-    ).toEqual(["test/scripts", "--reporter=verbose"]);
+    ).toEqual(["test/scripts", "--", "--reporter=verbose"]);
     expect(resolveTestProjectsDelegationArgs(["test/scripts/*.test.ts"])).toEqual([
       "test/scripts/*.test.ts",
     ]);
@@ -390,6 +391,15 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs(["./src"])).toBeNull();
     const prefix = "extensions/telegram/src/format";
     expect(resolveTestProjectsDelegationArgs([prefix])).toEqual([prefix]);
+  });
+
+  it("delegates owned agent directories with separate Vitest option values", () => {
+    const directory = "src/agents/embedded-agent-runner/run";
+
+    expect(resolveTestProjectsDelegationArgs([directory])).toEqual([directory]);
+    expect(
+      resolveTestProjectsDelegationArgs([directory, "--sequence.shuffle", "--sequence.seed", "3"]),
+    ).toEqual([directory, "--", "--sequence.shuffle", "--sequence.seed", "3"]);
   });
 
   it("delegates mixed filters when an explicit file target is present", () => {
@@ -420,13 +430,27 @@ describe("scripts/run-vitest", () => {
       ["--run=false", "test/scripts/run-vitest.test.ts"],
       ["--no-run", "test/scripts/run-vitest.test.ts"],
       ["--run", "false", "test/scripts/run-vitest.test.ts"],
-      ["--diff", "scripts/run-vitest.mjs"],
-      ["--testNamePattern", "run", "test/scripts/run-vitest.test.ts"],
-      ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
     ];
     for (const argv of directArgvCases) {
       expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
     }
+  });
+
+  it.each([
+    [
+      ["--diff", "scripts/run-vitest.mjs", "test/scripts/run-vitest.test.ts"],
+      ["test/scripts/run-vitest.test.ts", "--", "--diff", "scripts/run-vitest.mjs"],
+    ],
+    [
+      ["--testNamePattern", "run", "test/scripts/run-vitest.test.ts"],
+      ["test/scripts/run-vitest.test.ts", "--", "--testNamePattern", "run"],
+    ],
+    [
+      ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
+      ["test/scripts/run-vitest.test.ts", "--", "-t", "src"],
+    ],
+  ])("keeps option value %j out of project target classification", (argv, expected) => {
+    expect(resolveTestProjectsDelegationArgs(argv)).toEqual(expected);
   });
 
   it("reports missing explicit test files before Vitest can silently ignore them", () => {
@@ -889,7 +913,7 @@ describe("scripts/run-vitest", () => {
     }
   });
 
-  posixIt("reaps residual process-group descendants before completing", async () => {
+  posixIt("stops residual process-group descendants before completing", async () => {
     const descendantPidPath = nodePath.join(
       os.tmpdir(),
       `openclaw-run-vitest-residual-${process.pid}-${Date.now()}.pid`,
@@ -935,19 +959,34 @@ describe("scripts/run-vitest", () => {
 
       process.kill(watched.child.pid!, "SIGTERM");
       const snapshot = await Promise.race([
-        watched.completion.then((result) => ({
-          descendantAlive: isProcessAlive(descendantPid),
-          groupAlive: isProcessGroupAlive(watched.child.pid!),
-          result,
-        })),
+        watched.completion.then((result) => {
+          const psArgs =
+            process.platform === "linux" ? ["-eL", "-o", "pgid=,state="] : ["-axo", "pgid=,state="];
+          const stateResult = spawnSync("ps", psArgs, {
+            encoding: "utf8",
+          });
+          const rows = stateResult.stdout
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .map((line) => /^\s*(\d+)\s+(\S+)\s*$/.exec(line));
+          const groupStopped =
+            !stateResult.error &&
+            stateResult.signal === null &&
+            stateResult.stderr.trim() === "" &&
+            stateResult.status === 0 &&
+            rows.every(Boolean) &&
+            rows
+              .filter((row) => Number(row?.[1]) === watched.child.pid)
+              .every((row) => /^[ZX]/.test(row?.[2] ?? ""));
+          return { groupStopped, result };
+        }),
         delay(LOAD_SENSITIVE_PROCESS_TIMEOUT_MS, undefined, { ref: false }).then(() => {
           throw new Error("timed out waiting for watched Vitest completion");
         }),
       ]);
 
       expect(snapshot).toEqual({
-        descendantAlive: false,
-        groupAlive: false,
+        groupStopped: true,
         result: { code: 0, signal: null },
       });
     } finally {
@@ -1234,14 +1273,5 @@ function isProcessAlive(pid: number) {
     return true;
   } catch {
     return false;
-  }
-}
-
-function isProcessGroupAlive(pgid: number) {
-  try {
-    process.kill(-pgid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }

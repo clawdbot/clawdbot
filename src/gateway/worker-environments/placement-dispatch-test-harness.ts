@@ -82,6 +82,7 @@ export function createHarness(
       placementStore.recordWorkspaceResultConflict(claim, conflict),
     claimTurn: (params) => placementStore.claimTurn(params),
     claimReclaimWorkspaceResult: (params) => placementStore.claimReclaimWorkspaceResult(params),
+    closeWorkerTurnToolState: (claim) => placementStore.closeWorkerTurnToolState(claim),
     markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
     cancelWorkspaceResultAndReleaseTurn: (claim) =>
@@ -174,7 +175,7 @@ export function createHarness(
   const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
     environmentId: ready.environmentId,
     ownerEpoch,
-    remoteSocketPath: "/worker/gateway.sock",
+    launchTurn: vi.fn(),
     quiesceWorkspace: vi.fn(async () => {
       log.push("workspace:quiesce");
       return {
@@ -294,6 +295,10 @@ export function createHarness(
   const environments: WorkerDispatchEnvironmentService = {
     create: vi.fn(async () => {
       fail("create");
+      return currentEnvironment ?? ready;
+    }),
+    createFromProfileSnapshot: vi.fn(async () => {
+      fail("create");
       return ready;
     }),
     get: vi.fn(() => currentEnvironment),
@@ -303,7 +308,10 @@ export function createHarness(
       return minted;
     }),
     startTunnel: vi.fn(async ({ ownerEpoch }) => {
-      fail(ownerEpoch === 1 ? "tunnel:ready" : "tunnel:attached");
+      fail("tunnel:attached");
+      if (ownerEpoch !== currentEnvironment?.ownerEpoch) {
+        throw new Error("tunnel fixture received a stale owner epoch");
+      }
       return tunnelHandle(ownerEpoch);
     }),
     stopTunnel: vi.fn(async () => {
@@ -396,6 +404,9 @@ export function createHarness(
     },
     markEnvironmentOwnerEpoch: (ownerEpoch: number) => {
       currentEnvironment = { ...attached, ownerEpoch };
+    },
+    markEnvironmentProviderId: (providerId: string) => {
+      currentEnvironment = { ...attached, providerId };
     },
     markEnvironmentAttachments: (attachedSessionIds: string[]) => {
       currentEnvironment = { ...attached, attachedSessionIds };

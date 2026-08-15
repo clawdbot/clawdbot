@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const loadCodeModeTypeScriptRuntime = vi.hoisted(() =>
+  vi.fn<() => Promise<typeof import("typescript")>>(),
+);
+
+vi.mock("./code-mode-typescript-runtime.js", () => ({
+  loadCodeModeTypeScriptRuntime,
+}));
 import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareSource } from "./code-mode-runtime.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
@@ -57,9 +65,13 @@ function expectFailed(result: CodeModeHeadlessResult) {
 }
 
 describe("headless Code Mode", () => {
+  beforeEach(async () => {
+    loadCodeModeTypeScriptRuntime.mockResolvedValue(await import("typescript"));
+  });
+
   afterEach(() => {
     vi.useRealTimers();
-    testing.setTypescriptRuntimeForTest(null);
+    loadCodeModeTypeScriptRuntime.mockReset();
     expect(testing.activeRuns.size).toBe(0);
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
@@ -650,7 +662,7 @@ describe("headless Code Mode", () => {
   it("bounds output and returned values across separate worker legs", async () => {
     const tool = fakeTool("output_boundary", async () => jsonResult({ ok: true }));
 
-    const result = expectFailed(
+    const result = expectCompleted(
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness([tool]),
         code: `
@@ -662,7 +674,11 @@ describe("headless Code Mode", () => {
       }),
     );
 
-    expect(result.code).toBe("output_limit_exceeded");
+    expect(JSON.stringify(result)).toContain("rerun with narrower args");
+    expect(
+      Buffer.byteLength(JSON.stringify(result.output), "utf8") +
+        Buffer.byteLength(JSON.stringify(result.value), "utf8"),
+    ).toBeLessThanOrEqual(1_024);
     expect(tool.execute).toHaveBeenCalledOnce();
   });
 
@@ -823,7 +839,7 @@ describe("headless Code Mode", () => {
   });
 
   it("times out an unfinished headless TypeScript runtime load", async () => {
-    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
 
     const result = expectFailed(
       await runCodeModeScriptHeadless({
@@ -843,7 +859,7 @@ describe("headless Code Mode", () => {
   });
 
   it("aborts an unfinished headless TypeScript runtime load", async () => {
-    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
     const controller = new AbortController();
     const resultPromise = runCodeModeScriptHeadless({
       ctx: createHeadlessHarness(),
@@ -864,56 +880,29 @@ describe("headless Code Mode", () => {
 
   it("keeps worker-leg wall-clock expiry classified as timeout", async () => {
     const ctx = createHeadlessHarness();
-    const config = testing.resolveCodeModeHeadlessConfig(ctx);
-    const headlessScope = testing.createHeadlessAbortScope(undefined, 100);
-    try {
-      const result = await testing.runCodeModeWorker(
-        {
-          kind: "exec",
-          source: "while (true) {}",
-          config,
-          catalog: [],
-          apiFiles: [],
-          namespaces: [],
-        },
-        5_000,
-        undefined,
-        headlessScope.signal,
-      );
+    expectCompleted(await runCodeModeScriptHeadless({ ctx, code: "return true;" }));
 
-      expect(result).toMatchObject({
-        status: "failed",
-        code: "timeout",
-        error: "code mode timeout exceeded",
-      });
-    } finally {
-      headlessScope.cleanup();
-    }
-  });
-
-  it.each([
-    {
-      name: "syntax errors",
-      code: "return (;",
-      expectedCode: "internal_error",
-      overrides: undefined,
-    },
-    {
-      name: "output overages",
-      code: `text("x".repeat(2048)); return true;`,
-      expectedCode: "output_limit_exceeded",
-      overrides: { maxOutputBytes: 1024 },
-    },
-  ])("classifies $name", async ({ code, expectedCode, overrides }) => {
     const result = expectFailed(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness(),
-        code,
-        overrides,
+        ctx,
+        code: "while (true) {}",
+        wallClockMs: 100,
       }),
     );
 
-    expect(result.code).toBe(expectedCode);
+    expect(result.code).toBe("timeout");
+    expect(result.error).toContain("timeout exceeded");
+  });
+
+  it("classifies syntax errors", async () => {
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness(),
+        code: "return (;",
+      }),
+    );
+
+    expect(result.code).toBe("internal_error");
   });
 
   it("clamps headless limit overrides to worker-safe bounds", () => {

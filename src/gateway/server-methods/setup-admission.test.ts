@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { withSetupMigrationTargetLock } from "../../wizard/setup.migration-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -15,11 +22,17 @@ vi.mock("../../config/paths.js", async () => ({
 import {
   createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
+  whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
 
 describe("setup admission", () => {
   beforeEach(() => {
     mocks.stateDir = tempDirs.make("openclaw-setup-admission-");
+  });
+
+  afterEach(() => {
+    resetCommandQueueStateForTest();
+    resetGatewayWorkAdmission();
   });
 
   it("rejects concurrent work instead of queueing it", async () => {
@@ -69,7 +82,7 @@ describe("setup admission", () => {
 
   it("holds an admitted session lease until its runner settles", async () => {
     const settled = createDeferred();
-    await createAdmittedWizardSession(() => ({
+    const session = await createAdmittedWizardSession(() => ({
       whenSettled: () => settled.promise,
     }));
 
@@ -77,14 +90,33 @@ describe("setup admission", () => {
       createAdmittedWizardSession(() => ({ whenSettled: () => Promise.resolve() })),
     ).resolves.toBeUndefined();
     settled.resolve();
-    await settled.promise;
-    await vi.waitFor(async () => {
-      const next = await createAdmittedWizardSession(() => ({
-        whenSettled: () => Promise.resolve(),
-      }));
-      expect(next).toBeDefined();
-      await next?.whenSettled();
+    await whenAdmittedWizardSessionSettled(session!);
+    const next = await createAdmittedWizardSession(() => ({
+      whenSettled: () => Promise.resolve(),
+    }));
+    expect(next).toBeDefined();
+    await whenAdmittedWizardSessionSettled(next!);
+  });
+
+  it("retains root work for post-start session continuations", async () => {
+    const continueAfterStart = createDeferred();
+    let runner: Promise<void> | undefined;
+
+    await runWithGatewayIndependentRootWorkAdmission(async () => {
+      await createAdmittedWizardSession(() => {
+        runner = (async () => {
+          await continueAfterStart.promise;
+          await enqueueCommandInLane("setup-post-start-proof", async () => undefined);
+        })();
+        return { whenSettled: () => runner! };
+      });
     });
+
+    const activeAfterStart = getActiveGatewayRootWorkCount();
+    continueAfterStart.resolve();
+    await expect(runner).resolves.toBeUndefined();
+    expect(activeAfterStart).toBe(1);
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("releases an admitted session lease when construction fails", async () => {
@@ -93,9 +125,11 @@ describe("setup admission", () => {
         throw new Error("construction failed");
       }),
     ).rejects.toThrow("construction failed");
-    await expect(
-      createAdmittedWizardSession(() => ({ whenSettled: () => Promise.resolve() })),
-    ).resolves.toBeDefined();
+    const recovered = await createAdmittedWizardSession(() => ({
+      whenSettled: () => Promise.resolve(),
+    }));
+    expect(recovered).toBeDefined();
+    await whenAdmittedWizardSessionSettled(recovered!);
   });
 
   it("reserves wizard admission while setup waits to acquire its target lock", async () => {

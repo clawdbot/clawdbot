@@ -114,6 +114,14 @@ struct ComputerActionServiceTests {
         return false
     }
 
+    private func unsupportedAction(_ error: Error?) -> OpenClawComputerAction? {
+        guard let error = error as? ComputerActionService.ComputerActionError else { return nil }
+        if case let .unsupportedAction(action) = error {
+            return action
+        }
+        return nil
+    }
+
     private func validationError(
         _ operation: () throws -> Void) -> ComputerActionService.ComputerActionError?
     {
@@ -429,6 +437,76 @@ struct ComputerActionServiceTests {
 
         #expect(probe.enteredActionIDs == [1, 2])
         #expect(probe.maximumActiveActionCount == 1)
+    }
+
+    @Test func `v2 authority rejects a result after lifecycle revocation`() async {
+        let service = ComputerActionServiceV2()
+        var checks = 0
+        let outcomeError: Error?
+        do {
+            _ = try await service.perform(
+                OpenClawComputerActParams(action: .getCursorPosition),
+                lifecycleGeneration: 0,
+                checkExecutionAllowed: {
+                    checks += 1
+                    if checks > 1 {
+                        throw ComputerActionService.ComputerActionError.lifecycleChanged
+                    }
+                })
+            outcomeError = nil
+        } catch {
+            outcomeError = error
+        }
+
+        #expect(self.isLifecycleChanged(outcomeError))
+        #expect(checks == 2)
+    }
+
+    @Test func `execution authority revalidates after awaited preparation`() async {
+        let started = AsyncSignal()
+        let resume = AsyncSignal()
+        let releaseProbe = LifecycleReleaseProbe(allowed: true)
+        let authority = ComputerActionExecutionAuthority {
+            guard releaseProbe.allowed else {
+                throw ComputerActionService.ComputerActionError.lifecycleChanged
+            }
+        }
+        let operation = Task { @MainActor in
+            try await authority.run {
+                await started.signal()
+                await resume.wait()
+                return true
+            }
+        }
+        await started.wait()
+        releaseProbe.allowed = false
+        await resume.signal()
+
+        let outcomeError: Error?
+        do {
+            _ = try await operation.value
+            outcomeError = nil
+        } catch {
+            outcomeError = error
+        }
+        #expect(self.isLifecycleChanged(outcomeError))
+    }
+
+    @Test func `v2 rejects foreground accessibility-only actions`() async {
+        let service = ComputerActionServiceV2()
+        for action in [OpenClawComputerAction.setValue, .invokeMenu] {
+            let outcomeError: Error?
+            do {
+                _ = try await service.perform(
+                    OpenClawComputerActParams(action: action, deliveryMode: .foreground),
+                    lifecycleGeneration: 0,
+                    checkExecutionAllowed: {})
+                outcomeError = nil
+            } catch {
+                outcomeError = error
+            }
+            #expect(self.unsupportedAction(outcomeError) == action)
+        }
     }
 
     @Test func `cancelled queued action never executes`() async throws {

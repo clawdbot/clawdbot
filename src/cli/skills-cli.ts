@@ -23,7 +23,9 @@ import {
   fetchClawHubSkillVerification,
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
   installSkillFromClawHub,
   readVerifiedClawHubSkillSourceUrl,
@@ -65,6 +67,7 @@ import type {
 import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
+import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -78,9 +81,6 @@ export type {
 } from "./skills-cli.format.js";
 export { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
-type SkillStatusReport = Awaited<
-  ReturnType<(typeof import("../skills/discovery/status.js"))["buildWorkspaceSkillStatus"]>
->;
 type ResolvedClawHubSkillVerificationTarget = Extract<
   Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
   { ok: true }
@@ -152,7 +152,10 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   const inferredAgentId = explicitAgentId
     ? undefined
     : resolveAgentIdByWorkspacePath(config, options?.cwd ?? process.cwd());
-  const agentId = explicitAgentId ?? inferredAgentId ?? resolveDefaultAgentId(config);
+  const agentId =
+    explicitAgentId ??
+    inferredAgentId ??
+    resolveDefaultAgentId(config, { surface: "the skills command", hint: "Pass --agent <id>." });
   return {
     config,
     agentId,
@@ -208,7 +211,7 @@ async function runSkillsAction(
     const report = await loadSkillsStatusReport(options);
     defaultRuntime.writeStdout(render(report));
   } catch (err) {
-    defaultRuntime.error(String(err));
+    defaultRuntime.error(formatErrorMessage(err));
     defaultRuntime.exit(1);
   }
 }
@@ -220,20 +223,14 @@ function resolveSkillsWorkspaceForCommand(
   return resolveSkillsWorkspace({ agentId: resolveAgentOption(command ?? undefined, opts) });
 }
 
-function resolveClawHubTargetWorkspaceDir(
-  command: Command | undefined,
-  opts: { agent?: string; global?: boolean },
-): string | undefined {
-  return resolveClawHubTargetWorkspace(command, opts)?.workspaceDir;
-}
-
 function resolveClawHubTargetWorkspace(
   command: Command | undefined,
   opts: { agent?: string; global?: boolean },
+  reportError: (message: string) => void = defaultRuntime.error,
 ): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
   const agentId = resolveAgentOption(command, opts);
   if (opts.global && normalizeOptionalString(agentId)) {
-    defaultRuntime.error("Use either --global or --agent, not both.");
+    reportError("Use either --global or --agent, not both.");
     defaultRuntime.exit(1);
     return undefined;
   }
@@ -384,9 +381,7 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
     lines.push(`${label}  ${skill.state}${pinned}  last-used=${lastUsed}  uses=${skill.useCount}`);
   }
   for (const overlap of status.overlaps) {
-    lines.push(
-      `Possible overlap: ${overlap.left} ~ ${overlap.right} — merge via /learn if desired`,
-    );
+    lines.push(`Legacy overlap: ${overlap.left} ~ ${overlap.right}`);
   }
   return `${lines.join("\n")}\n`;
 }
@@ -597,26 +592,18 @@ export function registerSkillsCli(program: Command) {
         }
         for (const entry of results) {
           const installRef = normalizeOptionalString(entry.installRef);
-          const ownerHandle = normalizeOptionalString(entry.ownerHandle);
-          const slug = formatClawHubSearchText(entry.slug);
-          const skillsShInstallRef =
-            installRef?.startsWith("skills-sh:") &&
-            entry.trustState === CLAWHUB_SKILLS_SH_TRUST_STATE
-              ? installRef
-              : undefined;
-          const skillRef = skillsShInstallRef
-            ? formatClawHubSearchText(skillsShInstallRef)
-            : ownerHandle
-              ? `@${formatClawHubSearchText(ownerHandle)}/${slug}`
-              : slug;
+          const skillRef = formatClawHubSearchText(installRef ?? entry.slug);
+          const isExternalSource =
+            installRef?.startsWith("skills-sh:") === true &&
+            entry.trustState === CLAWHUB_SKILLS_SH_TRUST_STATE;
           const version = entry.version ? ` v${formatClawHubSearchText(entry.version)}` : "";
           const summary = entry.summary ? `  ${formatClawHubSearchText(entry.summary)}` : "";
           const displayName = formatClawHubSearchText(entry.displayName);
-          const trust = skillsShInstallRef ? `  ${CLAWHUB_SKILLS_SH_TRUST_LABEL}` : "";
+          const trust = isExternalSource ? `  ${CLAWHUB_SKILLS_SH_TRUST_LABEL}` : "";
           defaultRuntime.log(`${skillRef}${version}  ${displayName}${summary}${trust}`);
         }
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }
     });
@@ -640,6 +627,11 @@ export function registerSkillsCli(program: Command) {
       "Acknowledge ClawHub release trust warnings without prompting",
       false,
     )
+    .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
+      false,
+    )
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--as <slug>", "Install a git/local skill under this slug")
@@ -656,6 +648,7 @@ export function registerSkillsCli(program: Command) {
           forceInstall?: boolean;
           acknowledgeClawhubRisk?: boolean;
           acknowledgeClawHubRisk?: boolean;
+          acknowledgeInstallPolicyWarning?: boolean;
           global?: boolean;
           agent?: string;
           as?: string;
@@ -663,10 +656,11 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
-          if (!workspaceDir) {
+          const target = resolveClawHubTargetWorkspace(command, opts);
+          if (!target) {
             return;
           }
+          const { config, workspaceDir } = target;
           if (slug.trim().startsWith("skills-sh/")) {
             defaultRuntime.error(`Invalid skills.sh skill reference: ${slug}`);
             defaultRuntime.exit(1);
@@ -683,6 +677,10 @@ export function registerSkillsCli(program: Command) {
               spec: slug,
               slug: opts.as,
               force: Boolean(opts.force),
+              config,
+              ...resolveInstallPolicyWarningAcknowledgementCliOptions({
+                acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
+              }),
               logger: {
                 info: (message) => defaultRuntime.log(message),
                 warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
@@ -715,6 +713,10 @@ export function registerSkillsCli(program: Command) {
             slug,
             version: opts.version,
             force: Boolean(opts.force),
+            config,
+            ...resolveInstallPolicyWarningAcknowledgementCliOptions({
+              acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
+            }),
             ...(opts.forceInstall ? { forceInstall: true } : {}),
             ...resolveSkillClawHubRiskOptions(
               opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
@@ -734,7 +736,7 @@ export function registerSkillsCli(program: Command) {
           }
           defaultRuntime.log(`Installed ${result.slug}@${result.version} -> ${result.targetDir}`);
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
@@ -755,6 +757,11 @@ export function registerSkillsCli(program: Command) {
       "Acknowledge ClawHub release trust warnings without prompting",
       false,
     )
+    .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
+      false,
+    )
     .option("--global", "Update skills in the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .action(
@@ -765,6 +772,7 @@ export function registerSkillsCli(program: Command) {
           forceInstall?: boolean;
           acknowledgeClawhubRisk?: boolean;
           acknowledgeClawHubRisk?: boolean;
+          acknowledgeInstallPolicyWarning?: boolean;
           global?: boolean;
           agent?: string;
         },
@@ -794,6 +802,9 @@ export function registerSkillsCli(program: Command) {
             workspaceDir: target.workspaceDir,
             slug,
             ...(opts.forceInstall ? { forceInstall: true } : {}),
+            ...resolveInstallPolicyWarningAcknowledgementCliOptions({
+              acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
+            }),
             ...resolveSkillClawHubRiskOptions(
               opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
               "updating",
@@ -825,7 +836,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
           }
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
@@ -860,19 +871,23 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         let exitCode: number | undefined;
+        const reportError =
+          hasJsonOutput(opts) || opts.card !== true
+            ? (message: string) => defaultRuntime.writeJson({ error: message })
+            : defaultRuntime.error;
         try {
-          const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
-          if (!workspaceDir) {
+          const workspace = resolveClawHubTargetWorkspace(command, opts, reportError);
+          if (!workspace) {
             return;
           }
           const target = await resolveClawHubSkillVerificationTarget({
-            workspaceDir,
+            workspaceDir: workspace.workspaceDir,
             slug,
             version: opts.version,
             tag: opts.tag,
           });
           if (!target.ok) {
-            defaultRuntime.error(target.error);
+            reportError(target.error);
             exitCode = 1;
           } else {
             const verification = await fetchClawHubSkillVerification({
@@ -888,7 +903,7 @@ export function registerSkillsCli(program: Command) {
             if (opts.card && !hasJsonOutput(opts)) {
               const cardUrl = readVerifiedSkillCardUrl(verification);
               if (!cardUrl.ok) {
-                defaultRuntime.error(cardUrl.error);
+                reportError(cardUrl.error);
                 exitCode = 1;
               } else {
                 const card = await fetchClawHubSkillCard({
@@ -904,7 +919,7 @@ export function registerSkillsCli(program: Command) {
             }
           }
         } catch (err) {
-          defaultRuntime.error(String(err));
+          reportError(formatErrorMessage(err));
           defaultRuntime.exit(1);
           return;
         }
@@ -928,7 +943,7 @@ export function registerSkillsCli(program: Command) {
       }
       defaultRuntime.writeStdout(formatSkillCuratorStatus(status));
     } catch (err) {
-      defaultRuntime.error(String(err));
+      defaultRuntime.error(formatErrorMessage(err));
       defaultRuntime.exit(1);
     }
   };
@@ -954,7 +969,7 @@ export function registerSkillsCli(program: Command) {
             `${action[0]?.toUpperCase()}${action.slice(1)} ${result.skillKey}\n`,
           );
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       });
@@ -983,7 +998,7 @@ export function registerSkillsCli(program: Command) {
       }
       defaultRuntime.writeStdout(format(result));
     } catch (err) {
-      defaultRuntime.error(String(err));
+      defaultRuntime.error(formatErrorMessage(err));
       defaultRuntime.exit(1);
     }
   };
@@ -1048,7 +1063,7 @@ export function registerSkillsCli(program: Command) {
         }
         defaultRuntime.writeStdout(formatSkillProposalInspect(proposal));
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }
     });
@@ -1222,16 +1237,22 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .action(async (name: string, opts: { json?: boolean; agent?: string }, command: Command) => {
+      let skillFound = false;
       await runSkillsAction(
-        (report) =>
-          formatSkillInfo(report, name, {
+        (report) => {
+          skillFound = resolveSkillStatusEntry(report.skills, name) !== null;
+          return formatSkillInfo(report, name, {
             ...opts,
             json: hasJsonOutput(opts),
-          }),
+          });
+        },
         {
           agentId: resolveAgentOption(command, opts),
         },
       );
+      if (!skillFound) {
+        defaultRuntime.exit(1);
+      }
     });
 
   skills

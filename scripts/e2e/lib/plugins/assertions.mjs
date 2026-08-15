@@ -732,6 +732,11 @@ function assertPluginFileRemoved() {
 
 function assertNpmPluginRemoved() {
   const installPath = fs.readFileSync(scratchFile("plugins-npm-install-path.txt"), "utf8").trim();
+  const packageParent = path.dirname(installPath);
+  const nodeModulesPath = path.basename(packageParent).startsWith("@")
+    ? path.dirname(packageParent)
+    : packageParent;
+  const projectRoot = path.dirname(nodeModulesPath);
   const dependencyPackagePath = fs
     .readFileSync(scratchFile("plugins-npm-dependency-path.txt"), "utf8")
     .trim();
@@ -746,6 +751,9 @@ function assertNpmPluginRemoved() {
     throw new Error(
       `npm managed dependency still exists after uninstall: ${dependencyPackagePath}`,
     );
+  }
+  if (fs.existsSync(projectRoot)) {
+    throw new Error(`npm managed project still exists after uninstall: ${projectRoot}`);
   }
 }
 

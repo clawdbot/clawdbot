@@ -343,10 +343,8 @@ describe("test-projects args", () => {
           "src/agents/openai-transport-stream.failed-sse.test.ts",
           "src/agents/openai-transport-stream.incomplete-output.test.ts",
           "src/agents/openai-transport-stream.incomplete-sse.test.ts",
-          "src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts",
           "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
-          "src/agents/openai-transport-stream.replay-sanitization.test.ts",
           "src/agents/openai-transport-stream.usage-and-calls.test.ts",
         ],
         watchMode: false,
@@ -518,27 +516,6 @@ describe("test-projects args", () => {
     );
   });
 
-  it("splits an explicit Vitest filesystem module cache root", () => {
-    const [spec] = applyParallelVitestCachePaths(
-      [
-        {
-          config: "test/vitest/vitest.gateway.config.ts",
-          env: {},
-        },
-      ],
-      {
-        cwd: "/repo",
-        env: {
-          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache",
-        },
-      },
-    );
-
-    expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
-      "/tmp/cache/0-test-vitest-vitest.gateway.config.ts",
-    );
-  });
-
   it("routes plugin targets to the plugins config", () => {
     expect(buildVitestRunPlans(["src/plugins/loader.test.ts"])).toEqual([
       {
@@ -576,24 +553,22 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes extension helper targets to importing extension tests", () => {
-    expect(
-      buildVitestRunPlans(["extensions/memory-core/src/memory/test-runtime-mocks.ts"]),
-    ).toEqual([
+  it("routes direct and transitive extension helper importers to the owning config", () => {
+    const helper = "extensions/memory-core/src/memory/test-runtime-mocks.ts";
+    const plans = buildVitestRunPlans([helper]);
+
+    expect(plans).toEqual([
       {
         config: "test/vitest/vitest.extension-memory.config.ts",
         forwardedArgs: [],
-        includePatterns: [
-          "extensions/memory-core/src/memory/index.test.ts",
+        includePatterns: expect.arrayContaining([
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
-          "extensions/memory-core/src/memory/manager.legacy-migration-cleanup.test.ts",
-          "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
-          "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
-          "extensions/memory-core/src/memory/manager.session-chunk-delta.test.ts",
-        ],
+          "extensions/memory-core/src/memory/manager-session-update-race.test.ts",
+        ]),
         watchMode: false,
       },
     ]);
+    expect(plans[0]?.includePatterns).not.toContain(helper);
   });
 
   it("routes top-level test helpers to importing repo tests", () => {
@@ -668,6 +643,19 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: ["src/commands/models.set.e2e.test.ts"],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes the Docker package contract without private-QA E2E setup", () => {
+    const target = "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts";
+
+    expect(buildVitestRunPlans([target])).toEqual([
+      {
+        config: "test/vitest/vitest.package-docker.config.ts",
+        forwardedArgs: [target],
         includePatterns: null,
         watchMode: false,
       },
@@ -882,21 +870,6 @@ describe("test-projects args", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
-  });
-
-  it("routes explicit test-support helper files to affected tests", () => {
-    expect(
-      findUnmatchedExplicitTestTargets(["src/commands/onboard-non-interactive.test-helpers.ts"]),
-    ).toEqual([]);
-
-    expect(buildVitestRunPlans(["src/commands/onboard-non-interactive.test-helpers.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.commands.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/commands/onboard-non-interactive.gateway.test.ts"],
-        watchMode: false,
-      },
-    ]);
   });
 
   it("accepts explicit Vitest config targets routed as whole config runs", () => {

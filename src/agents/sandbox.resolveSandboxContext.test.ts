@@ -60,8 +60,8 @@ vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => ({ note: "test-remote" })),
 }));
 
-vi.mock("../skills/loading/workspace.js", () => ({
-  syncSkillsToWorkspace: syncSkillsToWorkspaceMock,
+vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
+  syncWorkspaceSkills: syncSkillsToWorkspaceMock,
 }));
 
 let sandboxFixtureRoot = "";

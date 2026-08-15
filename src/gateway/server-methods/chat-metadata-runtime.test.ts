@@ -7,6 +7,7 @@ import {
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -21,7 +22,16 @@ function createOwner(
   api?: ModelCatalogEntry["api"],
 ): PreparedModelRuntimeSnapshot {
   const model = { id, name: id, provider, ...(api ? { api } : {}) };
-  return {
+  const authStore: AuthProfileStore = {
+    version: 1,
+    profiles: Object.fromEntries(
+      Object.entries(credentials).map(([credentialProvider, credential]) => [
+        `${credentialProvider}:prepared`,
+        { ...credential, provider: credentialProvider },
+      ]),
+    ),
+  };
+  const owner: PreparedModelRuntimeSnapshot = {
     agentId: "main",
     agentDir: `/tmp/${id}/agent`,
     workspaceDir: `/tmp/${id}/workspace`,
@@ -41,6 +51,8 @@ function createOwner(
       modelRegistry: {} as never,
     }),
   };
+  setPreparedModelRuntimeAuthStore(owner, authStore);
+  return owner;
 }
 
 function createHarness(
@@ -78,6 +90,19 @@ function createHarness(
   );
   const context = {
     getRuntimeConfig: () => config,
+    loadGatewayModelCatalogSnapshot: async (params?: { readOnly?: boolean }) => {
+      const modelCatalog =
+        params?.readOnly === false && owner.loadFullModelCatalog
+          ? await owner.loadFullModelCatalog()
+          : owner.modelCatalog;
+      return {
+        ...modelCatalog,
+        agentId: owner.agentId,
+        agentDir: owner.agentDir,
+        workspaceDir: owner.workspaceDir,
+        config: owner.config,
+      };
+    },
     logGateway: {
       debug: vi.fn(),
       info: vi.fn(),
@@ -438,6 +463,62 @@ describe("gateway chat metadata runtime", () => {
       });
     },
   );
+
+  test("keeps live provider discovery off chat metadata projection", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: { "openai/gpt-5.6-sol": {} },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+    const harness = createHarness(config, { useDefaultProjection: true });
+    const credentials: AgentCredentialMap = {
+      openai: {
+        type: "oauth",
+        access: "rejected-access-token",
+        refresh: "rejected-refresh-token",
+        expires: Date.now() + 30 * 60_000,
+      },
+    };
+    const owner = createOwner(
+      config,
+      "gpt-5.6-sol",
+      credentials,
+      "openai",
+      "openai-chatgpt-responses",
+    );
+    const fullCatalog = {
+      ...owner.modelCatalog,
+      providerOutcomes: [{ provider: "openai", status: "auth-rejected" as const }],
+    };
+    const loadFullModelCatalog = vi.fn(async () => fullCatalog);
+    harness.setOwner({
+      ...owner,
+      loadFullModelCatalog,
+    });
+    harness.setAuthStore({
+      version: 1,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth",
+          provider: "openai",
+          access: "rejected-access-token",
+          refresh: "rejected-refresh-token",
+          expires: Date.now() + 30 * 60_000,
+        },
+      },
+    });
+
+    await harness.runtime.refresh();
+
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "gpt-5.6-sol", available: true })],
+    });
+    expect(loadFullModelCatalog).not.toHaveBeenCalled();
+  });
 
   test("retains a generation while auth store revisions are unchanged", async () => {
     const harness = createHarness();

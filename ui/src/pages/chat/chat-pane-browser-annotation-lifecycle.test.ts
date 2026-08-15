@@ -7,6 +7,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { BrowserAnnotationDraft } from "../../components/browser/browser-annotation.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
+  cloneChatAttachmentsForIndependentOwner,
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
@@ -62,6 +63,17 @@ describe("staged attachment composer adoption", () => {
       file: new File([id], `${id}.png`, { type: "image/png" }),
     });
   }
+
+  it("clones payload ownership for another retained composer", () => {
+    const source = storedAttachment("independent-source", false);
+    const [destination] = cloneChatAttachmentsForIndependentOwner([source]);
+
+    expect(destination?.id).not.toBe(source.id);
+    expect(getChatAttachmentDataUrl(destination!)).toBe(getChatAttachmentDataUrl(source));
+    releaseChatAttachmentPayload(source.id);
+    expect(getChatAttachmentDataUrl(source)).toBeNull();
+    expect(getChatAttachmentDataUrl(destination!)).not.toBeNull();
+  });
 
   function connectPaneThroughAttachmentRestore(
     context: ApplicationContext,
@@ -182,6 +194,29 @@ describe("staged attachment composer adoption", () => {
     expect(staged.every((attachment) => getChatAttachmentDataUrl(attachment) !== null)).toBe(true);
     remount.discardStagedAttachments?.();
     remount.disconnectedCallback();
+  });
+
+  it("restores each retained session package under the same logical pane", () => {
+    const owner = {} as GatewayBrowserClient;
+    const context = createSessionContext(owner, {} as SessionCapability);
+    const first = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:first");
+    const second = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:second");
+    const firstAttachment = storedAttachment("retained-first", false);
+    const secondAttachment = storedAttachment("retained-second", false);
+    first.state.chatAttachments = [firstAttachment];
+    second.state.chatAttachments = [secondAttachment];
+
+    first.disconnectedCallback();
+    second.disconnectedCallback();
+
+    const secondRemount = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:second");
+    const firstRemount = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:first");
+    expect(secondRemount.state.chatAttachments).toEqual([secondAttachment]);
+    expect(firstRemount.state.chatAttachments).toEqual([firstAttachment]);
+    secondRemount.discardStagedAttachments?.();
+    firstRemount.discardStagedAttachments?.();
+    secondRemount.disconnectedCallback();
+    firstRemount.disconnectedCallback();
   });
 
   it("keeps generated context on the attachment and leaves the user's draft unchanged", () => {
@@ -368,11 +403,13 @@ describe("staged attachment composer adoption", () => {
       phase: "reconnecting",
       hello: null,
     });
-    expect(state.chatAttachments).toEqual([]);
-    expect(state.chatComposerFallbackByScope.fallback?.attachments).toEqual([]);
+    // Rotation invalidates annotation-backed attachments only; plain payloads
+    // are client-local and survive (live state and fallbacks alike).
+    expect(state.chatAttachments).toEqual([ordinary]);
+    expect(state.chatComposerFallbackByScope.fallback?.attachments).toEqual([ordinary]);
     expect(getChatAttachmentDataUrl(current)).toBeNull();
     expect(getChatAttachmentDataUrl(fallback)).toBeNull();
-    expect(getChatAttachmentDataUrl(ordinary)).toBeNull();
+    expect(getChatAttachmentDataUrl(ordinary)).not.toBeNull();
   });
 
   it("discards a staged package captured without a client when the first client arrives", () => {
@@ -398,9 +435,9 @@ describe("staged attachment composer adoption", () => {
       hello: null,
     });
 
-    expect(state.chatAttachments).toEqual([]);
+    expect(state.chatAttachments).toEqual([ordinary]);
     expect(getChatAttachmentDataUrl(annotation)).toBeNull();
-    expect(getChatAttachmentDataUrl(ordinary)).toBeNull();
+    expect(getChatAttachmentDataUrl(ordinary)).not.toBeNull();
   });
 
   it("invalidates annotation Undo when the logical Gateway client is replaced", async () => {
@@ -439,9 +476,9 @@ describe("staged attachment composer adoption", () => {
     });
     toastHost.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
-    expect(state.chatAttachments).toEqual([]);
+    expect(state.chatAttachments).toEqual([ordinary]);
     expect(getChatAttachmentDataUrl(annotation)).toBeNull();
-    expect(getChatAttachmentDataUrl(ordinary)).toBeNull();
+    expect(getChatAttachmentDataUrl(ordinary)).not.toBeNull();
     toastHost.remove();
   });
 });

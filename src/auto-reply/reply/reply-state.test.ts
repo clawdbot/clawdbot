@@ -5,7 +5,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
@@ -41,7 +44,7 @@ async function seedSessionStore(params: {
   entry: SessionEntry | Record<string, unknown>;
 }) {
   await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     params.entry as Partial<SessionEntry>,
   );
@@ -510,6 +513,58 @@ describe("incrementCompactionCount", () => {
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
     expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(3);
+  });
+
+  it.each([
+    {
+      action: "clears",
+      compactionKind: "context-engine" as const,
+      expectedIds: undefined,
+    },
+    {
+      action: "preserves",
+      compactionKind: "native-harness" as const,
+      expectedIds: { "claude-cli": "claude-session", "codex-cli": "codex-session" },
+    },
+    {
+      action: "preserves",
+      compactionKind: "server-endpoint" as const,
+      expectedIds: { "claude-cli": "claude-session", "codex-cli": "codex-session" },
+    },
+  ])("$action CLI bindings after $compactionKind compaction", async (testCase) => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      cliSessionIds: { "claude-cli": "claude-session", "codex-cli": "codex-session" },
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "claude-session" },
+        "codex-cli": { sessionId: "codex-session" },
+      },
+      claudeCliSessionId: "claude-session",
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      compactionKind: testCase.compactionKind,
+    });
+
+    const stored = await loadStoredEntry(storePath, sessionKey);
+    expect(stored.cliSessionIds).toEqual(testCase.expectedIds);
+    expect(stored.cliSessionBindings).toEqual(
+      testCase.expectedIds
+        ? {
+            "claude-cli": { sessionId: "claude-session" },
+            "codex-cli": { sessionId: "codex-session" },
+          }
+        : undefined,
+    );
+    expect(stored.claudeCliSessionId).toBe(
+      testCase.compactionKind === "context-engine" ? undefined : "claude-session",
+    );
   });
 
   it("persists incognito compaction metadata only in the scoped store", async () => {

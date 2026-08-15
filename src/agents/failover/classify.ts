@@ -25,9 +25,6 @@ import {
   isClaudeCliLoggedOutError,
   isExactUnknownNoDetailsError,
   isGenericUnknownStreamErrorMessage,
-  isOpenRouterKeyBudgetLimitExceededError,
-  isOpenRouterKeyLimitExceededError,
-  isOpenRouterProviderReturnedError,
   isTransientHttpError,
   isUnsupportedImageInputErrorMessage,
   toPluginClassification,
@@ -51,13 +48,12 @@ import {
   classifyLegacyProviderSpecificError,
   classifyProviderPluginError,
   looksLikeProviderContextOverflowCandidate,
+  type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
 export {
   isBilling429MessageForProvider,
   isGenericUnknownStreamErrorMessage,
-  isOpenRouterKeyBudgetLimitExceededError,
-  isOpenRouterKeyLimitExceededError,
   isTransientHttpError,
   isUnclassifiedNoBodyHttpSignal,
 } from "./classification-rules.js";
@@ -157,12 +153,6 @@ function classifyFailoverClassificationFromMessage(
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);
   }
-  if (
-    isOpenRouterKeyLimitExceededError(raw, provider) ||
-    isOpenRouterKeyBudgetLimitExceededError(raw, provider)
-  ) {
-    return toReasonClassification("billing");
-  }
   const leadingStatus = extractLeadingHttpStatus(raw.trim());
   if (leadingStatus?.code !== 429 && isBillingErrorMessage(raw)) {
     return toReasonClassification("billing");
@@ -223,9 +213,6 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("auth");
   }
   if (isGenericUnknownStreamErrorMessage(raw)) {
-    return toReasonClassification("timeout");
-  }
-  if (isOpenRouterProviderReturnedError(raw, provider)) {
     return toReasonClassification("timeout");
   }
   if (isServerErrorMessage(raw)) {
@@ -296,7 +283,10 @@ function mergeMessageAndDetailClassification(
     : messageClassification;
 }
 
-export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
+export function classifyFailoverSignal(
+  signal: FailoverSignal,
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner },
+): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
   const explicitStatus =
     typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
@@ -309,6 +299,14 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     detailClassification,
   );
   const errorTypeClassification = classifyFailoverClassificationFromErrorType(signal.errorType);
+  // Provider-attributed 401/403/429 text is ambiguous enough to consult only the
+  // scoped owner hook. Passing the inferred status also fences unresolved ids
+  // from the descriptor-free broad scan in provider-runtime.
+  const providerHookStatus =
+    explicitStatus ??
+    (signal.provider && (inferredStatus === 401 || inferredStatus === 403 || inferredStatus === 429)
+      ? inferredStatus
+      : undefined);
   // Pure table matches are also the cheap runtime-load gate. Structured,
   // context-shaped, and otherwise-unclassified signals still consult the
   // provider once; its result remains authoritative over the prepared tables.
@@ -316,7 +314,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     signal.message || signal.code || signal.errorType || typeof inferredStatus === "number",
   );
   const hasStructuredDescriptor =
-    explicitStatus !== undefined || signal.code !== undefined || signal.errorType !== undefined;
+    providerHookStatus !== undefined || signal.code !== undefined || signal.errorType !== undefined;
   const hasContextCandidate = Boolean(
     signal.message && looksLikeProviderContextOverflowCandidate(signal.message),
   );
@@ -327,9 +325,10 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     ? classifyProviderPluginError({
         errorMessage: signal.message ?? "",
         provider: signal.provider,
-        status: explicitStatus,
+        status: providerHookStatus,
         code: signal.code,
         errorType: signal.errorType,
+        providerPlugin: opts?.providerPlugin,
       })
     : null;
   const tlsCertificateError = inspectTlsCertificateError(signal);
@@ -428,13 +427,16 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
 
 export function classifyFailoverReason(
   raw: string,
-  opts?: { provider?: string },
+  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner },
 ): FailoverReason | null {
   return failoverReasonFromClassification(
-    classifyFailoverSignal({
-      message: raw,
-      provider: opts?.provider,
-    }),
+    classifyFailoverSignal(
+      {
+        message: raw,
+        provider: opts?.provider,
+      },
+      opts,
+    ),
   );
 }
 

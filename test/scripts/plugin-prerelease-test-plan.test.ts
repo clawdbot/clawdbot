@@ -53,6 +53,9 @@ function timeoutForProfile(
   if (typeof timeout === "number") {
     return timeout;
   }
+  if (timeout === "${{ matrix.group.timeout_minutes || 60 }}") {
+    return 60;
+  }
   const match = timeout?.match(
     /^\$\{\{ inputs\.(?:release_profile|release_test_profile) == 'full' && ([0-9]+) \|\| ([0-9]+) \}\}$/u,
   );
@@ -268,7 +271,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(script).toContain("OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB");
     expect(script).toContain("docker_e2e_sample_stats_until_exit");
     expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
-    expect(script).toContain("node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts");
+    expect(script).toContain(
+      "openclaw_e2e_run_script_entrypoint scripts/e2e/kitchen-sink-rpc-walk",
+    );
     expect(walkScript).toContain("commands.list");
     expect(walkScript).toContain("tools.invoke");
     expect(walkScript).toContain("tts.providers");
@@ -429,6 +434,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       required: false,
       type: "string",
     });
+    expect(workflow.on.workflow_dispatch.inputs.target_context_ref).toEqual({
+      default: "",
+      description:
+        "Canonical release branch context authorizing compatibility fallbacks for an exact-SHA target",
+      required: false,
+      type: "string",
+    });
     expect(manifestEnv).toEqual({
       OPENCLAW_CI_CHANGED_PATHS_JSON:
         "${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}",
@@ -441,15 +453,18 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       OPENCLAW_CI_HISTORICAL_TARGET: "${{ steps.historical_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_RELEASE_CANDIDATE_TARGET:
         "${{ steps.release_candidate_target.outputs.eligible || 'false' }}",
+      OPENCLAW_CI_TARGET_CONTEXT_TARGET:
+        "${{ steps.target_context_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
+      OPENCLAW_CI_RUNNER_BACKEND: "${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}",
       OPENCLAW_CI_RUN_ANDROID:
         "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
       OPENCLAW_CI_RUN_CONTROL_UI_I18N:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}",
       OPENCLAW_CI_RUN_IOS_BUILD:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
       OPENCLAW_CI_RUN_MACOS:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
       OPENCLAW_CI_RUN_NATIVE_I18N:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
       OPENCLAW_CI_RUN_NODE:
@@ -488,12 +503,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     ).toContain("pnpm deadcode:ci");
     expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_REF")');
     expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_CONTEXT_REF")');
-    expect(normalCiScript).toContain('args+=(-f release_candidate_ref="$TARGET_CONTEXT_REF")');
-    expect(releaseChecksScript).toContain(
-      'release_checks_target_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"',
-    );
+    expect(normalCiScript).toContain('args+=(-f target_context_ref="$TARGET_CONTEXT_REF")');
+    expect(normalCiScript).not.toContain('args+=(-f release_candidate_ref="$TARGET_CONTEXT_REF")');
     expect(releaseChecksStep.env?.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
-    expect(releaseChecksScript).toContain('-f ref="$release_checks_target_ref"');
+    expect(releaseChecksScript).toContain('-f ref="$TARGET_SHA"');
+    expect(releaseChecksScript).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
     expect(releaseChecksScript).toContain("args+=(-f allow_frozen_target_scenario_omissions=true)");
     expect(releaseWorkflowSource).toContain('--arg targetContextRef "$TARGET_CONTEXT_REF"');
     expect(releaseWorkflowSource).toContain("targetContextRef: $targetContextRef");
@@ -514,6 +528,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(pluginManifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mts"');
     expect(pluginManifestScript).toContain('"./scripts/lib/extension-test-plan.mts"');
     expect(pluginManifestScript).toContain('"./scripts/lib/ci-node-test-plan.mts"');
+    expect(pluginManifestScript).toContain("const { createNodeTestShards } = await import");
+    expect(pluginManifestScript).not.toContain("createNodeTestShardBundles");
+    expect(pluginManifestScript).not.toContain("compactMode");
+    expect(pluginManifestScript).not.toContain("runnerBackend");
     expect(pluginManifestScript).toContain('shard.shardName === "agentic-plugins"');
     expect(pluginManifestScript).toContain(
       "Plugin prerelease plan unavailable in target ref; skipping static and Docker plugin prerelease lanes.",

@@ -9,7 +9,6 @@ import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { classifySystemAgentApprovalText } from "./approval-intent.js";
 import {
   executeSystemAgentOperation,
   formatSystemAgentPersistentPlan,
@@ -18,6 +17,7 @@ import {
   type SystemAgentCommandDeps,
   type SystemAgentOperation,
 } from "./operations.js";
+import { classifySystemAgentApprovalText } from "./operator-approval.js";
 import { resolveSystemAgentRescuePolicy } from "./rescue-policy.js";
 
 /**

@@ -10,6 +10,7 @@ import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
+import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
 import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
@@ -22,7 +23,7 @@ import {
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
-import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
+import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   createChatPaneSessionActionCallbacks,
@@ -30,9 +31,9 @@ import {
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
 import {
-  SESSION_RAIL_DOCK_MIN_WIDTH,
-  WORKSPACE_RAIL_MAX_WIDTH,
+  SESSION_RAIL_SIDE_MIN_PANE_WIDTH,
   WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
+  chatMainWidth,
 } from "./chat-pane-shared.ts";
 import {
   renderSidebarRegion,
@@ -54,6 +55,7 @@ import {
 } from "./chat-state-route.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
+import { detailSlotOpen, renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
 import { chatPullRequestId, createPullRequestBranch } from "./components/chat-pull-requests.ts";
 import {
@@ -61,6 +63,7 @@ import {
   openSessionWorkspaceFile,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
+import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
@@ -68,9 +71,7 @@ import {
   activatePanel,
   closeSlot,
   detachPanelToColumn,
-  isSidebarRegionCollapsed,
   mergePanelIntoColumn,
-  sidebarPrimaryWidth,
   type SidebarSide,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
@@ -86,6 +87,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     }
     void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
+    const selectedSessionId = selectedSession?.sessionId?.trim() || undefined;
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
       state.sessionKey,
@@ -105,6 +107,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
     const placement = selectedSession?.placement;
+    const diskSpace = placement?.state === "active" ? placement.diskSpace : undefined;
     const terminalReason = (placement as { terminalReason?: string } | undefined)?.terminalReason;
     const placementRunError = terminalReason
       ? { summary: t("chat.cloudWorkerFailed", { error: terminalReason }) }
@@ -138,13 +141,12 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     const currentAgentId = resolveChatAgentId(state);
     const { catalogKey, fullMessageLoader, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;
-    const approvalSnapshot = overlays?.snapshot;
-    const inlineApproval = this.active
-      ? findInlineApproval(approvalSnapshot?.approvalQueue ?? [], state.sessionKey)
-      : null;
-    // Tool rows consult the global title store while rendering; point its
-    // fetcher at this pane's connection. Requests capture session + agent at
-    // schedule time, so later renders of other panes cannot re-route them.
+    const inlineApproval = findInlineApproval(
+      overlays?.snapshot?.approvalQueue ?? [],
+      state.sessionKey,
+    );
+    // Tool rows consult the global title store while rendering. Requests capture
+    // session + agent at schedule time, so another pane cannot re-route them.
     configureToolTitleFetcher({
       client: state.connected ? state.client : null,
       sessionKey: catalogKey ? null : state.sessionKey || null,
@@ -155,6 +157,11 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
+    const modelUnavailable = isChatModelUnavailable(
+      selectedSession?.model ?? agentDefaultModel,
+      selectedSession?.modelProvider,
+      state.chatModelCatalog,
+    );
     const modelSetupRequired = requiresChatModelSetup({
       catalog: catalogKey !== null,
       connected: state.connected,
@@ -172,6 +179,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       session: selectedSession,
     });
     const gatewaySnapshot = this.context.gateway.snapshot;
+    const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
       multiIdentity &&
@@ -181,8 +189,9 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       selectedSession.sharingRole === "viewer" &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.add") === true &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
-    const disabledReason =
-      sessionParticipationBlocked && !suggestionViewer
+    const disabledReason = modelUnavailable
+      ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
+      : sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
         : null;
     const typingEnabled =
@@ -196,41 +205,41 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         gatewaySnapshot.client?.instanceId,
         state.sessionKey,
       );
-    // Never flash "view-only" while metadata loads; after loading, anything short
-    // of a continuable session (failed lookups too) explains the disabled composer.
+    // Do not flash view-only while metadata loads; failed lookups still explain
+    // why the composer is disabled.
     const catalogDisabledReason =
       catalogKey && !this.catalogLoading && this.catalogSession?.canContinue !== true
         ? this.catalogHost?.kind === "node"
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const sidebarChatColumn = sidebarLayout.columns.find((column) =>
-      column.panels.some((panel) => panel.slot === "chat"),
-    );
-    const sidebarRegionCollapsed = isSidebarRegionCollapsed(sidebarLayout, this.paneWidth);
-    const chatLayoutWidth = sidebarRegionCollapsed
-      ? this.paneWidth
-      : (sidebarChatColumn?.width ?? sidebarPrimaryWidth(sidebarLayout, this.paneWidth));
+    const chatLayoutWidth = this.chatLayoutWidth(sidebarLayout);
     const sessionWorkspace = createSessionWorkspaceProps(state, {
-      draftScope: this.paneId,
+      draftScope: this.presentationId,
       narrowLayout: chatLayoutWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
     });
     const railSideDocked =
       !sessionWorkspace.collapsed &&
       !sessionWorkspace.narrowLayout &&
       sessionWorkspace.dock !== "bottom";
-    // The workspace rail claims the first side slot; tasks need room for both columns.
+    // The workspace claims the first side slot; tasks need room for both columns.
     const backgroundTasks = createBackgroundTasksProps(state, {
       narrowLayout:
         chatLayoutWidth <
-        WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH + (railSideDocked ? WORKSPACE_RAIL_MAX_WIDTH : 0),
+        WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH +
+          (railSideDocked ? this.workspaceRailLayout.width + 4 : 0),
+      openTaskId:
+        state.sidebarContent?.kind === "task" && detailSlotOpen(sidebarLayout)
+          ? state.sidebarContent.taskId
+          : undefined,
+      onOpenTaskDetail: (task) => state.handleOpenSidebar({ kind: "task", taskId: task.id }),
     });
     const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
-    // Only side-docked rails narrow the conversation region.
-    const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
-    const chatMainWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
-    const selectedSessionRailMode =
-      this.sessionRailModeSessionKey === state.sessionKey ? this.sessionRailMode : "hidden";
+    const conversationWidth = chatMainWidth(
+      chatLayoutWidth,
+      railSideDocked ? this.workspaceRailLayout.width : null,
+      tasksSideDocked ? this.tasksRailLayout.width : null,
+    );
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
@@ -261,10 +270,9 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     });
     const props: ChatProps = {
       transcript: this.transcript,
-      backgroundTaskTranscript: this.backgroundTaskTranscript,
-      paneId: this.paneId,
+      paneId: this.presentationId,
       sessionKey: state.sessionKey,
-      announceTranscript: this.active,
+      announceTranscript: this.active && this.presented,
       onSessionKeyChange: (next) => {
         this.onPaneSessionChange?.(this.paneId, next);
       },
@@ -277,6 +285,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       sending:
         cloudStartupPending ||
         state.chatSending ||
+        this.recoveringSession ||
         this.sessionSuggestionAddOperation !== undefined,
       cloudStartup,
       onRetryCloudStartup: cloudStartup?.retryable
@@ -296,13 +305,14 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       observerLastReadAt: selectedSession?.lastReadAt,
       sessionRailCompanion: catalogKey
         ? undefined
-        : this.sessionCompanionThreads.view(state.sessionKey),
-      ...this.sessionRailOpenRequestProps(state.sessionKey),
-      sessionRailMode: selectedSessionRailMode,
-      sessionRailDocked: !catalogKey && chatMainWidth >= SESSION_RAIL_DOCK_MIN_WIDTH,
+        : this.sessionCompanionThreads.view(state.sessionKey, currentAgentId),
+      ...this.sessionRailCommandProps(state.sessionKey),
+      sessionRailMode: this.selectedSessionRailMode(state.sessionKey),
+      sessionRailDocked: !catalogKey && conversationWidth >= SESSION_RAIL_SIDE_MIN_PANE_WIDTH,
+      companionRail: this.companionRailColumn(),
       onSessionRailSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onSessionRailDraftChange: (draft) =>
-        this.sessionCompanionThreads.setDraft(state.sessionKey, draft),
+        this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
       onSessionRailClear: () => void this.clearSessionCompanion(),
       onSessionRailModeChange: (mode) => {
         if (state.sessionKey !== this.sessionRailModeSessionKey || mode !== this.sessionRailMode) {
@@ -310,8 +320,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
           this.sessionRailMode = mode;
         }
       },
-      // Unconditional: catalog chats never render the rail (sessionRailReady is
-      // forced false), and a hide/show from any surface must reach the gateway.
+      // Catalog chats never render this rail, but hide/show from any surface must
+      // still reach the gateway.
       onObserverVisibilityChange: this.setSessionObserverVisibility,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
@@ -360,36 +370,31 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
         : !modelSetupRequired &&
+          !modelUnavailable &&
           !selectedSessionArchived &&
+          !restartRecoveryTombstoned &&
           (!sessionParticipationBlocked || suggestionViewer) &&
           !cloudStartupPending,
       disabledReason: catalogDisabledReason ?? disabledReason,
-      disabledBanner:
-        selectedSessionArchived && !catalogDisabledReason
-          ? {
-              kind: "composer-replacement",
-              text: t("chat.archivedSessionDisabled"),
-              actionLabel: t("common.unarchive"),
-              disabledReason: mutationAccess.unarchive.allowed
-                ? undefined
-                : mutationAccess.unarchive.reason,
-              onAction: () => {
-                if (mutationAccess.unarchive.allowed) {
-                  void this.restoreArchivedSession(state.sessionKey);
-                }
-              },
-            }
-          : modelSetupRequired
-            ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
-            : undefined,
-      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
+      disabledBanner: this.sessionDisabledBanner({
+        catalogDisabledReason,
+        modelSetupRequired,
+        restartRecoveryTombstoned,
+        selectedSessionArchived,
+        selectedSessionId,
+        sessionKey: state.sessionKey,
+        unarchiveAccess: mutationAccess.unarchive,
+      }),
+      modelSetupRequired:
+        modelSetupRequired && !selectedSessionArchived && !restartRecoveryTombstoned,
       onModelSetup: () => this.context.navigate("model-setup"),
       error: state.lastError,
+      diskSpace,
       runError: catalogKey ? null : (state.chatRunError ?? placementRunError),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
-      approvalBusy: approvalSnapshot?.approvalBusy,
-      approvalErrors: approvalSnapshot?.approvalErrors,
-      approvalNowMs: approvalSnapshot?.approvalNowMs,
+      approvalBusy: overlays?.snapshot?.approvalBusy,
+      approvalErrors: overlays?.snapshot?.approvalErrors,
+      approvalNowMs: overlays?.snapshot?.approvalNowMs,
       onApprovalDecision:
         overlays && !sessionParticipationBlocked
           ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
@@ -428,19 +433,21 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
             agentDefaultModel,
             modelAccess: mutationAccess.model,
             effortAccess: mutationAccess.effort,
+            onModelSetup: () => this.context.navigate("model-setup"),
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
+      workspaceRail: this.workspaceRailColumn(),
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
+      tasksRail: this.tasksRailColumn(),
       taskSuggestions: this.taskSuggestions,
       pullRequests: this.sessionPullRequests.filter(
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
       ),
-      // Decided on the undismissed list: a dismissed open PR still exists, so
-      // the row must not offer creating a duplicate.
       pullRequestsBranch: createPullRequestBranch(
         this.sessionPullRequests,
         this.sessionPullRequestsBranch,
       ),
+      // A dismissed open PR still exists, so the row must not offer a duplicate.
       pullRequestsRateLimited: this.sessionPullRequestsRateLimited,
       pullRequestsExpanded: this.sessionPullRequestsExpanded,
       onExpandPullRequests: () => {
@@ -493,7 +500,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       },
       onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
-      // Metadata can resize a committed row; re-enter the scroll owner so the follow lock wins.
+      // Metadata can resize a committed row; re-enter the scroll owner so the
+      // follow lock wins.
       onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
       onDraftChange: state.handleChatDraftChange,
@@ -503,6 +511,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       showNewMessages: state.chatNewMessagesBelow,
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
+      attachmentLimits: state.hello?.policy?.attachments,
       getAttachments: () => state.chatAttachments,
       pendingAttachmentReads: attachmentReads.pendingReads,
       getPendingAttachmentReads: () => attachmentReads.pendingReads,
@@ -520,12 +529,12 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
             ? void this.addCurrentSessionSuggestion()
             : void state.handleSendChat(),
       onCompact: sessionActionCallbacks.onCompact,
+      // Checkpoint deep-link carries the archived filter so the row stays findable.
       onOpenSessionCheckpoints: () => {
-        const search = new URLSearchParams({ session: state.sessionKey });
-        if (selectedSessionArchived) {
-          search.set("status", "archived");
-        }
-        this.context.navigate("sessions", { search: `?${search.toString()}` });
+        const status = selectedSessionArchived ? "&status=archived" : "";
+        this.context.navigate("sessions", {
+          search: `?session=${encodeURIComponent(state.sessionKey)}${status}`,
+        });
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
@@ -549,6 +558,12 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       onQueueSteer: sessionParticipationBlocked
         ? undefined
         : (id) => void state.steerQueuedChatMessage(id),
+      onQueueMove: sessionParticipationBlocked ? undefined : state.moveQueuedChatMessage,
+      queuedEdit: {
+        editingId: activeQueuedMessageEdit(state)?.id ?? null,
+        onEdit: sessionParticipationBlocked ? undefined : state.editQueuedChatMessage,
+        onCancel: state.cancelQueuedChatMessageEdit,
+      },
       onGoalCommand: (command) => void state.handleSendChat(command),
       onCompanionQuestion: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionPrefill: this.prefillSessionCompanionQuestion,
@@ -561,6 +576,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         state.chatReplyTarget = target;
         state.requestUpdate?.();
       },
+      replyMessageAccess: catalogKey ? undefined : this.currentReplyMessageAccess(state.sessionKey),
       onRewindMessage: sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,
       onNewSession: () => void this.createSession(),
@@ -592,30 +608,36 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,
-      gatewayUrl: state.settings.gatewayUrl,
     };
-    const chat = renderChat(props);
-    const primary = this.renderBoardPrimary(board, chat);
+    const header = this.renderPaneHeader(
+      sessionWorkspace,
+      backgroundTasks,
+      selectedSession,
+      Boolean(catalogKey),
+      selectedAgent?.workspace,
+      selectedAgent?.workspaceGit === true,
+    );
+    const chat = renderChat({ ...props, header: board.face === "dashboard" ? nothing : header });
+    const boardPrimary = this.renderBoardPrimary(board, chat);
+    // Keep this root stable across board face changes so the guarded board runtime
+    // remains connected while Chat is active.
+    const primary = html`<div class="chat-pane-primary-column">
+      ${board.face === "dashboard" ? header : nothing}${boardPrimary}
+    </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const panelTemplates = {
       chat,
       ...(state.sidebarContent
         ? {
-            detail: html`<openclaw-chat-detail-panel
-              class="chat-sidebar"
-              .content=${state.sidebarContent}
-              .loadFullMessage=${fullMessageLoader}
-              .canvasPluginSurfaceUrl=${state.canvasPluginSurfaceUrl}
-              .embedSandboxMode=${state.embedSandboxMode}
-              .allowExternalEmbedUrls=${state.allowExternalEmbedUrls}
-              .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
-                openSessionWorkspaceFile(state, target)}
-              .onRevealInWorkspace=${(path: string) => revealSessionWorkspaceFile(state, path)}
-              .onOpenImage=${(item: Parameters<typeof state.handleOpenImage>[0]) =>
-                state.handleOpenImage(item, state.beginImageOpen())}
-              .embedded=${true}
-              @chat-detail-panel-close=${() => state.handleCloseSidebar()}
-            ></openclaw-chat-detail-panel>`,
+            detail: renderChatDetailSlot({
+              backgroundTasks,
+              chat: props,
+              content: state.sidebarContent,
+              fullMessageLoader,
+              host: state,
+              layout: sidebarLayout,
+              transcript: this.taskSidebarTranscript,
+            }),
           }
         : {}),
       ...(discussion
@@ -679,21 +701,12 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       focusVersion: state.sidebarFocusVersion,
       layout: sidebarLayout,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
-      panelMutationEnabled: {
-        chat: Boolean(board.activeTabId) && board.provider.canMutate,
-      },
+      panelMutationEnabled: { chat: Boolean(board.activeTabId) && board.provider.canMutate },
       panelTemplates,
       primary,
       sessionKey: state.sessionKey,
     });
-    return html`${this.renderPaneHeader(
-      sessionWorkspace,
-      backgroundTasks,
-      selectedSession,
-      Boolean(catalogKey),
-      selectedAgent?.workspace,
-      selectedAgent?.workspaceGit === true,
-    )}${content}${renderChatImageLightbox(
+    return html`${content}${renderChatImageLightbox(
       state.imageLightbox,
       state.handleCloseImage,
     )}${this.renderResetConfirmation()}`;

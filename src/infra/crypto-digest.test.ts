@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   sha256Base64,
   sha256Base64Url,
   sha256Base64UrlPrefix,
   sha256File,
   sha256Hex,
-  sha256HexPrefix,
+  sha256HexPrefixCore,
 } from "./crypto-digest.js";
 
 const HOSTILE_BYTES = Uint8Array.from([0, 255, 128, 195, 40, 226, 40, 161]);
@@ -31,12 +31,12 @@ describe("crypto digest helpers", () => {
   });
 
   it("returns an exact hexadecimal prefix", () => {
-    expect(sha256HexPrefix(HOSTILE_BYTES, 12)).toBe(HOSTILE_BYTES_SHA256.slice(0, 12));
+    expect(sha256HexPrefixCore(HOSTILE_BYTES, 12)).toBe(HOSTILE_BYTES_SHA256.slice(0, 12));
     expect(sha256Base64UrlPrefix(HOSTILE_BYTES, 12)).toBe("vYi9pIAlu894");
   });
 
   it("streams file bytes through the same digest contract", async () => {
-    await withTempDir({ prefix: "openclaw-crypto-digest-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-crypto-digest-" }, async (dir) => {
       const filePath = path.join(dir, "hostile.bin");
       await fs.writeFile(filePath, HOSTILE_BYTES);
 
@@ -45,7 +45,7 @@ describe("crypto digest helpers", () => {
   });
 
   it("preserves stream failure context when hashing a file", async () => {
-    await withTempDir({ prefix: "openclaw-crypto-digest-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-crypto-digest-" }, async (dir) => {
       const filePath = path.join(dir, "missing.bin");
 
       await expect(sha256File(filePath)).rejects.toMatchObject({

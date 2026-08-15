@@ -182,6 +182,7 @@ async function sendSlackOutboundMessage(params: {
   to: string;
   text: string;
   mediaUrl?: string;
+  forceDocument?: boolean;
   mediaAccess?: {
     localRoots?: readonly string[];
     readFile?: (filePath: string) => Promise<Buffer>;
@@ -227,6 +228,7 @@ async function sendSlackOutboundMessage(params: {
           mediaAccess: params.mediaAccess,
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
+          ...(params.forceDocument ? { forceDocument: true } : {}),
         }
       : {}),
     ...(params.blocks ? { blocks: params.blocks } : {}),
@@ -316,9 +318,6 @@ export const slackOutbound: ChannelOutboundAdapter = {
             text,
             mediaUrl,
             deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
-            onPlatformSendDispatch: useSingleDeliveryMarker
-              ? ctx.onPlatformSendDispatch
-              : undefined,
           }),
         finalize: async () => {
           let lastResult: Awaited<ReturnType<SlackSendFn>> | undefined;
@@ -335,9 +334,6 @@ export const slackOutbound: ChannelOutboundAdapter = {
                 : {}),
               ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
               deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
-              onPlatformSendDispatch: useSingleDeliveryMarker
-                ? ctx.onPlatformSendDispatch
-                : undefined,
             });
           }
           if (!lastResult) {

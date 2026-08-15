@@ -17,11 +17,6 @@ extension CanvasWindowController {
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
     }
 
-    static func jsOptionalStringLiteral(_ value: String?) -> String {
-        guard let value else { return "null" }
-        return Self.jsStringLiteral(value)
-    }
-
     static func storedFrameDefaultsKey(sessionKey: String) -> String {
         "openclaw.canvas.frame.\(self.sanitizeSessionKey(sessionKey))"
     }

@@ -4,7 +4,7 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   clearExecutablePathCache,
@@ -29,7 +29,7 @@ function restoreEnvValue(name: string, value: string | undefined): void {
 
 describe("executable path helpers", () => {
   it("detects regular files and rejects directories", async () => {
-    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const execPath = path.join(base, "tool");
       const filePath = path.join(base, "plain.txt");
       const dirPath = path.join(base, "dir");
@@ -46,7 +46,7 @@ describe("executable path helpers", () => {
   });
 
   it("resolves executables from PATH entries and cwd-relative paths", async () => {
-    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const binDir = path.join(base, "bin");
       const cwd = path.join(base, "cwd");
       await fs.mkdir(binDir, { recursive: true });
@@ -70,7 +70,7 @@ describe("executable path helpers", () => {
   });
 
   it("memoizes PATH hits and misses until explicit invalidation", async () => {
-    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const binDir = path.join(base, "bin");
       await fs.mkdir(binDir);
       const executable = path.join(binDir, "runner");
@@ -95,7 +95,7 @@ describe("executable path helpers", () => {
   });
 
   it("slides PATH hit and miss expiry for steady pollers", async () => {
-    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const binDir = path.join(base, "bin");
       await fs.mkdir(binDir);
       const executable = path.join(binDir, "runner");
@@ -128,7 +128,7 @@ describe("executable path helpers", () => {
   });
 
   it("does not reuse relative PATH probes after cwd changes", async () => {
-    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const firstCwd = path.join(base, "first");
       const secondCwd = path.join(base, "second");
       const relativeBin = "bin";
@@ -151,7 +151,7 @@ describe("executable path helpers", () => {
   });
 
   it("resolves absolute, home-relative, and Path-cased env executables", async () => {
-    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const homeDir = path.join(base, "home");
       const binDir = path.join(base, "bin");
       await fs.mkdir(homeDir, { recursive: true });
@@ -233,7 +233,7 @@ describe("resolveExecutable", () => {
 
   it("resolves to the first .cmd result from PATH on Windows without executing where.exe", async () => {
     await withMockedPlatform("win32", async () => {
-      await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
         const binDir = path.join(base, "bin");
         await fs.mkdir(binDir, { recursive: true });
         const cmdPath = path.join(binDir, "gcloud.cmd");
@@ -257,7 +257,7 @@ describe("resolveExecutable", () => {
 
   it("falls back to .exe when no .cmd match exists on Windows", async () => {
     await withMockedPlatform("win32", async () => {
-      await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
         const binDir = path.join(base, "bin");
         await fs.mkdir(binDir, { recursive: true });
         const exePath = path.join(binDir, "tailscale.exe");
@@ -276,7 +276,7 @@ describe("resolveExecutable", () => {
 
   it("falls back to first PATH result when no .cmd or .exe match exists on Windows", async () => {
     await withMockedPlatform("win32", async () => {
-      await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
         const binDir = path.join(base, "bin");
         await fs.mkdir(binDir, { recursive: true });
         const ps1Path = path.join(binDir, "gcloud.ps1");
@@ -307,7 +307,7 @@ describe("caller env PATHEXT propagation", () => {
   it.runIf(process.platform === "win32")(
     "accepts an explicit native executable when PATHEXT omits its suffix",
     async () => {
-      await withTempDir({ prefix: "openclaw-explicit-exe-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-explicit-exe-" }, async (base) => {
         const executable = path.join(base, "trusted-probe.exe");
         await fs.copyFile(process.execPath, executable);
         const env = { ...process.env, PATH: base, PATHEXT: ".CMD" };
@@ -327,7 +327,7 @@ describe("caller env PATHEXT propagation", () => {
   );
 
   it("keeps POSIX execute-permission checks for explicit native-looking paths", async () => {
-    await withTempDir({ prefix: "openclaw-explicit-posix-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-explicit-posix-" }, async (base) => {
       const executable = path.join(base, "trusted-probe.exe");
       await fs.writeFile(executable, "not executable\n", "utf8");
       const accessSpy = vi.spyOn(nodeFs, "accessSync").mockImplementation(() => {
@@ -348,7 +348,7 @@ describe("caller env PATHEXT propagation", () => {
     const orig = process.env.PATHEXT;
     process.env.PATHEXT = ".TXT";
     try {
-      await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
         const binDir = path.join(base, "bin");
         await fs.mkdir(binDir, { recursive: true });
 
@@ -369,7 +369,7 @@ describe("caller env PATHEXT propagation", () => {
   });
 
   it("keeps PATHEXT checks for non-native explicit PATH extensions", async () => {
-    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const binDir = path.join(base, "bin");
       await fs.mkdir(binDir, { recursive: true });
       const exePath = path.join(binDir, "tool.exe");
@@ -391,7 +391,7 @@ describe("caller env PATHEXT propagation", () => {
     const orig = process.env.PATHEXT;
     process.env.PATHEXT = ".TXT";
     try {
-      await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
         const ps1File = path.join(base, "script.ps1");
         await fs.writeFile(ps1File, 'Write-Output "ok"\n', "utf8");
 
@@ -410,7 +410,7 @@ describe("caller env PATHEXT propagation", () => {
     const orig = process.env.PATHEXT;
     process.env.PATHEXT = ".TXT";
     try {
-      await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
         const binDir = path.join(base, "bin");
         await fs.mkdir(binDir, { recursive: true });
         const ps1Path = path.join(binDir, "runner.ps1");
@@ -429,7 +429,7 @@ describe("caller env PATHEXT propagation", () => {
   });
 
   it("resolveExecutablePath with path separator falls back to process.env when no caller env given", async () => {
-    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const ps1File = path.join(base, "script.ps1");
       await fs.writeFile(ps1File, 'Write-Output "ok"\n', "utf8");
 

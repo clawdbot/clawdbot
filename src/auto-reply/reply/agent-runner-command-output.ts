@@ -4,7 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
+import { inferToolMetaFromArgsCore } from "../../agents/tool-display.js";
 import type { GetReplyOptions } from "../types.js";
 
 /**
@@ -49,7 +49,8 @@ export function buildCommandOutputFromToolResultEvent(evt: {
     return undefined;
   }
   const name = readStringValue(evt.data.name);
-  if (!name || !isCommandToolName(name)) {
+  const commandBearing = evt.data.commandBearing === true;
+  if (!name || (!commandBearing && !isCommandToolName(name))) {
     return undefined;
   }
   const result = readRecordValue(evt.data.result);
@@ -82,6 +83,7 @@ export function buildCommandOutputFromToolResultEvent(evt: {
     exitCode !== undefined ||
     durationMs !== undefined ||
     cwd !== undefined ||
+    (commandBearing && typeof evt.data.isError === "boolean") ||
     (result !== undefined && Object.keys(result).length > 0);
   if (!hasConcreteCommandResult) {
     return undefined;
@@ -91,7 +93,7 @@ export function buildCommandOutputFromToolResultEvent(evt: {
   const args = readRecordValue(evt.data.args);
   const title =
     readStringValue(evt.data.title) ??
-    (args ? inferToolMetaFromArgs(name, args, { detailMode: "explain" }) : undefined);
+    (args ? inferToolMetaFromArgsCore(name, args, { detailMode: "explain" }) : undefined);
   return {
     itemId: readStringValue(evt.data.itemId),
     phase: "end",

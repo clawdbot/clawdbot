@@ -1,6 +1,7 @@
 // Bundles MCP metadata exposed by plugins for package output.
 import fs from "node:fs";
 import path from "node:path";
+import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -237,10 +238,6 @@ function absolutizeBundleMcpServer(params: {
 
 function hasOnlyKeys(raw: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
   return Object.keys(raw).every((key) => allowed.has(key));
-}
-
-function isStringRecord(raw: unknown): raw is Record<string, string> {
-  return isRecord(raw) && Object.values(raw).every((value) => typeof value === "string");
 }
 
 function isPathWithin(baseDir: string, targetPath: string): boolean {

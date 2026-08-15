@@ -34,7 +34,7 @@ import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import {
   recordAcpParentStreamEvents,
   type AcpParentStreamEvent,
-} from "../../acp-parent-stream-store.sqlite.js";
+} from "./acp-parent-stream-store.sqlite.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;

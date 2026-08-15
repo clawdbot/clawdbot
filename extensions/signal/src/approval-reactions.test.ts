@@ -761,6 +761,7 @@ describe("Signal approval reactions", () => {
       approvalKind: "plugin",
       decision: "allow-once",
       channel: "signal",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -822,6 +823,7 @@ describe("Signal approval reactions", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "signal",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });

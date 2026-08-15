@@ -3,6 +3,10 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
+import {
+  LEGACY_TASK_SUGGESTION_TOOL_NAME,
+  TASK_SUGGESTION_TOOL_NAME,
+} from "../shared/legacy-tool-name-migration.js";
 import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
@@ -117,6 +121,11 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   if (issues.legacyPayloadCodexModel) {
     lines.push(
       `- ${pluralize(issues.legacyPayloadCodexModel, "job")} still uses legacy \`openai-codex/*\` cron model refs`,
+    );
+  }
+  if (issues.legacyTaskSuggestionToolName) {
+    lines.push(
+      `- ${pluralize(issues.legacyTaskSuggestionToolName, "job")} still grants legacy tool \`${LEGACY_TASK_SUGGESTION_TOOL_NAME}\`; doctor will rename it to \`${TASK_SUGGESTION_TOOL_NAME}\``,
     );
   }
   if (issues.legacyAgentTurnCommandPayload) {

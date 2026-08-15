@@ -14,6 +14,7 @@ import {
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
   preserveComposerFocusOnPrimaryAction,
+  replaceComposerPopoverAnchor,
   restoreHistoryCaret,
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
@@ -140,6 +141,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   state.dictationDraftKey = draftKey;
   const visibleDraft =
     state.composingDraft?.key === draftKey ? state.composingDraft.value : props.draft;
+  state.composerInputRef ??= (element?: Element) => {
+    state.composerInput = replaceComposerPopoverAnchor(state.composerInput, element);
+  };
   state.textareaRef ??= (element?: Element) => {
     const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
     const prevTextarea = state.composerTextarea;
@@ -476,6 +480,10 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
+    // A dropped compositionend (detach/blur mid-IME) must not wedge the
+    // composing flag: it persists across renders and kills Enter-send,
+    // history keys, and command menus until the Send button resets it.
+    state.composerComposing = false;
     if (state.composingDraft?.key === draftKey) {
       state.composingDraft = null;
     }

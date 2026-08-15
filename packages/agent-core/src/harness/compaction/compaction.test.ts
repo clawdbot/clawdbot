@@ -12,6 +12,7 @@ import {
   generateSummary,
   getLastAssistantUsage,
   prepareCompaction,
+  shouldCompact,
 } from "./compaction.js";
 import { createFileOps } from "./utils.js";
 
@@ -81,6 +82,21 @@ function createProjectedEntry(
     ? { ...common, type, customType: "test", content, display: true }
     : { ...common, type, fromId: common.parentId ?? common.id, summary: content };
 }
+
+describe("shouldCompact", () => {
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "skips an invalid context window of %s",
+    (contextWindow) => {
+      expect(
+        shouldCompact(1, contextWindow, {
+          enabled: true,
+          reserveTokens: 16_384,
+          keepRecentTokens: 20_000,
+        }),
+      ).toBe(false);
+    },
+  );
+});
 
 describe("calculateContextTokens", () => {
   it("prefers the final-iteration context snapshot over aggregate billing usage", () => {
@@ -237,6 +253,27 @@ describe("calculateContextTokens", () => {
     const entries = messages.map(createMessageEntry);
 
     expect(getLastAssistantUsage(entries)).toBe(validUsage);
+    expect(estimateContextTokens(messages)).toMatchObject({
+      usageTokens: 20,
+      lastUsageIndex: 0,
+    });
+    expect(estimateContextTokens(messages).trailingTokens).toBeGreaterThan(0);
+  });
+
+  it("scans past a sparse assistant row to retain older valid usage", () => {
+    const validUsage = createUsage(20);
+    const sparseAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "seeded without provider usage" }],
+      api: "test-api",
+      provider: "test-provider",
+      model: "test-model",
+      stopReason: "stop",
+      timestamp: 2,
+    } as AgentMessage;
+    const messages = [createAssistant("complete", validUsage, 1), sparseAssistant];
+
+    expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBe(validUsage);
     expect(estimateContextTokens(messages)).toMatchObject({
       usageTokens: 20,
       lastUsageIndex: 0,

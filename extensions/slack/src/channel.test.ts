@@ -1,5 +1,6 @@
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Slack tests cover channel plugin behavior.
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
@@ -156,10 +157,6 @@ function requireSlackListPeers() {
     throw new Error("slack directory.listPeers unavailable");
   }
   return listPeers;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");

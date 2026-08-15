@@ -26,9 +26,6 @@ export const discordProviderTestSupport = {
   setCreateClient(mock: typeof discordProviderRuntime.createClient) {
     discordProviderRuntime.createClient = mock;
   },
-  setGetPluginCommandSpecs(mock: typeof discordProviderRuntime.getPluginCommandSpecs) {
-    discordProviderRuntime.getPluginCommandSpecs = mock;
-  },
   setResolveDiscordAccount(mock: typeof discordProviderRuntime.resolveDiscordAccount) {
     discordProviderRuntime.resolveDiscordAccount = mock;
   },

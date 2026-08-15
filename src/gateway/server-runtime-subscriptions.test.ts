@@ -1,10 +1,12 @@
 // Tests for gateway runtime subscription wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../test/helpers/channel-admission-evidence.js";
 import {
   configureExecutionIdentityAdmissionSink,
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
+import { consumeChannelAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { tryFinishCronTaskRunWithoutHistory } from "../cron/service/task-runs.js";
 import {
@@ -22,6 +24,7 @@ import {
   createTaskRecord,
   markTaskLostById,
   markTaskTerminalById,
+  recordTaskProgressByRunId,
 } from "../tasks/task-registry.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
@@ -67,6 +70,8 @@ const auditTestState = vi.hoisted(() => ({
   created: 0,
   recorded: 0,
   identityRecorded: 0,
+  decisionRecorded: 0,
+  executionIdentityEnabled: false,
   stopped: 0,
 }));
 const agentEventHandlerMocks = vi.hoisted(() => ({
@@ -76,9 +81,15 @@ const transcriptBroadcastMocks = vi.hoisted(() => ({
   useActualHandler: false,
   readMessageCount: vi.fn(),
 }));
+const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => runtimeConfigState.value,
+}));
 
 vi.mock("../audit/audit-config.js", () => ({
   isAuditLedgerEnabled: () => auditTestState.enabled,
+  isExecutionIdentityCollectionEnabled: () => auditTestState.executionIdentityEnabled,
   resolveAuditMessageMode: () => auditTestState.messageMode,
 }));
 
@@ -93,6 +104,10 @@ vi.mock("../audit/audit-recorder.js", () => ({
       recordMessage: vi.fn(),
       recordExecutionIdentity: vi.fn(() => {
         auditTestState.identityRecorded += 1;
+        return true;
+      }),
+      recordExecutionDecision: vi.fn(() => {
+        auditTestState.decisionRecorded += 1;
         return true;
       }),
       stop: vi.fn(async () => {
@@ -168,9 +183,12 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.created = 0;
     auditTestState.recorded = 0;
     auditTestState.identityRecorded = 0;
+    auditTestState.decisionRecorded = 0;
+    auditTestState.executionIdentityEnabled = false;
     auditTestState.stopped = 0;
     transcriptBroadcastMocks.useActualHandler = false;
     transcriptBroadcastMocks.readMessageCount.mockReset();
+    runtimeConfigState.value = {};
     agentEventHandlerMocks.create.mockReset().mockImplementation(() => {
       throw new Error("server-chat lazy load failure");
     });
@@ -178,6 +196,7 @@ describe("startGatewayEventSubscriptions", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await unsubs?.agentUnsub();
     unsubs?.heartbeatUnsub();
     unsubs?.transcriptUnsub();
@@ -214,6 +233,26 @@ describe("startGatewayEventSubscriptions", () => {
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
     expect(hasExecutionIdentityAdmissionSink()).toBe(false);
+  });
+
+  it("owns channel evidence collection for the configured gateway lifecycle", async () => {
+    auditTestState.executionIdentityEnabled = true;
+    unsubs = startGatewayEventSubscriptions(createParams());
+
+    const evidence = createChannelParticipantAdmissionEvidence({
+      channelId: "test",
+      participantId: "person-1",
+    });
+    expect(evidence).toBeDefined();
+
+    await unsubs.agentUnsub();
+    expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({ ingressState: "unknown" });
+    expect(
+      createChannelParticipantAdmissionEvidence({
+        channelId: "test",
+        participantId: "person-2",
+      }),
+    ).toBeUndefined();
   });
 
   it("keeps retention maintenance but creates no producers when audit.enabled is false", async () => {
@@ -266,6 +305,45 @@ describe("startGatewayEventSubscriptions", () => {
 
     await unsubs.agentUnsub();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("uses the persisted bare-key owner for ownerless active-run projections", async () => {
+    runtimeConfigState.value = {
+      session: { scope: "global", store: "/tmp/openclaw-owned-sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+    const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
+    agentEventHandlerMocks.create.mockReturnValue(handler);
+    const params = createParams();
+    params.chatAbortControllers.set("run-ops", {
+      sessionKey: "global",
+      sessionId: "session-ops",
+    } as never);
+    unsubs = startGatewayEventSubscriptions(params);
+
+    emitAgentEvent({ runId: "load-handler", stream: "lifecycle", data: { phase: "error" } });
+    await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
+    const options = agentEventHandlerMocks.create.mock.calls[0]?.[0] as {
+      resolveSessionActiveRunState?: (session: {
+        requestedKey: string;
+        canonicalKey: string;
+        sessionId?: string;
+        agentId?: string;
+      }) => { active: boolean; runIds: string[] };
+    };
+
+    expect(
+      options.resolveSessionActiveRunState?.({
+        requestedKey: "global",
+        canonicalKey: "global",
+        sessionId: "session-ops",
+        agentId: "ops",
+      }),
+    ).toEqual({ active: true, runIds: ["run-ops"] });
   });
 
   it("logs transcript handler failures", async () => {
@@ -410,6 +488,164 @@ describe("startGatewayEventSubscriptions", () => {
       notifyPolicy: "silent",
     });
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("throttles live subagent progress per task and flushes before terminal status", async () => {
+    const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
+    unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+
+    const primary = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:primary",
+      runId: "run-throttle-primary",
+      task: "Implement live progress",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    const secondary = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:secondary",
+      runId: "run-throttle-secondary",
+      task: "Review live progress",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    if (!primary || !secondary) {
+      throw new Error("expected task records");
+    }
+    broadcast.mockClear();
+
+    for (const text of ["first", "second", "third"]) {
+      emitAgentEvent({
+        runId: primary.runId!,
+        stream: "assistant",
+        data: { text },
+      });
+    }
+    emitAgentEvent({
+      runId: secondary.runId!,
+      stream: "thinking",
+      data: { text: "parallel" },
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(broadcast).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    const firstFlush = broadcast.mock.calls
+      .filter(([event]) => event === "task")
+      .map(([, payload]) => payload as TaskEventPayload)
+      .filter(
+        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
+          payload.action === "upserted",
+      );
+    expect(firstFlush).toHaveLength(2);
+    expect(firstFlush.find((event) => event.task.id === primary.taskId)?.task.lastActivity).toBe(
+      "third",
+    );
+    expect(firstFlush.find((event) => event.task.id === secondary.taskId)?.task.lastActivity).toBe(
+      "parallel",
+    );
+
+    broadcast.mockClear();
+    emitAgentEvent({
+      runId: secondary.runId!,
+      stream: "assistant",
+      data: { text: "OpenClaw runtime context (internal): Keep internal details private." },
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const sanitizedActivity = broadcast.mock.calls.find(
+      ([event, payload]) =>
+        event === "task" &&
+        (payload as TaskEventPayload).action === "upserted" &&
+        (payload as Extract<TaskEventPayload, { action: "upserted" }>).task.id === secondary.taskId,
+    )?.[1] as Extract<TaskEventPayload, { action: "upserted" }> | undefined;
+    expect(sanitizedActivity?.task).not.toHaveProperty("lastActivity");
+    expect(JSON.stringify(sanitizedActivity)).not.toContain("OpenClaw runtime context");
+
+    broadcast.mockClear();
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "assistant",
+      data: { text: "third" },
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(broadcast).not.toHaveBeenCalled();
+
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "assistant",
+      data: { text: "final activity" },
+    });
+    markTaskTerminalById({ taskId: primary.taskId, status: "succeeded", endedAt: Date.now() });
+    const terminalFlush = broadcast.mock.calls
+      .filter(([event]) => event === "task")
+      .map(([, payload]) => payload as TaskEventPayload)
+      .filter(
+        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
+          payload.action === "upserted" && payload.task.id === primary.taskId,
+      );
+    expect(terminalFlush.map((event) => event.task.status)).toEqual(["running", "completed"]);
+    expect(terminalFlush[0]?.task.lastActivity).toBe("final activity");
+    expect(terminalFlush[1]?.task).not.toHaveProperty("lastActivity");
+
+    broadcast.mockClear();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("suppresses identical task summaries without delaying status transitions", async () => {
+    const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
+    unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+    const runId = "run-identical-task-summary";
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:summary",
+      runId,
+      task: "Avoid duplicate broadcasts",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      startedAt: 100,
+      lastEventAt: 100,
+    });
+    if (!task) {
+      throw new Error("expected task record");
+    }
+    broadcast.mockClear();
+
+    for (let index = 0; index < 2; index += 1) {
+      recordTaskProgressByRunId({
+        runId,
+        runtime: "subagent",
+        lastEventAt: 200,
+        progressSummary: "Working",
+      });
+    }
+    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 300 });
+
+    const taskEvents = broadcast.mock.calls
+      .filter(([event]) => event === "task")
+      .map(([, payload]) => payload as TaskEventPayload)
+      .filter(
+        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
+          payload.action === "upserted",
+      );
+    expect(taskEvents.map((event) => event.task.status)).toEqual(["running", "completed"]);
   });
 
   it.each(["succeeded", "failed", "cancelled", "timed_out", "lost"] as const)(

@@ -41,13 +41,13 @@ type MockCalls = {
 type SessionStoreEntryOptions = Parameters<typeof sessionStoreEntry>[1];
 type MutationMethod = "sessions.patch" | "sessions.compact";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value), `${label} should be an object`).toBe(true);
-  if (!isRecord(value)) {
+  expect(isObjectRecord(value), `${label} should be an object`).toBe(true);
+  if (!isObjectRecord(value)) {
     throw new Error(`${label} should be an object`);
   }
   return value;
@@ -70,7 +70,7 @@ function expectFields(record: Record<string, unknown>, expected: Record<string, 
 function transcriptMessageContents(events: readonly unknown[]): unknown[] {
   return events
     .map((event) =>
-      isRecord(event) && isRecord(event.message) ? event.message.content : undefined,
+      isObjectRecord(event) && isObjectRecord(event.message) ? event.message.content : undefined,
     )
     .filter((content) => content !== undefined);
 }
@@ -90,7 +90,7 @@ function findSession(
   const sessions = requireArray(payload.sessions, "response sessions");
   const session = sessions.find(
     (candidate): candidate is Record<string, unknown> =>
-      isRecord(candidate) && candidate.key === sessionKey,
+      isObjectRecord(candidate) && candidate.key === sessionKey,
   );
   if (!session) {
     throw new Error(`Missing session ${sessionKey}`);
@@ -107,7 +107,7 @@ function expectChangedBroadcast(
   expect(event).toBe("sessions.changed");
   expect(connIds).toEqual(new Set(["conn-1"]));
   expect(options).toEqual({
-    ...(typeof expected.agentId === "string" ? { agentId: expected.agentId } : {}),
+    agentId: typeof expected.agentId === "string" ? expected.agentId : "main",
     dropIfSlow: true,
     ...(typeof expected.sessionKey === "string" ? { sessionKeys: [expected.sessionKey] } : {}),
   });
@@ -261,7 +261,7 @@ async function expectListedSessionActiveRun(
   expect(session.activeRunIds).toEqual(expected ? ["run-1"] : undefined);
 }
 
-test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
+test("sessions.list keeps bulk rows lightweight and uses selected model fields", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
     models: {
@@ -273,6 +273,8 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
       main: sessionStoreEntry("sess-parent"),
       "dashboard:child": sessionStoreEntry("sess-child", {
         updatedAt: Date.now() - 1_000,
+        providerOverride: "anthropic",
+        modelOverride: "test-model-without-catalog-context",
         modelProvider: "anthropic",
         model: "test-model-without-catalog-context",
         modelSelectionLocked: true,
@@ -351,13 +353,15 @@ test.each([
   ["my-ngc", "deepseek-ai/deepseek-v4-pro"],
   ["my-ngc:nvidia", "nvidia/nemotron-3-ultra-550b-a55b"],
 ])(
-  "sessions.list preserves custom provider %s and nested models over WebSocket",
+  "sessions.list preserves selected custom provider %s and nested models over WebSocket",
   async (provider, model) => {
     const { storePath } = await createSessionStoreDir();
     await writeSessionStore({
       entries: {
         main: sessionStoreEntry("sess-parent"),
         "dashboard:child": sessionStoreEntry("sess-custom-provider", {
+          providerOverride: provider,
+          modelOverride: model,
           modelProvider: provider,
           model,
           parentSessionKey: "agent:main:main",
@@ -857,6 +861,8 @@ test("sessions.changed mutation events include live usage metadata", async () =>
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main", {
+        providerOverride: "openai",
+        modelOverride: "gpt-5.3-codex-spark",
         modelProvider: "openai",
         model: "gpt-5.3-codex-spark",
         contextTokens: 123_456,
@@ -978,6 +984,7 @@ test("sessions.changed mutation events include session management metadata", asy
 
   const archived = await invokeSessionsPatch({
     key: "discord:group:dev",
+    expectedSessionId: "sess-dev",
     archived: true,
   });
   expectChangedBroadcast(archived.broadcastToConnIds, {
@@ -994,6 +1001,7 @@ test("sessions.changed mutation events include session management metadata", asy
 
   const restored = await invokeSessionsPatch({
     key: "discord:group:dev",
+    expectedSessionId: "sess-dev",
     archived: false,
   });
   expectChangedBroadcast(restored.broadcastToConnIds, {

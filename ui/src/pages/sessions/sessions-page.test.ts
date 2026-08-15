@@ -107,18 +107,61 @@ describe("sessions page lifecycle", () => {
     document.body.append(toast);
     await toast.updateComplete;
 
-    await page.archiveSessionWithUndo({ key, pinned: true } as GatewaySessionRow);
+    await page.archiveSessionWithUndo({
+      key,
+      sessionId: "session-pinned",
+      pinned: true,
+    } as GatewaySessionRow);
     await toast.updateComplete;
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
     await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
     expect(mutableGateway.setSessionKey).not.toHaveBeenCalled();
 
-    expect(patch).toHaveBeenNthCalledWith(1, key, { archived: true }, { agentId: undefined });
+    expect(patch).toHaveBeenNthCalledWith(
+      1,
+      key,
+      { archived: true },
+      { agentId: undefined, expectedSessionId: "session-pinned" },
+    );
     expect(patch).toHaveBeenNthCalledWith(
       2,
       key,
       { archived: false, pinned: true },
-      { agentId: undefined },
+      { agentId: undefined, expectedSessionId: "session-pinned" },
+    );
+  });
+
+  it("keeps the archive Undo working after navigating off the Sessions page", async () => {
+    const key = "agent:main:navigated";
+    const patch = vi.fn(async () => ({
+      ok: true as const,
+      path: "",
+      key,
+      entry: { sessionId: key },
+    }));
+    const sessions = createSessions({ patch });
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    mutableGateway.emit({ sessionKey: key });
+    const page = await createPage(createContext(mutableGateway.gateway, sessions));
+    const toast = document.createElement("openclaw-toast-host");
+    document.body.append(toast);
+    await toast.updateComplete;
+
+    await page.archiveSessionWithUndo({
+      key,
+      sessionId: "session-nav",
+      pinned: false,
+    } as GatewaySessionRow);
+    await toast.updateComplete;
+    // The toast host outlives the page; navigation unmounts the page element.
+    page.remove();
+    toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+    expect(patch).toHaveBeenNthCalledWith(
+      2,
+      key,
+      { archived: false },
+      { agentId: undefined, expectedSessionId: "session-nav" },
     );
   });
 
@@ -238,6 +281,35 @@ describe("sessions page lifecycle", () => {
     expect(page.transcriptSearch).toEqual({ status: "idle" });
   });
 
+  it("reports a connection error instead of silently dropping a patch", async () => {
+    const patch = vi.fn();
+    const sessions = createSessions({ patch });
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(mutableGateway.gateway, sessions));
+    // Gateway drops while a rename dialog is open; submit lands afterwards.
+    mutableGateway.emit({ phase: "reconnecting", client: null });
+
+    const result = await page.patchSession("agent:main:main", { label: "renamed" });
+
+    expect(result).toBe("failed");
+    expect(patch).not.toHaveBeenCalled();
+    expect(page.error).toBe("Connect to the Gateway to change sessions.");
+  });
+
+  it("shows a connection error in the checkpoints drawer while disconnected", async () => {
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
+    mutableGateway.emit({ phase: "reconnecting", client: null });
+
+    await page.loadCheckpoint("agent:main:main");
+
+    // Without the recorded error the drawer would render "No checkpoints"
+    // beside a nonzero checkpoint badge.
+    expect(page.checkpointErrorByKey["agent:main:main"]).toBe(
+      "Connect to the Gateway to change sessions.",
+    );
+  });
+
   it("drops a transcript result after the query changes while it is pending", async () => {
     const response = deferred<SessionsSearchResult>();
     const request = vi.fn(() => response.promise);
@@ -345,6 +417,7 @@ describe("sessions page lifecycle", () => {
   it("enables Archive but keeps Delete disabled for an active non-main row", async () => {
     const row = {
       key: "agent:main:running",
+      sessionId: "session-running",
       kind: "direct",
       hasActiveRun: true,
     } as GatewaySessionRow;
@@ -810,13 +883,16 @@ describe("sessions page lifecycle", () => {
     const context = createContext(mutableGateway.gateway, sessions);
     getWorkboardState(context.workboard).loaded = true;
     const page = await createPage(context);
-    page.result = { count: 1, sessions: [{ key: "main" }] } as SessionsListResult;
+    page.result = {
+      count: 1,
+      sessions: [{ key: "main", sessionId: "session-main" }],
+    } as SessionsListResult;
     page.selectedKeys = new Set(["main"]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     const requests = [
       page.deleteSelected(),
-      page.patchSession("main", { archived: true }),
+      page.patchSession("main", { archived: true }, undefined, "session-main"),
       page.forkSession("main"),
       page.branchCheckpoint("main", "branch-checkpoint"),
       page.restoreCheckpoint("main", "restore-checkpoint"),
@@ -859,5 +935,21 @@ describe("sessions page lifecycle", () => {
     await request;
 
     expect(context.navigate).not.toHaveBeenCalled();
+  });
+
+  it("forks an active session from its last completed message", async () => {
+    const create = vi.fn(async () => "active-fork");
+    const sessions = createSessions({ create });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const context = createContext(gateway, sessions);
+    const page = await createPage(context);
+
+    await page.forkSession("main", true);
+
+    expect(create).toHaveBeenCalledWith({
+      parentSessionKey: "main",
+      fork: true,
+      forkFrom: "last-completed",
+    });
   });
 });

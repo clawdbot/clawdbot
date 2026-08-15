@@ -205,7 +205,6 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       needsFullReindex: params.needsFullReindex,
       files,
       targetSessionFiles: targetArchiveFiles,
-      sessionsDirtyFiles: this.sessionsDirtyFiles,
       existingRows: targetArchiveFiles
         ? null
         : loadMemorySourceFileState({

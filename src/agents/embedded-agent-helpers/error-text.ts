@@ -9,35 +9,32 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import {
+  classifyFailoverReason,
   isBilling429MessageForProvider,
   isBillingErrorMessage,
   isContextOverflowError,
-  isOpenRouterKeyBudgetLimitExceededError,
-  isOpenRouterKeyLimitExceededError,
   isProviderCompletedErrorFinishReasonMessage,
   isReasoningConstraintErrorMessage,
   isTimeoutErrorMessage,
 } from "../failover/classify.js";
+import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
+import {
+  AUTH_INVALID_TOKEN_USER_TEXT,
+  formatBillingErrorMessage,
+  formatDiskSpaceErrorCopy,
+  formatTransportErrorCopy,
+  isInvalidStreamingEventOrderError,
+  isLikelyHttpErrorText,
+  isRawApiErrorPayload,
+  isStreamingJsonParseError,
+  renderRateLimitOrOverloadedCopy,
+} from "../failover/user-copy.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
-import {
-  formatBillingErrorMessage,
-  formatDiskSpaceErrorCopy,
-  formatRateLimitOrOverloadedErrorCopy,
-  formatTransportErrorCopy,
-  isInvalidStreamingEventOrderError,
-  isLikelyHttpErrorText as isLikelyHttpErrorTextFromSanitizer,
-  isRawApiErrorPayload,
-  isStreamingJsonParseError,
-} from "./sanitize-user-facing-text.js";
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
-export const AUTH_INVALID_TOKEN_USER_TEXT =
-  "Authentication failed (provider returned HTTP 401). " +
-  "Your provider token may have expired — try the request again in a moment. " +
-  "If the failure persists, re-authenticate this provider.";
 const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "LLM request failed: provider rejected the request schema or tool payload.";
 const MODEL_NOT_FOUND_USER_TEXT =
@@ -46,6 +43,15 @@ const TOOL_CALL_INPUT_MISSING_RE =
   /tool_(?:use|call)\.(?:input|arguments).*?(?:field required|required)/i;
 const TOOL_CALL_INPUT_PATH_RE =
   /messages\.\d+\.content\.\d+\.tool_(?:use|call)\.(?:input|arguments)/i;
+type AssistantErrorTextOptions = {
+  cfg?: OpenClawConfig;
+  sessionKey?: string;
+  provider?: string;
+  providerOwner?: PreparedProviderFailoverOwner;
+  model?: string;
+  /** Credential auth mode; OAuth/token billing copy omits API-key language (#80877). */
+  authMode?: string;
+};
 function isMissingToolCallInputError(raw: string): boolean {
   return (
     Boolean(raw) && (TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw))
@@ -53,15 +59,7 @@ function isMissingToolCallInputError(raw: string): boolean {
 }
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: {
-    cfg?: OpenClawConfig;
-    sessionKey?: string;
-    provider?: string;
-    model?: string;
-    /** Credential auth mode (e.g. "oauth", "token", "api_key", "aws-sdk").
-     * When "oauth" or "token", billing copy omits API-key language (#80877). */
-    authMode?: string;
-  },
+  opts?: AssistantErrorTextOptions,
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -71,8 +69,9 @@ export function formatAssistantErrorText(
   if (!raw) {
     return "LLM request failed with an unknown error.";
   }
+  const providerOwner = opts?.providerOwner?.id ?? opts?.provider;
   const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind({
-    ...buildAssistantFailoverSignal(msg, { provider: opts?.provider }),
+    ...buildAssistantFailoverSignal(msg, { provider: providerOwner }),
     message: raw,
   });
   const unknownTool =
@@ -207,17 +206,21 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${apiError.message.trim()}`;
   }
 
-  if (
-    isOpenRouterKeyLimitExceededError(raw, opts?.provider) ||
-    isOpenRouterKeyBudgetLimitExceededError(raw, opts?.provider)
-  ) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
-  }
-  if (isBilling429MessageForProvider(raw, opts?.provider)) {
+  if (isBilling429MessageForProvider(raw, providerOwner)) {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
-  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
+  const failoverReason = classifyFailoverReason(raw, {
+    provider: providerOwner,
+    providerPlugin: opts?.providerOwner,
+  });
+  if (failoverReason === "billing") {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
+  }
+  const transientCopy =
+    failoverReason === "rate_limit" || failoverReason === "overloaded"
+      ? renderRateLimitOrOverloadedCopy({ reason: failoverReason, raw })
+      : undefined;
   if (transientCopy) {
     return transientCopy;
   }
@@ -249,7 +252,7 @@ export function formatAssistantErrorText(
     return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
 
-  if (isLikelyHttpErrorTextFromSanitizer(raw) || isRawApiErrorPayload(raw)) {
+  if (isRawApiErrorPayload(raw) || isLikelyHttpErrorText(raw)) {
     return formatRawAssistantErrorForUi(raw);
   }
 
@@ -289,14 +292,7 @@ function isRawAssistantErrorPassthrough(params: {
 
 export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
-  opts?: {
-    cfg?: OpenClawConfig;
-    sessionKey?: string;
-    provider?: string;
-    model?: string;
-    /** Credential auth mode for billing copy (#80877). */
-    authMode?: string;
-  },
+  opts?: AssistantErrorTextOptions,
 ): string {
   const friendlyError = formatAssistantErrorText(msg, opts);
   const rawError = msg.errorMessage?.trim();

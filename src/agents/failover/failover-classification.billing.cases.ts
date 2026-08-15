@@ -12,6 +12,34 @@ import {
 export const billingCases = [
   // Billing and account entitlement.
   {
+    // FIXED(refactor-06): legacy retry policy recognized this provider limit class as permanent.
+    id: "retry-go-usage-limit",
+    source: retrySource,
+    signal: { message: "GoUsageLimitError: usage is unavailable for this account" },
+    expected: reason("billing"),
+  },
+  {
+    // FIXED(refactor-06): legacy retry policy recognized this provider limit class as permanent.
+    id: "retry-free-usage-limit",
+    source: retrySource,
+    signal: { message: "FreeUsageLimitError: free usage is exhausted" },
+    expected: reason("billing"),
+  },
+  {
+    // FIXED(refactor-06): preserve the retry deny-list's account-balance semantics centrally.
+    id: "retry-no-available-balance",
+    source: retrySource,
+    signal: { message: "Your account has no available balance" },
+    expected: reason("billing"),
+  },
+  {
+    // FIXED(refactor-06): preserve the retry deny-list's provider-budget semantics centrally.
+    id: "retry-out-of-budget",
+    source: retrySource,
+    signal: { message: "Provider account is out of budget" },
+    expected: reason("billing"),
+  },
+  {
     id: "billing-anthropic-low-credit",
     source: billingSource,
     signal: { message: "Your credit balance is too low to access the Anthropic API." },

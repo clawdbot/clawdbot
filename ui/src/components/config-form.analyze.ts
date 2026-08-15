@@ -73,10 +73,10 @@ function isAnySchema(schema: JsonSchema): boolean {
 function normalizeEnum(values: unknown[]): { enumValues: unknown[]; nullable: boolean } {
   const filtered = values.filter((value) => value != null);
   const nullable = filtered.length !== values.length;
-  return { enumValues: uniqueValues(filtered), nullable };
+  return { enumValues: uniqueSchemaValues(filtered), nullable };
 }
 
-function uniqueValues(values: unknown[]): unknown[] {
+function uniqueSchemaValues(values: unknown[]): unknown[] {
   const unique: unknown[] = [];
   for (const value of values) {
     if (!unique.some((existing) => Object.is(existing, value))) {
@@ -569,11 +569,29 @@ function normalizeUnion(
     return secretInput;
   }
 
+  // An exact boolean branch is finite, except oneOf cannot absorb boolean literals
+  // that also match that branch. Open, nullable, or constrained branches stay in Raw mode.
+  if (literals.length > 0 && remaining.length > 0) {
+    const booleanBranch = remaining.length === 1 ? remaining[0] : undefined;
+    const plainBooleanBranch =
+      booleanBranch?.type === "boolean" && Object.keys(booleanBranch).length === 1;
+    if (
+      !plainBooleanBranch ||
+      literals.includes("true") ||
+      literals.includes("false") ||
+      (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
+    ) {
+      return null;
+    }
+    remaining.pop();
+    literals.unshift(true, false);
+  }
+
   if (literals.length > 0 && remaining.length === 0) {
     return {
       schema: {
         ...schema,
-        enum: uniqueValues(literals),
+        enum: uniqueSchemaValues(literals),
         nullable,
         enumIncludesNull: nullable,
         anyOf: undefined,
@@ -582,12 +600,6 @@ function normalizeUnion(
       },
       unsupportedPaths: [],
     };
-  }
-
-  // A native field cannot preserve both literal sentinels and an open typed branch.
-  // Keep the original union for Raw mode instead of silently dropping valid values.
-  if (literals.length > 0 && remaining.length > 0) {
-    return null;
   }
 
   if (remaining.length === 1) {

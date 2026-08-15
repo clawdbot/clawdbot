@@ -1,22 +1,17 @@
 // Vitest e2e config wires the e2e test shard.
-import os from "node:os";
 import { defineConfig } from "vitest/config";
 import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "./vitest.bundled-plugin-paths.ts";
 import baseConfig from "./vitest.config.ts";
 import { resolveRepoRootPath } from "./vitest.shared.config.ts";
 
-const base = baseConfig as unknown as Record<string, unknown>;
-const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
-const cpuCount = os.cpus().length;
-// Keep e2e runs cheap by default; callers can still override via OPENCLAW_E2E_WORKERS.
-const defaultWorkers = isCI ? Math.min(2, Math.max(1, Math.floor(cpuCount * 0.25))) : 1;
-const requestedWorkers = Number.parseInt(process.env.OPENCLAW_E2E_WORKERS ?? "", 10);
-const e2eWorkers =
-  Number.isFinite(requestedWorkers) && requestedWorkers > 0
+function resolveE2EWorkerCount(env: Record<string, string | undefined>): number {
+  const requestedWorkers = Number.parseInt(env.OPENCLAW_E2E_WORKERS ?? "", 10);
+  return Number.isFinite(requestedWorkers) && requestedWorkers > 0
     ? Math.min(16, requestedWorkers)
-    : defaultWorkers;
-const verboseE2E = process.env.OPENCLAW_E2E_VERBOSE === "1";
+    : 1;
+}
 
+const base = baseConfig as unknown as Record<string, unknown>;
 const baseTestWithProjects =
   (baseConfig as { test?: { exclude?: string[]; projects?: string[]; setupFiles?: string[] } })
     .test ?? {};
@@ -33,27 +28,37 @@ const exclude = [
   ...tuiPtyExcludes,
 ];
 
-export default defineConfig({
-  ...base,
-  test: {
-    ...baseTest,
-    maxWorkers: e2eWorkers,
-    silent: !verboseE2E,
-    globalSetup: [resolveRepoRootPath("test/vitest/vitest.e2e.global-setup.ts")],
-    setupFiles: [
-      ...new Set(
-        [...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"].map(resolveRepoRootPath),
-      ),
-    ],
-    include: [
-      "test/**/*.e2e.test.ts",
-      "src/**/*.e2e.test.ts",
-      "packages/**/*.e2e.test.ts",
-      "src/gateway/gateway.test.ts",
-      "src/gateway/server.startup-matrix-migration.integration.test.ts",
-      "src/gateway/sessions-history-http.test.ts",
-      BUNDLED_PLUGIN_E2E_TEST_GLOB,
-    ],
-    exclude,
-  },
-});
+export function createE2EVitestConfig(env: Record<string, string | undefined> = process.env) {
+  // Keep e2e runs deterministic by default; callers can still opt into parallelism.
+  const e2eWorkers = resolveE2EWorkerCount(env);
+  const verboseE2E = env.OPENCLAW_E2E_VERBOSE === "1";
+
+  return defineConfig({
+    ...base,
+    test: {
+      ...baseTest,
+      maxWorkers: e2eWorkers,
+      silent: !verboseE2E,
+      globalSetup: [resolveRepoRootPath("test/vitest/vitest.e2e.global-setup.ts")],
+      setupFiles: [
+        ...new Set(
+          [...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"].map(
+            resolveRepoRootPath,
+          ),
+        ),
+      ],
+      include: [
+        "test/**/*.e2e.test.ts",
+        "src/**/*.e2e.test.ts",
+        "packages/**/*.e2e.test.ts",
+        "src/gateway/gateway.test.ts",
+        "src/gateway/server.startup-matrix-migration.integration.test.ts",
+        "src/gateway/sessions-history-http.test.ts",
+        BUNDLED_PLUGIN_E2E_TEST_GLOB,
+      ],
+      exclude,
+    },
+  });
+}
+
+export default createE2EVitestConfig();

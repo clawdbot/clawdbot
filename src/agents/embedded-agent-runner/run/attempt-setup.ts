@@ -28,7 +28,7 @@ import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
-import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
+import { resolveSkillsPrompt } from "../../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
@@ -44,6 +44,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -63,19 +64,18 @@ import {
   resolveLiveToolResultMaxChars,
 } from "../tool-result-truncation.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
+import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
+import {
+  buildAfterTurnRuntimeContext,
+  resolveAttemptFsWorkspaceOnly,
+} from "./attempt-prompt-helpers.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
-import { repairAttemptToolUseResultPairing } from "./attempt-transcript-helpers.js";
-import { buildLoopPromptCacheInfo } from "./attempt.context-engine-helpers.js";
-import {
-  buildAfterTurnRuntimeContext,
-  resolveAttemptFsWorkspaceOnly,
-} from "./attempt.prompt-helpers.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -98,6 +98,7 @@ type AttemptWorkspaceParams = Pick<
   | "sandboxSessionKey"
   | "sessionId"
   | "sessionKey"
+  | "skillWorkshopCollectionReconcile"
   | "skillsSnapshot"
   | "workspaceDir"
 >;
@@ -108,13 +109,17 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    execOverrides: params.execOverrides,
-    sessionKey: sandboxSessionKey,
-    skillsSnapshot: params.skillsSnapshot,
-    workspaceDir: resolvedWorkspace,
-  });
+  // Collection review is a host-owned maintenance run with one restricted tool.
+  // Sandboxing would hide that tool or redirect it to a disposable workspace.
+  const sandbox = params.skillWorkshopCollectionReconcile
+    ? null
+    : await resolveSandboxContext({
+        config: params.config,
+        execOverrides: params.execOverrides,
+        sessionKey: sandboxSessionKey,
+        skillsSnapshot: params.skillsSnapshot,
+        workspaceDir: resolvedWorkspace,
+      });
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
@@ -373,7 +378,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       ...(input.repairToolUseResultPairing
         ? {
             repairAssembledMessages: (messages) =>
-              repairAttemptToolUseResultPairing(messages, input.isOpenAIResponsesApi),
+              sanitizeToolUseResultPairingForModel(messages, input.isOpenAIResponsesApi),
           }
         : {}),
       getPrePromptMessageCount: input.getPrePromptMessageCount,
@@ -519,7 +524,7 @@ export function prepareEmbeddedAttemptSkills(params: {
       skillsWorkspaceDir,
       skillsPromptWorkspaceDir,
     });
-    const skillsPrompt = resolveSkillsPromptForRun({
+    const skillsPrompt = resolveSkillsPrompt({
       skillsSnapshot,
       entries: promptSkillEntries,
       config: params.attempt.config,

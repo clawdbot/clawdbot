@@ -15,6 +15,11 @@ export type NodeHostConfig = {
       enabled?: boolean;
     };
   };
+  /** Full OpenClaw session hosting from this node's local installation. */
+  workerRuns?: {
+    /** Advertise this paired node as a worker session host (default: false). */
+    enabled?: boolean;
+  };
   /** Browser proxy settings for node hosts. */
   browserProxy?: NodeHostBrowserProxyConfig;
   /** MCP servers started and exposed by the headless node host. */

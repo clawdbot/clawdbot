@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
+import type { WorkerDesktopApp, WorkerProfile } from "../../plugins/capability-provider.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerTunnelHandle,
@@ -6,17 +9,30 @@ import type {
   WorkerTunnelStatus,
 } from "./tunnel-contract.js";
 
+export function deriveEnvironmentIntent(idempotencyKey: string): {
+  environmentId: string;
+  provisionOperationId: string;
+} {
+  const digest = createHash("sha256").update(idempotencyKey).digest("hex");
+  return {
+    environmentId: `worker:${digest.slice(0, 32)}`,
+    provisionOperationId: `provision:v2:${digest}`,
+  };
+}
+
 /** Non-secret worker projection available to Gateway request handlers. */
 export type WorkerEnvironmentServiceRecord = {
   environmentId: string;
   providerId: string;
   leaseId: string | null;
+  sharedHost: boolean | null;
   state: WorkerEnvironmentState;
   ownerEpoch: number;
   createdAtMs: number;
   idleSinceAtMs: number | null;
   attachedSessionIds: readonly string[];
   desktopAvailable: boolean;
+  desktopApps: readonly WorkerDesktopApp["id"][];
   tunnelStatus: WorkerTunnelStatus;
   error?: string;
 };
@@ -27,6 +43,11 @@ export type WorkerDesktopObserveResult = {
   expiresAtMs: number;
   control: boolean;
   vncPassword?: string;
+};
+
+export type WorkerDesktopLaunchResult = {
+  app: WorkerDesktopApp["id"];
+  status: "ready";
 };
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
@@ -40,6 +61,10 @@ export type WorkerEnvironmentServiceContract = {
     environmentId: string;
     control: boolean;
   }): Promise<WorkerDesktopObserveResult>;
+  launchDesktopApp(request: {
+    environmentId: string;
+    app: WorkerDesktopApp["id"];
+  }): Promise<WorkerDesktopLaunchResult>;
   startTunnel(request: WorkerTunnelRequest): Promise<WorkerTunnelHandle>;
   stopTunnel(environmentId: string, ownerEpoch?: number): Promise<void>;
 };
@@ -49,6 +74,12 @@ export type WorkerPlacementDispatchRequest = {
   sessionKey: string;
   agentId: string;
   profileId: string;
+  executionMode: WorkerPlacementExecutionMode;
+  deviceId?: string;
+  inheritedProfile?: {
+    providerId: string;
+    profileSnapshot: WorkerProfile;
+  };
 };
 
 export type WorkerPlacementReclaimRequest = {
@@ -65,7 +96,7 @@ export type WorkerPlacementDispatchContract = {
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
   reclaim?(
     request: WorkerPlacementReclaimRequest,
-  ): Promise<Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>>;
+  ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>>;
   forceDestroyEnvironment?(
     environmentId: string,
     onCleanupError?: (error: unknown) => void,

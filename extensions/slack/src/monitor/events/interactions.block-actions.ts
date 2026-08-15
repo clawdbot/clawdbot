@@ -11,10 +11,11 @@ import {
   timestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
+  asOptionalRecord,
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { decodeSlackApprovalAction, type SlackApprovalAction } from "../../approval-actions.js";
 import { isSlackApprovalAuthorizedSender } from "../../approval-auth.js";
 import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
@@ -27,6 +28,7 @@ import {
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_LINK_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
+  SLACK_SESSION_LINK_ACTION_ID,
 } from "../../reply-action-ids.js";
 import { truncateSlackText } from "../../truncate.js";
 import {
@@ -187,13 +189,6 @@ function summarizeRichTextPreview(value: unknown): string | undefined {
   }
   const max = 120;
   return joined.length <= max ? joined : truncateSlackText(joined, max);
-}
-
-function readInteractionAction(raw: unknown) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  return raw as Record<string, unknown>;
 }
 
 export function summarizeAction(action: Record<string, unknown>): SlackActionSummary {
@@ -393,6 +388,9 @@ function readSlackApprovalAction(parsed: ParsedSlackBlockAction): SlackApprovalA
 }
 
 function isSlackReplyLinkAction(parsed: ParsedSlackBlockAction): boolean {
+  if (parsed.actionId === SLACK_SESSION_LINK_ACTION_ID) {
+    return true;
+  }
   if (
     parsed.actionId === SLACK_REPLY_LINK_ACTION_ID ||
     parsed.actionId.startsWith(`${SLACK_REPLY_LINK_ACTION_ID}:`)
@@ -431,7 +429,7 @@ function parseSlackBlockAction(params: {
   log?: (message: string) => void;
 }): ParsedSlackBlockAction | null {
   const typedBody = params.body as SlackBlockActionBody;
-  const typedAction = readInteractionAction(params.action);
+  const typedAction = asOptionalRecord(params.action);
   if (!typedAction) {
     params.log?.(
       `slack:interaction malformed action payload channel=${typedBody.channel?.id ?? typedBody.container?.channel_id ?? "unknown"} user=${
@@ -657,6 +655,7 @@ async function handleSlackApprovalInteraction(params: {
       approvalKind: params.approval.approvalKind,
       decision: params.approval.decision,
       channel: "slack",
+      accountId: params.ctx.accountId,
       senderId: params.parsed.userId,
     });
     const terminalLabel = resolveSlackApprovalTerminalLabel(result.approval);
@@ -752,6 +751,7 @@ async function handleSlackLegacyApprovalInteraction(params: {
         approvalId: parsedApproval.approvalId,
         decision: parsedApproval.decision,
         channel: "slack",
+        accountId: params.ctx.accountId,
         senderId: params.parsed.userId,
         resolveMethod,
       });
@@ -912,6 +912,8 @@ async function resolveSlackBlockActionCommandAuthorized(params: {
   let channelUsers: Array<string | number> = [];
   if (isRoom && params.parsed.channelId) {
     const channelConfig = resolveSlackChannelConfig({
+      teamId: params.eventScope?.teamId ?? params.ctx.teamId,
+      allowUnscoped: params.ctx.installationIdentity?.kind !== "enterprise",
       channelId: params.parsed.channelId,
       channelName: params.auth.channelName,
       channels: params.ctx.channelsConfig,
@@ -924,6 +926,7 @@ async function resolveSlackBlockActionCommandAuthorized(params: {
 
   const commandIngress = await resolveSlackCommandIngress({
     ctx: params.ctx,
+    teamId: params.eventScope?.teamId ?? params.ctx.teamId,
     senderId: params.parsed.userId,
     senderName,
     channelType: params.auth.channelType ?? "channel",
@@ -971,7 +974,7 @@ function enqueueSlackBlockActionEvent(params: {
   params.ctx.runtime.log?.(
     `slack:interaction action=${params.parsed.actionId} type=${params.parsed.actionSummary.actionType ?? "unknown"} user=${params.parsed.userId} channel=${params.parsed.channelId}`,
   );
-  const sessionKey = params.ctx.resolveSlackSystemEventSessionKey({
+  const route = params.ctx.resolveSlackSystemEventRoute({
     channelId: params.parsed.channelId,
     channelType: params.auth.channelType,
     senderId: params.parsed.userId,
@@ -987,8 +990,7 @@ function enqueueSlackBlockActionEvent(params: {
     normalizeOptionalString(params.parsed.typedActionWithText.action_ts) ??
       params.parsed.typedBody.trigger_id,
   ].filter(Boolean);
-  const queued = enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
-    sessionKey,
+  const queued = enqueueRoutedSystemEvent(params.formatSystemEvent(eventPayload), route, {
     contextKey: contextParts.join(":"),
     deliveryContext: {
       channel: "slack",
@@ -1002,7 +1004,8 @@ function enqueueSlackBlockActionEvent(params: {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
-      sessionKey,
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
       heartbeat: { target: "last" },
     });
   }

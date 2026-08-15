@@ -11,8 +11,8 @@ import { log } from "../logger.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-finalize.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-setup.js";
+import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 import type { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
-import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 /** Tracks native prompt and abort settlement through attempt cleanup. */
@@ -91,7 +91,6 @@ type CleanupEmbeddedAttemptSessionInput = {
     timedOutDuringToolExecution: boolean;
     timedOutByRunBudget: boolean;
     promptError: unknown;
-    beforeAgentRunBlocked: boolean;
     beforeAgentRunBlockedBy?: string;
   };
 };
@@ -175,23 +174,21 @@ export async function cleanupEmbeddedAttemptSessionPhase(
 
   const finalState = input.readState();
   const cleanupFailure = cleanupError;
+  const beforeAgentRunBlocked = finalState.beforeAgentRunBlockedBy !== undefined;
+  const diagnosticTerminalAborted =
+    finalState.aborted || finalState.timedOut || finalState.idleTimedOut;
   input.emitDiagnosticRunCompleted?.(
     cleanupFailure
       ? "error"
-      : finalState.beforeAgentRunBlocked
+      : beforeAgentRunBlocked
         ? "blocked"
         : finalState.promptError
           ? "error"
-          : finalState.aborted ||
-              finalState.timedOut ||
-              finalState.idleTimedOut ||
-              finalState.timedOutDuringCompaction
+          : diagnosticTerminalAborted
             ? "aborted"
             : "completed",
     cleanupFailure ?? finalState.promptError,
-    finalState.beforeAgentRunBlocked
-      ? { blockedBy: finalState.beforeAgentRunBlockedBy ?? "before_agent_run" }
-      : undefined,
+    beforeAgentRunBlocked ? { blockedBy: finalState.beforeAgentRunBlockedBy } : undefined,
   );
 
   if (!cleanupFailure) {

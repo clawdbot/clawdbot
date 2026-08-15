@@ -15,6 +15,7 @@ import {
   closeStagedPane,
   discardStateStagedAttachments,
   preparePaneStagedAttachments,
+  replacePaneStagedAttachmentGatewayOwner,
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
@@ -45,11 +46,13 @@ function state(attachments: ChatAttachment[], sessionKey = "agent:main:one") {
 describe("staged chat attachment pane handoff", () => {
   it("discards a mounted package before clearing a closed pane handoff", () => {
     const calls: string[] = [];
-    const pane = {
-      paneId: "p1",
-      discardStagedAttachments: () => calls.push("discard"),
-    };
-    const root = { querySelectorAll: () => [pane] } as unknown as ParentNode;
+    const root = {
+      querySelectorAll: () => [
+        { paneId: "p1", discardStagedAttachments: () => calls.push("discard-one") },
+        { paneId: "p1", discardStagedAttachments: () => calls.push("discard-two") },
+        { paneId: "p2", discardStagedAttachments: () => calls.push("wrong-pane") },
+      ],
+    } as unknown as ParentNode;
     const context = {
       chatAttachmentHandoff: { clearPane: () => calls.push("clear") },
     } as unknown as ApplicationContext;
@@ -69,7 +72,7 @@ describe("staged chat attachment pane handoff", () => {
     } satisfies ChatSplitLayout;
 
     expect(closeStagedPane(context, root, layout, "p1")?.id).toBe("p2");
-    expect(calls).toEqual(["discard", "clear"]);
+    expect(calls).toEqual(["discard-one", "discard-two", "clear"]);
   });
 
   it("does not restage a closed pane when its id is reused after disconnect", () => {
@@ -178,6 +181,37 @@ describe("staged chat attachment pane handoff", () => {
     expect(current.chatComposerFallbackByScope.fallback?.attachments).toEqual([]);
   });
 
+  it("keeps plain staged attachments across a gateway client rotation", () => {
+    const previousOwner = {} as GatewayBrowserClient;
+    const nextOwner = {} as GatewayBrowserClient;
+    const handoff = createChatAttachmentHandoff();
+    const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
+    const plainImage = storedAttachment("rotation-image");
+    const plainFile = storedAttachment("rotation-file", "application/pdf");
+    const annotated: ChatAttachment = {
+      ...storedAttachment("rotation-annotation"),
+      browserAnnotation: { pageUrl: "https://example.test" } as never,
+    };
+    const current = state([plainImage, plainFile, annotated]);
+
+    const returned = replacePaneStagedAttachmentGatewayOwner(
+      context,
+      "p1",
+      current,
+      previousOwner,
+      nextOwner,
+    );
+
+    expect(returned).toBe(nextOwner);
+    // Plain payloads are client-local; rotation must not silently discard them.
+    expect(current.chatAttachments).toEqual([plainImage, plainFile]);
+    expect(getChatAttachmentDataUrl(plainImage)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(plainFile)).not.toBeNull();
+    // Annotation Undo context dies with the old client; its payload is released.
+    expect(getChatAttachmentDataUrl(annotated)).toBeNull();
+    discardStateStagedAttachments(current);
+  });
+
   it("restores a mixed package only to the exact mounted owner", () => {
     const owner = {} as GatewayBrowserClient;
     const otherOwner = {} as GatewayBrowserClient;
@@ -211,10 +245,11 @@ describe("staged chat attachment pane handoff", () => {
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const displaced = storedAttachment("displaced");
     const mounted = storedAttachment("mounted");
+    const remount = state([]);
     handoff.prepare({
       owner,
       paneId: "p1",
-      scopeKey: "active",
+      scopeKey: storedChatOutboxScopeKey(resolveStoredChatOutboxScope(remount, remount.sessionKey)),
       attachments: [],
       fallbacks: {
         collision: {
@@ -225,7 +260,6 @@ describe("staged chat attachment pane handoff", () => {
         },
       },
     });
-    const remount = state([]);
     remount.chatComposerFallbackByScope = {
       collision: {
         attachments: [mounted],

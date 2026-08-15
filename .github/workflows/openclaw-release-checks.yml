@@ -9,6 +9,11 @@ on:
         description: Branch, tag, or full commit SHA to validate
         required: true
         type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA target
+        required: false
+        default: ""
+        type: string
       expected_sha:
         description: Optional full SHA that ref must resolve to
         required: false
@@ -127,7 +132,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
@@ -285,11 +290,13 @@ jobs:
             echo "Failed to resolve selected ref SHA." >&2
             exit 1
           fi
-          if [[ -n "${EXPECTED_SHA// }" ]] && [[ "${selected_sha,,}" != "${EXPECTED_SHA,,}" ]]; then
+          normalized_selected_sha="$(printf '%s' "$selected_sha" | tr '[:upper:]' '[:lower:]')"
+          normalized_expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
+          if [[ -n "${normalized_expected_sha// }" ]] && [[ "$normalized_selected_sha" != "$normalized_expected_sha" ]]; then
             echo "Ref resolved to ${selected_sha}, expected ${EXPECTED_SHA}." >&2
             exit 1
           fi
-          echo "sha=${selected_sha,,}" >> "$GITHUB_OUTPUT"
+          echo "sha=${normalized_selected_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Validate Tideclaw alpha target matches workflow branch
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
@@ -507,7 +514,7 @@ jobs:
             done
 
             if [[ "$qa_filter_seen" == "true" ]]; then
-              repo_live_suite_filter="$(IFS=,; printf '%s' "${repo_filter_tokens[*]}")"
+              repo_live_suite_filter="$(IFS=,; printf '%s' "${repo_filter_tokens[*]-}")"
             fi
 
             if [[ "${#disabled_required_lanes[@]}" -gt 0 ]]; then
@@ -1974,7 +1981,7 @@ jobs:
       - name: Dispatch and await trusted Telegram QA
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_REF: ${{ needs.resolve_target.outputs.ref }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
         shell: bash
         run: |
@@ -1983,7 +1990,6 @@ jobs:
           workflow="openclaw-release-telegram-qa.yml"
           run_id=""
           run_name=""
-
           find_child_runs() {
             RUN_NAME="$run_name" gh api -X GET \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
@@ -2035,7 +2041,8 @@ jobs:
               --ref main \
               -f dispatch_id="$dispatch_id" \
               -f expected_trusted_workflow_sha="$expected_trusted_workflow_sha" \
-              -f target_ref="$TARGET_REF" \
+              -f target_context_ref="$TARGET_CONTEXT_REF" \
+              -f target_ref="$TARGET_SHA" \
               -f target_sha="$TARGET_SHA"
 
             for _ in $(seq 1 60); do

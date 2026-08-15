@@ -39,6 +39,29 @@
   --input: #1e2028;
   --ring: #ff5c5c;
 
+  /* Shared rail chrome. Light and dark themes inherit their actual colors
+     through --border/--accent while keeping one geometry contract. */
+  --rail-header-height: 48px;
+  --rail-header-padding-start: 12px;
+  --rail-header-padding-end: 8px;
+  --rail-header-action-size: 28px;
+  --rail-header-action-glyph-size: 16px;
+  --rail-header-action-color: var(--muted);
+  --rail-header-action-hover-color: var(--text);
+  --rail-header-action-active-color: var(--accent);
+  --rail-header-action-disabled-opacity: 0.4;
+  --rail-header-action-gap: 2px;
+  --rail-header-copy-gap: 2px;
+  --rail-header-background: var(--bg);
+  --rail-header-eyebrow-size: var(--control-ui-text-xs);
+  --rail-header-eyebrow-letter-spacing: 0.04em;
+  --rail-header-title-size: var(--control-ui-text-sm);
+  --rail-header-title-weight: 600;
+  --rail-divider-color: var(--border);
+  --rail-divider-size: 1px;
+  --rail-divider-active-size: 2px;
+  --rail-resizer-size: 4px;
+
   /*
    * Accent - Punchy signature red
    *
@@ -57,6 +80,17 @@
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #fafafa;
   --accent-glow: rgba(255, 92, 92, 0.2);
+
+  /* Link text keeps the accent hue but cannot be --accent: chat paints user
+     bubbles from that same token, so a link there fights its own background.
+     Derived, not per-theme — --accent-hover is every palette's audited lifted
+     accent and custom themes derive it too, and the extra 15% of --text buys
+     the margin the sender-tinted peer bubbles need (the lightest tint hue on
+     openknot sits at 4.3:1 against bare --accent-hover). Both steps move toward
+     the text color, which raises contrast in light and dark alike, so hover is
+     feedback that never costs readability. */
+  --link: color-mix(in srgb, var(--accent-hover) 85%, var(--text));
+  --link-hover: color-mix(in srgb, var(--link) 82%, var(--text));
   --selection-bg: #005fcc;
   --selection-fg: #ffffff;
   --primary: #d13c3c;
@@ -69,6 +103,25 @@
   --accent-2: #14b8a6;
   --accent-2-muted: rgba(20, 184, 166, 0.7);
   --accent-2-subtle: rgba(20, 184, 166, 0.1);
+
+  /* Theme-invariant presentation colors. */
+  --button-icon-bg: #ffffff;
+  --brand-logo-chip-bg: #ffffff;
+  --qr-bg: #ffffff;
+  --qr-text: #444444;
+  --media-bg: #000000;
+  --media-foreground: #ffffff;
+  --exec-highlight: #f97316;
+  --moon-highlight: #fef3c7;
+  --moon-base: #fbbf24;
+  --workshop-warm: #ff8a5c;
+  --workshop-teal: #14b8a6;
+  --workshop-cyan: #0891b2;
+
+  /* Provider and product brand colors never follow the active UI theme. */
+  --brand-codex: #10a37f;
+  --brand-claude: #d97757;
+  --brand-google: #4285f4;
 
   /*
    * Semantic status
@@ -103,6 +156,10 @@
   --danger-subtle: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
   --info-subtle: rgba(96, 165, 250, 0.08);
+  --warn-bright: #f59e0b;
+  --warn-strong: #d97706;
+  --danger-solid-hover: #dc2626;
+  --pr-merged: #a78bfa;
   /* Run state needs its own token: --accent is red in every shipped theme and
      sits on top of --danger, so a spinning ring reads as a failed session.
      Graphical indicator, judged against WCAG 1.4.11 (3:1), not the label audit
@@ -116,6 +173,17 @@
 
   /* Grid */
   --grid-line: rgba(255, 255, 255, 0.03);
+
+  /* GitHub syntax palette shared by highlighted code and file previews. */
+  --hljs-keyword: #ff8a80;
+  --hljs-number: #79c0ff;
+  --hljs-string: #a5d6ff;
+  --hljs-title: #d2a8ff;
+  --hljs-type: #ffa657;
+  --hljs-attribute: #7ee787;
+  --hljs-meta: #c9d1d9;
+  --hljs-deletion: #ffa198;
+  --hljs-addition: #7ee787;
 
   /* Theme transition */
   --theme-switch-x: 50%;
@@ -166,6 +234,13 @@
   --radius-full: 9999px;
   --radius: 10px;
 
+  /* Menu items stay optically parallel to their panel edge: radius 6 + padding 4
+     = panel radius 10. Shared knobs keep transient menus from drifting again. */
+  --menu-radius: var(--radius-md);
+  --menu-item-radius: var(--radius-sm);
+  --menu-item-height: 28px;
+  --menu-padding: 4px;
+
   /* Transitions - Crisp and responsive */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
@@ -180,12 +255,20 @@
 
   /* Layering */
   --z-dropdown: 100;
+  --z-toast: 2000;
 
   /* Custom select chevron. Data URIs cannot read var(--muted), so the stroke
      color is baked per theme mode; light mode overrides the whole image. */
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
   color-scheme: dark;
+}
+
+/* Menu actions follow the platform 44px touch-target contract for coarse pointers. */
+@media (pointer: coarse) {
+  :root {
+    --menu-item-height: 44px;
+  }
 }
 
 /* The claw family deepens only the text-bearing destructive fill. */
@@ -279,6 +362,7 @@
   --danger-subtle: rgba(185, 28, 28, 0.08);
   --info: #1d4ed8;
   --info-subtle: rgba(29, 78, 216, 0.08);
+  --pr-merged: #7c3aed;
   /* See the dark-theme note: run state stays off --accent. #0d9488 is 3.6:1 on
      --bg, above the 3:1 WCAG 1.4.11 bar for a non-text indicator. */
   --run: #0d9488;
@@ -288,6 +372,14 @@
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 12px var(--accent-glow);
 
   --grid-line: rgba(60, 42, 24, 0.05);
+
+  --hljs-keyword: #cf222e;
+  --hljs-number: #0550ae;
+  --hljs-string: #0a3069;
+  --hljs-title: #8250df;
+  --hljs-type: #953800;
+  --hljs-attribute: #116329;
+  --hljs-meta: #57606a;
 
   /* Light shadows - Subtle, warm-tinted */
   --shadow-sm: 0 1px 2px rgba(60, 42, 24, 0.05);
@@ -600,6 +692,19 @@
   box-sizing: border-box;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 html,
 body {
   height: 100%;
@@ -610,11 +715,25 @@ body {
      that `hidden` would let strand the shell off-screen. */
   overflow: clip;
   overscroll-behavior: none;
+  /* The app supplies its own pressed and selected states; WebKit's tap flash
+     reads as foreign chrome on top of them. */
+  -webkit-tap-highlight-color: transparent;
   /* iOS WKWebView font boosting inflates rendered text without re-running
      layout, so labels spill out of fixed-size chrome (welcome chips, badges).
      Locking text-size-adjust keeps rendered metrics equal to layout metrics. */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+}
+
+a,
+button,
+label,
+summary,
+input,
+select,
+textarea,
+[role="button"] {
+  touch-action: manipulation;
 }
 
 body {
@@ -629,6 +748,18 @@ body {
   user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* iOS Safari zooms the viewport when a focused text control is under 16px;
+   important keeps feature-local typography from silently dropping this floor.
+   Controls that manage their own touch size declare it via
+   --control-ui-touch-input-size; the floor never caps above 16px. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, var(--control-ui-touch-input-size, 1em)) !important;
+  }
 }
 
 @media (min-width: 1600px) {
@@ -699,6 +830,7 @@ openclaw-app {
    a page owns; installed/app-like windows are desktop chrome and keep the arrow.
    Controls consume --cursor-action rather than hardcoding a cursor, and real
    hyperlinks keep the UA pointer in every mode. */
+/* stylelint-disable-next-line no-duplicate-selectors -- cursor policy block, see comment above */
 :root {
   --cursor-action: pointer;
 }
@@ -771,6 +903,21 @@ wa-dropdown-item[disabled] {
   cursor: not-allowed;
 }
 
+/* Keep Web Awesome's checkbox rail trailing so it cannot shift menu icons and labels. */
+wa-dropdown-item[checkbox-adjacent] {
+  padding-inline-start: 1em;
+}
+
+wa-dropdown-item[type="checkbox"]::part(checkmark) {
+  order: 1;
+  margin-inline: 0.75em 0;
+}
+
+wa-dropdown-item[type="checkbox"] {
+  display: flex;
+  align-items: center;
+}
+
 button,
 input,
 textarea,
@@ -835,6 +982,17 @@ textarea,
   }
   to {
     opacity: 1;
+  }
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 

@@ -385,6 +385,13 @@ describe("command-startup-policy", () => {
     expect(resolvePolicy({ commandPath: ["mcp", "serve"] }).suppressDoctorStdout).toBe(true);
   });
 
+  it("reserves stdout for the browser native-host protocol", () => {
+    const policy = resolvePolicy({ commandPath: ["browser", "extension", "native-host"] });
+
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.suppressDoctorStdout).toBe(true);
+  });
+
   it("reserves stdout for the node worker protocol", () => {
     const policy = resolvePolicy({ commandPath: ["node", "worker"] });
 

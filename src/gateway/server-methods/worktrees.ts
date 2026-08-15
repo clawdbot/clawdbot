@@ -15,6 +15,7 @@ import {
   WorktreeSnapshotError,
 } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
+import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
@@ -103,17 +104,24 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
           context.getRuntimeConfig(),
         );
         if (!containment) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `worktrees.branches outside configured agent workspaces requires gateway scope: ${ADMIN_SCOPE}`,
-            ),
-          );
-          return;
+          const projectRoot = await resolveRecordedProjectRoot(params.repoRoot);
+          if (!projectRoot) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `worktrees.branches outside configured agent workspaces requires gateway scope: ${ADMIN_SCOPE}`,
+              ),
+            );
+            return;
+          }
+          // The stored project row is the authorization boundary, so write-scoped clients
+          // may inspect its canonical repo root without workspace containment.
+          repoRoot = projectRoot;
+        } else {
+          repoRoot = containment.path;
         }
-        repoRoot = containment.path;
       }
       const result = params.includeRepositoryStatus
         ? await service.listRepositoryBranches(repoRoot, {

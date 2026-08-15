@@ -5,8 +5,9 @@ import {
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
   type BeforeToolCallFailureDisposition,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AttemptFailureSource } from "./attempt-terminal.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
@@ -37,12 +38,11 @@ import {
   readCodexErrorNotificationMessage,
   readItem,
   readItemString,
-  readString,
 } from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
 import {
+  isCodexNotificationForTurn,
   readCodexNotificationThreadId,
-  readCodexNotificationTurnId,
 } from "./notification-correlation.js";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
@@ -76,6 +76,8 @@ export class CodexAppServerEventProjector {
   private readonly toolProgressProjection: CodexToolProgressProjection;
   private readonly toolTranscriptProjection: CodexToolTranscriptProjection;
   private completedTurn: CodexTurn | undefined;
+  /** Structured overloads may continue once the exact settled transcript is captured. */
+  settledTurnFailureFinalizationAllowed = false;
   private promptError: unknown;
   private promptErrorSource: AttemptFailureSource | null = null;
   private synthesizedMissingToolResultError: string | null = null;
@@ -219,7 +221,7 @@ export class CodexAppServerEventProjector {
       if (readCodexNotificationThreadId(params) !== this.threadId) {
         return;
       }
-    } else if (!this.isNotificationForTurn(params)) {
+    } else if (!isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
       return;
     }
     this.nativeToolLifecycleProjector.handleNotification(notification);
@@ -284,6 +286,9 @@ export class CodexAppServerEventProjector {
         if (params.willRetry === true) {
           break;
         }
+        this.settledTurnFailureFinalizationAllowed =
+          (isJsonObject(params.error) ? params.error.codexErrorInfo : undefined) ===
+          "serverOverloaded";
         this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
@@ -343,6 +348,13 @@ export class CodexAppServerEventProjector {
 
   recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
     this.toolTranscriptProjection.recordDynamicToolCall(params);
+  }
+
+  /** Projects a successful OpenClaw update_plan call through the native plan stream. */
+  recordDynamicPlanUpdate(params: unknown): void {
+    if (isJsonObject(params)) {
+      this.reasoningProjection.handleTurnPlanUpdated(params, "openclaw");
+    }
   }
 
   recordDynamicToolResult(params: {
@@ -438,7 +450,7 @@ export class CodexAppServerEventProjector {
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
-      this.options.onContextCompacted?.();
+      await this.options.onContextCompacted?.();
       await runAgentHarnessAfterCompactionHook({
         sessionFile: this.params.sessionFile,
         messages: await this.toolTranscriptProjection.readMirroredSessionMessages(),
@@ -486,6 +498,8 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.completedTurn = turn;
+    this.settledTurnFailureFinalizationAllowed =
+      turn.status === "failed" && turn.error?.codexErrorInfo === "serverOverloaded";
     if (turn.status !== "completed") {
       this.responseCompletions.clear();
     }
@@ -626,12 +640,6 @@ export class CodexAppServerEventProjector {
       // Downstream event consumers must not corrupt the canonical Codex turn projection.
       embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
     }
-  }
-
-  private isNotificationForTurn(params: JsonObject): boolean {
-    const threadId = readCodexNotificationThreadId(params);
-    const turnId = readCodexNotificationTurnId(params);
-    return threadId === this.threadId && turnId === this.turnId;
   }
 
   private isHookNotificationForCurrentThread(params: JsonObject): boolean {

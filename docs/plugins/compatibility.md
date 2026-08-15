@@ -22,8 +22,8 @@ Plugin compatibility contracts are tracked in the core registry at
 - owner: `sdk`, `config`, `setup`, `channel`, `provider`, `plugin-execution`,
   `agent-runtime`, or `core`
 - introduction and deprecation dates when applicable
-- an exact removal date once the owning maintainer approves it; an omitted
-  `removeAfter` keeps a deprecated surface ineligible for removal
+- an exact `removeAfter` date or named `removalGate` once the owning maintainer
+  approves it; a record with neither remains ineligible for removal
 - replacement guidance
 - docs, diagnostics, and tests that cover the old and new behavior
 
@@ -63,11 +63,12 @@ that introduces its replacement. Migration sequence:
 6. Wait through the announced migration window.
 7. Remove only with explicit breaking-release approval.
 
-Deprecated records must include a warning start date, replacement, docs
-link, and a final removal date no more than three months after the warning
-starts. Do not add a deprecated compatibility path with an open-ended
-removal window unless maintainers explicitly decide it is permanent
-compatibility and mark it `active` instead.
+Deprecated records must include a warning start date, replacement, docs link,
+and either a final removal date no more than three months after the warning
+starts or an explicit version boundary such as `next-plugin-sdk-major`. Do not
+add a deprecated compatibility path with an open-ended removal window unless
+maintainers explicitly decide it is permanent compatibility and mark it
+`active` instead.
 
 ## Current compatibility areas
 
@@ -77,8 +78,8 @@ separately tracked so supported upgrade paths can still repair old config.
 
 The remaining dated compatibility areas are:
 
-- the August and September SDK subpath windows listed in the migration guide
-- `api.on("deactivate", ...)` and `api.on("subagent_spawning", ...)` hook aliases
+- the September SDK subpath window listed in the migration guide
+- the `api.on("subagent_spawning", ...)` hook alias
 - memory-specific embedding registration and the beta.5 session-store bridge
 - WhatsApp inbound callback aliases described below
 - explicit channel target parsing and `openclaw/plugin-sdk/messaging-targets`

@@ -1,4 +1,5 @@
 // Status, health, sessions, and task/flow command registration.
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -6,7 +7,6 @@ import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
-import { parsePositiveIntOrUndefined, parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
@@ -68,7 +68,7 @@ function addSessionsListOptions(command: Command): Command {
     .option("--json", "Output as JSON", false)
     .option("--verbose", "Verbose logging", false)
     .option("--store <path>", "Path to session store (default: resolved from config)")
-    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--agent <id>", "Agent id to inspect (required for multiple explicit agents)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .option("--active <minutes>", "Only show sessions updated within the past N minutes")
     .option("--limit <count>", 'Max sessions to show (default: 100; use "all" for full output)');
@@ -178,7 +178,7 @@ function registerSessionsLifecycleCommand(
       ) {
         return;
       }
-      const timeoutMs = parseStrictPositiveIntOrUndefined(opts.timeout);
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
       if (opts.timeout !== undefined && timeoutMs === undefined) {
         defaultRuntime.error("--timeout must be a positive integer (milliseconds).");
         defaultRuntime.exit(1);
@@ -208,7 +208,7 @@ function registerSessionsLifecycleCommand(
 }
 
 function parseTimeoutMs(timeout: unknown): number | null | undefined {
-  const parsed = parsePositiveIntOrUndefined(timeout);
+  const parsed = parseStrictPositiveInteger(timeout);
   if (timeout !== undefined && parsed === undefined) {
     defaultRuntime.error("--timeout must be a positive integer (milliseconds)");
     defaultRuntime.exit(1);
@@ -218,7 +218,7 @@ function parseTimeoutMs(timeout: unknown): number | null | undefined {
 }
 
 function parseTasksAuditLimit(limit: unknown): number | null | undefined {
-  const parsed = parseStrictPositiveIntOrUndefined(limit);
+  const parsed = parseStrictPositiveInteger(limit);
   if (limit !== undefined && parsed === undefined) {
     defaultRuntime.error("--limit must be a positive integer, for example --limit 25.");
     defaultRuntime.exit(1);
@@ -250,6 +250,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--json", "Output JSON instead of text", false)
     .option("--all", "Full diagnosis (read-only, pasteable)", false)
     .option("--usage", "Show model provider usage/quota snapshots", false)
+    .option("--agent <id>", "Agent id for --usage auth scope")
     .option("--deep", "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
     .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
     .option("--verbose", "Verbose logging", false)
@@ -283,6 +284,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             all: Boolean(opts.all),
             deep: Boolean(opts.deep),
             usage: Boolean(opts.usage),
+            ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
             timeoutMs,
             verbose,
           },
@@ -356,7 +358,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("cleanup")
     .description("Run session-store maintenance now")
     .option("--store <path>", "Path to session store (default: resolved from config)")
-    .option("--agent <id>", "Agent id to maintain (default: configured default agent)")
+    .option("--agent <id>", "Agent id to maintain (required for multiple explicit agents)")
     .option("--all-agents", "Run maintenance across all configured agents", false)
     .option("--dry-run", "Preview maintenance actions without writing", false)
     .option("--enforce", "Apply maintenance even when configured mode is warn", false)
@@ -432,7 +434,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--tail <count>", "Number of existing trajectory events to show", "80")
     .option("--follow", "Continue following for new trajectory events", false)
     .option("--store <path>", "Path to session store (default: resolved from config)")
-    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--agent <id>", "Agent id to inspect (required for multiple explicit agents)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
@@ -555,13 +557,13 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       ) {
         return;
       }
-      const maxLines = parseStrictPositiveIntOrUndefined(opts.maxLines);
+      const maxLines = parseStrictPositiveInteger(opts.maxLines);
       if (opts.maxLines !== undefined && maxLines === undefined) {
         defaultRuntime.error("--max-lines must be a positive integer.");
         defaultRuntime.exit(1);
         return;
       }
-      const timeoutMs = parseStrictPositiveIntOrUndefined(opts.timeout);
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
       if (opts.timeout !== undefined && timeoutMs === undefined) {
         defaultRuntime.error("--timeout must be a positive integer (milliseconds).");
         defaultRuntime.exit(1);

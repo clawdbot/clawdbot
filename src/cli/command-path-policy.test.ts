@@ -270,6 +270,11 @@ describe("command-path-policy", () => {
       ownsProtocolStdout: true,
       networkProxy: "bypass",
     });
+    expectResolvedPolicy(["browser", "extension", "native-host"], {
+      hideBanner: true,
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    });
     expectResolvedPolicy(["configure"], {
       configGuard: "skip",
       loadPlugins: "never",

@@ -494,7 +494,6 @@ describe("claws cli", () => {
   it("applies a minimal Claw only after explicit consent", async () => {
     const manifestPath = await writeManifest();
     const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
-    const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
     const plan = JSON.parse(mocks.logs[0] ?? "{}");
     mocks.logs.length = 0;
@@ -508,19 +507,20 @@ describe("claws cli", () => {
       plan.planIntegrity,
       "--workspace",
       workspace,
-      "--json",
     ]);
 
     expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
       expect.objectContaining({ planIntegrity: plan.planIntegrity }),
       expect.objectContaining({ consentPlanIntegrity: plan.planIntegrity }),
     );
-    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
-      schemaVersion: "openclaw.clawAddResult.v1",
-      stability: "experimental",
-      status: "complete",
-      agent: { finalId: "demo-agent", workspace: expectedWorkspace },
-    });
+    expect(mocks.logs[0]).toBe(
+      "Experimental: Claws contracts may change while RFC 0016 is under review.",
+    );
+    expect(mocks.runtime.log.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applyClawAddPlan.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(mocks.logs).toContain("Added agent: demo-agent");
+    expect(mocks.logs.some((line) => line.startsWith("Workspace: "))).toBe(true);
   });
 
   it("resumes consented add with the matching in-flight workspace on disk", async () => {
@@ -852,6 +852,12 @@ describe("claws cli", () => {
 
   it("uses the source recorded by the installed Claw when --from is omitted", async () => {
     const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+    await mkdir(join(root, "profiles"));
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "utf8",
+    );
     mocks.readClawStatus.mockResolvedValue({
       schemaVersion: "openclaw.clawStatus.v1",
       records: [
@@ -887,6 +893,14 @@ describe("claws cli", () => {
       expect.objectContaining({
         agentId: "demo-agent",
         targetSource: expect.objectContaining({ name: "@acme/demo-agent", version: "1.2.3" }),
+        targetOpenClawProfile: expect.objectContaining({
+          agent: {
+            tools: expect.objectContaining({
+              profile: "full",
+              allow: expect.not.arrayContaining(["bundle-mcp"]),
+            }),
+          },
+        }),
       }),
     );
   });

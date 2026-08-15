@@ -219,6 +219,9 @@ function timeoutForProfile(
   if (typeof timeout === "number") {
     return timeout;
   }
+  if (timeout === "${{ matrix.group.timeout_minutes || 60 }}") {
+    return 60;
+  }
   const match = timeout?.match(
     /^\$\{\{ inputs\.(?:release_profile|release_test_profile) == 'full' && ([0-9]+) \|\| ([0-9]+) \}\}$/u,
   );
@@ -237,6 +240,9 @@ function evaluatedJobTimeouts(path: string, jobName: string, job: WorkflowJob): 
     return (["beta", "stable", "full"] as const).map((profile) =>
       timeoutForProfile(timeout, profile),
     );
+  }
+  if (timeout === "${{ matrix.group.timeout_minutes || 60 }}") {
+    return [60, 90];
   }
   if (timeout !== "${{ matrix.timeout_minutes }}") {
     throw new Error(`Unsupported timeout for ${path}:${jobName}: ${String(timeout)}`);
@@ -1036,6 +1042,60 @@ function runReleaseChecksSummary(params: {
 }
 
 describe("package acceptance workflow", () => {
+  it("forwards Plugin SDK acknowledgement through the canonical publish dispatch", () => {
+    const workflow = readWorkflow(RELEASE_PUBLISH_WORKFLOW);
+    const input = workflow.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
+    const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+    const downloadPreflight = workflowStep(resolveJob, "Download OpenClaw npm preflight manifest");
+    const validateEvidence = workflowStep(resolveJob, "Validate OpenClaw npm preflight manifest");
+    const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const dispatch = workflowStep(publishJob, "Dispatch publish workflows");
+
+    expect(readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8")).toContain(
+      "group: openclaw-release-publish-${{ inputs.npm_dist_tag }}",
+    );
+
+    expect(input).toEqual({
+      default: "",
+      description:
+        "8-character digest from the Plugin SDK API diff report when the release changes the SDK",
+      required: false,
+      type: "string",
+    });
+    expect(dispatch.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+    );
+    expect(validateEvidence.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+    );
+    expect(validateEvidence.env?.PLUGIN_SDK_API_VALIDATOR).toContain(
+      "plugin-sdk-api-release-evidence.mjs",
+    );
+    expect(validateEvidence.run).toContain('node "$PLUGIN_SDK_API_VALIDATOR"');
+    expect(validateEvidence.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
+    expect(validateEvidence.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
+    expect(validateEvidence.run).toContain('--current-selector-ref "$current_selector_ref"');
+    expect(validateEvidence.run).toContain('--current-selector-sha "$current_selector_sha"');
+    expect(validateEvidence.run).toContain("Immutable Plugin SDK API evidence artifact is missing");
+    expect(validateEvidence.run).toContain("cmp -s <(jq -S '.pluginSdkApi'");
+    expect(downloadPreflight.run).toContain('preflight_conclusion" != "success"');
+    expect(downloadPreflight.run).toContain(
+      'expected_extended_stable_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"',
+    );
+    expect(downloadPreflight.run).toContain(
+      'preflight_path" != ".github/workflows/openclaw-npm-release.yml"',
+    );
+    expect(validateEvidence.run).toContain(
+      'git merge-base --is-ancestor "$PREFLIGHT_WORKFLOW_SHA" "$WORKFLOW_SHA"',
+    );
+    expect(validateEvidence.run).toContain('"$PREFLIGHT_WORKFLOW_SHA" == "$EXPECTED_SHA"');
+    expect(validateEvidence.run).toContain('--workflow-sha "$PREFLIGHT_WORKFLOW_SHA"');
+    expect(publishJob.needs).toEqual(["resolve_release_target"]);
+    expect(dispatch.run).toContain(
+      '-f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}"',
+    );
+  });
+
   it("requires selected plugin names or complete immutable evidence for broad publication", () => {
     const selected = runReleasePublishInputValidation({
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "",
@@ -1508,7 +1568,6 @@ describe("package acceptance workflow", () => {
     const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     expect(setupNodeAction).toContain("Normalize container toolcache");
     expect(setupNodeAction).toContain("ln -s /__t /opt/hostedtoolcache");
-    expect(setupNodeAction).toContain("use-actions-cache: ${{ inputs.use-actions-cache }}");
 
     for (const workflowPath of workflowPaths()) {
       const workflowText = readFileSync(workflowPath, "utf8");
@@ -2700,8 +2759,8 @@ describe("package artifact reuse", () => {
         ),
       )
       .map(([jobId]) => jobId)
-      .sort();
-    expect(typedHarnessJobIds).toEqual(harnessJobCases.map(({ jobId }) => jobId).sort());
+      .toSorted();
+    expect(typedHarnessJobIds).toEqual(harnessJobCases.map(({ jobId }) => jobId).toSorted());
 
     for (const { jobId, planStepName, setupIf } of harnessJobCases) {
       const harnessJob = workflowJob(LIVE_E2E_WORKFLOW, jobId);
@@ -3574,12 +3633,9 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
     expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(workflow).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
-    expect(setupNodeWith["sticky-disk"]).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}",
-    );
-    expect(setupNodeWith["use-actions-cache"]).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && 'false' || 'true' }}",
-    );
+    expect(setupNodeWith).not.toHaveProperty("dependency-cache");
+    expect(setupNodeWith).not.toHaveProperty("sticky-disk");
+    expect(setupNodeWith["use-actions-cache"]).toBe("true");
     expect(checkTestboxJob["timeout-minutes"]).toBe(
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
@@ -3596,7 +3652,9 @@ describe("package artifact reuse", () => {
       checkTestboxSteps.indexOf(runTestboxStep) + 1,
     );
     expect(runArmTestboxStep.if).toBe("always()");
-    expect(runBuildArtifactsTestboxStep.if).toBe("always()");
+    expect(runBuildArtifactsTestboxStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && always()",
+    );
     expect(runWindowsTestboxStep.if).toBe("always()");
     expect(runTestboxStep["continue-on-error"]).toBeUndefined();
   });
@@ -3871,7 +3929,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("repo_live_suite_filter:");
     expect(workflow).toContain('repo_filter_tokens+=("$token")');
     expect(workflow).toContain(
-      'repo_live_suite_filter="$(IFS=,; printf \'%s\' "${repo_filter_tokens[*]}")"',
+      'repo_live_suite_filter="$(IFS=,; printf \'%s\' "${repo_filter_tokens[*]-}")"',
     );
     expect(workflow).toContain("cross_os_suite_filter:");
     expect(workflow).toContain("advisory: false");
@@ -6207,7 +6265,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
 
     for (const workflowPath of releaseWorkflowPaths) {
       const workflow = readWorkflow(workflowPath);
-      expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.15.0");
+      expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.16.0");
       expect(workflow.env?.PNPM_VERSION, workflowPath).toBeUndefined();
     }
 
@@ -6249,7 +6307,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const crossOs = readWorkflow(CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW);
     const packageAcceptance = readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW);
     const qaLive = readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW);
-    const performance = readWorkflow(PERFORMANCE_WORKFLOW);
     const profiles = ["beta", "stable", "full"] as const;
 
     const ciPreflight = workflowJob(CI_WORKFLOW, "preflight");
@@ -6343,29 +6400,33 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
           timeoutForProfile(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"], profile),
           timeoutForProfile(liveE2e.jobs?.prepare_docker_e2e_image?.["timeout-minutes"], profile),
           timeoutForProfile(liveE2e.jobs?.docker_e2e_image_ready?.["timeout-minutes"], profile),
-          timeoutForProfile(liveE2e.jobs?.validate_docker_lanes?.["timeout-minutes"], profile),
+          Math.max(
+            ...evaluatedJobTimeouts(
+              LIVE_E2E_WORKFLOW,
+              "validate_docker_lanes",
+              workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes"),
+            ),
+          ),
           timeoutForProfile(packageAcceptance.jobs?.summary?.["timeout-minutes"], profile),
           timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], profile),
         ],
       ]),
     ) as Record<(typeof profiles)[number], number[]>;
     expect(releasePackagePaths).toEqual({
-      beta: [30, 15, 60, 10, 30, 60, 5, 60, 5, 5],
-      stable: [30, 15, 60, 10, 30, 60, 5, 60, 5, 5],
-      full: [30, 15, 60, 10, 30, 90, 5, 60, 5, 5],
+      beta: [30, 15, 60, 10, 30, 60, 5, 90, 5, 5],
+      stable: [30, 15, 60, 10, 30, 60, 5, 90, 5, 5],
+      full: [30, 15, 60, 10, 30, 90, 5, 90, 5, 5],
     });
     const releaseChecksParent = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_checks");
     expect(releaseChecksParent["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
     expect(releaseChecksParent["timeout-minutes"]).toBe(420);
-    const releasePackageTimeouts = Object.fromEntries(
-      profiles.map((profile) => [
-        profile,
-        releasePackagePaths[profile].reduce((total, timeout) => total + timeout, 0),
-      ]),
-    );
-    expect(releasePackageTimeouts).toEqual({ beta: 280, stable: 280, full: 310 });
-    for (const profile of profiles) {
-      const childTimeout = releasePackageTimeouts[profile];
+    const releasePackageTimeouts = {
+      beta: releasePackagePaths.beta.reduce((total, timeout) => total + timeout, 0),
+      stable: releasePackagePaths.stable.reduce((total, timeout) => total + timeout, 0),
+      full: releasePackagePaths.full.reduce((total, timeout) => total + timeout, 0),
+    };
+    expect(releasePackageTimeouts).toEqual({ beta: 310, stable: 310, full: 340 });
+    for (const [profile, childTimeout] of Object.entries(releasePackageTimeouts)) {
       expect(childTimeout, `release-package:${profile}`).toBeLessThanOrEqual(420);
       expect(420 - childTimeout, `release-package:${profile}`).toBeGreaterThanOrEqual(60);
     }

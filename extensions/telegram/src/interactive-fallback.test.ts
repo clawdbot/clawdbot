@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleTelegramQuestionCallback } from "./bot-handlers.callback-questions.runtime.js";
+import { handleTelegramQuestionCallback } from "./bot-handlers.callback-actions.js";
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
 import { parseTelegramQuestionCallbackData } from "./question-callback-data.js";
 

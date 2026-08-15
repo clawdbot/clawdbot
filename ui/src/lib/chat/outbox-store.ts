@@ -8,6 +8,7 @@ import {
   resolveUiDefaultAgentId,
   resolveUiKnownSelectedGlobalAgentId,
 } from "../sessions/session-key.ts";
+import { compareChatQueueOrder } from "./chat-queue-order.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
 import {
   MAX_RETAINED_QUEUE_ITEMS,
@@ -276,7 +277,7 @@ function mergeStoredComposerSessions(
       [...(older.queue ?? []), ...(newest.queue ?? [])].map((item) => [item.id, item]),
     ).values(),
   )
-    .toSorted((left, right) => left.createdAt - right.createdAt)
+    .toSorted(compareChatQueueOrder)
     .slice(0, MAX_RETAINED_QUEUE_ITEMS);
   return {
     ...(draftOwner.draft ? { draft: draftOwner.draft } : {}),
@@ -678,7 +679,11 @@ export function listStoredChatOutboxes(state: ChatComposerScope): StoredChatOutb
     outboxes.push({
       sessionKey: scope.conversationKey,
       ...(scope.routingAgentId ? { agentId: scope.routingAgentId } : {}),
-      queue: session.queue.map((item) => applyStoredChatOutboxScope(item, scope)),
+      // Sort on the way out so every reader — drain head selection, projection,
+      // badges — sees one queue order instead of trusting storage array order.
+      queue: session.queue
+        .map((item) => applyStoredChatOutboxScope(item, scope))
+        .toSorted(compareChatQueueOrder),
     });
   }
   return outboxes.toSorted(

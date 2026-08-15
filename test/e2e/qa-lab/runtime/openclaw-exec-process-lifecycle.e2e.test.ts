@@ -171,7 +171,7 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
 
     const timedOut = await foregroundExecTool.execute("foreground-timeout", {
       command: nodeEvalCommand("setTimeout(() => {}, 5000);"),
-      timeout: 0.05,
+      timeoutSeconds: 0.05,
     });
     expect(timedOut.details).toMatchObject({
       status: "failed",

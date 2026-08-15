@@ -3,7 +3,12 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-clien
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { waitForActiveGatewayRootWork } from "../process/gateway-work-admission.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
@@ -23,6 +28,7 @@ function createContext(): GatewayRequestContext {
       error: vi.fn(),
     },
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }
@@ -151,7 +157,12 @@ describe("createGatewayInstanceRuntime", () => {
           sendText,
         },
       };
-      setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", source: "test", plugin }]));
+      const pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
+      stageActivePluginRegistry(
+        createTestRegistry([{ pluginId: "signal", source: "test", plugin }]),
+        null,
+        "default",
+      );
       const context = {
         ...createContext(),
         getRuntimeConfig: () => ({ channels: { signal: { enabled: true } } }),
@@ -184,7 +195,7 @@ describe("createGatewayInstanceRuntime", () => {
         expect(handleAction).not.toHaveBeenCalled();
       } finally {
         runtime.close();
-        setActivePluginRegistry(createTestRegistry([]));
+        restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
       }
     });
   });
@@ -284,26 +295,35 @@ describe("createGatewayInstanceRuntime", () => {
       const started = new Promise<void>((resolve) => {
         markStarted = resolve;
       });
+      let finishHandler!: () => void;
+      const handlerCanFinish = new Promise<void>((resolve) => {
+        finishHandler = resolve;
+      });
       const runtime = createGatewayInstanceRuntime({
         getContext: createContext,
         getMethodRegistry: () =>
           createRegistry({
             send: async () => {
               markStarted();
-              await new Promise<never>(() => {});
+              await handlerCanFinish;
             },
           }),
         isDispatchAvailable: () => true,
       });
 
-      const request = runtime.nativeApprovals.requestRoute("send", { message: "test" });
-      const error = request.catch((value: unknown) => value);
-      await started;
-      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-      const caught = await error;
-      expect(caught).toBeInstanceOf(Error);
-      expect((caught as Error).message).toContain("gateway request timeout for send");
-      runtime.close();
+      try {
+        const request = runtime.nativeApprovals.requestRoute("send", { message: "test" });
+        const error = request.catch((value: unknown) => value);
+        await started;
+        await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+        const caught = await error;
+        expect(caught).toBeInstanceOf(Error);
+        expect((caught as Error).message).toContain("gateway request timeout for send");
+      } finally {
+        finishHandler();
+        await waitForActiveGatewayRootWork();
+        runtime.close();
+      }
     } finally {
       vi.useRealTimers();
     }

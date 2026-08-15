@@ -170,11 +170,15 @@ describe("ClickClack discussion service", () => {
     expect(globalHarness.store.lookup("global")).toMatchObject({ agentId: "ops" });
 
     const qualifiedHarness = createHarness({ label: "Qualified session" });
-    qualifiedHarness.config.agents = { list: [{ id: "ops", default: true }] };
+    qualifiedHarness.config.agents = { list: [{ id: "ops" }, { id: "worker" }] };
     const qualifiedKey = "agent:worker:qualified";
 
     expect(await qualifiedHarness.service.open(qualifiedKey)).toMatchObject({ state: "open" });
     expect(qualifiedHarness.store.lookup(qualifiedKey)).toMatchObject({ agentId: "worker" });
+    expect(qualifiedHarness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({ external_url: expect.stringContaining("/chat/worker/") }),
+    );
   });
 
   it("uses the account agent for unscoped links without changing the configured owner", async () => {

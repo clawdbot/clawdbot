@@ -38,6 +38,7 @@ import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
+import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageTo } from "./origin-routing.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
@@ -413,6 +414,10 @@ export async function prepareReplyAgentPayloads(state: {
     sessionKey,
     view: runResult.latestMcpAppChannelView,
   });
+  replyPayloads = attachMcpConnectChannelAction({
+    payloads: replyPayloads,
+    action: runResult.latestMcpConnectAction,
+  });
 
   const hasVisibleReplyPayload = replyPayloads.some(
     (payload) =>
@@ -485,6 +490,7 @@ export async function prepareReplyAgentPayloads(state: {
       provider: providerUsed,
       model: modelUsed,
       config: cfg,
+      agentDir: followupRun.run.agentDir,
     });
     const hasDiagnosticBillableUsageBuckets =
       diagnosticUsage.input !== undefined ||
@@ -532,6 +538,7 @@ export async function prepareReplyAgentPayloads(state: {
     (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
   const responseUsageLine = resolveResponseUsageLine({
     config: cfg,
+    agentDir: followupRun.run.agentDir,
     sessionRaw: responseUsageSessionRaw,
     channel: replyToChannel,
     usage,

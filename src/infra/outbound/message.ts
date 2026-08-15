@@ -4,8 +4,9 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import {
-  sendDurableMessageBatch,
+  sendDurableMessageBatchCore,
   serializeDurableMessagePayloadOutcomes,
+  type DurableMessageBatchSendResult,
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
 import type { DurableMessageSendIntent } from "../../channels/message/types.js";
@@ -129,6 +130,7 @@ export type MessageSendResult = {
   mediaUrls?: string[];
   result?: OutboundDeliveryResult | { messageId: string };
   deliveryStatus?: "sent" | "suppressed" | "partial_failed" | "failed";
+  suppressionReason?: Extract<DurableMessageBatchSendResult, { status: "suppressed" }>["reason"];
   /** Formatted send error when deliveryStatus is "failed" or "partial_failed". */
   error?: string;
   sentBeforeError?: boolean;
@@ -243,6 +245,7 @@ function deriveRequiredMessageSendCapabilities(params: {
 
 async function assertRequiredMessageSendDurability(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   channel: Exclude<string, "none">;
   payloads: ReplyPayload[];
   replyToId?: string | null;
@@ -251,6 +254,7 @@ async function assertRequiredMessageSendDurability(params: {
 }): Promise<void> {
   const support = await resolveOutboundDurableFinalDeliverySupport({
     cfg: params.cfg,
+    agentId: params.agentId,
     channel: params.channel,
     requirements: deriveRequiredMessageSendCapabilities(params),
   });
@@ -382,6 +386,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     if (requireUnknownSendReconciliation) {
       await assertRequiredMessageSendDurability({
         cfg,
+        agentId: params.agentId,
         channel: outboundChannel,
         payloads: normalizedPayloads,
         replyToId: params.replyToId,
@@ -389,7 +394,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         silent: params.silent,
       });
     }
-    const send = await sendDurableMessageBatch({
+    const send = await sendDurableMessageBatchCore({
       cfg,
       channel: outboundChannel,
       to: resolvedTarget.to,
@@ -441,6 +446,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
       result: results.at(-1),
       deliveryStatus: send.status,
+      ...(send.status === "suppressed" ? { suppressionReason: send.reason } : {}),
       ...(send.status === "failed" || send.status === "partial_failed"
         ? { error: formatErrorMessage(send.error) }
         : {}),

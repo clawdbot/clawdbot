@@ -332,9 +332,8 @@ export type ProviderPlugin = {
   /**
    * Provider-owned WebSocket session policy.
    *
-   * Use this when a provider wants generic WebSocket transports to attach
-   * native session headers or tune the session-scoped cool-down before HTTP
-   * fallback.
+   * @deprecated Return `websocket` from `resolveTransportTurnState`. When both
+   * hooks provide a field, the new hook takes precedence.
    */
   resolveWebSocketSessionPolicy?: (
     ctx: ProviderResolveWebSocketSessionPolicyContext,

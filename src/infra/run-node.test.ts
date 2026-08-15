@@ -21,11 +21,11 @@ import {
   resolveRuntimePostBuildRequirement,
   runNodeMain,
 } from "../../scripts/run-node.mts";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const it = baseIt.extend<{ tmp: string }>({
   tmp: async ({ task: _task }, use) => {
-    await withTempDir({ prefix: "openclaw-run-node-" }, use);
+    await withTestDir({ prefix: "openclaw-run-node-" }, use);
   },
 });
 
@@ -1540,7 +1540,7 @@ describe("run-node script", () => {
     { label: "remote agent", args: ["agent", "--message", "hello"] },
     { label: "dashboard", args: ["dashboard", "--no-open", "--yes"] },
   ])("does not rebuild for $label calls against an existing dirty dist", async ({ args }) => {
-    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+    await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupStampedProject(tmp, {
         files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
         trackConfig: true,

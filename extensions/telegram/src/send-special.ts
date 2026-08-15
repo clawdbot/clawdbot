@@ -102,7 +102,7 @@ async function sendStickerTelegramWithContext(
 }
 
 type TelegramPollOpts = TelegramThreadedSendOpts &
-  Pick<TelegramSendOpts, "silent"> & {
+  Pick<TelegramSendOpts, "onPlatformSendDispatch" | "silent"> & {
     /** Whether votes are anonymous. Defaults to true (Telegram default). */
     isAnonymous?: boolean;
   };
@@ -163,6 +163,7 @@ async function sendPollTelegramWithContext(
     ...(opts.silent === true ? { disable_notification: true } : {}),
   };
 
+  await opts.onPlatformSendDispatch?.();
   const result = await prepared.request(
     () =>
       api.sendPoll(prepared.chatId, normalizedPoll.question, normalizedPoll.options, pollParams),

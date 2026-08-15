@@ -1,5 +1,5 @@
 // Default CLI dependency surface with lazy outbound channel send adapters.
-import { normalizeChannelId } from "../channels/registry.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { CliDeps } from "./deps.types.js";
 
@@ -45,7 +45,7 @@ const NON_CHANNEL_DEP_KEYS = new Set([
 ]);
 
 function resolveKnownChannelId(raw: string): string | undefined {
-  return normalizeChannelId(raw) ?? undefined;
+  return normalizeChatChannelId(raw) ?? undefined;
 }
 
 // Per-channel module caches for lazy loading.

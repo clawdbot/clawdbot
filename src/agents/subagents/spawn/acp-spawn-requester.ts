@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../../../acp/runtime/session-meta.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
@@ -14,7 +14,6 @@ import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
-import type { SessionCapabilityStore } from "../../subagent-capabilities.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -23,6 +22,7 @@ import {
   hasSessionLocalHeartbeatRelayRoute,
   isHeartbeatEnabledForSessionAgent,
 } from "./acp-spawn-heartbeat.js";
+import type { SessionCapabilityStore } from "./subagent-capabilities.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
 
@@ -126,6 +126,7 @@ export function resolveAcpSpawnRequesterState(params: {
     hasThreadContext,
     heartbeatEnabled: isHeartbeatEnabledForSessionAgent({
       cfg: params.cfg,
+      requesterAgentId: params.requesterAgentId,
       sessionKey: params.parentSessionKey,
     }),
     heartbeatRelayRouteUsable:
@@ -220,7 +221,9 @@ export function validateAcpResumeSessionOwnership(params: {
     };
   }
 
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId: params.targetAgentId,
+  });
   for (const { sessionKey, entry } of listSessionEntriesReadOnly({ storePath, clone: false })) {
     const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
     if (!sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)) {

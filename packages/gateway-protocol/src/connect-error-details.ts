@@ -6,7 +6,7 @@
  */
 import { normalizeOptionalProtocolString } from "./protocol-value-normalization.js";
 
-function normalizeArrayBackedTrimmedStringList(value: unknown): string[] | undefined {
+function normalizeOptionalConnectDetailStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
@@ -36,6 +36,7 @@ export const ConnectErrorDetailCodes = {
   AUTH_TAILSCALE_PROXY_MISSING: "AUTH_TAILSCALE_PROXY_MISSING",
   AUTH_TAILSCALE_WHOIS_FAILED: "AUTH_TAILSCALE_WHOIS_FAILED",
   AUTH_TAILSCALE_IDENTITY_MISMATCH: "AUTH_TAILSCALE_IDENTITY_MISMATCH",
+  CONTROL_UI_BUILD_MISMATCH: "CONTROL_UI_BUILD_MISMATCH",
   CONTROL_UI_ORIGIN_NOT_ALLOWED: "CONTROL_UI_ORIGIN_NOT_ALLOWED",
   PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH",
   CONTROL_UI_DEVICE_IDENTITY_REQUIRED: "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
@@ -229,6 +230,19 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
   return typeof code === "string" && code.trim().length > 0 ? code.trim() : null;
 }
 
+/** Read the exact target artifact from an untrusted reload-required rejection. */
+export function readControlUiBuildMismatchId(details: unknown): string | null {
+  if (readConnectErrorDetailCode(details) !== ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
+    return null;
+  }
+  const raw = details as { gatewayBuildId?: unknown; reloadRequired?: unknown };
+  const gatewayBuildId = normalizeOptionalProtocolString(raw.gatewayBuildId);
+  if (!gatewayBuildId || gatewayBuildId.length > 96 || raw.reloadRequired !== true) {
+    return null;
+  }
+  return gatewayBuildId;
+}
+
 /** Extracts normalized retry advice from untrusted connect-error details. */
 export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRecoveryAdvice {
   if (!details || typeof details !== "object" || Array.isArray(details)) {
@@ -266,7 +280,7 @@ export function normalizePairingConnectRequestId(value: unknown): string | undef
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
-  return normalizeArrayBackedTrimmedStringList(value);
+  return normalizeOptionalConnectDetailStringList(value);
 }
 
 function createPairingConnectErrorDetails(params: {

@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const {
@@ -33,7 +33,7 @@ const {
 }));
 
 vi.mock("./config-validation.js", () => ({
-  requireValidConfigSnapshot: requireValidConfigMock,
+  requireValidConfig: requireValidConfigMock,
 }));
 
 vi.mock("./agents.providers.js", () => ({
@@ -144,10 +144,52 @@ describe("agentsListCommand", () => {
     ]);
   });
 
+  it("sanitizes configured agent text without changing JSON summaries", async () => {
+    const control = "\u001B]0;agents-list-injection\u0007";
+    const identityName = `${control}Operator 🦞\r\nforged-row`;
+    const workspace = `/tmp/workspace-${control}\tpath`;
+    const model = `${control}provider/model\nvariant`;
+    const cfg = {
+      agents: {
+        entries: {
+          main: {
+            name: `${control}Main\nAlias`,
+            workspace,
+            agentDir: `/tmp/agent-${control}\npath`,
+            model,
+            identity: { name: identityName },
+          },
+        },
+      },
+      bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+    } satisfies OpenClawConfig;
+    requireValidConfigMock.mockResolvedValue(cfg);
+    summarizeBindingsMock.mockReturnValue([`${control}Telegram\nroute`]);
+    listProvidersForAgentMock.mockReturnValue([`${control}Telegram\tconfigured`]);
+
+    const textRuntime = createRuntime();
+    await agentsListCommand({ bindings: true }, textRuntime);
+
+    const textOutput = vi.mocked(textRuntime.log).mock.calls.flat().join("\n");
+    expect(textOutput).not.toContain("\u001B");
+    expect(textOutput).not.toContain("\nforged-row");
+    expect(textOutput).toContain("Operator 🦞\\r\\nforged-row");
+    expect(textOutput).toContain("provider/model\\nvariant");
+    expect(textOutput).toContain("Telegram\\nroute");
+
+    const jsonRuntime = createRuntime();
+    await agentsListCommand({ json: true }, jsonRuntime);
+
+    // Workspace paths are platform-normalized before JSON, so assert the
+    // non-sanitization invariant on it rather than byte equality.
+    expect(jsonRuntime.json[0]).toEqual([expect.objectContaining({ identityName, model })]);
+    expect((jsonRuntime.json[0] as Array<{ workspace: string }>)[0]?.workspace).toContain(control);
+  });
+
   it.skipIf(process.platform !== "win32")(
     "shortens real Windows home casing aliases in human output",
     async () => {
-      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+      await withTestDir({ prefix: "openclaw-home-display-" }, async (home) => {
         const workspace = path.join(home, "workspace");
         const agentDir = path.join(home, "agents", "main", "agent");
         await fs.promises.mkdir(workspace, { recursive: true });

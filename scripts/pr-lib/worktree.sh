@@ -102,7 +102,7 @@ enter_worktree() {
 pr_meta_json() {
   local pr="$1"
   local metadata files expected_file_count actual_file_count head_before head_after
-  metadata=$(gh pr view "$pr" --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,reviewRequests,changedFiles,additions,deletions,statusCheckRollup,files)
+  metadata=$(gh pr view "$pr" --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,changedFiles,additions,deletions,statusCheckRollup,files)
   head_before=$(printf '%s\n' "$metadata" | jq -r .headRefOid)
   expected_file_count=$(printf '%s\n' "$metadata" | jq -r .changedFiles)
 

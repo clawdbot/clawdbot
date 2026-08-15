@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -12,6 +13,7 @@ import {
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
+import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
 import type {
   BundleMcpToolRuntime,
   McpCatalogTool,
@@ -170,10 +172,10 @@ function toJsonAgentToolResult(params: {
 }
 
 function requireStringArg(input: unknown, key: string): string {
-  if (!input || typeof input !== "object") {
+  if (!isRecord(input)) {
     throw new Error(`${key} is required`);
   }
-  const value = Reflect.get(input, key);
+  const value = input[key];
   if (typeof value !== "string") {
     throw new Error(`${key} is required`);
   }
@@ -459,6 +461,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
 
 export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
+  agentId?: string;
   reservedToolNames?: Iterable<string>;
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
@@ -476,10 +479,17 @@ export async function materializeBundleMcpToolsForRun(params: {
   const reservedToolNames = params.reservedToolNames
     ? Array.from(params.reservedToolNames)
     : undefined;
+  const materializedCatalog = mergeMcpConnectCatalog(catalog, params.runtime.requesterConnect);
   const tools = buildBundleMcpToolsFromCatalog({
-    catalog,
+    catalog: materializedCatalog,
     reservedToolNames,
     createExecute: (tool) => async (toolCallId: string, input: unknown) => {
+      if (!Object.hasOwn(catalog.servers, tool.serverName)) {
+        const connect = params.runtime.requesterConnect?.createExecute(tool.serverName);
+        if (connect) {
+          return await connect(toolCallId, input);
+        }
+      }
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
       const agentResult = toAgentToolResult({
@@ -495,6 +505,7 @@ export async function materializeBundleMcpToolsForRun(params: {
           : undefined;
         const view = await fetchMcpAppView({
           runtime: params.runtime,
+          agentId: params.agentId,
           serverName: tool.serverName,
           toolName: tool.toolName,
           uiResourceUri: tool.uiResourceUri,
@@ -561,7 +572,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       : undefined,
   });
   const appTools = buildAppToolPolicyProjections({
-    catalog,
+    catalog: materializedCatalog,
     modelTools: tools,
     reservedToolNames,
   });

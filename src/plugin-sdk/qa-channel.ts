@@ -2,7 +2,7 @@
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore,
 } from "./facade-loader.js";
 import type {
   QaBusAttachment,
@@ -92,7 +92,7 @@ type FacadeModule = {
 };
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadBundledPluginPublicSurfaceModuleSyncCore<FacadeModule>({
     dirName: "qa-channel",
     artifactBasename: "api.js",
   });

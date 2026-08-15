@@ -21,10 +21,10 @@ describe("provider failover hook structured signals", () => {
     providerRuntimeMocks.requireProviderRuntime.mockClear();
   });
 
-  it("does not resolve provider runtime for a generic non-context error", () => {
+  it("does not resolve provider runtime for a generic non-ambiguous error", () => {
     expect(
-      classifyFailoverSignal({ provider: "demo-provider", message: "429 too many requests" }),
-    ).toEqual({ kind: "reason", reason: "rate_limit" });
+      classifyFailoverSignal({ provider: "demo-provider", message: "503 service unavailable" }),
+    ).toEqual({ kind: "reason", reason: "overloaded" });
     expect(providerRuntimeMocks.requireProviderRuntime).not.toHaveBeenCalled();
     expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
@@ -138,14 +138,46 @@ describe("provider failover hook structured signals", () => {
     });
   });
 
-  it("does not promote a message-inferred HTTP status to a structured consultation", () => {
+  it("uses provider-attributed inferred auth statuses only for scoped hook consultation", () => {
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
+      ({ provider, context }) =>
+        provider === "demo-provider" && (context.status === 403 || context.status === 429)
+          ? "billing"
+          : undefined,
+    );
+
     expect(
       classifyFailoverSignal({
         provider: "demo-provider",
         message: "403 concurrency limit breached",
       }),
-    ).toEqual({ kind: "reason", reason: "auth" });
-    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    ).toEqual({ kind: "reason", reason: "billing" });
+    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledWith({
+      provider: "demo-provider",
+      context: {
+        provider: "demo-provider",
+        errorMessage: "403 concurrency limit breached",
+        status: 403,
+        code: undefined,
+        errorType: undefined,
+      },
+    });
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        message: "429 API key budget limit exceeded",
+      }),
+    ).toEqual({ kind: "reason", reason: "billing" });
+    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenLastCalledWith({
+      provider: "demo-provider",
+      context: {
+        provider: "demo-provider",
+        errorMessage: "429 API key budget limit exceeded",
+        status: 429,
+        code: undefined,
+        errorType: undefined,
+      },
+    });
   });
 
   it("passes nested provider error types through failover error normalization", () => {

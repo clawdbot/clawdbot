@@ -2,6 +2,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
 const {
@@ -91,6 +92,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
 
   return {
     params: {
+      admittedRunContext: createTestAdmittedRunContext("run-1"),
       sessionId: "openclaw-session-1",
       sessionKey: "agent:main:main",
       agentId: "main",
@@ -217,6 +219,46 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     await expect(runCliAgent(context.params)).resolves.toMatchObject({
       payloads: [{ text: "final answer" }],
     });
+
+    expect(prepareCliRunContextMock).toHaveBeenCalledOnce();
+    expect(runBeforeAgentReplyForTurnMock).not.toHaveBeenCalled();
+  });
+
+  it("runs a native control command on the existing session without turn side effects", async () => {
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
+      bootstrapped: true,
+    }));
+    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+    const context = buildPreparedContext(createContextEngine({ bootstrap, afterTurn }));
+    context.params.controlOperation = "compact";
+    context.params.allowEmptyAssistantReplyAsSilent = true;
+    executePreparedCliRunMock.mockResolvedValueOnce({
+      text: "",
+      rawText: "",
+      sessionId: "existing-external-cli-session",
+    });
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.meta.agentMeta?.sessionId).toBe("existing-external-cli-session");
+    expect(executePreparedCliRunMock).toHaveBeenCalledWith(
+      context,
+      "existing-external-cli-session",
+      undefined,
+    );
+    expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
+    expect(loadCliSessionHistoryMessagesMock).not.toHaveBeenCalled();
+    expect(loadCliSessionContextEngineMessagesMock).not.toHaveBeenCalled();
+    expect(bootstrap).not.toHaveBeenCalled();
+    expect(afterTurn).not.toHaveBeenCalled();
+  });
+
+  it("skips the top-level before-reply hook for native control commands", async () => {
+    const context = buildPreparedContext(createContextEngine());
+    context.params.controlOperation = "compact";
+    prepareCliRunContextMock.mockResolvedValue(context);
+
+    await runCliAgent(context.params);
 
     expect(prepareCliRunContextMock).toHaveBeenCalledOnce();
     expect(runBeforeAgentReplyForTurnMock).not.toHaveBeenCalled();
