@@ -29,6 +29,12 @@ export const planningKnowledgeConfigSchema = Type.Object(
         description: "Explicit derived planning_personal index path.",
       }),
     ),
+    writerScriptPath: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "Explicit Planning-owned knowledge_notes.py writer path.",
+      }),
+    ),
     pythonExecutable: Type.Optional(
       Type.String({ minLength: 1, description: "Python executable for the OneLibrary CLI." }),
     ),
@@ -40,7 +46,7 @@ export const planningKnowledgeConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type PlanningKnowledgeConfig = Static<typeof planningKnowledgeConfigSchema>;
+type PlanningKnowledgeConfig = Static<typeof planningKnowledgeConfigSchema>;
 
 export const planningKnowledgeSearchParameters = Type.Object(
   {
@@ -53,7 +59,7 @@ export const planningKnowledgeSearchParameters = Type.Object(
   { additionalProperties: false },
 );
 
-export type PlanningKnowledgeSearchParams = Static<typeof planningKnowledgeSearchParameters>;
+type PlanningKnowledgeSearchParams = Static<typeof planningKnowledgeSearchParameters>;
 
 export const planningKnowledgeCaptureParameters = Type.Object(
   {
@@ -61,6 +67,48 @@ export const planningKnowledgeCaptureParameters = Type.Object(
       minLength: 1,
       description: "Content the user explicitly asked to save as personal Knowledge.",
     }),
+    title: Type.Optional(Type.String({ minLength: 1 })),
+    knowledgeType: Type.Optional(
+      Type.Union([
+        Type.Literal("principle"),
+        Type.Literal("learning"),
+        Type.Literal("framework"),
+        Type.Literal("concept"),
+        Type.Literal("reference"),
+        Type.Literal("reflection"),
+      ]),
+    ),
+    sourceType: Type.Optional(
+      Type.Union([
+        Type.Literal("human"),
+        Type.Literal("ai_chat"),
+        Type.Literal("meeting"),
+        Type.Literal("book"),
+        Type.Literal("paper"),
+        Type.Literal("article"),
+        Type.Literal("web"),
+        Type.Literal("document"),
+        Type.Literal("other"),
+      ]),
+    ),
+    verificationStatus: Type.Optional(
+      Type.Union([
+        Type.Literal("unverified"),
+        Type.Literal("reviewed"),
+        Type.Literal("confirmed"),
+        Type.Literal("corrected"),
+        Type.Literal("rejected"),
+      ]),
+    ),
+    essence: Type.Optional(Type.String({ minLength: 1 })),
+    knowledge: Type.Optional(Type.String({ minLength: 1 })),
+    domains: Type.Optional(Type.Array(Type.String())),
+    topics: Type.Optional(Type.Array(Type.String())),
+    goalRefs: Type.Optional(Type.Array(Type.String())),
+    projectRefs: Type.Optional(Type.Array(Type.String())),
+    relatedNoteRefs: Type.Optional(Type.Array(Type.String())),
+    sourceRefs: Type.Optional(Type.Array(Type.String())),
+    supersedes: Type.Optional(Type.Array(Type.String())),
     operationalFollowUp: Type.Optional(
       Type.String({
         minLength: 1,
@@ -71,12 +119,13 @@ export const planningKnowledgeCaptureParameters = Type.Object(
   { additionalProperties: false },
 );
 
-export type PlanningKnowledgeCaptureParams = Static<typeof planningKnowledgeCaptureParameters>;
+type PlanningKnowledgeCaptureParams = Static<typeof planningKnowledgeCaptureParameters>;
 
 type ResolvedPlanningKnowledgeConfig = {
   scriptPath: string;
   sourceRoot: string;
   indexPath: string;
+  writerScriptPath?: string;
   pythonExecutable: string;
   mode: "text" | "semantic" | "hybrid";
   timeoutMs: number;
@@ -87,9 +136,10 @@ type CommandResult = {
   exitCode: number | null;
 };
 
-export type PlanningKnowledgeCommandRunner = (request: {
+type PlanningKnowledgeCommandRunner = (request: {
   executable: string;
   args: string[];
+  stdin?: string;
   timeoutMs: number;
   signal?: AbortSignal;
 }) => Promise<CommandResult>;
@@ -148,12 +198,18 @@ export function resolvePlanningKnowledgeConfig(
   const normalizedSourceRoot = resolveConfiguredPath(config.sourceRoot, "sourceRoot", resolvePath);
   const normalizedScriptPath = resolveConfiguredPath(config.scriptPath, "scriptPath", resolvePath);
   const normalizedIndexPath = resolveConfiguredPath(config.indexPath, "indexPath", resolvePath);
+  const normalizedWriterScriptPath = config.writerScriptPath
+    ? resolveConfiguredPath(config.writerScriptPath, "writerScriptPath", resolvePath)
+    : undefined;
 
   if (!isKnowledgeRoot(normalizedSourceRoot)) {
     throw new Error("Planning Knowledge sourceRoot must end in notes/knowledge");
   }
   if (basename(normalizedScriptPath) !== "planning_knowledge_index.py") {
     throw new Error("Planning Knowledge scriptPath must be OneLibrary planning_knowledge_index.py");
+  }
+  if (normalizedWriterScriptPath && basename(normalizedWriterScriptPath) !== "knowledge_notes.py") {
+    throw new Error("Planning Knowledge writerScriptPath must be Planning knowledge_notes.py");
   }
   if (isPathInside(normalizedIndexPath, normalizedSourceRoot)) {
     throw new Error("Planning Knowledge indexPath must be outside the canonical source root");
@@ -168,6 +224,7 @@ export function resolvePlanningKnowledgeConfig(
     scriptPath: normalizedScriptPath,
     sourceRoot: normalizedSourceRoot,
     indexPath: normalizedIndexPath,
+    ...(normalizedWriterScriptPath ? { writerScriptPath: normalizedWriterScriptPath } : {}),
     pythonExecutable: config.pythonExecutable?.trim() || "python3",
     mode: config.mode ?? "text",
     timeoutMs,
@@ -177,13 +234,14 @@ export function resolvePlanningKnowledgeConfig(
 function runCommand(request: {
   executable: string;
   args: string[];
+  stdin?: string;
   timeoutMs: number;
   signal?: AbortSignal;
 }): Promise<CommandResult> {
   return new Promise((resolveResult, reject) => {
     const child = spawn(request.executable, request.args, {
       shell: false,
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: [request.stdin === undefined ? "ignore" : "pipe", "pipe", "ignore"],
     });
     let stdout = "";
     let settled = false;
@@ -216,8 +274,16 @@ function runCommand(request: {
     };
 
     request.signal?.addEventListener("abort", abort, { once: true });
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
+    if (request.stdin !== undefined) {
+      child.stdin?.end(request.stdin);
+    }
+    const stdoutStream = child.stdout;
+    if (!stdoutStream) {
+      finish(new Error("Planning Knowledge command returned no stdout"));
+      return;
+    }
+    stdoutStream.setEncoding("utf8");
+    stdoutStream.on("data", (chunk: string) => {
       stdout += chunk;
     });
     child.once("error", () => finish(new Error("Planning Knowledge adapter is unavailable")));
@@ -314,6 +380,65 @@ function parseSearchOutput(stdout: string): Record<string, unknown>[] {
   return results.map(safeSearchResult);
 }
 
+function parseCommandObject(stdout: string, label: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(`Planning Knowledge ${label} returned invalid JSON`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Planning Knowledge ${label} returned an invalid response`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function assertPortableCommandObject(value: unknown): void {
+  if (isString(value)) {
+    assertNoAbsolutePath(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      assertPortableCommandObject(item);
+    }
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) {
+      assertPortableCommandObject(item);
+    }
+  }
+}
+
+function parseCaptureResult(stdout: string): {
+  status: "created" | "already_exists";
+  title: string;
+  canonical_ref: string;
+} {
+  const result = parseCommandObject(stdout, "Planning writer");
+  const status = result.status;
+  const title = result.title;
+  const canonicalRef = result.canonical_ref;
+  if (status !== "created" && status !== "already_exists") {
+    throw new Error("Planning writer returned an unexpected status");
+  }
+  if (!isString(title) || !title.trim()) {
+    throw new Error("Planning writer returned no title");
+  }
+  if (!isString(canonicalRef) || !NOTE_REF_PATTERN.test(canonicalRef)) {
+    throw new Error("Planning writer returned an invalid canonical note ref");
+  }
+  assertPortableCommandObject({ title, canonical_ref: canonicalRef });
+  return { status, title, canonical_ref: canonicalRef };
+}
+
+function parseSyncResult(stdout: string): Record<string, unknown> {
+  const result = parseCommandObject(stdout, "OneLibrary sync");
+  assertPortableCommandObject(result);
+  return result;
+}
+
 export function createPlanningKnowledgeSearchTool(
   config: ResolvedPlanningKnowledgeConfig,
   runner: PlanningKnowledgeCommandRunner = runCommand,
@@ -378,20 +503,128 @@ export function createPlanningKnowledgeSearchTool(
   };
 }
 
-export function createPlanningKnowledgeCaptureTool() {
+export function createPlanningKnowledgeCaptureTool(
+  config?: ResolvedPlanningKnowledgeConfig,
+  runner: PlanningKnowledgeCommandRunner = runCommand,
+) {
   return {
     name: "planning_knowledge_capture",
-    label: "Planning Knowledge Capture (disabled)",
-    description:
-      "Recognize explicit requests to save personal Knowledge without writing in PLN-500A.",
+    label: config?.writerScriptPath
+      ? "Planning Knowledge Capture"
+      : "Planning Knowledge Capture (disabled)",
+    description: config?.writerScriptPath
+      ? "Create an explicitly requested Planning Knowledge Note through the Planning-owned writer, then refresh the derived OneLibrary index. Never create tasks or calendar events."
+      : "Recognize explicit requests to save personal Knowledge without writing in PLN-500A.",
     parameters: planningKnowledgeCaptureParameters,
     optional: true,
-    async execute(_toolCallId: string, params: PlanningKnowledgeCaptureParams) {
+    async execute(
+      _toolCallId: string,
+      params: PlanningKnowledgeCaptureParams,
+      signal?: AbortSignal,
+    ) {
+      if (!config?.writerScriptPath) {
+        return jsonResult({
+          intent: "knowledge_capture",
+          status: "capture_not_enabled_in_pln_500a",
+          write_performed: false,
+          canonical_owner: "planning",
+          operational_follow_up: params.operationalFollowUp?.trim() ? "route_separately" : "none",
+        });
+      }
+
+      const title = params.title?.trim();
+      const knowledgeType = params.knowledgeType;
+      const sourceType = params.sourceType;
+      const verificationStatus = params.verificationStatus;
+      if (!title || !knowledgeType || !sourceType || !verificationStatus) {
+        throw new Error(
+          "Planning Knowledge capture requires title, knowledgeType, sourceType, and verificationStatus",
+        );
+      }
+      const content = params.content.trim();
+      if (!content) {
+        throw new Error("Planning Knowledge capture content required");
+      }
+      const writerPayload: Record<string, unknown> = {
+        title,
+        knowledge_type: knowledgeType,
+        source_type: sourceType,
+        verification_status: verificationStatus,
+        content: {
+          essence: params.essence?.trim() || content,
+          knowledge: params.knowledge?.trim() || content,
+        },
+      };
+      for (const [input, output] of [
+        ["domains", "domains"],
+        ["topics", "topics"],
+        ["goalRefs", "goal_refs"],
+        ["projectRefs", "project_refs"],
+        ["relatedNoteRefs", "related_note_refs"],
+        ["sourceRefs", "source_refs"],
+        ["supersedes", "supersedes"],
+      ] as const) {
+        const value = params[input];
+        if (value !== undefined) {
+          writerPayload[output] = value;
+        }
+      }
+
+      const writerResult = await runner({
+        executable: config.pythonExecutable,
+        args: [
+          config.writerScriptPath,
+          "create",
+          "--root",
+          dirname(dirname(config.sourceRoot)),
+          "--input",
+          "-",
+        ],
+        stdin: JSON.stringify(writerPayload),
+        timeoutMs: config.timeoutMs,
+        signal,
+      });
+      if (writerResult.exitCode !== 0) {
+        const error = parseCommandObject(writerResult.stdout, "Planning writer");
+        throw new Error(
+          isString(error.message) ? error.message : "Planning Knowledge capture failed",
+        );
+      }
+      const created = parseCaptureResult(writerResult.stdout);
+
+      const syncResult = await runner({
+        executable: config.pythonExecutable,
+        args: [
+          config.scriptPath,
+          "sync",
+          "--root",
+          config.sourceRoot,
+          "--index",
+          config.indexPath,
+          "--mode",
+          config.mode,
+        ],
+        timeoutMs: config.timeoutMs,
+        signal,
+      });
+      if (syncResult.exitCode !== 0) {
+        throw new Error("Planning Knowledge derived index sync failed");
+      }
+      const synced = parseSyncResult(syncResult.stdout);
       return jsonResult({
         intent: "knowledge_capture",
-        status: "capture_not_enabled_in_pln_500a",
-        write_performed: false,
+        status: created.status,
+        write_performed: created.status === "created",
         canonical_owner: "planning",
+        canonical_ref: created.canonical_ref,
+        title: created.title,
+        corpus: "planning_personal",
+        derived_sync: "completed",
+        sync_summary: {
+          inserted_records: synced.inserted_records,
+          updated_records: synced.updated_records,
+          unchanged_records: synced.unchanged_records,
+        },
         operational_follow_up: params.operationalFollowUp?.trim() ? "route_separately" : "none",
       });
     },

@@ -1,18 +1,25 @@
 # Planning Knowledge plugin
 
-This optional OpenClaw tool plugin provides read-only retrieval from the
-Planning-owned personal Knowledge corpus through OneLibrary's existing CLI.
+This optional OpenClaw tool plugin provides private retrieval from, and
+explicit capture into, the Planning-owned personal Knowledge corpus. Retrieval
+uses OneLibrary's existing CLI; capture uses Planning's narrow
+`knowledge_notes.py create` writer and then refreshes the derived index.
 
 Configure explicit paths for:
 
 - OneLibrary's `planning_knowledge_index.py`;
 - the canonical `notes/knowledge/` root; and
-- the derived `planning_personal` index.
+- the derived `planning_personal` index; and
+- optionally Planning's `knowledge_notes.py` writer to enable capture.
 
-The plugin never crawls the Goal_Agent repository, reads `config/secrets/`,
-or writes Planning files. Retrieval results retain the portable canonical
+The plugin never accepts a caller-controlled filesystem path, crawls
+`config/secrets/`, or writes outside the Planning writer's canonical
+`notes/knowledge/` boundary. Retrieval results retain the portable canonical
 citation `note:notes/knowledge/<slug>`.
 
-In PLN-500A, the capture tool only recognizes an explicit save-as-Knowledge
-request and returns `capture_not_enabled_in_pln_500a`; it performs no write
-and does not turn the request into a task.
+Without `writerScriptPath`, the capture tool remains recognition-only and
+returns `capture_not_enabled_in_pln_500a`. With the Planning writer configured,
+an explicit capture creates or retries one canonical note, refreshes only the
+derived OneLibrary index, and returns the canonical `note:` ref. Mixed request
+follow-ups are reported as `route_separately`; this plugin never creates tasks
+or calendar events.

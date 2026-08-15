@@ -1,7 +1,7 @@
 {
   "id": "planning-knowledge",
   "name": "Planning Knowledge",
-  "description": "Read-only access to Oliver's Planning-owned personal Knowledge Notes. Canonical refs remain note:notes/knowledge/<slug>.",
+  "description": "Private retrieval and explicit Planning-owned capture for personal Knowledge Notes. Canonical refs remain note:notes/knowledge/<slug>.",
   "activation": {
     "onStartup": true
   },
@@ -22,6 +22,11 @@
         "type": "string",
         "minLength": 1,
         "description": "Explicit derived planning_personal index path."
+      },
+      "writerScriptPath": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Explicit Planning-owned knowledge_notes.py writer path."
       },
       "pythonExecutable": {
         "type": "string",
