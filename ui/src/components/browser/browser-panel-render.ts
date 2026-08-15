@@ -1,6 +1,7 @@
 import { html, nothing, svg, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { renderDockDestinations } from "../dock-destination-controls.ts";
 import { icons } from "../icons.ts";
 import { renderPanelEmptyState } from "../panel-empty-state.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
@@ -15,13 +16,14 @@ const INSPECT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="
 
 export type BrowserPanelDock = "bottom" | "right";
 
-function renderTabStrip(controller: BrowserPanelController) {
+function renderTabStrip(controller: BrowserPanelController, embedded: boolean) {
   return renderBrowserPanelTabs({
     tabs: controller.tabs,
     activeTargetId: controller.activeTargetId,
     onSelect: (targetId) => void controller.selectTab(targetId),
     onClose: (targetId) => controller.closeTab(targetId),
     onNew: () => controller.beginNewTab(),
+    hideNewControl: embedded,
   });
 }
 
@@ -34,24 +36,26 @@ function renderHeaderActions(
   const activeUrl = controller.view?.metrics?.url || controller.view?.url || controller.urlDraft;
   return html`
     <div class="rail-header__actions bp-actions">
-      <button
-        class="rail-header__action bp-icon ${dock === "bottom" ? "is-active" : ""}"
-        type="button"
-        title=${t("browser.dockBottom")}
-        aria-label=${t("browser.dockBottom")}
-        @click=${() => onDockChange("bottom")}
-      >
-        ${icons.panelBottomOpen}
-      </button>
-      <button
-        class="rail-header__action bp-icon ${dock === "right" ? "is-active" : ""}"
-        type="button"
-        title=${t("browser.dockRight")}
-        aria-label=${t("browser.dockRight")}
-        @click=${() => onDockChange("right")}
-      >
-        ${icons.panelRightOpen}
-      </button>
+      ${renderDockDestinations({
+        current: dock,
+        groupClass: "bp-dock-modes",
+        groupLabel: t("browser.title"),
+        destinations: [
+          {
+            dock: "bottom",
+            label: t("browser.dockBottom"),
+            icon: icons.panelBottomOpen,
+            className: "bp-icon",
+          },
+          {
+            dock: "right",
+            label: t("browser.dockRight"),
+            icon: icons.panelRightOpen,
+            className: "bp-icon",
+          },
+        ],
+        onSelect: onDockChange,
+      })}
       <button
         class="rail-header__action bp-icon"
         type="button"
@@ -79,10 +83,21 @@ function renderHeaderActions(
   `;
 }
 
-function renderToolbar(controller: BrowserPanelController) {
+function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
   const hasView = Boolean(controller.view);
   return html`
     <div class="bp-toolbar">
+      ${embedded
+        ? html`<button
+            class="bp-icon"
+            type="button"
+            title=${t("browser.newTab")}
+            aria-label=${t("browser.newTab")}
+            @click=${() => controller.beginNewTab()}
+          >
+            ${icons.plus}
+          </button>`
+        : nothing}
       <button
         class="bp-icon"
         type="button"
@@ -331,11 +346,13 @@ export function renderBrowserPanelChrome(
       aria-label=${t("browser.title")}
     >
       ${embedded ? nothing : resizer}
-      <header class="rail-header bp-header">
-        ${renderTabStrip(controller)}
-        ${embedded ? nothing : renderHeaderActions(controller, dock, onDockChange, onClose)}
-      </header>
-      ${renderToolbar(controller)} ${renderAnnotateBar(controller)}
+      ${embedded && controller.tabs.length === 0
+        ? nothing
+        : html`<header class="rail-header bp-header">
+            ${renderTabStrip(controller, embedded)}
+            ${embedded ? nothing : renderHeaderActions(controller, dock, onDockChange, onClose)}
+          </header>`}
+      ${renderToolbar(controller, embedded)} ${renderAnnotateBar(controller)}
       ${controller.errorText
         ? html`<div class="bp-note bp-note--error" role="alert">${controller.errorText}</div>`
         : controller.noticeText

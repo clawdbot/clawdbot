@@ -1,6 +1,7 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { renderDockDestinations } from "../dock-destination-controls.ts";
 import { icons } from "../icons.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
@@ -350,34 +351,32 @@ export function renderTerminalPanelActions(params: {
             >
               ${icons.panelBottomOpen}
             </button>`
-          : html`<span class="tp-dock-modes" role="group" aria-label=${t("terminal.dockMode")}
-                ><button
-                  class="rail-header__action tp-icon ${params.dock === "bottom" ? "is-active" : ""}"
-                  type="button"
-                  title=${t("terminal.dockBottom")}
-                  aria-label=${t("terminal.dockBottom")}
-                  @click=${() => params.onDock("bottom")}
-                >
-                  ${icons.panelBottomOpen}
-                </button>
-                <button
-                  class="rail-header__action tp-icon ${params.dock === "right" ? "is-active" : ""}"
-                  type="button"
-                  title=${t("terminal.dockRight")}
-                  aria-label=${t("terminal.dockRight")}
-                  @click=${() => params.onDock("right")}
-                >
-                  ${icons.panelRightOpen}</button
-                ><button
-                  class="rail-header__action tp-icon ${params.dock === "main" ? "is-active" : ""}"
-                  type="button"
-                  title=${t("terminal.dockMain")}
-                  aria-label=${t("terminal.dockMain")}
-                  @click=${() => params.onDock("main")}
-                >
-                  ${icons.columns2}
-                </button>
-              </span>
+          : html`${renderDockDestinations({
+                current: params.dock,
+                groupClass: "tp-dock-modes",
+                groupLabel: t("terminal.dockMode"),
+                destinations: [
+                  {
+                    dock: "bottom",
+                    label: t("terminal.dockBottom"),
+                    icon: icons.panelBottomOpen,
+                    className: "tp-icon",
+                  },
+                  {
+                    dock: "right",
+                    label: t("terminal.dockRight"),
+                    icon: icons.panelRightOpen,
+                    className: "tp-icon",
+                  },
+                  {
+                    dock: "main",
+                    label: t("terminal.dockMain"),
+                    icon: icons.columns2,
+                    className: "tp-icon",
+                  },
+                ],
+                onSelect: params.onDock,
+              })}
               <button
                 class="rail-header__action tp-icon tp-open-fullscreen"
                 type="button"

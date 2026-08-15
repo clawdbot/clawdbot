@@ -2,6 +2,7 @@ import { html, nothing, render as renderTemplate, type TemplateResult } from "li
 import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { renderDockDestinations } from "../../../components/dock-destination-controls.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import { renderPanelTabStrip } from "../../../components/panel-tab-strip.ts";
@@ -240,35 +241,26 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     if (this.narrow) {
       return nothing;
     }
-    const dock = sidebarDock(this.layout);
-    // Destinations only: the current dock has nowhere to move to, so it drops
-    // out of the cluster instead of rendering as a pressed, coloured state.
-    return html`<span class="side-panel__action-group side-panel__action-group--dock">
-      ${dock === "bottom"
-        ? nothing
-        : html`<openclaw-tooltip .content=${t("browser.dockBottom")}>
-            <button
-              class="rail-header__action side-panel__dock-bottom"
-              type="button"
-              aria-label=${t("browser.dockBottom")}
-              @click=${() => this.callbacks?.setDock("bottom")}
-            >
-              ${icons.panelBottomOpen}
-            </button>
-          </openclaw-tooltip>`}
-      ${dock === "right"
-        ? nothing
-        : html`<openclaw-tooltip .content=${t("browser.dockRight")}>
-            <button
-              class="rail-header__action side-panel__dock-right"
-              type="button"
-              aria-label=${t("browser.dockRight")}
-              @click=${() => this.callbacks?.setDock("right")}
-            >
-              ${icons.panelRightOpen}
-            </button>
-          </openclaw-tooltip>`}
-    </span>`;
+    return renderDockDestinations({
+      current: sidebarDock(this.layout),
+      groupClass: "side-panel__action-group side-panel__action-group--dock",
+      groupLabel: t("chat.sidePanel.label"),
+      destinations: [
+        {
+          dock: "bottom",
+          label: t("browser.dockBottom"),
+          icon: icons.panelBottomOpen,
+          className: "side-panel__dock-bottom",
+        },
+        {
+          dock: "right",
+          label: t("browser.dockRight"),
+          icon: icons.panelRightOpen,
+          className: "side-panel__dock-right",
+        },
+      ],
+      onSelect: (dock) => this.callbacks?.setDock(dock),
+    });
   }
 
   private renderHeaderActions(openUrl: string | null) {
@@ -331,7 +323,6 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     }
     return html`<div class="side-panel-empty side-panel-empty--selector">
       <strong class="side-panel-empty__title">${t("chat.sidePanel.emptyTitle")}</strong>
-      <p class="side-panel-empty__description">${t("chat.sidePanel.emptyDescription")}</p>
       <div class="side-panel-empty__types" role="list">
         ${this.panelTypes().map(
           (type) => html`<button
