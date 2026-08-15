@@ -193,7 +193,10 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
   });
 
-  it("hard-cleans descendants that close lineage while the root exits during TERM grace", async () => {
+  it.each([
+    { label: "after TERM grace", repeatKill: false },
+    { label: "when repeated KILL arrives", repeatKill: true },
+  ])("hard-cleans output-holding descendants $label", async ({ repeatKill }) => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const tempDir = tempDirs.make("openclaw-service-child-lineage-term-");
     const descendantPath = path.join(tempDir, "descendant.cjs");
@@ -205,7 +208,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
         process.on("SIGTERM", () => {
           try { fs.closeSync(3); } catch {}
         });
-        process.stdout.write("ready\\n");
+        process.stdout.write(process.ppid + " " + process.pid + "\\n");
         setInterval(() => {}, 1000);
       `,
       "utf8",
@@ -215,11 +218,8 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       `
         const { spawn } = require("node:child_process");
         process.on("SIGTERM", () => process.exit(0));
-        const child = spawn(process.execPath, [${JSON.stringify(descendantPath)}], {
-          stdio: ["ignore", "pipe", "ignore", 3],
-        });
-        child.stdout.once("data", () => {
-          process.stdout.write(process.pid + " " + child.pid + "\\n");
+        spawn(process.execPath, [${JSON.stringify(descendantPath)}], {
+          stdio: ["ignore", 1, 2, 3],
         });
         setInterval(() => {}, 1000);
       `,
@@ -239,6 +239,12 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     activePids.add(descendantPid);
 
     adapter.kill("SIGTERM");
+    if (repeatKill) {
+      await waitFor(() => !isAlive(rootPid));
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(isAlive(descendantPid)).toBe(true);
+      adapter.kill("SIGKILL");
+    }
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
   });

@@ -55,14 +55,15 @@ export function runServiceChildGroupAnchor(): void {
   let lastHostSequence = 0;
   let command: ChildProcess | undefined;
   let control: Socket | undefined;
-  let rootSettled = false;
   let rootSettlementStarted = false;
+  let rootResultDelivery: Promise<void> | undefined;
   let rootExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   let stdoutDrained = false;
   let stderrDrained = false;
   let lineageClosed = false;
-  let cleanupClaim: symbol | undefined;
   let forceCleanup = false;
+  let resolveForceCleanup: () => void = () => {};
+  const forceCleanupRequested = new Promise<void>((resolve) => (resolveForceCleanup = resolve));
   let resolveLineage!: () => void;
   const lineageDone = new Promise<void>((resolve) => {
     resolveLineage = resolve;
@@ -131,32 +132,36 @@ export function runServiceChildGroupAnchor(): void {
     }
     if (state === "closing") {
       forceCleanup ||= signal === "SIGKILL";
+      if (forceCleanup) {
+        resolveForceCleanup();
+      }
       return;
     }
     state = "closing";
-    const claim = Symbol("service-child-cleanup");
-    cleanupClaim = claim;
     forceCleanup = signal === "SIGKILL";
+    const termGraceDone = delay(TERM_GRACE_MS);
     if (!forceCleanup) {
       // The anchor catches its own signal while every command-group member receives it.
       process.kill(0, "SIGTERM");
-      await Promise.race([lineageDone, delay(TERM_GRACE_MS)]);
+      await Promise.race([lineageDone, termGraceDone, forceCleanupRequested]);
     }
-    if (state !== "closing" || cleanupClaim !== claim || !start) {
+    if (state !== "closing" || !start) {
       return;
     }
     if (lineageClosed && !rootExit && !forceCleanup) {
       // A normal root exit may close the lineage fd before libuv reports the
       // child exit. Give that exact child event a bounded observation window;
       // a still-running root that closed lineage remains a lease violation.
-      await Promise.race([rootExited, delay(LINEAGE_EXIT_OBSERVATION_MS)]);
+      await Promise.race([rootExited, delay(LINEAGE_EXIT_OBSERVATION_MS), forceCleanupRequested]);
     }
-    if (state !== "closing" || cleanupClaim !== claim || !start) {
+    if (state !== "closing" || !start) {
       return;
     }
     if (lineageClosed && rootExit && !forceCleanup) {
-      await rootSettledDone;
-      if (state !== "closing" || cleanupClaim !== claim || !start) {
+      // Output can outlive lineage and the root. It may preserve the authentic root
+      // result only within the existing TERM grace, and KILL must wake this wait.
+      await Promise.race([rootSettledDone, termGraceDone, forceCleanupRequested]);
+      if (state !== "closing" || !start) {
         return;
       }
     }
@@ -255,7 +260,7 @@ export function runServiceChildGroupAnchor(): void {
           if (state !== "active") {
             return;
           }
-          if (rootExit && rootSettled) {
+          if (rootExit) {
             void closeAuthority("lineage-closed", false);
           } else {
             void requestCleanup("lineage-lost");
@@ -267,12 +272,11 @@ export function runServiceChildGroupAnchor(): void {
     lineage.once("close", markLineageClosed);
     lineage.once("error", markLineageClosed);
     const settleRoot = async () => {
-      if (rootSettlementStarted || !rootExit || !stdoutDrained || !stderrDrained) {
+      if (rootSettlementStarted || !rootResultDelivery || !stdoutDrained || !stderrDrained) {
         return;
       }
       rootSettlementStarted = true;
-      await send({ type: "root-result", code: rootExit.code, signal: rootExit.signal });
-      rootSettled = true;
+      await rootResultDelivery;
       resolveRootSettled();
       if (lineageClosed && state === "active") {
         await closeAuthority("lineage-closed", false);
@@ -312,6 +316,9 @@ export function runServiceChildGroupAnchor(): void {
     });
     command.once("exit", (code, signal) => {
       rootExit = { code, signal };
+      // The host gates public settlement on output EOF, so record the authentic root
+      // result before cleanup can hard-close an output-holding descendant.
+      rootResultDelivery = send({ type: "root-result", code, signal });
       resolveRootExited();
       void settleRoot();
     });
