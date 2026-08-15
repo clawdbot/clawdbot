@@ -279,7 +279,7 @@ describe("chat pane terminal action", () => {
     }
   });
 
-  it("renders the browser control only when available and exposes it in the narrow menu", () => {
+  it("keeps Browser and Tasks reachable in the topbar", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const session = {
@@ -288,11 +288,16 @@ describe("chat pane terminal action", () => {
       updatedAt: 0,
     } satisfies GatewaySessionRow;
     const container = document.createElement("div");
+    const onToggleTasks = vi.fn();
+    const backgroundTasks = {
+      ...createBackgroundTasksProps(state),
+      onToggleCollapsed: onToggleTasks,
+    };
     const renderHeader = () =>
       render(
         pane.renderPaneHeader(
           createSessionWorkspaceProps(state),
-          createBackgroundTasksProps(state),
+          backgroundTasks,
           session,
           false,
           undefined,
@@ -311,13 +316,15 @@ describe("chat pane terminal action", () => {
     renderHeader();
     expect(container.querySelector(".chat-browser-panel-toggle")).toBeNull();
     expect(panelActionIds()).not.toContain("browser");
+    container.querySelector<HTMLButtonElement>(".chat-tasks-toggle")?.click();
+    expect(onToggleTasks).toHaveBeenCalledOnce();
 
     state.browserPanelAvailable = true;
     const onToggleBrowser = vi.fn();
     render(
       pane.renderPaneHeader(
         { ...createSessionWorkspaceProps(state), onToggleBrowser },
-        createBackgroundTasksProps(state),
+        backgroundTasks,
         session,
         false,
         undefined,
@@ -325,7 +332,8 @@ describe("chat pane terminal action", () => {
       ),
       container,
     );
-    expect(container.querySelector(".chat-browser-panel-toggle")).toBeNull();
+    container.querySelector<HTMLButtonElement>(".chat-browser-panel-toggle")?.click();
+    expect(onToggleBrowser).toHaveBeenCalledOnce();
     expect(panelActionIds()).toContain("browser");
     container
       .querySelector<HTMLElement & { panelActions: Array<{ id: string; onActivate: () => void }> }>(
@@ -333,6 +341,6 @@ describe("chat pane terminal action", () => {
       )
       ?.panelActions.find((action) => action.id === "browser")
       ?.onActivate();
-    expect(onToggleBrowser).toHaveBeenCalledOnce();
+    expect(onToggleBrowser).toHaveBeenCalledTimes(2);
   });
 });

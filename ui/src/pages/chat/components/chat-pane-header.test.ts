@@ -303,11 +303,11 @@ describe("chat pane header", () => {
     expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();
   });
 
-  it("moves session panel shortcuts out of a narrow header while keeping shell actions", () => {
+  it("keeps persistent surface actions in a narrow header", () => {
     const { container } = mount({
       narrow: true,
       mergedChrome: true,
-      panelActions: html`<button data-action="terminal"></button>`,
+      panelActions: html`<button data-action="persistent-surface"></button>`,
       discussionAction: html`<button data-action="discussion"></button>`,
       diffAction: html`<button data-action="diff"></button>`,
       backgroundTasksAction: html`<button data-action="tasks"></button>`,
@@ -316,7 +316,7 @@ describe("chat pane header", () => {
       sessionMenuAction: html`<button data-action="session-menu"></button>`,
     });
 
-    expect(container.querySelector('[data-action="terminal"]')).toBeNull();
+    expect(container.querySelector('[data-action="persistent-surface"]')).not.toBeNull();
     expect(container.querySelector('[data-action="discussion"]')).toBeNull();
     expect(container.querySelector('[data-action="diff"]')).toBeNull();
     expect(container.querySelector('[data-action="tasks"]')).toBeNull();
