@@ -324,7 +324,7 @@ export default definePluginEntry({
           name: "memory_store",
           label: "Memory Store",
           description:
-            "Save important information in long-term memory. Use for preferences, facts, decisions.",
+            "Save important information in long-term memory. Success means the exact text already exists or the database commit completed; it does not guarantee semantic recall.",
           parameters: Type.Object({
             text: Type.String({ description: "Information to remember" }),
             importance: optionalFiniteNumberSchema({
@@ -343,7 +343,11 @@ export default definePluginEntry({
                     text: "Memory was not stored because this is an incognito session.",
                   },
                 ],
-                details: { action: "rejected", reason: "incognito_session" },
+                details: {
+                  action: "rejected",
+                  reason: "incognito_session",
+                  status: "blocked",
+                },
               };
             }
             const { text, category = "other" } = params as {
@@ -367,23 +371,24 @@ export default definePluginEntry({
                 details: {
                   action: "rejected",
                   reason: "prompt_injection_detected",
+                  status: "blocked",
                 },
               };
             }
 
             const vector = await embeddings.embed(agentId, text);
 
-            const existing = await findCleanDuplicateMemory(db, agentId, vector);
+            const existing = await findCleanDuplicateMemory(db, agentId, vector, text);
             if (existing) {
               return {
                 content: [
                   {
                     type: "text",
-                    text: `Similar memory already exists: "${existing.entry.text}"`,
+                    text: `Already stored: "${existing.entry.text}"`,
                   },
                 ],
                 details: {
-                  action: "duplicate",
+                  action: "already_present",
                   existingId: existing.entry.id,
                   existingText: existing.entry.text,
                 },

@@ -1,4 +1,4 @@
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { buildPluginToolMetadataKey, getPluginToolMeta } from "../../../plugins/tools.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
@@ -7,7 +7,12 @@ import {
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
+import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
+import {
+  collectReplaySafeToolNames,
+  collectSideEffectToolOwners,
+  isAgentToolReplaySafe,
+} from "../../tool-replay-safety.js";
 import { addClientToolsToToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import {
@@ -77,6 +82,15 @@ export function prepareEmbeddedAttemptClientTools(params: {
     params.uncompactedEffectiveTools,
     params.replaySafetyOptions,
   );
+  const sideEffectToolOwners = collectSideEffectToolOwners(params.uncompactedEffectiveTools, {
+    declaredOwner: (tool) => {
+      const meta = getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0]);
+      const toolName = normalizeToolPolicyName(tool.name ?? "");
+      return meta?.sideEffecting && toolName
+        ? buildPluginToolMetadataKey(meta.pluginId, toolName)
+        : undefined;
+    },
+  });
   const clientConflictToolNames = params.deferredDirectoryToolsCallable
     ? builtinToolNames
     : coreBuiltinToolNames;
@@ -166,6 +180,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
     clientToolLoopDetection,
     replaySafeToolNames,
     replaySafeTools,
+    sideEffectToolOwners,
     sessionToolAllowlist,
   };
 }

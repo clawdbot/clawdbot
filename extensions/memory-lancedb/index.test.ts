@@ -3415,13 +3415,13 @@ describe("memory plugin e2e", () => {
     expect(looksLikePromptInjection("I prefer concise replies")).toBe(false);
   });
 
-  test("memory_store rejects prompt-injection-looking text before embedding or storage", async () => {
+  test("memory_store blocks rejected writes, detects exact CR/NFC duplicates, commits semantic neighbors, and disclaims recall", async () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const add = vi.fn(async () => undefined);
-    const toArray = vi.fn(async () => []);
+    const toArray = vi.fn(async (): Promise<Record<string, unknown>[]> => []);
     const limit = vi.fn(() => ({ toArray }));
     const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
     const openTable = vi.fn(async () => ({
@@ -3457,6 +3457,7 @@ describe("memory plugin e2e", () => {
         if (!storeTool) {
           throw new Error("memory_store tool was not registered");
         }
+        expect(storeTool.description).toContain("does not guarantee semantic recall");
 
         const incognitoStoreTool = materializeRegisteredTool(
           registeredTools.find((t) => t.opts?.name === "memory_store")?.tool,
@@ -3468,6 +3469,7 @@ describe("memory plugin e2e", () => {
         expect(incognitoRejected.details).toEqual({
           action: "rejected",
           reason: "incognito_session",
+          status: "blocked",
         });
         expect(incognitoRejected.content?.[0]?.text).toContain("incognito session");
         expect(embeddingsCreate).not.toHaveBeenCalled();
@@ -3483,6 +3485,7 @@ describe("memory plugin e2e", () => {
         expect(rejected.details).toEqual({
           action: "rejected",
           reason: "prompt_injection_detected",
+          status: "blocked",
         });
         expect(rejected.content?.[0]?.text).toContain("not stored");
         expect(embeddingsCreate).not.toHaveBeenCalled();
@@ -3514,6 +3517,45 @@ describe("memory plugin e2e", () => {
         expect(add).toHaveBeenCalledTimes(1);
         expect(firstAddedMemory(add).text).toBe("The user prefers concise replies");
         expect(firstAddedMemory(add).importance).toBe(0.8);
+
+        toArray.mockResolvedValueOnce([
+          {
+            id: "exact-existing",
+            text: "Cafe\u0301 meetings use metric units.\r",
+            category: "preference",
+            vector: [0.1, 0.2, 0.3],
+            importance: 0.8,
+            createdAt: Date.now(),
+            _distance: 0.01,
+          },
+        ]);
+        const exactExisting = await storeTool.execute("test-call-exact-existing", {
+          text: "Café meetings use metric units.\n",
+          category: "preference",
+        });
+        expect(exactExisting.details).toMatchObject({
+          action: "already_present",
+          existingId: "exact-existing",
+        });
+        expect(add).toHaveBeenCalledTimes(1);
+
+        toArray.mockResolvedValueOnce([
+          {
+            id: "semantic-neighbor",
+            text: "The user likes concise responses",
+            category: "preference",
+            vector: [0.1, 0.2, 0.3],
+            importance: 0.8,
+            createdAt: Date.now(),
+            _distance: 0.01,
+          },
+        ]);
+        const semanticNeighbor = await storeTool.execute("test-call-semantic-neighbor", {
+          text: "The user prefers concise replies",
+          category: "preference",
+        });
+        expect(semanticNeighbor.details?.action).toBe("created");
+        expect(add).toHaveBeenCalledTimes(2);
       },
     });
   });

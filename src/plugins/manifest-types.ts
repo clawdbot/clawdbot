@@ -528,6 +528,8 @@ export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadat
   optional?: boolean;
   /** Tool execution is safe to repeat after an incomplete model turn. */
   replaySafe?: boolean;
+  /** Tool execution can change durable state and failed attempts must remain visible. */
+  sideEffecting?: boolean;
 };
 
 export type PluginManifestProviderAuthChoice = {

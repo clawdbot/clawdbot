@@ -77,6 +77,7 @@ type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
   replaySafe?: boolean;
+  sideEffecting?: boolean;
   trustedLocalMedia?: boolean;
   mcp?: PluginToolMcpMeta;
 };
@@ -379,6 +380,13 @@ function isManifestToolReplaySafe(params: {
   toolName: string;
 }): boolean {
   return params.manifestPlugin?.toolMetadata?.[params.toolName]?.replaySafe === true;
+}
+
+function isManifestToolSideEffecting(params: {
+  manifestPlugin: PluginManifestRecord | undefined;
+  toolName: string;
+}): boolean {
+  return params.manifestPlugin?.toolMetadata?.[params.toolName]?.sideEffecting === true;
 }
 
 function isTrustedManifestLocalMediaTool(params: {
@@ -908,6 +916,10 @@ function createCachedDescriptorPluginTool(params: {
     pluginId,
     optional: params.descriptor.optional,
     replaySafe: isManifestToolReplaySafe({
+      manifestPlugin: params.plugin,
+      toolName,
+    }),
+    sideEffecting: isManifestToolSideEffecting({
       manifestPlugin: params.plugin,
       toolName,
     }),
@@ -1557,6 +1569,10 @@ export function resolvePluginTools(params: {
         pluginId: entry.pluginId,
         optional,
         replaySafe: isManifestToolReplaySafe({
+          manifestPlugin,
+          toolName: tool.name,
+        }),
+        sideEffecting: isManifestToolSideEffecting({
           manifestPlugin,
           toolName: tool.name,
         }),

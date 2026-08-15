@@ -15,6 +15,9 @@
   "contracts": {
     "tools": ["memory_forget", "memory_recall", "memory_store"]
   },
+  "toolMetadata": {
+    "memory_store": { "sideEffecting": true }
+  },
   "uiHints": {
     "embedding.apiKey": {
       "label": "Embedding API Key",

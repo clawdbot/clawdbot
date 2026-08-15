@@ -163,6 +163,10 @@ function sanitizeRecallMemoryText(text: string): string | null {
   return looksLikeEnvelopeSludge(text) ? null : text;
 }
 
+function normalizeStoredMemoryText(text: string): string {
+  return text.replace(/\r\n?/gu, "\n").normalize("NFC").trim();
+}
+
 export async function findCleanDuplicateMemory(
   db: {
     search(
@@ -174,9 +178,19 @@ export async function findCleanDuplicateMemory(
   },
   agentId: string,
   vector: number[],
+  exactText?: string,
 ): Promise<MemorySearchResult | undefined> {
   const existing = await db.search(agentId, vector, DUPLICATE_SEARCH_LIMIT, 0.95);
-  return existing.find((result) => sanitizeRecallMemoryText(result.entry.text) !== null);
+  const normalizedExactText =
+    exactText === undefined ? undefined : normalizeStoredMemoryText(exactText);
+  return existing.find((result) => {
+    const cleanText = sanitizeRecallMemoryText(result.entry.text);
+    return (
+      cleanText !== null &&
+      (normalizedExactText === undefined ||
+        normalizeStoredMemoryText(cleanText) === normalizedExactText)
+    );
+  });
 }
 
 export function cleanMemorySearchResults(results: MemorySearchResult[]): Array<{

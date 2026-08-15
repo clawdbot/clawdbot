@@ -392,7 +392,7 @@ Each `providerBaseUrl` guard supports:
 }
 ```
 
-`toolMetadata` entries also accept `optional` (marks the tool as non-required for plugin activation) and `replaySafe` (marks tool execution as safe to repeat after an incomplete model turn), on top of the shared `configSignals`/`authSignals` fields above.
+`toolMetadata` entries also accept `optional` (marks the tool as non-required for plugin activation), `replaySafe` (marks tool execution as safe to repeat after an incomplete model turn), and `sideEffecting` (marks execution as potentially changing durable or external state), on top of the shared `configSignals`/`authSignals` fields above.
 
 If a tool has no `toolMetadata`, OpenClaw preserves the existing behavior and loads the owning plugin when the tool contract matches policy. For hot-path tools whose factory depends on auth/config, plugin authors should declare `toolMetadata` instead of making core import runtime to ask.
 

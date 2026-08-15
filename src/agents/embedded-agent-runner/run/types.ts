@@ -70,10 +70,18 @@ type EmbeddedRunAttemptToolTerminalObservation = {
   outcome: "success" | "failure";
   failure?: Omit<
     ToolErrorSummary,
-    "toolName" | "meta" | "mutatingAction" | "actionFingerprint" | "fileTarget"
+    "toolName" | "meta" | "mutatingAction" | "ownerKey" | "actionFingerprint" | "fileTarget"
   >;
   /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
   nativeMutation?: {
+    mutatingAction: boolean;
+    replaySafe: boolean;
+    actionFingerprint?: string;
+    fileTarget?: ToolErrorSummary["fileTarget"];
+  };
+  /** Host-prepared mutation facts bound to one concrete plugin tool owner. */
+  ownerMutation?: {
+    ownerKey: string;
     mutatingAction: boolean;
     replaySafe: boolean;
     actionFingerprint?: string;

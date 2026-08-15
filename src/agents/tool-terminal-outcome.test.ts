@@ -7,6 +7,7 @@ import {
   recordToolExecutionTracked,
   resetAdjustedParamsByToolCallIdForTests,
 } from "./agent-tools.before-tool-call.state.js";
+import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 describe("tool terminal outcome observer", () => {
@@ -136,5 +137,80 @@ describe("tool terminal outcome observer", () => {
         outcome: "success",
       }),
     ).toMatchObject({ executionStarted: true, sideEffectEvidence: false });
+  });
+
+  it("keeps a failed persistence claim visible, appends a correction, and hides owner metadata", () => {
+    const observation = {
+      toolName: "memory_store",
+      arguments: { text: "The user prefers metric units." },
+      executionStarted: true,
+      outcome: "failure",
+      failure: { error: "429 insufficient_quota" },
+      ownerMutation: {
+        ownerKey: '["memory-lancedb","memory_store"]',
+        mutatingAction: true,
+        replaySafe: false,
+        actionFingerprint: "memory-store:metric-units",
+      },
+    } as const;
+    const terminal = createToolTerminalObserver("run-memory-store")(observation);
+
+    const payloads = buildPayloads({
+      assistantTexts: ["I've saved that preference and will remember it."],
+      lastToolError: terminal.lastToolError,
+    });
+
+    expect(payloads).toEqual([
+      expect.objectContaining({ text: "I've saved that preference and will remember it." }),
+      expect.objectContaining({ isError: true }),
+    ]);
+    expect(JSON.stringify(payloads)).not.toContain("memory-lancedb");
+  });
+
+  it("does not treat an unowned same-name tool as a persistence mutation", () => {
+    const terminal = createToolTerminalObserver("run-third-party-store")({
+      toolName: "memory_store",
+      arguments: { text: "The user prefers metric units." },
+      executionStarted: true,
+      outcome: "failure",
+      failure: { error: "store unavailable" },
+    });
+
+    expect(terminal.lastToolError).toMatchObject({ mutatingAction: false });
+  });
+
+  it("clears a failed persistence action only after the same fact succeeds", () => {
+    const observe = createToolTerminalObserver("run-memory-store-retry");
+    const ownerKey = '["memory-lancedb","memory_store"]';
+    const ownerMutation = (actionFingerprint: string) => ({
+      ownerKey,
+      mutatingAction: true as const,
+      replaySafe: false as const,
+      actionFingerprint,
+    });
+
+    observe({
+      toolName: "memory_store",
+      arguments: { text: "The user prefers metric units." },
+      outcome: "failure",
+      failure: { error: "store unavailable" },
+      ownerMutation: ownerMutation("fact:metric"),
+    });
+    expect(
+      observe({
+        toolName: "memory_store",
+        arguments: { text: "The user prefers imperial units." },
+        outcome: "success",
+        ownerMutation: ownerMutation("fact:imperial"),
+      }).lastToolError,
+    ).toMatchObject({ actionFingerprint: "fact:metric" });
+    expect(
+      observe({
+        toolName: "memory_store",
+        arguments: { text: "The user prefers metric units." },
+        outcome: "success",
+        ownerMutation: ownerMutation("fact:metric"),
+      }).lastToolError,
+    ).toBeUndefined();
   });
 });

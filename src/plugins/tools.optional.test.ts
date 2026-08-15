@@ -1039,7 +1039,7 @@ describe("resolvePluginTools optional tools", () => {
       config,
       plugins: [
         createToolManifest("optional-demo", ["optional_tool"], {
-          toolMetadata: { optional_tool: { optional: true } },
+          toolMetadata: { optional_tool: { optional: true, sideEffecting: true } },
         }),
       ],
     });
@@ -1065,6 +1065,10 @@ describe("resolvePluginTools optional tools", () => {
     });
 
     expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(getPluginToolMeta(expectDefined(tools[0], "tools[0] test invariant"))).toMatchObject({
+      pluginId: "optional-demo",
+      sideEffecting: true,
+    });
     expect(loadContextMocks.resolve).not.toHaveBeenCalled();
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });

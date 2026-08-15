@@ -91,6 +91,7 @@ export function prepareEmbeddedAttemptStream(input: {
   sandboxSessionKey: string;
   builtinToolNames: ReadonlySet<string>;
   replaySafeToolNames: ReadonlySet<string>;
+  sideEffectToolOwners?: ReadonlyMap<string, string>;
 }) {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
@@ -319,6 +320,7 @@ export function prepareEmbeddedAttemptStream(input: {
     agentId: input.hookAgentId,
     builtinToolNames: input.builtinToolNames,
     replaySafeToolNames: input.replaySafeToolNames,
+    ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
     internalEvents: attempt.internalEvents,
   });
   toolMetasForTerminal = subscription.toolMetas;

@@ -50,6 +50,40 @@ describe("tool mutation helpers", () => {
     expect(readFingerprint).toBeUndefined();
   });
 
+  it("binds reordered exact arguments to one owner but separates changed facts and owners", () => {
+    const ownerKey = '["memory-lancedb","memory_store"]';
+    const metric = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers metric units." },
+      undefined,
+      { ownerKey },
+    );
+    const reordered = buildToolMutationState(
+      "memory_store",
+      { text: "The user prefers metric units.", category: "preference" },
+      undefined,
+      { ownerKey },
+    );
+    const imperial = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers imperial units." },
+      undefined,
+      { ownerKey },
+    );
+    const otherOwner = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers metric units." },
+      undefined,
+      { ownerKey: '["other-plugin","memory_store"]' },
+    );
+
+    expect(metric).toMatchObject({ mutatingAction: true, replaySafe: false });
+    expect(metric.actionFingerprint).toBe(reordered.actionFingerprint);
+    expect(metric.actionFingerprint).not.toBe(imperial.actionFingerprint);
+    expect(metric.actionFingerprint).not.toBe(otherOwner.actionFingerprint);
+    expect(metric.actionFingerprint).not.toContain("metric units");
+  });
+
   it.each([
     ["exec", "sed -n '1,220p' src/agents/tool-mutation.ts"],
     ["bash", "cat package.json"],

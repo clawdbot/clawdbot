@@ -47,6 +47,7 @@ export function createToolTerminalObserver(
       (trackedExecutionStarted ?? observation.executionStarted ?? true) && !executionPrevented;
     const executedArguments = asRecord(trackedArguments) ?? asRecord(observation.arguments);
     const mutation =
+      observation.ownerMutation ??
       observation.nativeMutation ??
       buildToolMutationState(observation.toolName, executedArguments, observation.meta);
     const fileTargets =
@@ -61,6 +62,7 @@ export function createToolTerminalObserver(
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
         mutatingAction,
+        ...(observation.ownerMutation ? { ownerKey: observation.ownerMutation.ownerKey } : {}),
         ...(mutatingAction && mutation.actionFingerprint
           ? { actionFingerprint: mutation.actionFingerprint }
           : {}),
@@ -75,6 +77,7 @@ export function createToolTerminalObserver(
       const success = {
         toolName: observation.toolName,
         ...(observation.meta ? { meta: observation.meta } : {}),
+        ...(observation.ownerMutation ? { ownerKey: observation.ownerMutation.ownerKey } : {}),
         ...(mutation.actionFingerprint ? { actionFingerprint: mutation.actionFingerprint } : {}),
       };
       for (const fileTarget of fileTargets ?? [undefined]) {
