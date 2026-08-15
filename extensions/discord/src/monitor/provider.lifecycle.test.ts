@@ -740,4 +740,126 @@ describe("runDiscordGatewayLifecycle", () => {
       vi.useRealTimers();
     }
   });
+
+  it("force-stops the lifecycle when the gateway stays disconnected past the ready timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        // Register the force-stop handler so triggerForceStop calls it
+        stopParams.registerForceStop?.((err: unknown) => {
+          throw err;
+        });
+        // Advance past the ready timeout — watchdog should fire and force-stop
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      const { lifecycleParams, statusSink } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+        /discord gateway stayed disconnected/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not force-stop when the gateway reconnects before the watchdog threshold", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        // Gateway reconnects before the timeout
+        setTimeout(() => {
+          gateway.isConnected = true;
+        }, 5_000);
+        await vi.advanceTimersByTimeAsync(6_000);
+        emitter.emit("debug", "Gateway websocket opened");
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers force-stop when a reconnect is in progress at the watchdog threshold", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      // Simulate a socket that is CONNECTING (readyState=0)
+      const mockWs = new EventEmitter() as EventEmitter & { readyState: number };
+      mockWs.readyState = 0; // CONNECTING
+      gateway.ws = mockWs;
+
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        // Socket stays CONNECTING through the first watchdog deadline (30s).
+        // The watchdog fires, sees CONNECTING, defers (grace 1/2).
+        // After 5s into the grace period, the socket reaches OPEN and READY.
+        setTimeout(() => {
+          mockWs.readyState = 1; // OPEN
+          gateway.isConnected = true;
+        }, 35_000); // After the first deadline (30s) + 5s into grace
+        // Advance past the first watchdog threshold (30s) — should defer
+        await vi.advanceTimersByTimeAsync(31_000);
+        // Advance past the 5s grace recovery — gateway should now be connected
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("force-stops after grace periods are exhausted when socket stays CONNECTING", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      // Simulate a socket permanently stuck in CONNECTING
+      const mockWs = new EventEmitter() as EventEmitter & { readyState: number };
+      mockWs.readyState = 0; // CONNECTING — never reaches OPEN
+      gateway.ws = mockWs;
+
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        stopParams.registerForceStop?.((err: unknown) => {
+          throw err;
+        });
+        // Advance past the first watchdog threshold (30s) — should defer (grace 1/2)
+        await vi.advanceTimersByTimeAsync(31_000);
+        // Advance past the second watchdog threshold (30s) — should defer (grace 2/2)
+        await vi.advanceTimersByTimeAsync(31_000);
+        // Advance past the third watchdog threshold (30s) — grace exhausted, force-stop
+        await vi.advanceTimersByTimeAsync(31_000);
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+        /discord gateway stayed disconnected/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

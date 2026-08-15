@@ -22,11 +22,7 @@ import { Plugin, type Client } from "./client.js";
 import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-close-codes.js";
 import { dispatchVoiceGatewayEvent, mapGatewayDispatchData } from "./gateway-dispatch.js";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
-import {
-  GatewayHeartbeatTimers,
-  GatewayReconnectTimer,
-  GatewayConnectionWatchdog,
-} from "./gateway-lifecycle.js";
+import { GatewayHeartbeatTimers, GatewayReconnectTimer } from "./gateway-lifecycle.js";
 import { decodeGatewayMessage, ensureGatewayParams } from "./gateway-payload.js";
 import { GatewaySendLimiter } from "./gateway-rate-limit.js";
 import { DiscordGatewayVoiceStateCache } from "./gateway-voice-state-cache.js";
@@ -100,7 +96,6 @@ export class GatewayPlugin extends Plugin {
   private isConnecting = false;
   private readonly heartbeatTimers = new GatewayHeartbeatTimers();
   private readonly reconnectTimer = new GatewayReconnectTimer();
-  private readonly connectionWatchdog = new GatewayConnectionWatchdog();
   private readonly voiceStateCache = new DiscordGatewayVoiceStateCache();
   private outboundLimiter = new GatewaySendLimiter(
     (payload) => this.sendSerializedGatewayEvent(payload),
@@ -190,7 +185,6 @@ export class GatewayPlugin extends Plugin {
     this.shouldReconnect = false;
     this.stopReconnectTimer();
     this.stopHeartbeat();
-    this.connectionWatchdog.stop();
     this.outboundLimiter.clear();
     this.ws?.close(1000, "Client disconnect");
     this.ws = null;
@@ -428,13 +422,11 @@ export class GatewayPlugin extends Plugin {
       this.reconnectAttempts = 0;
       this.consecutiveResumeFailures = 0;
       this.isConnected = true;
-      this.connectionWatchdog.stop();
     }
     if (payload.t === GatewayDispatchEvents.Resumed) {
       this.reconnectAttempts = 0;
       this.consecutiveResumeFailures = 0;
       this.isConnected = true;
-      this.connectionWatchdog.stop();
     }
     this.voiceStateCache.apply(payload);
     dispatchVoiceGatewayEvent(this.client, payload.t, payload.d);
@@ -479,7 +471,6 @@ export class GatewayPlugin extends Plugin {
     if (this.reconnectAttempts > (this.options.reconnect?.maxAttempts ?? 50)) {
       const maxAttempts = this.options.reconnect?.maxAttempts ?? 50;
       this.shouldReconnect = false;
-      this.connectionWatchdog.stop();
       this.emitter.emit(
         "error",
         new Error(
@@ -512,33 +503,9 @@ export class GatewayPlugin extends Plugin {
       "debug",
       `Gateway reconnect scheduled in ${delay}ms (${options.reason}, resume=${String(shouldResume)})`,
     );
+    this.emitter.emit("reconnect-scheduled", delay);
     this.reconnectTimer.schedule(delay, () => {
       this.connect(shouldResume);
-    });
-    // Start a connection watchdog that fires if the gateway stays disconnected
-    // longer than the reconnect delay plus 2x heartbeat interval. This catches
-    // event-loop stalls that delay the reconnect timer past its useful window.
-    // The watchdog is not stopped by scheduleReconnect rescheduling — it
-    // monitors total disconnection time across retry cycles.
-    const watchdogThreshold = delay + 90_000;
-    this.connectionWatchdog.start(watchdogThreshold, () => {
-      // Don't override terminal reconnect states — if maxAttempts was reached
-      // or a fatal close code set shouldReconnect=false, respect that stop.
-      if (!this.shouldReconnect || this.isConnected) {
-        this.connectionWatchdog.stop();
-        return;
-      }
-      this.emitter.emit(
-        "debug",
-        `Gateway connection watchdog fired after ${this.connectionWatchdog.elapsedMs ?? watchdogThreshold}ms disconnected — forcing fresh IDENTIFY`,
-      );
-      this.resetSessionState();
-      // Tear down any stuck connecting socket — connect() returns early if
-      // isConnecting is true, so we must clear it first.
-      this.ws?.close();
-      this.ws = null;
-      this.isConnecting = false;
-      this.connect(false);
     });
   }
 
