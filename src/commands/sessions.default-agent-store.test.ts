@@ -181,6 +181,24 @@ describe("sessionsCommand default store agent selection", () => {
     expect(logs[0]).toContain("Session store: /tmp/sessions-voice.voice.sqlite");
   });
 
+  it("names both supported escapes when an explicit roster has no session-list owner", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, helper: {}, third: {} },
+      },
+    });
+    const { runtime } = createRuntime();
+
+    await sessionsCommand({}, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Multiple agents are configured, but session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents to include every configured agent.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("uses all configured agent stores with --all-agents", async () => {
     listSessionEntriesMock.mockReset();
     listSessionEntriesMock

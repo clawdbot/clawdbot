@@ -5,6 +5,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -354,6 +355,26 @@ export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
       ),
     };
   });
+}
+
+/** Loads task records without creating or migrating shared state. */
+export function loadTaskRegistryStateFromSqliteReadOnly(): TaskRegistryStoreSnapshot {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db, path }) =>
+      runSqliteDeferredTransactionSync(db, () => {
+        assertSqliteTableIntegrity(db, path, "task_runs");
+        assertSqliteTableIntegrity(db, path, "task_delivery_state");
+        const taskRows = selectTaskRows(db);
+        const deliveryRows = selectTaskDeliveryStateRows(db);
+        return {
+          tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
+          deliveryStates: new Map(
+            deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)]),
+          ),
+        };
+      }),
+    ) ?? { tasks: new Map(), deliveryStates: new Map() }
+  );
 }
 
 export function listTaskRegistryRecordsByOwnerKeyFromSqlite(ownerKey: string): TaskRecord[] {

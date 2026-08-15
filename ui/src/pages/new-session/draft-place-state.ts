@@ -131,6 +131,22 @@ export class DraftPlaceState {
     return this.repositoryState.preferenceReady;
   }
 
+  canAdoptGroupDefaults(): boolean {
+    return (
+      !this.folderSelectedByUser &&
+      !this.whereSelectedByUser &&
+      !this.projectSelectedByUser &&
+      !this.repositoryState.hasUserSelection
+    );
+  }
+
+  adoptGroupDefaults() {
+    if (this.read().data?.groupStatus !== "resolved" || !this.canAdoptGroupDefaults()) {
+      return;
+    }
+    this.adoptAgentDefaults({ preserveSelectedAgent: true });
+  }
+
   setAgentsHydrated(value: boolean) {
     this.agentsHydratedValue = value;
   }
@@ -242,16 +258,30 @@ export class DraftPlaceState {
         storedFolder === preference?.workspace &&
         preference.workspace !== workspace;
       const storedFolderUsable = Boolean(storedFolder) && !storedWorkspaceMoved;
-      this.folderValue = storedFolderUsable ? storedFolder : workspace;
+      const groupTarget = Boolean(snapshot.data?.group);
+      const groupFolder = snapshot.data?.groupCwd ?? "";
+      const groupWorktree = snapshot.data?.groupWorktree === true;
+      this.folderValue = groupTarget
+        ? groupFolder || workspace
+        : storedFolderUsable
+          ? storedFolder
+          : workspace;
       this.folderGatewayApproved = false;
       this.folderSelectedByUser = false;
-      this.repositoryState.adoptPreference(preference);
-      const preferredWhere = preference?.where ?? { kind: "local" };
+      this.repositoryState.adoptPreference(groupTarget ? { worktree: groupWorktree } : preference);
+      if (groupTarget) {
+        // Group defaults own the initial local/worktree choice. Repository
+        // discovery still rejects worktrees when the selected folder is not Git.
+        this.repositoryState.forceWorktree(groupWorktree);
+      }
+      const preferredWhere = groupTarget
+        ? { kind: "local" as const }
+        : (preference?.where ?? { kind: "local" as const });
       this.preferredWhereRestore = preferredWhere.kind === "local" ? null : preferredWhere;
-      this.preferredProjectRestore = preference?.projectId ?? "";
+      this.preferredProjectRestore = groupTarget ? "" : (preference?.projectId ?? "");
       this.whereSelectedByUser = false;
       this.projectSelectedByUser = false;
-      if (storedWorkspaceMoved) {
+      if (storedWorkspaceMoved && !groupTarget) {
         this.persistPreference({ folder: workspace });
       }
     }

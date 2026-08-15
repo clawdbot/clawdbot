@@ -137,7 +137,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     buildProviderAuthDoctorHintWithPlugin: vi.fn(() => undefined),
     buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
     buildProviderUnknownModelHintWithPlugin: vi.fn(() => undefined),
-    createProviderEmbeddingProvider: vi.fn(() => undefined),
     formatProviderAuthProfileApiKeyWithPlugin: vi.fn(() => undefined),
     normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
     prepareProviderDynamicModel: vi.fn(async () => {}),

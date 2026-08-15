@@ -324,7 +324,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     event: CustomEvent<CatalogSessionContinuedDetail>,
   ) => {
     const detail = event.detail;
-    if (!detail?.sessionKey) {
+    const rawAgentId = typeof detail?.agentId === "string" ? detail.agentId.trim() : "";
+    const eventAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
+    const currentAgentId = this.sessionCatalogAgentId
+      ? normalizeAgentId(this.sessionCatalogAgentId)
+      : null;
+    if (!detail?.sessionKey || !eventAgentId || eventAgentId !== currentAgentId) {
       return;
     }
     this.sessionCatalogs = bindAdoptedCatalogSession(this.sessionCatalogs, detail);

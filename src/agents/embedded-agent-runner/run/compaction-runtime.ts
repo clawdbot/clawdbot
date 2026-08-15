@@ -63,6 +63,7 @@ export type EmbeddedRunCompactionRecoveryInput = {
     file: string;
     target?: ContextEngineSessionTarget;
   };
+  prepareCompactedTranscriptRetry: () => Promise<void>;
   armPostCompactionGuard: () => void;
 };
 

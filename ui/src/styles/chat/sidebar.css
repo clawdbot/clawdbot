@@ -197,11 +197,16 @@
   overflow: hidden;
 }
 
+/* Header-to-transcript blend. It stops one thread gutter short of both pane
+   edges: the transcript's scrollbar lives in that strip, and a full-width
+   overlay paints over the thumb's top (it vanishes under the fade while
+   scrolling). Transcript content never enters the gutter, so nothing escapes
+   the blend. Both edges stay symmetric so RTL keeps the same clearance. */
 .chat-main__conversation::before {
   content: "";
   position: absolute;
   z-index: 2;
-  inset: 0 0 auto;
+  inset: 0 var(--chat-thread-gutter) auto;
   height: 24px;
   pointer-events: none;
   background: linear-gradient(to bottom, var(--chat-surface), transparent);

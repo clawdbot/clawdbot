@@ -569,6 +569,13 @@
       "text": "exec host=gateway/node"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/model-providers/default-models-view.ts",
+      "text": "i"
+    },
+    {
       "count": 4,
       "kind": "html-text",
       "name": "text",

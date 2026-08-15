@@ -182,6 +182,7 @@ interface YieldContinuationAttempt {
   didSendDeterministicApprovalPrompt?: boolean;
   successfulCronAdds?: number;
   acceptedSessionSpawns?: readonly { runId: string; childSessionKey: string }[];
+  runtimeContinuationStarted?: boolean;
   messagingToolSentTexts?: readonly string[];
   messagingToolSentMediaUrls?: readonly string[];
   messagingToolSentTargets?: readonly MessagingToolSend[];
@@ -201,6 +202,7 @@ export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt):
       messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
     }) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
+    attempt.runtimeContinuationStarted === true ||
     hasAsyncActivity(attempt.toolMetas) ||
     (attempt.successfulCronAdds ?? 0) > 0
   );

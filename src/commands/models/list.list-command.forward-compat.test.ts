@@ -89,6 +89,7 @@ const mocks = vi.hoisted(() => {
     ensureOpenClawModelsJson: vi.fn(),
     ensureAuthProfileStore: vi.fn(),
     resolveDefaultAgentDir: vi.fn(),
+    resolveModelsTargetAgent: vi.fn(),
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
     resolveConfiguredEntries: vi.fn(),
@@ -112,6 +113,10 @@ function resetMocks() {
   mocks.ensureOpenClawModelsJson.mockResolvedValue({ wrote: false });
   mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {}, order: {} });
   mocks.resolveDefaultAgentDir.mockReturnValue("/tmp/openclaw-agent");
+  mocks.resolveModelsTargetAgent.mockReturnValue({
+    agentId: "main",
+    agentDir: "/tmp/openclaw-agent",
+  });
   mocks.loadModelRegistry.mockResolvedValue({
     models: [],
     availableKeys: new Set(),
@@ -230,6 +235,11 @@ function installModelsListCommandForwardCompatMocks() {
 
   vi.doMock("./list.configured.js", () => ({
     resolveConfiguredEntries: mocks.resolveConfiguredEntries,
+  }));
+
+  vi.doMock("./shared.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./shared.js")>()),
+    resolveModelsTargetAgent: mocks.resolveModelsTargetAgent,
   }));
 
   vi.doMock("./list.table.js", () => ({
@@ -394,6 +404,18 @@ beforeEach(() => {
 });
 
 describe("modelsListCommand forward-compat", () => {
+  it("uses the explicitly selected agent for auth and catalog discovery", async () => {
+    mocks.resolveModelsTargetAgent.mockReturnValueOnce({
+      agentId: "research",
+      agentDir: "/tmp/openclaw-agent-research",
+    });
+
+    await modelsListCommand({ agent: "research", json: true }, createRuntime() as never);
+
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(mocks.resolvedConfig, "research");
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent-research");
+  });
+
   describe("empty model lists", () => {
     it.each([
       { name: "JSON", options: { json: true } },

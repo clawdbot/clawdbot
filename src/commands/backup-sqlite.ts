@@ -107,7 +107,7 @@ function recordSqliteOutcomeBestEffort(
     recordBackupRunOutcome({ kind: "sqlite-snapshot", ...params });
   } catch (error) {
     runtime.error(
-      `Warning: backup completed, but its run record could not be written: ${formatErrorMessage(error)}`,
+      `Warning: the backup outcome could not be recorded: ${formatErrorMessage(error)}`,
     );
   }
 }

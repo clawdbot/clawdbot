@@ -1,5 +1,9 @@
 import { Option, type Command } from "commander";
 import { signalProcessTree } from "../process/kill-tree.js";
+import {
+  NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+  type NodeWorkerConnectionFailureMessage,
+} from "../worker/node-supervisor-protocol.js";
 import type { WorkerCommandLifetime } from "../worker/worker-command.runtime.js";
 
 const WORKER_START_MESSAGE_TYPE = "openclaw-worker-start-v1";
@@ -66,6 +70,20 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
   return {
     started: startedPromise,
     signal: abortController.signal,
+    reportConnectionFailure: (cause) => {
+      if (disposed || !process.connected || typeof process.send !== "function") {
+        return;
+      }
+      const message: NodeWorkerConnectionFailureMessage = {
+        type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+        cause: cause ?? null,
+      };
+      try {
+        process.send(message, () => {});
+      } catch {
+        // The disconnect handler owns worker shutdown when the supervisor is gone.
+      }
+    },
     terminateOwnedTree: () => {
       signalProcessTree(process.pid, "SIGKILL", {
         detached: process.platform !== "win32",

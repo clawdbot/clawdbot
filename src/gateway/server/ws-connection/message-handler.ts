@@ -331,6 +331,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           clientDisplayName: connectParams.client.displayName,
           mode: connectParams.client.mode,
           version: connectParams.client.version,
+          buildId: connectParams.client.buildId,
           platform: connectParams.client.platform,
           deviceFamily: connectParams.client.deviceFamily,
           modelIdentifier: connectParams.client.modelIdentifier,

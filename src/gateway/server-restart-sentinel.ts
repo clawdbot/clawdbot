@@ -1,6 +1,5 @@
 // Gateway restart sentinel recovery.
 // Resumes pending restart continuations and outbound delivery after process restart.
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import {
   resolveCorrelatedSubagentDelivery,
   settleCorrelatedSubagentDelivery,
@@ -207,12 +206,12 @@ export async function deliverQueuedSessionDelivery(params: {
   stateDir?: string;
 }) {
   const queuedEntry = resolveCorrelatedSubagentDelivery(params.entry);
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(queuedEntry.sessionKey);
+  const { cfg, agentId, entry, storePath, canonicalKey } = loadSessionEntry(queuedEntry.sessionKey);
   const deliveryContext = resolveQueuedSessionDeliveryContext(queuedEntry);
 
   if (queuedEntry.kind === "systemEvent") {
-    const { agentId, text } = queuedEntry;
-    enqueueRestartSentinelWake(text, canonicalKey, agentId, deliveryContext);
+    const { agentId: systemEventAgentId, text } = queuedEntry;
+    enqueueRestartSentinelWake(text, canonicalKey, systemEventAgentId, deliveryContext);
     return;
   }
 
@@ -239,6 +238,8 @@ export async function deliverQueuedSessionDelivery(params: {
     await deliverQueuedGeneratedMediaAgentTurn({
       entry: queuedEntry,
       canonicalKey,
+      agentId,
+      storePath,
       sessionEntry: entry,
       ...(params.stateDir !== undefined ? { stateDir: params.stateDir } : {}),
     })
@@ -259,10 +260,6 @@ export async function deliverQueuedSessionDelivery(params: {
   const route = queuedEntry.route;
   const messageId = resolveQueuedRestartContinuationMessageId(queuedEntry);
   const userMessage = queuedEntry.message.trim();
-  const agentId = resolveSessionAgentId({
-    sessionKey: canonicalKey,
-    config: cfg,
-  });
   let dispatchError: unknown;
   const ctxPayload = finalizeInboundContext(
     {

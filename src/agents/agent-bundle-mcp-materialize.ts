@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -171,10 +172,10 @@ function toJsonAgentToolResult(params: {
 }
 
 function requireStringArg(input: unknown, key: string): string {
-  if (!input || typeof input !== "object") {
+  if (!isRecord(input)) {
     throw new Error(`${key} is required`);
   }
-  const value = Reflect.get(input, key);
+  const value = input[key];
   if (typeof value !== "string") {
     throw new Error(`${key} is required`);
   }

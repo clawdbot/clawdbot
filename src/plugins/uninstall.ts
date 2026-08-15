@@ -220,7 +220,14 @@ function resolveNpmManagedProjectInstall(params: {
     installPath: params.installPath,
     nodeModulesRoot,
   });
-  return packageName ? { installPath: params.installPath, npmRoot, packageName } : null;
+  if (
+    !packageName ||
+    resolveComparableUninstallPath(params.installPath) !==
+      resolveComparableUninstallPath(path.join(nodeModulesRoot, ...packageName.split("/")))
+  ) {
+    return null;
+  }
+  return { installPath: npmRoot, npmRoot, packageName };
 }
 
 function resolveNpmPackageNameFromInstallPath(params: {

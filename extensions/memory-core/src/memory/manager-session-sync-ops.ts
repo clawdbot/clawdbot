@@ -230,7 +230,13 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
     if (pending.length > 0) {
       this.sessionsDirty = true;
-      void this.sync({ reason: "session-delta" }).catch((err: unknown) => {
+      // Keep both identity and file keys so every transcript backend enters the
+      // targeted queue instead of letting an active sync clear this newer event.
+      void this.sync({
+        reason: "session-delta",
+        sessions: pendingTargets,
+        archiveFiles: pending,
+      }).catch((err: unknown) => {
         log.warn(`memory sync failed (session update): ${String(err)}`);
       });
     }

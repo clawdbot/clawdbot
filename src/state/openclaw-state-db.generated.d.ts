@@ -1144,8 +1144,10 @@ export interface SecretStoreEntries {
 
 export interface SessionGroups {
   created_at: number;
+  cwd: string | null;
   name: string;
   position: number;
+  worktree: number | null;
 }
 
 export interface SessionStateEvents {
@@ -1557,6 +1559,7 @@ export interface WorkerSessionPlacements {
   agent_id: string;
   created_at_ms: number;
   environment_id: string | null;
+  execution_mode: string | null;
   last_live_event_ack_cursor: number | null;
   last_transcript_ack_cursor: number | null;
   recovery_error: string | null;

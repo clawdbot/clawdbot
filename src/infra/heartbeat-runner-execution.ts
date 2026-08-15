@@ -13,7 +13,7 @@ import {
   resolveHeartbeatScratchProposalFromReplyResult,
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
-import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -59,7 +59,6 @@ import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   heartbeatLog,
   resolveAmbientHeartbeatAgentId,
-  resolveHeartbeatAckMaxChars,
   resolveHeartbeatForWake,
   resolveHeartbeatTimeoutOverrideSeconds,
   shouldUseHeartbeatResponseToolPrompt,
@@ -322,7 +321,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     typeof pendingFinalDeliveryText === "string" &&
     stripHeartbeatToken(pendingFinalDeliveryText, {
       mode: "heartbeat",
-      maxAckChars: resolveHeartbeatAckMaxChars(cfg, heartbeat),
+      maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     }).shouldSkip;
   if (
     recentSessionEntry?.pendingFinalDelivery !== undefined &&

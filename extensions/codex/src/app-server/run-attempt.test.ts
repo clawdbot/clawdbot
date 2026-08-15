@@ -2403,8 +2403,127 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+    );
+    const planRestoreRequest = harness.requests.find(
+      (request) => request.method === "thread/inject_items",
+    );
+    expect(planRestoreRequest?.params).toMatchObject({
+      threadId: "thread-1",
+      items: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: expect.stringContaining('"step":"Restore progress","status":"in_progress"'),
+            },
+          ],
+        },
+      ],
+    });
+
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+  });
+
+  it("does not inject plan state after compaction when the turn has no plan", async () => {
+    const params = createRunParams();
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+    );
+    expect(harness.requests.map((request) => request.method)).not.toContain("thread/inject_items");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("bounds restored plan state after compaction", async () => {
+    const params = createRunParams();
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/plan/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        explanation: "e".repeat(10_000),
+        plan: Array.from({ length: 100 }, (_, index) => ({
+          step: `${index}: ${"x".repeat(2_000)}`,
+          status: index === 0 ? "inProgress" : "pending",
+        })),
+      },
+    });
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+    );
+
+    const request = harness.requests.find((entry) => entry.method === "thread/inject_items");
+    const text = (
+      request?.params as { items?: Array<{ content?: Array<{ text?: string }> }> } | undefined
+    )?.items?.[0]?.content?.[0]?.text;
+    expect(text).toBeDefined();
+    const payloadText = text?.slice((text?.indexOf("\n") ?? -1) + 1) ?? "";
+    const payload = JSON.parse(payloadText) as {
+      explanation?: string;
+      plan: Array<{ step: string; status: string }>;
+    };
+    expect(Buffer.byteLength(payloadText, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(Buffer.byteLength(payload.explanation ?? "", "utf8")).toBeLessThanOrEqual(2 * 1024);
+    expect(payload.plan.length).toBeLessThanOrEqual(50);
+    expect(payload.plan.every((step) => Buffer.byteLength(step.step, "utf8") <= 512)).toBe(true);
+    expect(payload.plan[0]?.status).toBe("in_progress");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("continues the turn when restoring plan state after compaction fails", async () => {
+    const params = createRunParams();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/inject_items") {
+        throw new Error("injected test failure");
+      }
+      return undefined;
+    });
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/plan/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        explanation: "Keep working",
+        plan: [{ step: "Finish safely", status: "inProgress" }],
+      },
+    });
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+    );
+    expect(harness.requests.map((request) => request.method)).toContain("thread/inject_items");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+    expect(readAttemptTerminal(result).promptError).toBeNull();
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
@@ -4040,11 +4159,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
   });
 
-  it("promotes implicit Codex yolo approval policy when OpenClaw tool policy exists", async () => {
+  it("keeps effective default Codex yolo when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
-    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
     const { sessionFile, workspaceDir } = createRunPaths();
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -4053,17 +4171,12 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("untrusted");
+    const turnRequest = harness.requests.find((request) => request.method === "turn/start");
+    const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(startParams?.approvalPolicy).toBe("never");
     expect(startParams?.sandbox).toBe("danger-full-access");
-    expect(info).toHaveBeenCalledWith(
-      "codex app-server approval policy promoted for OpenClaw tool policy",
-      {
-        from: "never",
-        to: "untrusted",
-        beforeToolCallHook: true,
-        trustedToolPolicies: [],
-      },
-    );
+    expect(turnParams?.approvalPolicy).toBe("never");
+    expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
   });
   it("keeps explicit Codex yolo mode unpromoted when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
@@ -4123,7 +4236,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.sandbox).toBe("danger-full-access");
   });
 
-  it("ignores invalid Codex app-server env overrides when promoting tool policy approval", async () => {
+  it("ignores invalid Codex app-server env overrides without weakening default yolo", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
@@ -4137,7 +4250,7 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("untrusted");
+    expect(startParams?.approvalPolicy).toBe("never");
   });
   it("preserves a healthy binding when invalid image cleanup hits a transient thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

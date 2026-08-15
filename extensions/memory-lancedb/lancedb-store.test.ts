@@ -6,6 +6,27 @@ import { installTmpDirHarness } from "./test-helpers.js";
 describe("MemoryDB agent isolation", () => {
   const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-scope-" });
 
+  test("cancels a timed-out native search and keeps the table usable", async () => {
+    const db = new MemoryDB(getDbPath(), 2);
+    try {
+      const stored = await db.store("alpha", {
+        text: "alpha private preference",
+        vector: [1, 0],
+        importance: 0.8,
+        category: "preference",
+      });
+
+      await expect(db.search("alpha", [1, 0], 5, 0, { timeoutMs: 0 })).rejects.toThrow(
+        "Query timeout",
+      );
+      await expect(db.search("alpha", [1, 0], 5, 0, { timeoutMs: 5_000 })).resolves.toMatchObject([
+        { entry: { id: stored.id, text: "alpha private preference" } },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   test("scopes store, search, list, query, count, delete, and restart reads", async () => {
     const db = new MemoryDB(getDbPath(), 2);
     const alpha = await db.store("alpha", {

@@ -34,6 +34,8 @@ import {
 } from "../prepared-model-runtime.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
+import type { SandboxContext } from "../sandbox/types.js";
+import { resolveSessionPlacementSandbox } from "../session-placement-admission.js";
 import { SessionManager } from "../sessions/index.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import { compactNativeCliSession } from "./compact.js";
@@ -326,14 +328,28 @@ async function compactEmbeddedAgentSessionImpl(
   };
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
+  const placementParams = params as CompactEmbeddedAgentSessionParams & {
+    sandbox?: SandboxContext | null;
+  };
+  const placementSandbox =
+    placementParams.sandbox === undefined
+      ? await resolveSessionPlacementSandbox({
+          agentId: runtimeTarget.agentId,
+          config: params.config,
+          sessionId: runtimeTarget.sessionId,
+          sessionKey: runtimeTarget.sessionKey,
+          workspaceDir: resolvedWorkspaceDir,
+        })
+      : null;
+  const preparedParams = placementSandbox ? { ...params, sandbox: placementSandbox } : params;
   const runtimeSelection = resolveCompactionRuntimeSelection({
-    ...params,
-    modelId: params.model,
-    boundHarnessRuntime: params.agentHarnessId,
-    preparedRuntimePlan: params.runtimePlan,
+    ...preparedParams,
+    modelId: preparedParams.model,
+    boundHarnessRuntime: preparedParams.agentHarnessId,
+    preparedRuntimePlan: preparedParams.runtimePlan,
     selectedHarnessRuntime:
-      params.modelSelectionLocked === true
-        ? normalizeOptionalAgentRuntimeId(params.agentHarnessId)
+      preparedParams.modelSelectionLocked === true
+        ? normalizeOptionalAgentRuntimeId(preparedParams.agentHarnessId)
         : undefined,
   });
   // Native control operations reuse the backend's existing authenticated session.
@@ -378,7 +394,7 @@ async function compactEmbeddedAgentSessionImpl(
       // Retain engine ownership until the queued path settles. Explicit cleanup
       // or accepted background maintenance may release it from this call.
       return await compactResolvedContextEngine(
-        params,
+        preparedParams,
         contextEngine,
         agentDir,
         resolvedWorkspaceDir,

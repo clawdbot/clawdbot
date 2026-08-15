@@ -161,6 +161,7 @@ let startMode: StartMode = "hello";
 let startCalls = 0;
 let closeCode = 1006;
 let closeReason = "";
+let helloCapabilities: string[] | undefined = [];
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
 let connectError: Error | null = null;
 
@@ -169,7 +170,7 @@ function makeStubGatewayHello(): HelloOk {
     type: "hello-ok",
     protocol: 1,
     server: { version: "test", connId: "test-connection" },
-    features: { methods: helloMethods ?? [], events: [] },
+    features: { capabilities: helloCapabilities ?? [], methods: helloMethods ?? [], events: [] },
     snapshot: {
       presence: [],
       health: {},
@@ -312,6 +313,7 @@ function resetGatewayCallMocks() {
   startCalls = 0;
   closeCode = 1006;
   closeReason = "";
+  helloCapabilities = [];
   helloMethods = ["health", "secrets.resolve"];
   connectError = null;
   gatewayClientRequest = async (method, params, opts) => {
@@ -2428,6 +2430,19 @@ describe("callGateway error details", () => {
       }),
     ).rejects.toThrow(
       /does not support required method "secrets\.resolve".*update or restart the active gateway/i,
+    );
+  });
+
+  it("fails before request when a required gateway capability is missing", async () => {
+    setLocalLoopbackGatewayConfig();
+    helloCapabilities = [];
+    await expect(
+      callGateway({
+        method: "gateway.restart.request",
+        requiredCapabilities: ["gateway-restart-target-safe-v1"],
+      }),
+    ).rejects.toThrow(
+      /does not support required capability "gateway-restart-target-safe-v1".*update or restart the active gateway/i,
     );
   });
 });

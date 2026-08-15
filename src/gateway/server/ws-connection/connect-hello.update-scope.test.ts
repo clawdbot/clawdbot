@@ -8,40 +8,10 @@ const {
   emitGatewayAuthSecurityEventMock,
   listControlUiPluginTabsMock,
   listControlUiPluginWidgetKindsMock,
-  redeemDeviceBootstrapTokenProfileMock,
-  restoreGenericDeviceBootstrapTokenMock,
-  broadcastSetupHandoffCompletionMock,
-  broadcastSetupHandoffDeliveryUncertainMock,
-  confirmSetupHandoffDeliveryMock,
-  consumeSetupHandoffMock,
 } = vi.hoisted(() => ({
   emitGatewayAuthSecurityEventMock: vi.fn(),
   listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
   listControlUiPluginWidgetKindsMock: vi.fn((_scopes: readonly string[]) => []),
-  broadcastSetupHandoffCompletionMock: vi.fn(),
-  broadcastSetupHandoffDeliveryUncertainMock: vi.fn(),
-  confirmSetupHandoffDeliveryMock: vi.fn(async ({ handoff }) => handoff),
-  redeemDeviceBootstrapTokenProfileMock: vi.fn(async () => ({
-    recorded: true,
-    fullyRedeemed: true,
-  })),
-  restoreGenericDeviceBootstrapTokenMock: vi.fn(async () => true),
-  consumeSetupHandoffMock: vi.fn(async () => ({
-    record: {
-      token: "bootstrap-secret",
-      setupId: "setup-failed-send",
-      ts: 1,
-      issuedAtMs: 1,
-    },
-    completion: {
-      setupId: "setup-failed-send",
-      deviceId: "device-123",
-      access: "node",
-      completedAtMs: 1,
-      deliveryState: "uncertain",
-      retainUntilMs: 2,
-    },
-  })),
   buildGatewaySnapshotMock: vi.fn((opts?: { includeUpdateDetails?: boolean }) => {
     const updateAvailable = {
       currentVersion: "2026.8.7",
@@ -82,18 +52,6 @@ const {
   }),
 }));
 
-vi.mock("../../../infra/device-bootstrap.js", () => ({
-  redeemDeviceBootstrapTokenProfile: redeemDeviceBootstrapTokenProfileMock,
-  restoreGenericDeviceBootstrapToken: restoreGenericDeviceBootstrapTokenMock,
-}));
-
-vi.mock("../../device-pair-setup-completion.js", () => ({
-  broadcastSetupHandoffCompletion: broadcastSetupHandoffCompletionMock,
-  broadcastSetupHandoffDeliveryUncertain: broadcastSetupHandoffDeliveryUncertainMock,
-  confirmSetupHandoffDelivery: confirmSetupHandoffDeliveryMock,
-  consumeSetupHandoff: consumeSetupHandoffMock,
-}));
-
 vi.mock("../health-state.js", () => ({
   buildGatewaySnapshot: buildGatewaySnapshotMock,
   getHealthCache: vi.fn(() => null),
@@ -111,6 +69,11 @@ vi.mock("../../control-ui-plugin-tabs.js", () => ({
 
 vi.mock("./connect-auth-security.js", () => ({
   emitGatewayAuthSecurityEvent: emitGatewayAuthSecurityEventMock,
+}));
+
+vi.mock("../../../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../version.js")>()),
+  resolveRuntimeServiceBuildId: () => "build-a",
 }));
 
 import { sendGatewayHello } from "./connect-hello.js";
@@ -224,6 +187,18 @@ describe("sendGatewayHello update detail scope", () => {
         },
       }),
     );
+    expect(helloPayload(context)?.server.buildId).toBe("build-a");
+    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("bundled");
+  });
+
+  it("omits package build identity for independently built configured UI roots", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+    context.configSnapshot = { gateway: { controlUi: { root: "/custom/ui" } } };
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloPayload(context)?.server.buildId).toBeUndefined();
+    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("configured");
   });
 
   it("keeps hello projection and telemetry at effective scopes", async () => {
@@ -293,30 +268,5 @@ describe("sendGatewayHello update detail scope", () => {
       expect(scope).not.toContain("profile-");
       expect(scope).not.toContain("device-token-");
     }
-  });
-
-  it("keeps setup completion committed when hello delivery fails", async () => {
-    const context = makeContext("node", []);
-    context.sendFrame.mockRejectedValueOnce(new Error("socket closed"));
-    const state = {
-      ...makeState("node", []),
-      device: { id: "device-123" },
-      devicePublicKey: "public-key-123",
-      authMethod: "bootstrap-token",
-      bootstrapTokenCandidate: "bootstrap-secret",
-      issuedBootstrapProfile: { roles: ["node"], scopes: [] },
-    };
-
-    await sendGatewayHello(context as never, state as never, {});
-
-    expect(consumeSetupHandoffMock).toHaveBeenCalledWith({
-      token: "bootstrap-secret",
-      deviceId: "device-123",
-      pairedDeviceMatches: expect.any(Function),
-    });
-    expect(broadcastSetupHandoffCompletionMock).not.toHaveBeenCalled();
-    expect(broadcastSetupHandoffDeliveryUncertainMock).toHaveBeenCalled();
-    expect(restoreGenericDeviceBootstrapTokenMock).not.toHaveBeenCalled();
-    expect(context.handler.close).toHaveBeenCalled();
   });
 });

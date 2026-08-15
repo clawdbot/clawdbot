@@ -274,9 +274,7 @@ describe("registerQrCli", () => {
     });
 
     await expect(runQr(["--setup-code-only", "--limited", "--voice-node"])).rejects.toThrow("exit");
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Error: Use either --limited or --voice-node, not both.",
-    );
+    expect(runtime.error).toHaveBeenCalledWith("Use either --limited or --voice-node, not both.");
   });
 
   it("renders ASCII QR by default", async () => {

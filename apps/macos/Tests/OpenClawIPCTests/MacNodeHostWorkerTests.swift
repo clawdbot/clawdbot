@@ -51,8 +51,8 @@ struct MacNodeHostWorkerTests {
     @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
         let input = MacNodeHostWorkerRetryPolicy.Input(
             launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"]),
-            configurationGeneration: 4)
+                command: ["/usr/local/bin/openclaw", "node", "worker"],
+                configurationGeneration: 4))
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 5)
 
         try policy.prepareForStart(input)
@@ -76,11 +76,12 @@ struct MacNodeHostWorkerTests {
     @Test func `new worker input resets an exhausted crash retry budget`() throws {
         let original = MacNodeHostWorkerRetryPolicy.Input(
             launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"]),
-            configurationGeneration: 4)
+                command: ["/usr/local/bin/openclaw", "node", "worker"],
+                configurationGeneration: 4))
         let updated = MacNodeHostWorkerRetryPolicy.Input(
-            launch: original.launch,
-            configurationGeneration: 5)
+            launch: MacNodeHostWorkerLaunch(
+                command: original.launch.command,
+                configurationGeneration: 5))
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 1)
 
         try policy.prepareForStart(original)
@@ -267,7 +268,7 @@ struct MacNodeHostWorkerTests {
             ["system", "mcp"]) == ["canvas", "screen", "system", "mcp"])
     }
 
-    @Test func `provider selection filters command ownership and publishes only the CUA descriptor`() throws {
+    @Test func `provider selection filters command ownership and publishes each provider descriptor`() throws {
         let descriptor = OpenClawProtocol.AnyCodable([
             "contractVersion": OpenClawProtocol.AnyCodable(2),
         ])
@@ -282,6 +283,25 @@ struct MacNodeHostWorkerTests {
         #expect(!peekaboo.commands.contains(MacNodeScreenCommand.snapshot.rawValue))
         #expect(!peekaboo.commands.contains(OpenClawComputerCommand.act.rawValue))
         #expect(peekaboo.computerUse == nil)
+        let peekabooDescriptor = try #require(MacNodeModeCoordinator.computerUseDescriptor(
+            provider: .peekaboo,
+            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            workerManifest: peekaboo))
+        let peekabooJSON = try JSONEncoder().encode(peekabooDescriptor)
+        let peekabooObject = try #require(
+            JSONSerialization.jsonObject(with: peekabooJSON) as? [String: Any])
+        #expect(peekabooObject["contractVersion"] as? Int == 2)
+        #expect((peekabooObject["provider"] as? [String: Any])?["id"] as? String == "peekaboo")
+        let actions = try #require(peekabooObject["actions"] as? [String])
+        #expect(actions.contains("get_window_state"))
+        #expect(actions.contains("invoke_menu"))
+        #expect(!actions.contains("zoom"))
+        #expect(!actions.contains("get_browser_state"))
+        #expect(!actions.contains("start_recording"))
+        let features = try #require(peekabooObject["features"] as? [String: Any])
+        #expect(features["recording"] as? Bool == false)
+        #expect(features["agentCursor"] as? Bool == false)
+        #expect(features["multiDisplay"] as? Bool == true)
 
         let cua = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: .cua))
         #expect(cua.commands == manifest.commands)
@@ -326,58 +346,125 @@ struct MacNodeHostWorkerTests {
         await worker.stop()
     }
 
-    @Test func `worker receives only the app-provided CUA endpoint`() async throws {
-        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+    @Test func `worker strips inherited CUA values and receives only the app-provided endpoint`() async throws {
+        let endpoint = CuaDriverWorkerEndpoint(
+            socketPath: "/private/test/cua.sock",
+            binaryPath: "/Applications/OpenClaw.app/Contents/Resources/cua-driver")
+        let endpointValue = try endpoint.environmentValue()
+        let inheritedKeys = [CuaDriverWorkerEnvironment.endpoint] +
+            CuaDriverWorkerEnvironment.inheritedFamilyPrefixes.flatMap {
+                [$0 + "SOCKET_PATH", $0 + "BINARY_PATH"]
+            }
+        let inheritedEnvironment = Dictionary(uniqueKeysWithValues: inheritedKeys.map {
+            ($0, Optional("inherited"))
+        })
         let script = """
-        test "$OPENCLAW_CUA_DRIVER_SOCKET_PATH" = "/private/test/cua.sock" || exit 41
-        test "$OPENCLAW_CUA_DRIVER_BINARY_PATH" = "/Applications/OpenClaw.app/Contents/Resources/cua-driver" || exit 42
+        test "$OPENCLAW_CUA_DRIVER_ENDPOINT" = "$1" || exit 41
+        test "$(env | grep -Ec '^(OPENCLAW_)?CUA_DRIVER_')" = 1 || exit 42
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         while IFS= read -r line; do :; done
         """
 
-        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script],
-            environment: [
-                CuaDriverWorkerEnvironment.socketPath: "/private/test/cua.sock",
-                CuaDriverWorkerEnvironment.binaryPath:
-                    "/Applications/OpenClaw.app/Contents/Resources/cua-driver",
-            ]))
-        await worker.stop()
+        try await TestIsolation.withEnvValues(inheritedEnvironment) {
+            let worker = MacNodeHostWorker(session: GatewayNodeSession())
+            _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+                command: ["/bin/sh", "-c", script, "worker", endpointValue],
+                environment: [
+                    CuaDriverWorkerEnvironment.endpoint: endpointValue,
+                ]))
+            await worker.stop()
+        }
     }
 
-    @Test func `worker forwards terminal input and cancellation frames`() async throws {
+    @Test func `unbound worker strips every inherited CUA endpoint value`() async throws {
+        let inheritedKeys = [CuaDriverWorkerEnvironment.endpoint] +
+            CuaDriverWorkerEnvironment.inheritedFamilyPrefixes.flatMap {
+                [$0 + "SOCKET_PATH", $0 + "BINARY_PATH"]
+            }
+        let inheritedEnvironment = Dictionary(uniqueKeysWithValues: inheritedKeys.map {
+            ($0, Optional("inherited"))
+        })
+        let script = """
+        test "$(env | grep -Ec '^(OPENCLAW_)?CUA_DRIVER_')" = 0 || exit 41
+        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        while IFS= read -r line; do :; done
+        """
+
+        try await TestIsolation.withEnvValues(inheritedEnvironment) {
+            let worker = MacNodeHostWorker(session: GatewayNodeSession())
+            _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+                command: ["/bin/sh", "-c", script]))
+            await worker.stop()
+        }
+    }
+
+    @Test func `worker cancellation settles when the child suppresses its result`() async throws {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-worker-cancel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
         let script = """
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["terminal"],"commands":["codex.terminal.resume.v1"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
-        IFS= read -r invoke
+        IFS= read -r buffered_invoke
         IFS= read -r input
-        IFS= read -r cancel
-        printf '%s' "$invoke" | grep -q '"id":"terminal-1"' || exit 40
+        IFS= read -r buffered_cancel
+        printf '%s' "$buffered_invoke" | grep -q '"id":"terminal-1"' || exit 40
         printf '%s' "$input" | grep -q '"type":"invoke-input"' || exit 41
         printf '%s' "$input" | grep -q '"invokeId":"terminal-1"' || exit 42
         printf '%s' "$input" | grep -q '"seq":7' || exit 43
-        printf '%s' "$cancel" | grep -q '"type":"invoke-cancel"' || exit 44
-        printf '%s' "$cancel" | grep -q '"invokeId":"terminal-1"' || exit 45
-        printf '%s\\n' '{"type":"invoke-result","result":{"id":"terminal-1","ok":true}}'
+        printf '%s' "$buffered_cancel" | grep -q '"type":"invoke-cancel"' || exit 44
+        printf '%s' "$buffered_cancel" | grep -q '"invokeId":"terminal-1"' || exit 45
+        IFS= read -r active_invoke
+        printf '%s' "$active_invoke" | grep -q '"id":"terminal-2"' || exit 46
+        printf '%s\\n' "$$" > "$1"
+        IFS= read -r active_cancel
+        printf '%s' "$active_cancel" | grep -q '"type":"invoke-cancel"' || exit 47
+        printf '%s' "$active_cancel" | grep -q '"invokeId":"terminal-2"' || exit 48
         while IFS= read -r line; do :; done
         """
 
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script]))
+            command: ["/bin/sh", "-c", script, "worker", marker.path]))
         await worker.handleInput(invokeId: "terminal-1", seq: 7, payloadJSON: #"{"data":"x"}"#)
         await worker.cancel(invokeId: "terminal-1")
-        let response = await worker.invoke(BridgeInvokeRequest(
-            id: "terminal-1",
-            command: "codex.terminal.resume.v1"))
+        do {
+            let buffered = try await AsyncTimeout.withTimeout(
+                seconds: 1,
+                onTimeout: { WorkerBackpressureTimeout() },
+                operation: {
+                    await worker.invoke(BridgeInvokeRequest(
+                        id: "terminal-1",
+                        command: "codex.terminal.resume.v1"))
+                })
+            #expect(!buffered.ok)
+            #expect(buffered.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
 
-        #expect(response.ok)
-        await worker.stop()
+            let invoking = Task {
+                await worker.invoke(BridgeInvokeRequest(
+                    id: "terminal-2",
+                    command: "codex.terminal.resume.v1"))
+            }
+            _ = try await TestProcessSupport.waitForPID(in: marker)
+            await worker.cancel(invokeId: "terminal-2")
+            let active = try await AsyncTimeout.withTimeout(
+                seconds: 1,
+                onTimeout: { WorkerBackpressureTimeout() },
+                operation: { await invoking.value })
+            await worker.stop()
+            #expect(!active.ok)
+            #expect(active.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
+        } catch {
+            await worker.stop()
+            throw error
+        }
     }
 
     @Test func `ready worker exit notifies its route owner`() async throws {
         try await confirmation("unexpected worker exit") { confirmed in
             let exitGate = AsyncTestGate()
-            let worker = MacNodeHostWorker(session: GatewayNodeSession()) {
+            let expectedGeneration: UInt64 = 42
+            let worker = MacNodeHostWorker(session: GatewayNodeSession()) { generation in
+                #expect(generation == expectedGeneration)
                 confirmed()
                 exitGate.open()
             }
@@ -388,7 +475,8 @@ struct MacNodeHostWorkerTests {
             """
 
             _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-                command: ["/bin/sh", "-c", script]))
+                command: ["/bin/sh", "-c", script],
+                configurationGeneration: expectedGeneration))
             await exitGate.wait()
         }
     }

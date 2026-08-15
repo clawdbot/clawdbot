@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WorkerDesktopApp, WorkerProfile } from "../../plugins/capability-provider.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerTunnelHandle,
@@ -73,6 +74,7 @@ export type WorkerPlacementDispatchRequest = {
   sessionKey: string;
   agentId: string;
   profileId: string;
+  executionMode: WorkerPlacementExecutionMode;
   deviceId?: string;
   inheritedProfile?: {
     providerId: string;

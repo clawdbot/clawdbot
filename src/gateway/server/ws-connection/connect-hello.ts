@@ -13,7 +13,7 @@ import {
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
-import { resolveRuntimeServiceVersion } from "../../../version.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import {
   listControlUiPluginTabs,
@@ -113,12 +113,20 @@ export async function sendGatewayHello(
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
   const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
+  // A configured UI root can be built independently from the Gateway. Exact
+  // comparison is authoritative only for the package-owned bundled artifact.
+  const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
+    ? ("configured" as const)
+    : ("bundled" as const);
+  const serverBuildId = controlUiBuildSource === "bundled" ? resolveRuntimeServiceBuildId() : null;
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
     protocol: PROTOCOL_VERSION,
     server: {
       version: resolveRuntimeServiceVersion(process.env),
+      ...(serverBuildId ? { buildId: serverBuildId } : {}),
+      controlUiBuildSource,
       connId,
     },
     features: {
@@ -127,6 +135,7 @@ export async function sendGatewayHello(
       capabilities: [
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+        GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,

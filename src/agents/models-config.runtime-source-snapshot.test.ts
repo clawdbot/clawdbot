@@ -26,7 +26,6 @@ vi.mock("./model-auth-env-vars.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderConfigDefaultsWithPlugin: (config: OpenClawConfig) => config,
   applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
   normalizeProviderConfigWithPlugin: () => undefined,
   resolveProviderConfigApiKeyWithPlugin: () => undefined,

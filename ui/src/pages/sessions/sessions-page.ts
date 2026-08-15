@@ -1144,7 +1144,10 @@ class SessionsPage extends OpenClawLightDomElement {
     expectedSessionId?: string,
   ): Promise<SessionsPageMutationResult> {
     if (!scope) {
-      return "stale";
+      // Nothing was attempted (e.g. rename dialog submitted after the gateway
+      // dropped); say so instead of silently swallowing the edit.
+      this.error = t("sessionsView.actionRequiresConnection");
+      return "failed";
     }
     if (typeof patch.archived === "boolean" && !expectedSessionId?.trim()) {
       this.error = "Session lifecycle action requires a durable session identity.";
@@ -1211,7 +1214,7 @@ class SessionsPage extends OpenClawLightDomElement {
     });
   }
 
-  private async forkSession(key: string) {
+  private async forkSession(key: string, fromLastCompleted = false) {
     const scope = this.captureRequestScope();
     if (!scope) {
       return;
@@ -1220,6 +1223,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const createParams = {
       parentSessionKey: key,
       fork: true,
+      ...(fromLastCompleted ? { forkFrom: "last-completed" as const } : {}),
       ...(agentId ? { agentId } : {}),
     };
     if (!this.requireMutationAccess(scope, { method: "sessions.create", params: createParams })) {
@@ -1280,6 +1284,12 @@ class SessionsPage extends OpenClawLightDomElement {
   private async loadCheckpoint(sessionKey: string) {
     const scope = this.captureRequestScope();
     if (!scope) {
+      // Rows stay expandable while disconnected; without an error the drawer
+      // would claim "No checkpoints" beside a nonzero checkpoint badge.
+      this.checkpointErrorByKey = {
+        ...this.checkpointErrorByKey,
+        [sessionKey]: t("sessionsView.actionRequiresConnection"),
+      };
       return;
     }
     this.checkpointTaskKey = sessionKey;
@@ -1477,6 +1487,7 @@ class SessionsPage extends OpenClawLightDomElement {
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
+          icon: normalizeOptionalString(row.icon) ?? null,
         }}
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
@@ -1487,6 +1498,7 @@ class SessionsPage extends OpenClawLightDomElement {
           cloudWorkerStopAction,
         })}
         .forkDisabled=${row.modelSelectionLocked === true}
+        .forkFromLastCompleted=${row.hasActiveRun === true}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
@@ -1516,8 +1528,11 @@ class SessionsPage extends OpenClawLightDomElement {
             case "rename":
               void this.renameSession(row);
               break;
+            case "set-icon":
+              void this.patchSession(row.key, { icon: action.icon });
+              break;
             case "fork":
-              void this.forkSession(row.key);
+              void this.forkSession(row.key, row.hasActiveRun === true);
               break;
             case "workboard":
               void this.addToWorkboard(row);

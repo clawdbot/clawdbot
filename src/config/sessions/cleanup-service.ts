@@ -26,7 +26,6 @@ import {
   inspectSqliteSessionHistoryDiskBudget,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { countSessionEntryMaintenanceEligibleEntries } from "./store-maintenance-eligibility.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -266,14 +265,20 @@ export function serializeSessionCleanupResult(params: {
   dryRun: boolean;
   summaries: SessionCleanupSummary[];
 }): SessionsCleanupResult {
-  if (params.summaries.length === 1) {
-    return params.summaries[0] ?? ({} as SessionCleanupSummary);
+  const summaries = params.summaries.map((summary) => ({
+    ...summary,
+    storePath: resolveSqliteTargetFromSessionStorePath(summary.storePath, {
+      agentId: summary.agentId,
+    }).path,
+  }));
+  if (summaries.length === 1) {
+    return summaries[0] ?? ({} as SessionCleanupSummary);
   }
   return {
     allAgents: true,
     mode: params.mode,
     dryRun: params.dryRun,
-    stores: params.summaries,
+    stores: summaries,
   };
 }
 
@@ -396,7 +401,7 @@ async function previewStoreCleanup(params: {
   });
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
-    entryCount: countSessionEntryMaintenanceEligibleEntries(previewStore, preserveSessionKeys),
+    entryCount: Object.keys(previewStore).length,
     // `sessions cleanup` applies the cap immediately (apply path forces maintenance and the
     // preview caps unconditionally below), so mirror that here: prune stale probes before the
     // forced cap can evict real sessions in their place.
