@@ -50,6 +50,7 @@ export function createHarness(
     terminalizeReclaimOnTunnelDrop?: boolean;
     terminalizedReclaimError?: Error;
     environmentGeneration?: number;
+    hostIsolationFresh?: boolean;
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -371,7 +372,12 @@ export function createHarness(
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
       return currentEnvironment
-        ? [{ environmentId: currentEnvironment.environmentId, hostIsolation: "fresh" as const }]
+        ? [
+            {
+              environmentId: currentEnvironment.environmentId,
+              hostIsolation: options.hostIsolationFresh === false ? "unavailable" : "fresh",
+            } as const,
+          ]
         : [];
     }),
   };

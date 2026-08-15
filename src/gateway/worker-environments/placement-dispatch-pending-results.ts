@@ -165,14 +165,6 @@ export async function recoverPendingWorkspaceResults(
         continue;
       }
       const environment = environments.get(active.environmentId);
-      if (
-        sameActiveEnvironment(active, environment) &&
-        !freshHostIsolationEnvironmentIds.has(active.environmentId)
-      ) {
-        // Provider inspection owns the host-isolation fact consumed by tunnel
-        // creation. A failed inspection must not reuse a stale dedicated-host scope.
-        continue;
-      }
       const localPath = await deps.resolveWorkspacePath(active);
       const priorWorkspaceResultConflict =
         active.workspaceResultConflict ?? (await deps.resolveWorkspaceResultConflict(active));
@@ -361,6 +353,11 @@ export async function recoverPendingWorkspaceResults(
         if (failed.state === "failed") {
           await failure.retryFailedTeardown(failed);
         }
+        continue;
+      }
+      if (!freshHostIsolationEnvironmentIds.has(active.environmentId)) {
+        // Provider inspection owns the host-isolation fact consumed by tunnel
+        // creation. A failed inspection must not reuse a stale dedicated-host scope.
         continue;
       }
       const owner = {

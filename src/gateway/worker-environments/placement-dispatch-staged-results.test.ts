@@ -94,12 +94,13 @@ describe("staged worker placement result recovery", () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
-  it("applies a staged pending result without a tunnel and reclaims the worker", async () => {
+  it("applies a staged pending result without fresh provider facts or a tunnel", async () => {
     const workspacePath = path.join(root, "same-worker-staged-result");
     const priorConflictRef = "refs/openclaw/worker-results/prior-conflict";
     const harness = createHarness(placementStore, {
       workspacePath,
       priorWorkspaceResultConflict: { paths: ["old.txt"], stagedResultRef: priorConflictRef },
+      hostIsolationFresh: false,
     });
     const active = harness.placements.seedActive(2);
     harness.markEnvironmentOwnerEpoch(2);
