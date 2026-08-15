@@ -185,6 +185,9 @@ pnpm test <path-or-filter> -- --reporter=verbose
 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
 ```
 
+Do not run independent `pnpm test`/Vitest commands concurrently in one
+worktree; the Vitest cache races with `ENOTEMPTY`. Group one command or use
+distinct `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` values.
 Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 `pnpm test` wrapper so project routing, workers, and setup stay correct. If raw
 Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch

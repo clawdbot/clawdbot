@@ -3,7 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ClickButton } from "./driver-client.js";
+import { ClickButton, EscalationReason } from "./driver-client.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
 
 type RpcRequest = {
@@ -177,6 +177,24 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
             }),
           );
           break;
+        case "browser_navigate":
+          fake.respond(
+            request,
+            toolResult({
+              status: "ok",
+              target_id: "target-1",
+              tab_id: "tab-1",
+              url: "https://example.com/",
+              refs_invalidated: true,
+            }),
+          );
+          break;
+        case "list_windows":
+          fake.respond(request, toolResult({ windows: [] }));
+          break;
+        case "get_session_state":
+          fake.respond(request, sessionState("desktop"));
+          break;
         case "end_session":
           fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
           break;
@@ -209,6 +227,52 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         delivery: { mode: 0, deliveredCount: 1 },
         evidence: [{ kind: 0 }],
       });
+      await driver.callTool("browser_navigate", {
+        target_id: "target-1",
+        tab_id: "tab-1",
+        url: "https://example.com/",
+      });
+      await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
+        isError: false,
+      });
+      await driver.escalateScope(EscalationReason.Other);
+      await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
+        isError: false,
+      });
+
+      const startCalls = endpoint.requests.filter(
+        (request) => request.method === "tools/call" && request.params?.name === "start_session",
+      );
+      expect(startCalls).toHaveLength(2);
+      const captureScopes = startCalls.flatMap((request) => {
+        const scope = request.params?.arguments?.capture_scope;
+        return typeof scope === "string" ? [scope] : [];
+      });
+      expect(captureScopes.toSorted((left, right) => left.localeCompare(right))).toEqual([
+        "desktop",
+        "window",
+      ]);
+      expect(new Set(startCalls.map((request) => request.params?.arguments?.session)).size).toBe(2);
+      const desktopSession = startCalls.find(
+        (request) => request.params?.arguments?.capture_scope === "desktop",
+      )?.params?.arguments?.session;
+      const windowSession = startCalls.find(
+        (request) => request.params?.arguments?.capture_scope === "window",
+      )?.params?.arguments?.session;
+      expect(
+        endpoint.requests.find(
+          (request) =>
+            request.method === "tools/call" && request.params?.name === "get_session_state",
+        )?.params?.arguments?.session,
+      ).toBe(desktopSession);
+      expect(
+        endpoint.requests
+          .filter(
+            (request) => request.method === "tools/call" && request.params?.name === "list_windows",
+          )
+          .map((request) => request.params?.arguments?.session),
+      ).toEqual([windowSession, windowSession]);
+
       await driver.dispose();
       await vi.waitFor(() => {
         closed = endpoint.requests.some(
@@ -240,6 +304,47 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       await expect(driver.getDesktopState()).rejects.toThrow("COMPUTER_DRIVER_ERROR");
       expect(driver.isAvailable()).toBe(false);
       await driver.dispose();
+    } finally {
+      await endpoint.close();
+    }
+  });
+
+  it("ends a started window session when desktop startup fails", async () => {
+    let desktopStart: RpcRequest | undefined;
+    const endedSessions: unknown[] = [];
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, {
+          protocolVersion: "2025-06-18",
+          capabilities: { tools: {} },
+          serverInfo: { name: "fake-cua-driver", version: "0.19.3" },
+        });
+      } else if (request.method === "tools/call" && request.params?.name === "start_session") {
+        if (request.params.arguments?.capture_scope === "desktop") {
+          desktopStart = request;
+        } else {
+          fake.respond(request, sessionState("window"));
+        }
+      } else if (request.method === "tools/call" && request.params?.name === "list_windows") {
+        fake.respond(request, toolResult({ windows: [] }));
+      } else if (request.method === "tools/call" && request.params?.name === "end_session") {
+        endedSessions.push(request.params.arguments?.session);
+        fake.respond(request, toolResult({ session: request.params.arguments?.session }));
+      }
+    });
+    try {
+      const driver = createCuaMcpDriver(endpoint);
+      await vi.waitFor(() => expect(driver.isAvailable()).toBe(true));
+      await driver.callTool("list_windows", {});
+      const desktopCall = driver.getDesktopState().catch((error: unknown) => error);
+      await vi.waitFor(() => expect(desktopStart).toBeDefined());
+      const disposeCall = driver.dispose().catch((error: unknown) => error);
+      endpoint.respond(desktopStart!, { ...toolResult({}), isError: true });
+
+      await expect(desktopCall).resolves.toBeInstanceOf(Error);
+      await expect(disposeCall).resolves.toBeInstanceOf(Error);
+      expect(endedSessions).toHaveLength(1);
+      expect(endedSessions[0]).toEqual(expect.stringMatching(/^openclaw-window-/));
     } finally {
       await endpoint.close();
     }

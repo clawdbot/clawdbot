@@ -124,6 +124,13 @@ describe("Control UI build admission over WebSocket", () => {
     }
     const origin = `http://127.0.0.1:${address.port}`;
     let connectedClient: unknown = null;
+    // Hold the injected close until the post-rejection frame reaches the handler;
+    // otherwise socket timing can make the no-RPC assertion vacuous.
+    let releasePostRejectionFrame = () => {};
+    const postRejectionFrameObserved = new Promise<void>((resolve) => {
+      releasePostRejectionFrame = resolve;
+    });
+    let closeRequested = false;
 
     wss.on("connection", (socket, request) => {
       const send = (value: unknown) => socket.send(JSON.stringify(value));
@@ -151,7 +158,11 @@ describe("Control UI build admission over WebSocket", () => {
         refreshHealthSnapshot: vi.fn(),
         send,
         close: (code, reason) => {
-          setTimeout(() => socket.close(code, reason), 25);
+          if (closeRequested) {
+            return;
+          }
+          closeRequested = true;
+          void postRejectionFrameObserved.then(() => socket.close(code, reason));
         },
         isClosed: () => socket.readyState >= WebSocket.CLOSING,
         clearHandshakeTimer: vi.fn(),
@@ -163,7 +174,12 @@ describe("Control UI build admission over WebSocket", () => {
         setHandshakeState: vi.fn(),
         advanceHandshakePhase: vi.fn(),
         setCloseCause: vi.fn(),
-        setLastFrameMeta: setLastFrameMetaMock,
+        setLastFrameMeta: (meta) => {
+          setLastFrameMetaMock(meta);
+          if (meta.method === "health" && meta.id === "post-rejection-rpc") {
+            releasePostRejectionFrame();
+          }
+        },
         originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
         logGateway: createLogger() as never,
         logHealth: createLogger() as never,

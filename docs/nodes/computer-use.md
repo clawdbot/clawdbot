@@ -62,6 +62,31 @@ The CUA descriptor advertises window, element, and browser targets; background a
 
 Browser targets, pages, page elements, and dialogs are opaque capabilities. Retake browser state after navigation, reconnect, or a stale-reference refusal. The adapter never returns provider-native CDP target IDs, tab IDs, or page refs to the model.
 
+### Maintainer live-proof rig
+
+The repository includes a macOS-only development rig that preserves the real vertical path: agent-facing `computer` tool, Gateway `node.invoke`, paired Mac node, and the selected node-local provider. It is deliberately isolated from the operator app and Gateway.
+
+Build a signed app from a clean, committed checkout, choose a fresh profile and non-default loopback port, and prepare the two config views:
+
+```bash
+scratch="$(mktemp -d /tmp/openclaw-cu-live.XXXXXX)"
+scripts/dev/computer-use-macos-live-rig.sh prepare \
+  cu-live-proof 29431 "$PWD/dist/OpenClaw.app" "$scratch" peekaboo
+```
+
+Run the emitted `gateway` and `app` commands in separate terminals. The split config is intentional: the externally launched daemon reads a scratch config with `gateway.mode: "local"`, while the app profile reads `gateway.mode: "remote"`, direct transport, and the daemon's loopback URL. If the app reads local mode, its Port Guardian owns the route instead of joining the external daemon. The rig keeps its validated launch fields in non-executable `rig.json`; later commands reject unknown fields or paths that do not match the scratch/profile layout. It also seeds a dedicated `node` identity, completed onboarding, unpaused state, Computer Control, and the checkout path used to start the debug node worker. There is no separate node-mode toggle.
+
+In a third terminal, run the emitted `nodes` command. A fresh CLI identity first returns a device-approval request; approve that request from the isolated app's Devices settings or with `openclaw --profile cu-live-proof devices approve <requestId>`, then rerun `nodes` until the paired entry is connected and advertises `computer.act` plus a `computerUse` descriptor.
+
+Place a harmless editable fixture window behind a different frontmost app, then run the vertical:
+
+```bash
+scripts/dev/computer-use-macos-live-rig.sh proof \
+  "$scratch" peekaboo "Computer Use Fixture" "background proof" "Editor"
+```
+
+The proof runner first requires the sole connected computer node to advertise the requested provider, then executes `screenshot`, `list_windows`, `get_window_state`, background element click and type, and re-observes the window. It saves the structured result and target-window before/after images under the scratch directory and fails unless the provider matches, the target started non-frontmost, the frontmost app and cursor stayed unchanged, target content changed, and the final effect was confirmed or a structured refusal. Restart the isolated app with the other provider and rerun the same proof. Do not use port `18789`, the default profile, or `/Applications/OpenClaw.app` for this rig.
+
 ### Windows and Linux (experimental, direct SDK)
 
 The bundled `cua-computer` plugin provides an experimental fulfiller for Windows and Linux node hosts. It is disabled by default and uses the pinned CUA Driver SDK 0.19.3 contract directly:
@@ -80,7 +105,7 @@ The bundled `cua-computer` plugin provides an experimental fulfiller for Windows
 
    OpenClaw checks the SDK package version, the selected OS/CPU package version, regular-file identity, and the pinned SHA-256 digest of the native library and Node runtime. A clean check prints `no findings`. If it reports a `COMPUTER_DRIVER_*` error, reinstall or update OpenClaw on this node host and run the check again. Do not download a standalone `cua-driver` executable or add one to `PATH`; Windows and Linux use the npm-installed in-process SDK.
 
-3. Start `openclaw node run` from the interactive desktop session. The plugin repeats the artifact verification at startup before it imports native code, creates its configured SDK runtime lazily, then creates one OpenClaw-owned trusted session for the node-host command execution. It closes that session and shuts down the runtime when the command host stops or restarts.
+3. Start `openclaw node run` from the interactive desktop session. The plugin repeats the artifact verification at startup before it imports native code, creates its configured SDK runtime lazily, then creates separate fixed window- and desktop-scoped trusted sessions for node-host command execution. `escalate_scope` reads the already-desktop session state, so the window identity remains immutable. It closes both sessions and shuts down the runtime when the command host stops or restarts.
 
 4. Add `computer.act` to the Gateway allowlist. This plugin registers `computer.act` as a dangerous plugin node command, so enabling the plugin alone is not enough; the operator must opt in explicitly:
 
@@ -96,7 +121,7 @@ The bundled `cua-computer` plugin provides an experimental fulfiller for Windows
 
 This fulfiller currently controls only the primary display. `hold_key`, `left_mouse_down`, and `left_mouse_up` are unavailable because the CUA Driver SDK has no desktop-scope held-input contract. Modifier-held clicks, scrolling, and dragging are rejected because the typed desktop methods do not accept modifiers. The `key` action accepts named keys, letters, and modifier combos (for example `cmd+c` or `Return`); digit and punctuation keys are rejected because the driver drops their layout-dependent shift state, so send that text through the `type` action instead. Cancellation is passed to the SDK for each node invocation.
 
-The plugin calls `CuaDriver.createConfigured`, never bare `create()`. Its authorization ceiling, trusted session identifier, TTLs, and desktop scope are fixed by OpenClaw; model-facing `screen.snapshot` and `computer.act` inputs cannot select a session or widen that authority. Because the driver reports no stable display identity, frame authorization binds to the trusted session generation plus live primary-display geometry. A new session invalidates outstanding frames, but a same-geometry primary-display substitution inside one session cannot be detected; prefer a stable single-display session for this fulfiller.
+The plugin calls `CuaDriver.createConfigured`, never bare `create()`. Its authorization ceiling, fixed window/desktop session identities, TTLs, and scopes are owned by OpenClaw; model-facing `screen.snapshot` and `computer.act` inputs cannot select a session or widen the window identity. Because the driver reports no stable display identity, frame authorization binds to the trusted session generation plus live primary-display geometry. A new session invalidates outstanding frames, but a same-geometry primary-display substitution inside one session cannot be detected; prefer a stable single-display session for this fulfiller.
 
 On Windows and Linux this is a hard replacement of the former 0.10 daemon/MCP integration: OpenClaw does not spawn a CUA process or proxy an MCP client. macOS deliberately uses the app-owned embedded daemon described above so the driver remains in `OpenClaw.app`'s TCC responsibility chain. Neither path falls back to another provider for an individual action.
 

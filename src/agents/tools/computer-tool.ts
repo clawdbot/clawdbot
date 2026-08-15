@@ -102,6 +102,14 @@ const COORDINATE_REQUIRED_ACTIONS = new Set<ComputerToolAction>([
   "left_click_drag",
 ]);
 
+const ELEMENT_TARGETABLE_CLICK_ACTIONS = new Set<ComputerToolAction>([
+  "left_click",
+  "right_click",
+  "middle_click",
+  "double_click",
+  "triple_click",
+]);
+
 // Actions that accept an optional target coordinate (scroll at a point, press
 // or release the button at a point). Keyboard actions never carry coordinates.
 const COORDINATE_OPTIONAL_ACTIONS = new Set<ComputerToolAction>([
@@ -369,7 +377,11 @@ function buildComputerActParams(params: {
     wire.screenIndex = params.screenIndex;
     wire.refWidth = params.refWidth ?? COMPUTER_REF_WIDTH;
   }
-  if (COORDINATE_REQUIRED_ACTIONS.has(action)) {
+  const elementRef = readToolStringParam(input, "elementRef");
+  if (
+    COORDINATE_REQUIRED_ACTIONS.has(action) &&
+    !(elementRef && ELEMENT_TARGETABLE_CLICK_ACTIONS.has(action))
+  ) {
     const [x, y] = requireCoordinate(input, action);
     wire.x = x;
     wire.y = y;

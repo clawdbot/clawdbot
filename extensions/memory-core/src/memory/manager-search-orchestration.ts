@@ -285,12 +285,12 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           );
         } catch (err) {
           releaseSemanticProvider();
-          this.markLocalEmbeddingProviderDegraded(err);
-          // An aborted caller already stopped waiting; skip fallback-provider
-          // activation so the abandoned search stops instead of re-embedding.
+          // An aborted caller already stopped waiting; keep the provider generation
+          // healthy and skip fallback activation instead of poisoning later searches.
           if (opts?.signal?.aborted) {
             throw err;
           }
+          this.markLocalEmbeddingProviderDegraded(err);
           const message = formatErrorMessage(err);
           const activatedFallback = this.shouldFallbackOnError(err)
             ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
@@ -331,7 +331,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
               );
             } catch (fallbackErr) {
               releaseFallbackProvider();
-              this.markLocalEmbeddingProviderDegraded(fallbackErr);
+              if (!opts?.signal?.aborted) {
+                this.markLocalEmbeddingProviderDegraded(fallbackErr);
+              }
               throw fallbackErr;
             } finally {
               releaseFallbackProvider();

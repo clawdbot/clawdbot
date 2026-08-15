@@ -338,6 +338,8 @@ Before handoff, prove CLI/app from neutral `~`:
 ```
 
 Visible desktop alone proves nothing. Keep browser windowed unless capture task.
+Before sharing a WebVNC link, screenshot first; verify the real app/path works
+and the target UI is not broken.
 Never commit proof assets to product repo.
 
 ## Failure Triage

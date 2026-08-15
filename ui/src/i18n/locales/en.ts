@@ -5495,6 +5495,7 @@ export const en: TranslationMap = {
       widgetExportFailed: "Widget export failed. Try again.",
       pinToDashboard: "Pin to dashboard",
       pinToDashboardPending: "Pinning…",
+      pinToDashboardFailed: "Could not pin to dashboard. Try again.",
       pinnedToDashboard: "Pinned",
       fileChanges: "File changes",
       attemptedChanges: "Attempted changes",

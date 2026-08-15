@@ -552,7 +552,7 @@ describe("cua-computer provider", () => {
   });
 
   it("maps remaining discovery, window lifecycle, and semantic actions", async () => {
-    const { session, callTool } = driver();
+    const { session, callTool, callDesktopTool } = driver();
     callTool.mockImplementation(async (name) => {
       if (name === "list_windows") {
         return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows);
@@ -566,9 +566,6 @@ describe("cua-computer provider", () => {
           windows: CUA_DRIVER_CONTRACT_FIXTURES.listWindows.windows,
         });
       }
-      if (name === "get_cursor_position") {
-        return cuaToolResult({ x: 11, y: 12, source: "x11" });
-      }
       return cuaToolResult(
         {},
         {
@@ -577,6 +574,11 @@ describe("cua-computer provider", () => {
         },
       );
     });
+    callDesktopTool.mockImplementation(async (name) =>
+      name === "get_cursor_position"
+        ? cuaToolResult({ x: 11, y: 12, source: "x11" })
+        : cuaToolResult({}),
+    );
     const computer = await execution(session);
     const tree = JSON.parse(await computer.act('{"action":"get_accessibility_tree"}')) as {
       details: { windows: unknown[]; processes: unknown[] };
@@ -584,6 +586,7 @@ describe("cua-computer provider", () => {
     expect(tree.details.windows).toHaveLength(1);
     expect(tree.details.processes).toHaveLength(1);
     await expect(computer.act('{"action":"get_cursor_position"}')).resolves.toContain('"x":11');
+    expect(callDesktopTool).toHaveBeenCalledWith("get_cursor_position", {}, undefined);
 
     const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
       details: { windows: Array<{ windowRef: string }> };

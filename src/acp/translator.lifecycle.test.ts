@@ -160,8 +160,6 @@ describe("acp translator stable lifecycle handlers", () => {
     expect(typeof agent.closeSession).toBe("function");
     expect(capabilities.sessionCapabilities?.fork).toBeUndefined();
     expect("unstable_listSessions" in agent).toBe(false);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("lists Gateway sessions through the stable handler with opaque cursors and cwd filtering", async () => {
@@ -219,8 +217,6 @@ describe("acp translator stable lifecycle handlers", () => {
       limit: 5,
       includeDerivedTitles: true,
     });
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("does not include sessions without workspace metadata in cwd-filtered lists", async () => {
@@ -244,8 +240,6 @@ describe("acp translator stable lifecycle handlers", () => {
 
     expect(result.sessions.map((session) => session.sessionId)).toEqual(["agent:main:a1"]);
     expect(result.sessions.map((session) => session.cwd)).toEqual(["/work/a"]);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("lists Gateway sessions with invalid updated timestamps", async () => {
@@ -271,8 +265,6 @@ describe("acp translator stable lifecycle handlers", () => {
 
     expect(result.sessions).toHaveLength(1);
     expect(result.sessions[0]?.updatedAt).toBeUndefined();
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("rejects session/list cursors when the cwd filter changes", async () => {
@@ -314,8 +306,6 @@ describe("acp translator stable lifecycle handlers", () => {
     await expect(
       agent.listSessions(createListSessionsRequest({ cursor: filtered.nextCursor })),
     ).rejects.toThrow(/cursor does not match the cwd filter/i);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("rejects relative cwd filters for session/list", async () => {
@@ -327,8 +317,6 @@ describe("acp translator stable lifecycle handlers", () => {
     await expect(
       agent.listSessions(createListSessionsRequest({ cwd: "relative/path" })),
     ).rejects.toThrow(/requires an absolute cwd/i);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("resumes an existing Gateway session without replaying transcript history", async () => {
@@ -378,8 +366,6 @@ describe("acp translator stable lifecycle handlers", () => {
         },
       },
     });
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("rejects resume for a missing Gateway session without creating bridge state", async () => {
@@ -399,7 +385,6 @@ describe("acp translator stable lifecycle handlers", () => {
     ).rejects.toThrow(/Session missing-session not found/i);
 
     expect(sessionStore.hasSession("missing-session")).toBe(false);
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("resolves prompts when chat send returns a terminal timeout ack", async () => {
@@ -521,7 +506,5 @@ describe("acp translator stable lifecycle handlers", () => {
     await expect(agent.closeSession(createCloseSessionRequest("missing-session"))).rejects.toThrow(
       /Session missing-session not found/i,
     );
-
-    sessionStore.clearAllSessionsForTest();
   });
 });

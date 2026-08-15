@@ -70,6 +70,7 @@ final class ComputerActionServiceV2 {
     private let windows: WindowManagementService
     private let menu: MenuService
     private let observationService: DesktopObservationService
+    private let snapshotManager: InMemorySnapshotManager
     private var lifecycleGeneration: UInt64?
     private var appRefs: [String: ServiceApplicationInfo] = [:]
     private var windowRefs: [String: WindowTarget] = [:]
@@ -77,7 +78,7 @@ final class ComputerActionServiceV2 {
     private var executionAuthority: ComputerActionExecutionAuthority?
 
     init() {
-        let snapshotManager = SnapshotManager()
+        let snapshotManager = InMemorySnapshotManager()
         let automation = UIAutomationService(snapshotManager: snapshotManager)
         let applications = ApplicationService()
         let menu = MenuService(applicationService: applications)
@@ -85,6 +86,7 @@ final class ComputerActionServiceV2 {
         self.applications = applications
         self.windows = WindowManagementService(applicationService: applications)
         self.menu = menu
+        self.snapshotManager = snapshotManager
         self.observationService = DesktopObservationService(
             screenCapture: ScreenCaptureService(loggingService: LoggingService()),
             automation: automation,
@@ -280,6 +282,13 @@ final class ComputerActionServiceV2 {
                     maxChildrenPerNode: AXTraversalBudget.defaultMaxChildrenPerNode)))
         let result = try await self.withExecutionAuthority {
             try await self.observationService.observe(request)
+        }
+        if let elements = result.elements {
+            try await self.withExecutionAuthority {
+                try await self.snapshotManager.storeDetectionResult(
+                    snapshotId: elements.snapshotId,
+                    result: elements)
+            }
         }
         let observedWindow = result.capture.metadata.windowInfo ?? target.window
         guard observedWindow.windowID == target.window.windowID else {

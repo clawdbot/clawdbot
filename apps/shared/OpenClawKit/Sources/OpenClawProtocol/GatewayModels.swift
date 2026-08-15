@@ -13936,6 +13936,7 @@ public struct CommandEntry: Codable, Sendable {
     public let description: String
     public let category: AnyCodable?
     public let source: AnyCodable
+    public let skilldisplayname: String?
     public let skillmodelvisible: Bool?
     public let scope: AnyCodable
     public let acceptsargs: Bool
@@ -13949,6 +13950,7 @@ public struct CommandEntry: Codable, Sendable {
         description: String,
         category: AnyCodable? = nil,
         source: AnyCodable,
+        skilldisplayname: String? = nil,
         skillmodelvisible: Bool? = nil,
         scope: AnyCodable,
         acceptsargs: Bool,
@@ -13961,6 +13963,7 @@ public struct CommandEntry: Codable, Sendable {
         self.description = description
         self.category = category
         self.source = source
+        self.skilldisplayname = skilldisplayname
         self.skillmodelvisible = skillmodelvisible
         self.scope = scope
         self.acceptsargs = acceptsargs
@@ -13975,6 +13978,7 @@ public struct CommandEntry: Codable, Sendable {
         case description
         case category
         case source
+        case skilldisplayname = "skillDisplayName"
         case skillmodelvisible = "skillModelVisible"
         case scope
         case acceptsargs = "acceptsArgs"

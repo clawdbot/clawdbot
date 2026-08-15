@@ -272,7 +272,7 @@ export async function handleV2Act(
       });
     }
     case "get_cursor_position": {
-      const result = await callWindowTool(driver, state, "get_cursor_position", {}, signal);
+      const result = await driver.callDesktopTool("get_cursor_position", {}, signal);
       return JSON.stringify({
         ok: true,
         details: projectedToolDetails(result, "get_cursor_position"),

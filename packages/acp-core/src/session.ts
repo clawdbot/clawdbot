@@ -19,7 +19,6 @@ export type AcpSessionStore = {
   clearActiveRun: (sessionId: string) => void;
   cancelActiveRun: (sessionId: string) => boolean;
   deleteSession: (sessionId: string) => boolean;
-  clearAllSessionsForTest: () => void;
 };
 
 type AcpSessionStoreOptions = {
@@ -189,14 +188,6 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
 
   const deleteSession: AcpSessionStore["deleteSession"] = (sessionId) => removeSession(sessionId);
 
-  const clearAllSessionsForTest: AcpSessionStore["clearAllSessionsForTest"] = () => {
-    for (const session of sessions.values()) {
-      session.abortController?.abort();
-    }
-    sessions.clear();
-    runIdToSessionId.clear();
-  };
-
   return {
     createSession,
     hasSession,
@@ -206,7 +197,6 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     clearActiveRun,
     cancelActiveRun,
     deleteSession,
-    clearAllSessionsForTest,
   };
 }
 

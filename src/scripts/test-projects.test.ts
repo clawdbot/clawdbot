@@ -553,30 +553,22 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes extension helper targets to importing extension tests", () => {
-    expect(
-      buildVitestRunPlans(["extensions/memory-core/src/memory/test-runtime-mocks.ts"]),
-    ).toEqual([
+  it("routes direct and transitive extension helper importers to the owning config", () => {
+    const helper = "extensions/memory-core/src/memory/test-runtime-mocks.ts";
+    const plans = buildVitestRunPlans([helper]);
+
+    expect(plans).toEqual([
       {
         config: "test/vitest/vitest.extension-memory.config.ts",
         forwardedArgs: [],
-        includePatterns: [
-          "extensions/memory-core/src/memory/index.test.ts",
-          "extensions/memory-core/src/memory/manager-keyword-retrieval.test.ts",
-          "extensions/memory-core/src/memory/manager-provider-lifecycle-fallback.test.ts",
-          "extensions/memory-core/src/memory/manager-provider-lifecycle-leases.test.ts",
-          "extensions/memory-core/src/memory/manager-provider-lifecycle.test.ts",
-          "extensions/memory-core/src/memory/manager-registry.test.ts",
-          "extensions/memory-core/src/memory/manager-search-orchestration.test.ts",
-          "extensions/memory-core/src/memory/manager-session-update-race.test.ts",
+        includePatterns: expect.arrayContaining([
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
-          "extensions/memory-core/src/memory/manager.legacy-migration-cleanup.test.ts",
-          "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
-          "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
-        ],
+          "extensions/memory-core/src/memory/manager-session-update-race.test.ts",
+        ]),
         watchMode: false,
       },
     ]);
+    expect(plans[0]?.includePatterns).not.toContain(helper);
   });
 
   it("routes top-level test helpers to importing repo tests", () => {

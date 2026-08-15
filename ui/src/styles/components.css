@@ -5800,7 +5800,7 @@ td.data-table-key-col {
 
 .session-run-spinner,
 .session-glyph__ring {
-  animation: session-run-spin 0.8s linear infinite;
+  animation: session-run-spin 1.6s linear infinite;
 }
 
 @keyframes session-run-spin {
