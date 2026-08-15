@@ -2,7 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
@@ -21,12 +20,6 @@ import {
 } from "../../infra/system-events.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
-
-// Preserve one full 20,000-character operator prompt plus its timestamped event envelope while
-// preventing the 20-entry queue from multiplying that prompt into one unbounded agent wake.
-const SYSTEM_EVENT_BLOCK_MAX_CHARS = 24_000;
-const SYSTEM_EVENT_BLOCK_TRUNCATION_NOTICE =
-  "System: [older or oversized queued system events omitted to keep this wake within 24,000 characters]";
 
 function isCronContextSystemEvent(event: SystemEvent): boolean {
   return event.contextKey?.startsWith("cron:") ?? false;
@@ -68,39 +61,6 @@ function compactSystemEvent(line: string): string | null {
     return trimmed.replace(/ · last input [^·]+/i, "").trim();
   }
   return trimmed;
-}
-
-function formatBoundedSystemEventBlocks(blocks: readonly string[]): string | undefined {
-  if (blocks.length === 0) {
-    return undefined;
-  }
-  const full = blocks.join("\n");
-  if (full.length <= SYSTEM_EVENT_BLOCK_MAX_CHARS) {
-    return full;
-  }
-
-  const retained: string[] = [];
-  let retainedChars = SYSTEM_EVENT_BLOCK_TRUNCATION_NOTICE.length;
-  for (let index = blocks.length - 1; index >= 0; index -= 1) {
-    const block = blocks[index];
-    if (block === undefined) {
-      continue;
-    }
-    const available = SYSTEM_EVENT_BLOCK_MAX_CHARS - retainedChars - 1;
-    if (available <= 0) {
-      break;
-    }
-    if (block.length <= available) {
-      retained.unshift(block);
-      retainedChars += block.length + 1;
-      continue;
-    }
-    if (retained.length === 0) {
-      retained.unshift(truncateUtf16Safe(block, available));
-    }
-    break;
-  }
-  return [SYSTEM_EVENT_BLOCK_TRUNCATION_NOTICE, ...retained].join("\n");
 }
 
 function resolveSystemEventTimezone(cfg: OpenClawConfig) {
@@ -152,7 +112,7 @@ export async function drainFormattedSystemEvents(params: {
   suppressHeartbeatOwnedEvents?: boolean;
 }): Promise<string | undefined> {
   const summaryLines: string[] = [];
-  const systemBlocks: string[] = [];
+  const systemLines: string[] = [];
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
@@ -176,16 +136,14 @@ export async function drainFormattedSystemEvents(params: {
       continue;
     }
     const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
-    const eventLines: string[] = [];
     let index = 0;
     // Inbound text is deliberately not rewritten to neutralize look-alike `System:` lines.
     // Role separation plus external-content wrapping is the boundary.
     // This is an explicit product decision.
     for (const subline of compacted.split("\n")) {
-      eventLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+      systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
       index += 1;
     }
-    systemBlocks.push(eventLines.join("\n"));
   }
   if (params.isMainSession && params.isNewSession) {
     const summary = await buildChannelSummary(params.cfg);
@@ -197,14 +155,13 @@ export async function drainFormattedSystemEvents(params: {
       }
     }
   }
-  const systemBlock = formatBoundedSystemEventBlocks(systemBlocks);
-  if (summaryLines.length === 0 && systemBlock === undefined) {
+  if (summaryLines.length === 0 && systemLines.length === 0) {
     return undefined;
   }
 
   // Each sub-line gets its own prefix so continuation lines can't be mistaken
   // for regular user content.
   return summaryLines.length > 0
-    ? [...summaryLines, ...(systemBlock ? [systemBlock] : [])].join("\n")
-    : systemBlock;
+    ? [...summaryLines, ...systemLines].join("\n")
+    : systemLines.join("\n");
 }
