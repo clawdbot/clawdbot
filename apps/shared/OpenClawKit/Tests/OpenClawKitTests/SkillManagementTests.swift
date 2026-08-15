@@ -133,6 +133,7 @@ struct SkillManagementTests {
                 valid: true,
                 slug: "@molly/weather",
                 ownerHandle: "molly",
+                requestedReference: nil,
                 installedVersion: "2.0.0",
                 reason: nil))
         #expect(SkillManagementContract.installed([linked], slug: "weather", version: "2.0.0"))
@@ -147,6 +148,7 @@ struct SkillManagementTests {
                 valid: true,
                 slug: "weather",
                 ownerHandle: "molly",
+                requestedReference: nil,
                 installedVersion: "2.0.0",
                 reason: nil))
         #expect(SkillManagementContract.installed([linked], slug: "@molly/weather", version: "2.0.0"))

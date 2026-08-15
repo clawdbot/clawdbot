@@ -616,6 +616,13 @@ private fun ClawHubSkillSearchPanel(
         trailing = {
           val reviewing = state.reviewingSlug == skill.reference
           val installing = isClawHubSkillOperationActive(state.installingSlugs, skill.reference)
+          val canActOnResult =
+            isConnected &&
+              methodsAvailable &&
+              !installed &&
+              !reviewing &&
+              !installing &&
+              (skill.canReadDetails || canManageSkills)
           ClawSecondaryButton(
             text =
               when {
@@ -629,8 +636,7 @@ private fun ClawHubSkillSearchPanel(
             onClick = { onReviewInstall(skill) },
             // Reviewing only needs read access, but an install-only row installs on the first tap,
             // so it stays disabled without admin instead of erroring after the tap.
-            enabled = isConnected && methodsAvailable && !installed && !reviewing && !installing &&
-              (skill.canReadDetails || canManageSkills),
+            enabled = canActOnResult,
           )
         },
       )
