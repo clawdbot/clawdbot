@@ -752,15 +752,18 @@ describe("launchd runtime parsing", () => {
 });
 
 describe("launchd runtime state", () => {
-  it("marks installed plist split-brain when launchd no longer has the job", async () => {
+  it("reports an installed but unloaded LaunchAgent as stopped", async () => {
     const env = createDefaultLaunchdEnv();
     state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
-    state.serviceLoaded = false;
+    state.printError = [
+      "Bad request.",
+      'Could not find service "ai.openclaw.gateway" in domain for user gui: 501',
+    ].join("\n");
+    state.printFailuresRemaining = 1;
 
     const runtime = await readLaunchAgentRuntime(env);
-    expect(runtime.status).toBe("unknown");
-    expect(runtime.missingSupervision).toBe(true);
-    expect(runtime.detail).toBe("Could not find service");
+
+    expect(runtime).toEqual({ status: "stopped" });
   });
 
   it.each([
@@ -775,9 +778,22 @@ describe("launchd runtime state", () => {
     const runtime = await readLaunchAgentRuntime(env);
 
     expect(runtime.status).toBe("unknown");
-    expect(runtime.missingSupervision).toBe(true);
     expect(runtime.missingGuiSession).toBe(true);
     expect(runtime.detail).toBe(detail);
+  });
+
+  it("keeps unexpected launchctl failures visible without claiming missing supervision", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
+    state.printError = "Operation not permitted\nwhile reading launchd state";
+    state.printFailuresRemaining = 1;
+
+    const runtime = await readLaunchAgentRuntime(env);
+
+    expect(runtime).toEqual({
+      status: "unknown",
+      detail: "Operation not permitted while reading launchd state",
+    });
   });
 
   it("marks a missing unit when launchd has no job and no plist exists", async () => {
