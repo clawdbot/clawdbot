@@ -42,6 +42,34 @@ jobs:
         uses: ./.github/actions/setup-android-toolchain
 
 
+      - name: Build Android APK
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          
+          cd apps/android
+          chmod +x gradlew
+          
+          # Debug 构建
+          ./gradlew assembleThirdPartyDebug --no-daemon
+          
+          # 查找生成的 APK
+          version="$(node -p 'require("../apps/android/version.json").version')"
+          apk_path="app/build/outputs/apk/third-party/debug/OpenClaw-${version}-third-party-debug.apk"
+          
+          test -f "${apk_path}" || {
+            echo "❌ APK not found, checking all APKs:"
+            find . -name "*.apk" -type f | head -10
+            exit 1
+          }
+          
+          cp "${apk_path}" ../../dist/OpenClaw-Android.apk
+          cd ../../dist
+          sha256sum OpenClaw-Android.apk > OpenClaw-Android-SHA256SUMS.txt
+          
+          echo "✅ Built: $(ls -la OpenClaw-Android.apk)"
 
       - name: Prepare and verify signed Android APK
         env:
