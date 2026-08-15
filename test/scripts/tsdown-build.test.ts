@@ -478,6 +478,36 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
+  it("caps the tsdown heap when the cgroup mount exposes only a subtree", () => {
+    // A container mount roots cgroupfs at the container's own cgroup, so /proc/self/cgroup
+    // records stay host-absolute and only translate to a visible path via the mount root.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/docker/abc123/openclaw-main-update.service\n"],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /docker/abc123 /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n",
+      ],
+      ["/sys/fs/cgroup/openclaw-main-update.service/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
   it("clamps explicit tsdown heap settings to the container memory limit", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",

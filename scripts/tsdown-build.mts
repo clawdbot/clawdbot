@@ -497,23 +497,33 @@ function resolveCgroupMountPoints(params: MemoryLimitParams = {}) {
     // Unreadable off Linux; the documented defaults still apply.
   }
 
-  let unified = DEFAULT_CGROUP_V2_MOUNT_PATH;
-  let v1Memory = DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH;
+  let unified = { mountPoint: DEFAULT_CGROUP_V2_MOUNT_PATH, root: "/" };
+  let v1Memory = { mountPoint: DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH, root: "/" };
   for (const line of rawMountinfo.split("\n")) {
     // mountinfo separates its variable optional fields from the fstype with a lone "-".
     const [fields, describe] = line.split(" - ");
-    const mountPoint = fields?.split(" ")[4];
+    const [, , , root, mountPoint] = (fields ?? "").split(" ");
     const [fsType, , superOptions] = (describe ?? "").split(" ");
-    if (!mountPoint) {
+    if (!mountPoint || !root) {
       continue;
     }
     if (fsType === "cgroup2") {
-      unified = mountPoint;
+      unified = { mountPoint, root };
     } else if (fsType === "cgroup" && (superOptions ?? "").split(",").includes("memory")) {
-      v1Memory = mountPoint;
+      v1Memory = { mountPoint, root };
     }
   }
   return { unified, v1Memory };
+}
+
+// mountinfo field 4 is the subtree a cgroupfs mount exposes, so /proc/self/cgroup records are
+// relative to it: under a container mount the visible leaf is the mount point itself, not the
+// host-absolute path. A record outside that subtree is not reachable here at all.
+function relativeCgroupPath(mountRoot: string, cgroupPath: string) {
+  if (mountRoot === "/" || cgroupPath === mountRoot) {
+    return mountRoot === "/" ? cgroupPath : "/";
+  }
+  return cgroupPath.startsWith(`${mountRoot}/`) ? cgroupPath.slice(mountRoot.length) : "/";
 }
 
 // A systemd slice budget lives on the process's own cgroup, never on a hierarchy root, so
@@ -530,11 +540,15 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
   }
 
   const paths: string[] = [];
-  const addHierarchy = (root: string, limitFiles: string[], cgroupPath: string) => {
-    const segments = cgroupPath.split("/").filter(Boolean);
+  const addHierarchy = (
+    mount: { mountPoint: string; root: string },
+    limitFiles: string[],
+    cgroupPath: string,
+  ) => {
+    const segments = relativeCgroupPath(mount.root, cgroupPath).split("/").filter(Boolean);
     for (let depth = segments.length; depth >= 0; depth -= 1) {
       for (const limitFile of limitFiles) {
-        paths.push(path.join(root, ...segments.slice(0, depth), limitFile));
+        paths.push(path.join(mount.mountPoint, ...segments.slice(0, depth), limitFile));
       }
     }
   };
