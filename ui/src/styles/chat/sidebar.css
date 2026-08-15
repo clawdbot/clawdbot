@@ -561,6 +561,7 @@ openclaw-chat-sidebar-region,
   min-height: var(--menu-item-height);
   padding: 0 8px;
   border-radius: var(--menu-item-radius);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
 }
 
 .side-panel-type-menu__item:hover::part(base),
@@ -568,10 +569,17 @@ openclaw-chat-sidebar-region,
   background: var(--bg-hover);
 }
 
+.side-panel-type-menu__item + .side-panel-type-menu__item {
+  margin-top: 1px;
+}
+
 .side-panel-type-option__icon {
   display: inline-flex;
+  width: 16px;
+  height: 16px;
   align-items: center;
   justify-content: center;
+  flex: 0 0 16px;
   color: var(--muted);
 }
 
@@ -591,9 +599,9 @@ openclaw-chat-sidebar-region,
   align-items: center;
   justify-content: center;
   padding: 0 6px;
-  border: 0;
+  border: 1px solid color-mix(in srgb, var(--muted) 12%, transparent);
   border-radius: var(--radius-full);
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--muted);
   font: 500 calc(10px * var(--control-ui-text-scale)) / 1 var(--mono);
   font-variant-numeric: tabular-nums;
@@ -650,7 +658,7 @@ openclaw-chat-sidebar-region,
   display: grid;
   width: min(100%, 320px);
   margin-top: 16px;
-  gap: 0;
+  gap: 1px;
 }
 
 .side-panel-empty__type {
@@ -663,7 +671,7 @@ openclaw-chat-sidebar-region,
   padding: 2px 8px;
   border: 0;
   border-radius: var(--menu-item-radius);
-  background: transparent;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   text-align: left;
