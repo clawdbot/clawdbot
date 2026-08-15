@@ -1838,12 +1838,15 @@ async function continueClaudeSession(
           throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
         }
       }
-      history = await readBoundedClaudeHistory({
+      // Narrowed local: afterCreate below needs a definite array, while the outer
+      // `history` stays optional so complete() can link without a reread on races.
+      const loadedHistory = await readBoundedClaudeHistory({
         runtime: api.runtime,
         hostId,
         threadId,
         allowProcessHomeFallback,
       });
+      history = loadedHistory;
       const config = currentClaudeSessionCatalogConfig(api);
       const adoptingAgentId = agentId;
       // Adopt onto the model this agent actually routes to the CLI backend; the
@@ -1873,7 +1876,7 @@ async function continueClaudeSession(
         },
         afterCreate: async (entry) => {
           await importClaudeHistory({
-            items: history,
+            items: loadedHistory,
             threadId,
             sessionId: entry.sessionId,
             sessionKey: entry.key,
