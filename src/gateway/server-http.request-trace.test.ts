@@ -263,6 +263,10 @@ describe("gateway HTTP request error cleanup", () => {
       expect(response.status).toBe(500);
       expect(await response.text()).toBe("Internal Server Error");
       expect(handlePluginRequest).toHaveBeenCalledOnce();
+      expect(errorLog).toHaveBeenCalledWith(
+        "[gateway-http] unhandled error in request handler:",
+        expect.objectContaining({ message: "plugin route dispatch failed" }),
+      );
     } finally {
       server.closeAllConnections();
       await closeServer(server);
