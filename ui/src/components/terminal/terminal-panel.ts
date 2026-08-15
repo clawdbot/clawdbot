@@ -11,6 +11,7 @@ import { terminalDocumentPath } from "../../app/terminal-document-mode.ts";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
+import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
 import { createDockPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
@@ -421,6 +422,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     dockPanelStyles,
     terminalPanelStyles,
     terminalPanelUploadStyles,
+    scrollbarShadowStyles,
   ];
 }
 
