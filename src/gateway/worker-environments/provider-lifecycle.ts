@@ -55,7 +55,10 @@ type WorkerProviderLifecycleOptions = {
   providerCallTimeoutMs?: number;
   tunnelManager?: Pick<WorkerTunnelManager, "stop">;
   credentialBroker: WorkerCredentialBroker;
-  callBootstrap: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  callBootstrap: <T>(
+    installation: WorkerInstallationArtifact,
+    run: (signal: AbortSignal) => Promise<T>,
+  ) => Promise<T>;
   callProvider: <T>(environmentId: string, run: () => Promise<T>, timeoutMs?: number) => Promise<T>;
   inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
   isServiceError: (error: unknown, code: string) => boolean;
@@ -217,7 +220,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     const sshEndpoint = record.sshEndpoint;
     let receipt: WorkerAdmissionHandshake;
     try {
-      receipt = await callBootstrap((signal) =>
+      receipt = await callBootstrap(installation, (signal) =>
         options.bootstrapWorker({
           operationId: record.provisionOperationId,
           sshEndpoint,

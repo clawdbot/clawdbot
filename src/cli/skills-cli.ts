@@ -23,6 +23,7 @@ import {
   fetchClawHubSkillVerification,
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   installSkillFromClawHub,
@@ -209,7 +210,7 @@ async function runSkillsAction(
     const report = await loadSkillsStatusReport(options);
     defaultRuntime.writeStdout(render(report));
   } catch (err) {
-    defaultRuntime.error(String(err));
+    defaultRuntime.error(formatErrorMessage(err));
     defaultRuntime.exit(1);
   }
 }
@@ -601,7 +602,7 @@ export function registerSkillsCli(program: Command) {
           defaultRuntime.log(`${skillRef}${version}  ${displayName}${summary}${trust}`);
         }
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }
     });
@@ -734,7 +735,7 @@ export function registerSkillsCli(program: Command) {
           }
           defaultRuntime.log(`Installed ${result.slug}@${result.version} -> ${result.targetDir}`);
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
@@ -834,7 +835,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
           }
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
@@ -917,7 +918,7 @@ export function registerSkillsCli(program: Command) {
             }
           }
         } catch (err) {
-          reportError(String(err));
+          reportError(formatErrorMessage(err));
           defaultRuntime.exit(1);
           return;
         }
@@ -941,7 +942,7 @@ export function registerSkillsCli(program: Command) {
       }
       defaultRuntime.writeStdout(formatSkillCuratorStatus(status));
     } catch (err) {
-      defaultRuntime.error(String(err));
+      defaultRuntime.error(formatErrorMessage(err));
       defaultRuntime.exit(1);
     }
   };
@@ -967,7 +968,7 @@ export function registerSkillsCli(program: Command) {
             `${action[0]?.toUpperCase()}${action.slice(1)} ${result.skillKey}\n`,
           );
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       });
@@ -996,7 +997,7 @@ export function registerSkillsCli(program: Command) {
       }
       defaultRuntime.writeStdout(format(result));
     } catch (err) {
-      defaultRuntime.error(String(err));
+      defaultRuntime.error(formatErrorMessage(err));
       defaultRuntime.exit(1);
     }
   };
@@ -1061,7 +1062,7 @@ export function registerSkillsCli(program: Command) {
         }
         defaultRuntime.writeStdout(formatSkillProposalInspect(proposal));
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }
     });

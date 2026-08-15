@@ -1,5 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configSnapshot,
+  emptyMetadataSnapshot,
+  hostedDiffsEntry,
+  hostedFeedDiffsEntry,
+  metadataSnapshot,
+} from "./management-service.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
@@ -107,83 +114,6 @@ const {
   uninstallManagedPlugin,
 } = await import("./management-service.js");
 
-function configSnapshot(config: Record<string, unknown> = {}) {
-  return {
-    snapshot: {
-      valid: true,
-      parsed: {},
-      path: "/tmp/openclaw.json",
-      sourceConfig: config,
-      hash: "base-hash",
-    },
-    writeOptions: {
-      expectedConfigPath: "/tmp/openclaw.json",
-      includeFileHashesForWrite: { "/tmp/plugins.json": "include-hash" },
-      includeFileTargetsForWrite: { "/tmp/plugins.json": "/tmp/plugins.json" },
-    },
-  };
-}
-
-function metadataSnapshot(params: {
-  enabled: boolean;
-  id?: string;
-  name?: string;
-  origin?: "bundled" | "global";
-  installRecord?: Record<string, unknown>;
-  icon?: string;
-}) {
-  const id = params.id ?? "workboard";
-  const origin = params.origin ?? "bundled";
-  const installRecord =
-    params.installRecord ??
-    (origin === "global" ? { source: "path", installPath: `/tmp/${id}` } : undefined);
-  const manifest = {
-    id,
-    name: params.name ?? "Workboard",
-    description: "Coordinate agent work in a shared board.",
-    catalog: { featured: true, order: 10 },
-    ...(params.icon ? { icon: params.icon } : {}),
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin,
-    rootDir: `/tmp/${id}`,
-    source: `/tmp/${id}/index.ts`,
-    manifestPath: `/tmp/${id}/openclaw.plugin.json`,
-  };
-  return {
-    index: {
-      plugins: [
-        {
-          pluginId: id,
-          ...(origin === "global" ? { installOwner: id } : {}),
-          packageName: `@openclaw/${id}`,
-          origin,
-          enabled: params.enabled,
-          rootDir: `/tmp/${id}`,
-        },
-      ],
-      installRecords: installRecord ? { [id]: installRecord } : {},
-    },
-    byPluginId: new Map([[id, manifest]]),
-    plugins: [manifest],
-    diagnostics: [],
-    normalizePluginId: (pluginId: string) => pluginId,
-  };
-}
-
-function emptyMetadataSnapshot() {
-  return {
-    index: { plugins: [], installRecords: {} },
-    byPluginId: new Map(),
-    plugins: [],
-    diagnostics: [],
-    normalizePluginId: (pluginId: string) => pluginId,
-  };
-}
-
 function mockHostedOfficialCatalog(entries: unknown[]) {
   mocks.officialCatalog.mockResolvedValue({
     source: "hosted",
@@ -208,35 +138,6 @@ function mockClawHubInstall(pluginId: string, packageName: string, targetDir?: s
     },
   });
 }
-
-const hostedDiffsEntry = {
-  name: "@openclaw/diffs",
-  version: "2.0.0",
-  description: "Hosted description",
-  openclaw: {
-    plugin: { id: "diffs", label: "Hosted Diffs" },
-    install: { clawhubSpec: "clawhub:@openclaw/diffs", defaultChoice: "clawhub" },
-  },
-};
-
-// Mirrors the ClawHub feed: package identity is remote, while runtime metadata stays local.
-const hostedFeedDiffsEntry = {
-  id: "@openclaw/diffs",
-  title: "Diffs",
-  state: "available",
-  featured: true,
-  publisher: { id: "openclaw", trust: "official" },
-  install: {
-    candidates: [
-      {
-        sourceRef: "public-clawhub",
-        package: "@openclaw/diffs",
-        version: "2026.6.11",
-        integrity: `sha256:${"a".repeat(64)}`,
-      },
-    ],
-  },
-};
 
 describe("plugin management service", () => {
   beforeEach(() => {
@@ -800,6 +701,68 @@ describe("plugin management service", () => {
         expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
       }),
     );
+  });
+
+  it("approves every install-policy warning in an acknowledged Gateway install", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
+    mocks.clawhubInstall.mockImplementation(async (params: unknown) => {
+      const callback = expectDefined(
+        (
+          params as {
+            onInstallPolicyWarning?: (request: {
+              targetName: string;
+              targetType: "plugin";
+              requestMode: "install";
+              reason: string;
+            }) => Promise<{ status: "approved" | "declined" }>;
+          }
+        ).onInstallPolicyWarning,
+        "install policy acknowledgement callback",
+      );
+      await expect(
+        callback({
+          targetName: "diffs",
+          targetType: "plugin",
+          requestMode: "install",
+          reason: "Review package metadata",
+        }),
+      ).resolves.toEqual({ status: "approved" });
+      await expect(
+        callback({
+          targetName: "diffs",
+          targetType: "plugin",
+          requestMode: "install",
+          reason: "Review installed dependencies",
+        }),
+      ).resolves.toEqual({ status: "approved" });
+      return {
+        ok: true,
+        pluginId: "diffs",
+        targetDir: "/tmp/extensions/diffs",
+        extensions: ["index.js"],
+        packageName: "@openclaw/diffs",
+        clawhub: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "@openclaw/diffs",
+          clawhubFamily: "code-plugin",
+        },
+      };
+    });
+    mocks.persistInstall.mockResolvedValue({});
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
+    );
+
+    await installManagedPlugin({
+      request: {
+        source: "official",
+        pluginId: "diffs",
+        acknowledgeInstallPolicyWarning: true,
+      },
+      env: {},
+    });
   });
 
   it("removes only the newly installed managed target after persistence conflicts", async () => {

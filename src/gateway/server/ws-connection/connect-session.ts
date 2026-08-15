@@ -323,18 +323,16 @@ export async function attachAuthenticatedGatewayConnect(
     requestOrigin,
   });
   if (controlUiBuildMismatch) {
-    const message = "Control UI updated; reload this page to continue";
+    // Build identity predates this rejection. Frozen clients recognize the shipped
+    // protocol-mismatch signal and surface its literal reload guidance.
+    const message = "protocol mismatch: Control UI updated; reload this page to continue";
     markHandshakeFailure("control-ui-build-mismatch", {
       clientBuildId: controlUiBuildMismatch.clientBuildId ?? "legacy",
       gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
     });
     sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message, {
       retryable: false,
-      details: {
-        code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-        gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
-        reloadRequired: true,
-      },
+      details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
     });
     logWsControl.warn(
       `control ui build rejected conn=${connId} clientBuild=${formatForLog(controlUiBuildMismatch.clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(controlUiBuildMismatch.gatewayBuildId)}; reload required`,

@@ -34,6 +34,7 @@ type WorkerInstallationArtifactBase = {
 
 type WorkerBundleArtifact = WorkerInstallationArtifactBase & {
   install: "bundle";
+  tarballBytes: number;
   tarballSha256: string;
   tarballPath: string;
 };
@@ -511,6 +512,7 @@ async function prepareWorkerBundle(
       bundleHash,
       openclawVersion,
       protocolFeatures,
+      tarballBytes: (await fs.stat(tarballPath)).size,
       tarballSha256: await hashWorkerBundleTarball(tarballPath),
       tarballPath,
     };

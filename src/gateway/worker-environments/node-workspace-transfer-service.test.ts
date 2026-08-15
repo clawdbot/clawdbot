@@ -251,13 +251,11 @@ describe("node workspace transfer service", () => {
         persistenceRetry.release();
       }
       await upload;
-      const replay = await fetch(
-        `${httpOrigin}/__openclaw__/worker-transfer/v1/environments/environment-1/reconciliations/${prepared.snapshot.manifestRef.slice(7)}`,
-        {
-          method: "POST",
-          headers: { authorization: `Bearer ${uploadToken}`, "content-length": "0" },
-        },
-      );
+      const reconciliationUrl = `${httpOrigin}/__openclaw__/worker-transfer/v1/environments/environment-1/reconciliations/${prepared.snapshot.manifestRef.slice(7)}`;
+      const replay = await fetch(reconciliationUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${uploadToken}`, "content-length": "0" },
+      });
       expect(replay.status).toBe(404);
       const uploaded = service.takeUpload("environment-1", prepared.snapshot.manifestRef);
       expect(uploaded.current.entries).toContainEqual(
@@ -266,6 +264,23 @@ describe("node workspace transfer service", () => {
       await expect(
         fs.readFile(path.join(uploaded.stagingRoot, "result.txt"), "utf8"),
       ).resolves.toBe("node result\n");
+      const invalidUploadToken = service.prepareUpload(
+        "environment-1",
+        prepared.snapshot.manifestRef,
+      );
+      const invalidUpload = await fetch(reconciliationUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${invalidUploadToken}`, "content-length": "0" },
+      });
+      expect(invalidUpload.status).toBe(413);
+      await expect(invalidUpload.json()).resolves.toEqual({
+        error: "workspace_transfer_limit",
+      });
+      const replacementUploadToken = service.prepareUpload(
+        "environment-1",
+        prepared.snapshot.manifestRef,
+      );
+      service.revoke("environment-1", replacementUploadToken);
       writeFaults.failNextWrite(new Error("injected terminal upload write failure"));
       const failedUploadToken = service.prepareUpload(
         "environment-1",

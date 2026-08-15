@@ -47,6 +47,7 @@ describe("resolveInstallPolicyWarningAcknowledgementCliOptions", () => {
         targetName: "demo\npkg",
         targetType: "plugin",
         requestMode: fixture.requestMode,
+        reason: "Policy warning",
       }),
     ).resolves.toEqual({ status: "approved" });
 
@@ -66,6 +67,7 @@ describe("resolveInstallPolicyWarningAcknowledgementCliOptions", () => {
         targetName: "demo",
         targetType: "skill",
         requestMode: "install",
+        reason: "Policy warning",
       }),
     ).resolves.toEqual({ status: "declined" });
   });
@@ -104,6 +106,7 @@ describe("resolveInstallPolicyWarningAcknowledgementCliOptions", () => {
         targetName: "demo",
         targetType: "plugin",
         requestMode: "install",
+        reason: "Policy warning",
       }),
     ).resolves.toEqual({ status: "approved" });
     await expect(
@@ -111,6 +114,7 @@ describe("resolveInstallPolicyWarningAcknowledgementCliOptions", () => {
         targetName: "demo-dependency",
         targetType: "plugin",
         requestMode: "install",
+        reason: "Dependency policy warning",
       }),
     ).resolves.toEqual({ status: "approved" });
     expect(promptTextMock).not.toHaveBeenCalled();

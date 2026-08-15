@@ -232,8 +232,9 @@ async function reconcileStoredChatOutboxHead(
   }
   const historyArgs = [host, outbox, item, client, connectionEpoch, dependencies] as const;
   const history = await readCurrentStoredChatHistory(...historyArgs);
-  if (history === "blocked" || history === "continue") {
-    return history;
+  // Keyed unknown sends reach history only for exact proof; absence stays blocked.
+  if (history === "blocked" || history === "continue" || item.sendState === "unconfirmed") {
+    return history === "continue" ? "continue" : "blocked";
   }
   if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && isChatBusy(host)) {
     return "blocked";
@@ -285,7 +286,7 @@ async function drainStoredChatOutbox(
       return "empty";
     }
     if (
-      item.sendState === "unconfirmed" ||
+      (item.sendState === "unconfirmed" && (!item.sendRunId || item.localCommandName)) ||
       (item.sendState === "waiting-model" && !lane.pendingOptions.has(item.id)) ||
       // An open edit owns this row: sending the superseded text would deliver a
       // message the operator is visibly rewriting. The queue behind it waits,

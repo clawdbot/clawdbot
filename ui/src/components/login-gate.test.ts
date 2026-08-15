@@ -43,23 +43,6 @@ afterEach(() => {
 });
 
 describe("login gate failure recovery", () => {
-  it("offers explicit reload guidance for a rejected stale build", async () => {
-    const element = await mountFailure(
-      "Control UI updated; reload this page to continue",
-      ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-    );
-
-    const failure = element.querySelector<HTMLElement>(
-      '.login-gate__failure[data-kind="build-mismatch"]',
-    );
-    expect(failure?.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
-      "Server updated",
-    );
-    expect(
-      failure?.querySelector<HTMLButtonElement>(".login-gate__failure-refresh"),
-    ).not.toBeNull();
-  });
-
   it("offers page refresh for a protocol mismatch and reloads when selected", async () => {
     const element = await mountFailure(
       "protocol mismatch",

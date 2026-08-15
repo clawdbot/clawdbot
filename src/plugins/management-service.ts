@@ -42,6 +42,7 @@ import {
 } from "./install-persistence.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
+import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 import type { PluginInstallLogger } from "./install-types.js";
 import {
   installPluginFromNpmPackArchive,
@@ -129,8 +130,9 @@ type ManagedPluginInstallRequest =
       packageName: string;
       version?: string;
       acknowledgeClawHubRisk?: boolean;
+      acknowledgeInstallPolicyWarning?: true;
     }
-  | { source: "official"; pluginId: string };
+  | { source: "official"; pluginId: string; acknowledgeInstallPolicyWarning?: true };
 
 export type ManagedPluginSourceInstallRequest =
   | {
@@ -192,10 +194,24 @@ type ManagedPluginSourceInstallResult =
       npmResolution?: NpmSpecResolution;
       clawhub?: ClawHubPluginInstallRecordFields;
     }
-  | { ok: false; error: string; code?: string; version?: string; warning?: string };
+  | {
+      ok: false;
+      error: string;
+      code?: string;
+      version?: string;
+      warning?: string;
+      installPolicyWarning?: InstallPolicyWarningDetails;
+    };
 
 type SourceInstallerResult =
-  | { ok: false; error: string; code?: string; version?: string; warning?: string }
+  | {
+      ok: false;
+      error: string;
+      code?: string;
+      version?: string;
+      warning?: string;
+      installPolicyWarning?: InstallPolicyWarningDetails;
+    }
   | {
       ok: true;
       pluginId: string;
@@ -209,6 +225,7 @@ export class ManagedPluginLifecycleError extends Error {
   readonly code?: string;
   readonly version?: string;
   readonly warning?: string;
+  readonly installPolicyWarning?: InstallPolicyWarningDetails;
 
   constructor(
     message: string,
@@ -217,6 +234,7 @@ export class ManagedPluginLifecycleError extends Error {
       code?: string;
       version?: string;
       warning?: string;
+      installPolicyWarning?: InstallPolicyWarningDetails;
       cause?: unknown;
     },
   ) {
@@ -226,6 +244,7 @@ export class ManagedPluginLifecycleError extends Error {
     this.code = details?.code;
     this.version = details?.version;
     this.warning = details?.warning;
+    this.installPolicyWarning = details?.installPolicyWarning;
   }
 }
 
@@ -848,6 +867,9 @@ export async function listManagedPlugins(params: {
     }
     const kind = normalizeKinds(entry.kind);
     const install = resolveCatalogInstallAction({ entry, pluginId });
+    const clawhubPackageName = resolveCatalogPackageSourceIdentities(entry).find(
+      (identity) => identity.source === "clawhub",
+    )?.packageName;
     const description = normalizeOptionalString(entry.description);
     const version = normalizeOptionalString(entry.version);
     const featuredAt =
@@ -855,6 +877,7 @@ export async function listManagedPlugins(params: {
     plugins.push({
       id: pluginId,
       name: resolveOfficialExternalPluginLabel(entry),
+      ...(clawhubPackageName ? { packageName: clawhubPackageName } : {}),
       ...(description ? { description } : {}),
       ...(version ? { version } : {}),
       ...(kind ? { kind } : {}),
@@ -993,6 +1016,7 @@ function throwInstallFailure(result: {
   code?: string;
   version?: string;
   warning?: string;
+  installPolicyWarning?: InstallPolicyWarningDetails;
 }): never {
   const unavailable =
     !result.code ||
@@ -1004,6 +1028,7 @@ function throwInstallFailure(result: {
     code: result.code,
     version: result.version,
     warning: result.warning,
+    installPolicyWarning: result.installPolicyWarning,
     cause: result,
   });
 }
@@ -1085,6 +1110,7 @@ function throwPersistenceFailureWithCleanupWarnings(error: unknown, warnings: st
       code: error.code,
       version: error.version,
       warning: [error.warning, cleanupWarning].filter(Boolean).join("\n"),
+      installPolicyWarning: error.installPolicyWarning,
       cause: error,
     });
   }
@@ -1451,6 +1477,13 @@ export async function installManagedPlugin(params: {
       snapshot,
       env,
       logger: installLogger,
+      ...(params.request.acknowledgeInstallPolicyWarning
+        ? {
+            safetyOverrides: {
+              onInstallPolicyWarning: async () => ({ status: "approved" as const }),
+            },
+          }
+        : {}),
       cleanupOnPersistenceFailure: true,
       invalidateRuntimeCache: false,
       runtime: createSilentRuntime(),

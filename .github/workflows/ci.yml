@@ -418,12 +418,19 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      # Push/PR preflight is dependency-free: the manifest planner closure and
+      # the protocol coverage script import only node builtins and relative
+      # files, and Node strips their types natively. Only manual dispatches
+      # (which may check out frozen targets with older planner syntax) still
+      # install and run through tsx.
       - name: Setup manifest pnpm
+        if: github.event_name == 'workflow_dispatch'
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install manifest dependencies
+        if: github.event_name == 'workflow_dispatch'
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Build CI manifest
@@ -455,7 +462,11 @@ jobs:
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
           OPENCLAW_CI_RUNNER_BACKEND: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
         run: |
-          node --import tsx --input-type=module <<'EOF'
+          manifest_node_args=()
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            manifest_node_args+=(--import tsx)
+          fi
+          node "${manifest_node_args[@]}" --input-type=module <<'EOF'
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
           const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
@@ -811,7 +822,6 @@ jobs:
                   lane: `profile-${part}`,
                   slug: `profile-${part}-of-${qaSmokeCiPartCount}`,
                   part_count: qaSmokeCiPartCount,
-                  ...(qaSmokeCiPartCount === 4 && part === 2 ? { docker_cache: true } : {}),
                 };
               }),
             ),
@@ -915,7 +925,14 @@ jobs:
 
       - name: Check mobile protocol event coverage
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
-        run: node scripts/check-protocol-event-coverage.mjs
+        run: |
+          # Dispatches may target frozen checkouts whose script needs the tsx
+          # shim; push/PR checkouts run the dependency-free .mts natively.
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            node scripts/check-protocol-event-coverage.mjs
+          else
+            node scripts/check-protocol-event-coverage.mts
+          fi
 
       # Publish one immutable semantic dependency archive before same-repo
       # Blacksmith jobs fan out. The GitHub backend uses the pnpm-store cache.
@@ -1506,7 +1523,7 @@ jobs:
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
-          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Download exact-run built runtime
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -1587,7 +1604,7 @@ jobs:
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
-          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - &cache_playwright_chromium
         name: Cache Playwright Chromium
@@ -1662,7 +1679,7 @@ jobs:
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
-          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - *cache_playwright_chromium
       - *install_playwright_chromium
@@ -1842,7 +1859,7 @@ jobs:
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
-          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -1934,34 +1951,20 @@ jobs:
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
-
-      - name: Set up Blacksmith Docker layer cache
-        if: ${{ matrix.docker_cache == true && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') }}
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
-        with:
-          max-cache-size-mb: 800000
+          # Reader of build-artifacts' protected daily archive: warms tsdown
+          # tooling plus the repeated openclaw.mjs boots in the scenario loop.
+          node-compile-cache: "true"
+          node-compile-cache-scope: build
 
       - name: Build QA smoke runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
-          # Pack the public runtime before overlaying private QA artifacts so they cannot leak.
-          unset OPENCLAW_BUILD_PRIVATE_QA
-          pnpm build qaRuntime
-          pnpm ui:build
-          package_args=(
-            --skip-build
-            --output-dir .artifacts/qa-e2e/smoke-ci-package
-            --output-name openclaw-current.tgz
-          )
-          package_script="scripts/package-openclaw-for-docker.mts"
-          if [[ ! -f "$package_script" ]]; then
-            package_script="scripts/package-openclaw-for-docker.mjs"
-          fi
-          if grep -Fq -- '--allow-unreleased-changelog' "$package_script"; then
-            package_args=(--allow-unreleased-changelog "${package_args[@]}")
-          fi
-          node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
+          # The smoke coverage set contains no docker-lane or Control UI
+          # scenarios (the run step fails closed if one returns), so the
+          # public pack and ui:build are skipped: one private overlay build
+          # halves this fixed cost on every part. Never pack dist after a
+          # private build; the overlay must not leak into public artifacts.
           OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build qaRuntime
 
       - name: Run smoke profile part
@@ -1980,7 +1983,6 @@ jobs:
           export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
           export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
           export NODE_OPTIONS=--max-old-space-size=16384
-          export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/.artifacts/qa-e2e/smoke-ci-package/openclaw-current.tgz"
           PROFILE_RUNS_TSV="$(
             node --import tsx --input-type=module <<'EOF'
           const smokePlan = await import("./extensions/qa-lab/src/ci-smoke-plan.ts");
@@ -2052,6 +2054,23 @@ jobs:
           } else {
             throw new Error("QA smoke plan does not expose a supported CI planner.");
           }
+          // The build step skips the public pack because no smoke scenario
+          // uses the docker lane; fail closed instead of running one without
+          // its packaged tgz.
+          const catalog = await import("./extensions/qa-lab/src/scenario-catalog.ts");
+          const scenarioById = new Map(
+            catalog.readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario]),
+          );
+          for (const run of runs) {
+            for (const scenarioId of run.scenario_ids) {
+              const executionPath = scenarioById.get(scenarioId)?.execution?.path ?? "";
+              if (executionPath.includes("docker")) {
+                throw new Error(
+                  `smoke scenario ${scenarioId} needs the docker lane; restore the public pack step in ci.yml before selecting it`,
+                );
+              }
+            }
+          }
           for (const run of runs) {
             const scenarioIds = Buffer.from(JSON.stringify(run.scenario_ids)).toString("base64");
             process.stdout.write(`${run.slug}\t${scenarioIds}\n`);
@@ -2116,7 +2135,7 @@ jobs:
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
-          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Run plugin contract shard
         env:
@@ -2159,7 +2178,7 @@ jobs:
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
-          restore-test-caches: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'true' || 'false' }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Run channel contract shard
         env:
@@ -2444,6 +2463,7 @@ jobs:
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
+          DIFF_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2490,7 +2510,23 @@ jobs:
               pnpm check:import-cycles
               ;;
             npm-lock)
-              if has_package_script "deps:npm-lock:check"; then
+              # The --all sweep resolves ~94 npm graphs against the registry
+              # (~110s). Push/PR runs use the reviewed --changed scoping (zero
+              # dependency-surface changes resolve nothing); dispatches and
+              # release validation keep the full sweep, which also covers
+              # registry-side drift on unchanged lockfiles.
+              npm_lock_base=""
+              if [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" && -n "$DIFF_BASE_SHA" ]] &&
+                has_package_script "deps:npm-lock:check:changed"; then
+                if timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${DIFF_BASE_SHA}:refs/remotes/origin/npm-lock-base"; then
+                  npm_lock_base="refs/remotes/origin/npm-lock-base"
+                else
+                  echo "::warning::npm-lock base fetch failed; falling back to the full sweep"
+                fi
+              fi
+              if [[ -n "$npm_lock_base" ]]; then
+                pnpm deps:npm-lock:check:changed --base "$npm_lock_base" --head HEAD
+              elif has_package_script "deps:npm-lock:check"; then
                 pnpm deps:npm-lock:check
               elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
                 echo "Current CI targets must provide the deps:npm-lock:check package script." >&2
@@ -2694,9 +2730,9 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 5
       matrix:
-        stripe: [1, 2, 3, 4]
+        stripe: [1, 2, 3, 4, 5]
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -2716,7 +2752,7 @@ jobs:
             echo "[skip] target does not support core test-type stripes"
             exit 0
           fi
-          node scripts/run-tsgo-core-test-shards.mjs --stripe "${{ matrix.stripe }}/4" --concurrency 2
+          node scripts/run-tsgo-core-test-shards.mjs --stripe "${{ matrix.stripe }}/5" --concurrency 2
 
   check-additional-shard:
     permissions:
@@ -3000,7 +3036,13 @@ jobs:
               fi
               ;;
             plugin-sdk-api-diff)
-              if node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:diff"] ? 0 : 1);'; then
+              # Pure reporting: no caller passes --require-acknowledgement, so
+              # this can only surface an artifact/summary. Keep it off the
+              # push/PR critical path; dispatch (incl. release validation)
+              # still produces the report.
+              if [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]]; then
+                echo "[skip] plugin SDK API diff reports on manual and release dispatches only"
+              elif node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:diff"] ? 0 : 1);'; then
                 mkdir -p .artifacts
                 run_check "plugin-sdk:api:diff" pnpm run plugin-sdk:api:diff -- \
                   --base "${{ needs.preflight.outputs.diff_base_revision }}" \
