@@ -110,14 +110,26 @@ export function getMemoryEmbeddingProvider(
   id: string,
   cfg?: OpenClawConfig,
 ): MemoryEmbeddingProviderAdapter | undefined {
+  const lookupIds = resolveMemoryEmbeddingProviderLookupIds(id, cfg);
   const memoryAdapter = getRuntimeEmbeddingProviderAdapter({
     key: "memoryEmbeddingProviders",
     cfg,
-    lookupIds: resolveMemoryEmbeddingProviderLookupIds(id, cfg),
+    lookupIds,
     getRegisteredProvider: getRegisteredMemoryEmbeddingProvider,
   });
   if (memoryAdapter) {
     return memoryAdapter;
+  }
+
+  // Exact adapter ids have already won above; aliases follow the same configured
+  // API-owner lookup order and only resolve when one adapter owns that identity.
+  for (const lookupId of lookupIds) {
+    const authProviderMatches = listRegisteredMemoryEmbeddingProviderAdapters().filter(
+      (adapter) => adapter.authProviderId === lookupId,
+    );
+    if (authProviderMatches.length === 1) {
+      return authProviderMatches[0];
+    }
   }
 
   // Resolve the shipped generic provider contract at its registry owner so all

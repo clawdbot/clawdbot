@@ -150,6 +150,55 @@ describe("memory embedding provider runtime resolution", () => {
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves a unique registered auth provider alias after direct ids", () => {
+    const geminiAdapter = {
+      ...createCapabilityAdapter("gemini"),
+      authProviderId: "google",
+    };
+    registerMemoryEmbeddingProvider(geminiAdapter);
+
+    expect(runtimeModule.getMemoryEmbeddingProvider("google")).toBe(geminiAdapter);
+    expect(runtimeModule.getMemoryEmbeddingProvider("gemini")).toBe(geminiAdapter);
+    expect(runtimeModule.getMemoryEmbeddingProvider("unknown")).toBeUndefined();
+
+    const googleAdapter = createCapabilityAdapter("google");
+    registerMemoryEmbeddingProvider(googleAdapter);
+    expect(runtimeModule.getMemoryEmbeddingProvider("google")).toBe(googleAdapter);
+  });
+
+  it("resolves a configured provider through its auth provider alias", () => {
+    const geminiAdapter = {
+      ...createCapabilityAdapter("gemini"),
+      authProviderId: "google",
+    };
+    registerMemoryEmbeddingProvider(geminiAdapter);
+    const config = {
+      models: {
+        providers: {
+          "google-work": {
+            api: "google",
+            models: [],
+          },
+        },
+      },
+    } as never;
+
+    expect(runtimeModule.getMemoryEmbeddingProvider("google-work", config)).toBe(geminiAdapter);
+  });
+
+  it("leaves ambiguous registered auth provider aliases unresolved", () => {
+    registerMemoryEmbeddingProvider({
+      ...createCapabilityAdapter("gemini"),
+      authProviderId: "google",
+    });
+    registerMemoryEmbeddingProvider({
+      ...createCapabilityAdapter("vertex"),
+      authProviderId: "google",
+    });
+
+    expect(runtimeModule.getMemoryEmbeddingProvider("google")).toBeUndefined();
+  });
+
   it("adapts generic providers once without adding them to memory auto-selection", async () => {
     const close = vi.fn();
     const embed = vi.fn(async () => [1, 2]);
