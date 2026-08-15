@@ -606,18 +606,30 @@ class McpCuaDriverSession implements CuaDriverSession {
     }
     this.disposed = true;
     let failure: unknown;
-    try {
-      await Promise.all([this.windowStartPromise, this.desktopStartPromise]);
-      if (this.client.isAvailable()) {
-        if (this.windowStarted) {
+    const startResults = await Promise.allSettled([
+      this.windowStartPromise,
+      this.desktopStartPromise,
+    ]);
+    for (const result of startResults) {
+      if (result.status === "rejected") {
+        failure ??= result.reason;
+      }
+    }
+    if (this.client.isAvailable()) {
+      if (this.windowStarted) {
+        try {
           await this.client.callTool("end_session", { session: this.windowPublicSession });
-        }
-        if (this.desktopStarted) {
-          await this.client.callTool("end_session", { session: this.desktopPublicSession });
+        } catch (error) {
+          failure ??= error;
         }
       }
-    } catch (error) {
-      failure = error;
+      if (this.desktopStarted) {
+        try {
+          await this.client.callTool("end_session", { session: this.desktopPublicSession });
+        } catch (error) {
+          failure ??= error;
+        }
+      }
     }
     try {
       await this.client.stop();
