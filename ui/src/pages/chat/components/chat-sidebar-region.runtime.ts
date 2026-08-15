@@ -152,7 +152,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     return html`
       <wa-dropdown
         class="side-panel-type-menu"
-        placement="bottom-end"
+        placement="bottom-start"
         @wa-select=${(event: CustomEvent<{ item: { value?: SidebarSlotId } }>) => {
           const slot = event.detail.item.value;
           if (slot) {
@@ -223,7 +223,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           },
           onNew: () => undefined,
           newLabel: t("chat.sidePanel.addTab"),
-          newControl: nothing,
+          newControl: this.renderTypeMenu(),
           separateTabs: true,
           onReorder: (panelId, targetPanelId, placement) =>
             this.callbacks?.reorderPanel(panelId, targetPanelId, placement),
@@ -269,10 +269,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand",
     );
     return html`<div class="rail-header__actions side-panel__actions">
-      <span class="side-panel__action-group side-panel__action-group--content">
-        ${this.renderTypeMenu()}
-        ${openUrl
-          ? html`<a
+      ${openUrl
+        ? html`<span class="side-panel__action-group side-panel__action-group--content">
+            <a
               class="rail-header__action"
               href=${openUrl}
               target="_blank"
@@ -280,9 +279,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
               aria-label=${t("chat.sessionDiscussion.openExternal")}
               title=${t("chat.sessionDiscussion.openExternal")}
               >${icons.externalLink}</a
-            >`
-          : nothing}
-      </span>
+            >
+          </span>`
+        : nothing}
       ${this.renderDockControls()}
       <span class="side-panel__action-group side-panel__action-group--layout">
         <openclaw-tooltip .content=${expandLabel}>
