@@ -283,6 +283,7 @@ openclaw-chat-sidebar-region,
   min-width: 0;
   align-items: center;
   overflow: hidden;
+  padding-left: 6px;
 }
 
 .side-panel__header .tabstrip::part(body) {
