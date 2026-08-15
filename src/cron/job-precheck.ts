@@ -312,8 +312,17 @@ export async function authorizeCronJobPrecheckCommand(params: {
     requested !== undefined
       ? minSecurity(normalizeExecSecurity(layered.security) ?? "full", requested)
       : (normalizeExecSecurity(layered.security) ?? (hasConfigLayers ? "full" : undefined));
+  const layeredMode: ExecMode | undefined =
+    "mode" in layered &&
+    (layered.mode === "deny" ||
+      layered.mode === "allowlist" ||
+      layered.mode === "ask" ||
+      layered.mode === "auto" ||
+      layered.mode === "full")
+      ? layered.mode
+      : undefined;
   const modePolicy = resolveExecModePolicy({
-    mode: "mode" in layered ? layered.mode : undefined,
+    mode: layeredMode,
     security: ceilingSecurity ?? "full",
     ask: "off",
   });
