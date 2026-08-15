@@ -88,7 +88,6 @@ function normalizeUpdateComparison(content: string): string {
 }
 
 type ApplyPatchOptions = ApplyPatchFileOptions & {
-  root: string;
   signal?: AbortSignal;
 };
 
@@ -321,11 +320,11 @@ async function assertPatchParentPath(filePath: string, options: ApplyPatchOption
   await assertSandboxPath({
     filePath: parent,
     cwd: options.cwd,
-    root: options.root,
+    root: options.root ?? options.cwd,
   });
   await assertNoExistingParentAliases({
     parentPath: resolvePathFromInput(parent, options.cwd),
-    rootPath: options.root,
+    rootPath: options.root ?? options.cwd,
   });
 }
 
@@ -372,7 +371,7 @@ async function resolvePatchPath(
       await assertSandboxPath({
         filePath: resolved.hostPath,
         cwd: options.cwd,
-        root: options.root,
+        root: options.root ?? options.cwd,
         allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
         allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
       });
@@ -389,7 +388,7 @@ async function resolvePatchPath(
         await assertSandboxPath({
           filePath,
           cwd: options.cwd,
-          root: options.root,
+          root: options.root ?? options.cwd,
           allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })
