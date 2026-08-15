@@ -715,6 +715,32 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
+  it("delivers a sanitized fallback for an empty message-tool-only completion", () => {
+    const turn = createTurn();
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+
+    const decision = resolveFollowupDeliveryDecision({
+      turn,
+      execution: createSettledExecution(),
+      accounting: createAccounting(),
+    });
+
+    expect(decision).toMatchObject({
+      kind: "deliver",
+      payloads: [
+        {
+          text: expect.stringContaining("did not produce a visible reply"),
+          isError: true,
+        },
+      ],
+    });
+    if (decision.kind === "deliver") {
+      expect(
+        getReplyPayloadMetadata(decision.payloads[0] ?? {})?.deliverDespiteSourceReplySuppression,
+      ).toBe(true);
+    }
+  });
+
   it("keeps a terminal failure when suppressed partial output is present", () => {
     const turn = createTurn();
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
@@ -908,18 +934,18 @@ describe("deliverFollowupDecision", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("does not retry an intentionally suppressed routed follow-up", async () => {
+  it("does not retry a channel-transform-suppressed routed follow-up", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.routeReply.mockReset();
     deliveryState.routeReply.mockResolvedValue({
       ok: true,
       delivered: false,
       suppressed: true,
-      reason: "reasoning_payload_not_external",
+      reason: "channel_transform",
     });
 
     await deliverFollowupDecision({
-      decision: { kind: "deliver", payloads: [{ text: "internal reasoning", isReasoning: true }] },
+      decision: { kind: "deliver", payloads: [{ text: "private reply" }] },
       turn: createTurn(),
       defaults: createDefaults(onBlockReply),
       runId: "run-1",

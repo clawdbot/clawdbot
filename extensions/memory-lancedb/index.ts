@@ -12,7 +12,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isIncognitoSessionKey, normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
@@ -154,7 +154,7 @@ export default definePluginEntry({
           ...(typeof cfg.embedding.dimensions === "number"
             ? { dimensions: cfg.embedding.dimensions }
             : {}),
-          ...asRecord(runtimePluginConfig.embedding),
+          ...asOptionalRecord(runtimePluginConfig.embedding),
         },
         ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
         dbPath: cfg.dbPath,
@@ -163,7 +163,7 @@ export default definePluginEntry({
         captureMaxChars: cfg.captureMaxChars,
         recallMaxChars: cfg.recallMaxChars,
         ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
-        ...asRecord(runtimePluginConfig),
+        ...asOptionalRecord(runtimePluginConfig),
       });
     };
     const readMemoryRecallCooldown = (agentId: string): { error: string } | undefined => {
@@ -227,13 +227,13 @@ export default definePluginEntry({
             try {
               recall = await runWithTimeout({
                 timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS,
-                task: async () => {
+                task: async (deadlineAtMs) => {
                   let vector: number[];
                   try {
                     vector = await embeddings.embed(
                       agentId,
                       normalizeRecallQuery(query, currentCfg.recallMaxChars),
-                      { timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS },
+                      { timeoutMs: Math.max(1, deadlineAtMs - Date.now()) },
                     );
                   } catch (error) {
                     throw new MemoryRecallEmbeddingError(error);
@@ -244,6 +244,7 @@ export default definePluginEntry({
                     vector,
                     limit + DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA,
                     0.1,
+                    { timeoutMs: Math.max(0, deadlineAtMs - Date.now()) },
                   );
                 },
               });
@@ -535,11 +536,11 @@ export default definePluginEntry({
         let recallPhase: "embedding" | "search" = "embedding";
         const recall = await runWithTimeout({
           timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
-          task: async () => {
+          task: async (deadlineAtMs) => {
             let vector: number[];
             try {
               vector = await embeddings.embed(agentId, recallQuery, {
-                timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+                timeoutMs: Math.max(1, deadlineAtMs - Date.now()),
               });
             } catch (error) {
               throw new MemoryRecallEmbeddingError(error);
@@ -549,7 +550,9 @@ export default definePluginEntry({
             recallPhase = "search";
             // Overfetch to compensate for sludge filtering: if contaminated
             // entries occupy the top slots we still surface enough clean ones.
-            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3);
+            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3, {
+              timeoutMs: Math.max(0, deadlineAtMs - Date.now()),
+            });
           },
         });
         if (recall.status === "timeout") {

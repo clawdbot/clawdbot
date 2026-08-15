@@ -22,6 +22,7 @@ import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   createResumeHarness,
   createStartedThreadHarness,
@@ -273,7 +274,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
-  it("auto-answers promoted command and workspace file approvals when the hook allows", async () => {
+  it("auto-answers defensive yolo command and workspace file approvals when the hook allows", async () => {
     const approvalSpy = vi.spyOn(approvalBridge, "handleCodexAppServerApprovalRequest");
     const beforeToolCall = vi.fn(() => undefined);
     initializeGlobalHookRunner(
@@ -285,13 +286,14 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.trigger = "user";
     params.approvalReviewerDeviceId = "device-tui-reviewer";
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
 
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
     });
     await harness.waitForMethod("turn/start");
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    expect((startRequest?.params as { approvalPolicy?: string })?.approvalPolicy).toBe("untrusted");
+    expect((startRequest?.params as { approvalPolicy?: string })?.approvalPolicy).toBe("never");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
       approvalContext: {
@@ -311,10 +313,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         cwd: workspaceDir,
       },
     });
-    expect(approvalSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ autoApproveOpenClawToolPolicy: true }),
-    );
-    expect(commandResponse).toEqual({ decision: "accept" });
+    expect(approvalSpy).toHaveBeenCalledWith(expect.objectContaining({ autoApprove: true }));
+    expect(commandResponse).toEqual({ decision: "acceptForSession" });
     await expect(
       harness.handleServerRequest({
         id: "request-file-policy-allow",
@@ -327,7 +327,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
           grantRoot: workspaceDir,
         },
       }),
-    ).resolves.toEqual({ decision: "accept" });
+    ).resolves.toEqual({ decision: "acceptForSession" });
 
     expect(beforeToolCall).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "apply_patch" }),
@@ -335,10 +335,11 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    closeHostCapabilities();
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
 
-  it("fails a promoted unattended approval immediately when the hook requires review", async () => {
+  it("fails a defensive unattended yolo approval immediately when the hook requires review", async () => {
     const onResolution = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([
@@ -360,6 +361,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.trigger = "cron";
     params.onAgentEvent = vi.fn();
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
 
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
@@ -394,6 +396,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    closeHostCapabilities();
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
 

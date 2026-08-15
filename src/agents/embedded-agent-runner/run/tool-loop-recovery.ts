@@ -2,7 +2,10 @@ import { clearBatchAdmittedToolCallsForRun } from "../../agent-tools.before-tool
 import type { HookContext } from "../../agent-tools.before-tool-call.types.js";
 import { normalizeCodeModeExecBeforeHookParams } from "../../code-mode-control-tools.js";
 import type { Agent } from "../../runtime/index.js";
-import type { InternalBeforeToolBatchHook } from "../../runtime/internal-hooks.js";
+import {
+  attachInternalToolBatchLifecycle,
+  type InternalBeforeToolBatchHook,
+} from "../../runtime/internal-hooks.js";
 import { admitToolCallBatch } from "../../tool-loop-admission.js";
 import { hashToolCall } from "../../tool-loop-detection.js";
 import { log } from "../logger.js";
@@ -22,8 +25,14 @@ export function createToolLoopBatchAdmission(
         : call.args,
     }));
     try {
-      const intervention = await admitToolCallBatch(canonicalCalls, ctx);
-      return intervention ? { intervention } : undefined;
+      const admission = await admitToolCallBatch(canonicalCalls, ctx);
+      const { commitReadyCalls, releaseSkippedCalls, ...result } = admission;
+      return commitReadyCalls && releaseSkippedCalls
+        ? attachInternalToolBatchLifecycle(result, {
+            commitReadyCalls,
+            releaseSkippedCalls,
+          })
+        : result;
     } catch (error) {
       const first = canonicalCalls[0];
       log.error(`tool-loop batch admission failed: ${String(error)}`);

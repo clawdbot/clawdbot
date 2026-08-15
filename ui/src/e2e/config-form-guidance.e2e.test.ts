@@ -66,7 +66,7 @@ suite.define(() => {
         viewport: { height: 1000, width: 1440 },
       },
       async ({ page }) => {
-        const config = { update: { groupPolicy: "allowlist" } };
+        const config = { meta: { groupPolicy: "allowlist" } };
         await installMockGateway(page, {
           methodResponses: {
             "config.get": {
@@ -81,9 +81,9 @@ suite.define(() => {
               schema: {
                 type: "object",
                 properties: {
-                  update: {
+                  meta: {
                     type: "object",
-                    title: "Updates",
+                    title: "Meta",
                     properties: {
                       groupPolicy: {
                         title: "Group policy",
@@ -106,7 +106,7 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
 
         await page.getByRole("button", { name: "Core" }).click();
-        await page.getByRole("button", { name: "Updates", exact: true }).click();
+        await page.getByRole("button", { name: "Meta", exact: true }).click();
 
         const policyRow = page.locator(".settings-row").filter({ hasText: "Group policy" });
         await expect.poll(() => policyRow.locator("wa-radio").count()).toBe(4);

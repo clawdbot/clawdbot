@@ -11,6 +11,7 @@ import {
   markPluginBindingFallbackNoticeShown,
 } from "../../plugins/conversation-binding.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
+import type { PluginCommandExecutionReplyOptions } from "../../plugins/plugin-command-runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { DispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
@@ -20,6 +21,7 @@ import {
   loadAbortRuntime,
   loadFastApproveRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
+import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { extractShortModelName } from "./response-prefix-template.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
@@ -145,6 +147,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   }
   // Own the session before plugin-bound handlers or message hooks can perform
   // work. Fast abort, fast approval, and inbound dedupe remain ahead of this gate.
+  const admissionTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
+  if (admissionTicket && !(await admissionTicket.wait(params.replyOptions?.abortSignal))) {
+    return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+  }
   const preDispatchAcquisition = await state.ensureDispatchReplyOperation("pre_dispatch");
   if (preDispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
@@ -161,7 +167,14 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
     }
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
-    if (shouldBypassPluginOwnedBindingForCommand(ctx, cfg)) {
+    params.replyOptions ??= {};
+    if (
+      shouldBypassPluginOwnedBindingForCommand(
+        ctx,
+        cfg,
+        params.replyOptions as PluginCommandExecutionReplyOptions,
+      )
+    ) {
       logVerbose(
         `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
       );

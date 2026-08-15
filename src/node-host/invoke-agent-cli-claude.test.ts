@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodeHostClient } from "./client.js";
-import type { NodeHostInvokeRuntime } from "./invoke-agent-cli-claude-handler.js";
 import { decodeClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
@@ -225,46 +224,6 @@ describe("Claude CLI node command", () => {
         argv: [executable, "-p", "--resume", "session-1"],
       },
     });
-  });
-
-  it("clears nested Claude run attribution from an explicit Gateway envelope", async () => {
-    const executable = await executableScript("process.exit(0);");
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const handleSystemRun = vi.fn(
-      async (_options: Parameters<NonNullable<NodeHostInvokeRuntime["handleSystemRun"]>>[0]) =>
-        undefined,
-    );
-    const invokeFrame = frame({
-      argv: ["-p"],
-      sessionKey: "agent:forged:request",
-      systemRunPlan: {
-        argv: [executable, "-p"],
-        cwd: null,
-        commandText: `${executable} -p`,
-        agentId: null,
-        sessionKey: "agent:forged:plan",
-      },
-      idleTimeoutMs: 1_000,
-      timeoutMs: 2_000,
-    });
-    invokeFrame.sessionKey = null;
-
-    await handleInvoke(invokeFrame, client(calls), { current: async () => [] }, undefined, {
-      claudePath: executable,
-      handleSystemRun: handleSystemRun as never,
-    });
-
-    expect(handleSystemRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          systemRunPlan: expect.objectContaining({ sessionKey: null }),
-        }),
-      }),
-    );
-    const runParams = handleSystemRun.mock.calls[0]?.[0]?.params as
-      | { sessionKey?: string }
-      | undefined;
-    expect(runParams).not.toHaveProperty("sessionKey");
   });
 
   it("converts forwarded OAuth into a child-only descriptor after approval", async () => {

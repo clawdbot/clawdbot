@@ -13,7 +13,6 @@ export const NodeProtocolSchemas = {
   NodePluginToolsUpdateParams: nodes.NodePluginToolsUpdateParamsSchema,
   NodeSkillDescriptor: nodes.NodeSkillDescriptorSchema,
   NodeSkillsUpdateParams: nodes.NodeSkillsUpdateParamsSchema,
-  NodeProtocolFeaturesUpdateParams: nodes.NodeProtocolFeaturesUpdateParamsSchema,
   NodePendingAckParams: nodes.NodePendingAckParamsSchema,
   NodeDescribeParams: nodes.NodeDescribeParamsSchema,
   ...nodeInvoke.NodeInvokeProtocolSchemas,

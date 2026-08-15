@@ -61,12 +61,20 @@ export function registerModelsCli(program: Command) {
     .option("--all", "Show full model catalog", false)
     .option("--local", "Filter to local models", false)
     .option("--provider <id>", "Filter by provider id")
+    .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain line output", false)
-    .action(async (opts) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .action(async (opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const { modelsListCommand } = await import("../commands/models/list.list-command.js");
-        await modelsListCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
+        await modelsListCommand(
+          {
+            ...opts,
+            json: hasJsonOutput(opts),
+            agent: resolveModelAgentOption(command, opts),
+          },
+          defaultRuntime,
+        );
       });
     });
 
@@ -329,9 +337,10 @@ export function registerModelsCli(program: Command) {
   auth
     .command("add")
     .description("Interactive auth helper (provider auth or paste token)")
-    .action(async (command) => {
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .action(async (opts, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-        const agent = resolveModelAgentOption(command) ?? resolveModelAgentOption(auth);
+        const agent = resolveModelAgentOption(command, opts);
         const { modelsAuthAddCommand } = await loadModelsAuthCommands();
         await modelsAuthAddCommand({ agent }, defaultRuntime);
       });
@@ -361,6 +370,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("login")
     .description("Run a provider plugin auth flow (OAuth/API key)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--provider <id>", "Provider id registered by a plugin")
     .option("--method <id>", "Provider auth method id")
     .option("--device-code", "Use the provider device-code auth method", false)
@@ -397,6 +407,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("setup-token")
     .description("Run a provider CLI to create/sync a token (TTY required)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--provider <name>", "Provider id")
     .option("--yes", "Skip confirmation", false)
     .action(async (opts, command) => {
@@ -417,6 +428,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("paste-token")
     .description("Paste a token into auth-profiles.json and update config")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")
     .option(
@@ -442,6 +454,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("paste-api-key")
     .description("Paste an API key into auth-profiles.json and update config")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .requiredOption("--provider <name>", "Provider id (e.g. openai)")
     .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")
     .action(async (opts, command) => {
@@ -462,6 +475,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("login-github-copilot")
     .description("Login to GitHub Copilot via GitHub device flow (TTY required)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--yes", "Overwrite existing profile without prompting", false)
     .action(async (opts, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {

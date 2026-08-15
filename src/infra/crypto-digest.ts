@@ -19,7 +19,7 @@ export function sha256Base64UrlPrefix(input: DigestInput, length: number): strin
   return sha256Base64Url(input).slice(0, length);
 }
 
-export function sha256HexPrefix(input: DigestInput, length: number): string {
+export function sha256HexPrefixCore(input: DigestInput, length: number): string {
   return sha256Hex(input).slice(0, length);
 }
 

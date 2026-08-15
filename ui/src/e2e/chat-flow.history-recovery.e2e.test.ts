@@ -136,10 +136,8 @@ suite.define(() => {
       await page.getByText("Current session placeholder.").waitFor({ timeout: 10_000 });
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
       await sessionLink(sessionB).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history")).length)
-        .toBeGreaterThan(historyRequestsBeforeReturn);
       await expectTrace();
+      expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
       if (artifactDir) {
         await page.screenshot({
           fullPage: true,
@@ -252,10 +250,11 @@ suite.define(() => {
       expect(requireRecord(historyRequest.params)).toMatchObject({
         sessionKey: "agent:main:session-b",
       });
-      await page.locator(".chat-thread").getByText("User history question 68").waitFor({
+      const activeThread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      await activeThread.getByText("User history question 68").waitFor({
         timeout: 10_000,
       });
-      await page.locator(".chat-thread").getByText("Assistant history answer 69").waitFor({
+      await activeThread.getByText("Assistant history answer 69").waitFor({
         timeout: 10_000,
       });
       await expect
@@ -273,11 +272,11 @@ suite.define(() => {
 
       await waitForChatScrollIdle(page);
       await scrollChatThreadToTop(page);
-      await page.locator(".chat-thread").getByText("User history question 10").waitFor({
+      await activeThread.getByText("User history question 10").waitFor({
         timeout: 10_000,
       });
       await scrollChatThreadToTop(page);
-      await page.locator(".chat-thread").getByText("User history question 0").waitFor({
+      await activeThread.getByText("User history question 0").waitFor({
         timeout: 10_000,
       });
       await scrollChatThreadToTop(page);
@@ -407,18 +406,17 @@ suite.define(() => {
       );
       await sessionB.click();
       await page.getByText(/^recent retained message 140\n/).waitFor({ timeout: 10_000 });
-      const thread = page.locator(".chat-thread");
+      const activePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const thread = activePane.locator(".chat-thread");
       await thread.hover();
       await page.mouse.wheel(0, -1_000_000);
       await expect
         .poll(() =>
-          page
-            .locator("openclaw-chat-pane")
-            .evaluate(
-              (element) =>
-                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                  .length,
-            ),
+          activePane.evaluate(
+            (element) =>
+              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                .length,
+          ),
         )
         .toBe(140);
       // Prepending preserves the visible anchor. A renewed upward gesture
@@ -445,15 +443,15 @@ suite.define(() => {
         ).chatSessionReturnSamples = samples;
         const deadline = performance.now() + 750;
         const sample = () => {
-          const pane = document.querySelector("openclaw-chat-pane") as
+          const pane = document.querySelector('openclaw-chat-pane[aria-hidden="false"]') as
             | (HTMLElement & {
                 state?: { chatMessages?: unknown[]; sessionKey?: string };
               })
             | null;
-          const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-chat-row-key]"));
+          const rows = Array.from(pane?.querySelectorAll<HTMLElement>("[data-chat-row-key]") ?? []);
           samples.push({
-            hiddenNotice: document.body.textContent?.includes("Showing last") ?? false,
-            loading: document.querySelector(".chat-history-loading") !== null,
+            hiddenNotice: pane?.textContent?.includes("Showing last") ?? false,
+            loading: pane?.querySelector(".chat-history-loading") !== null,
             messageCount: pane?.state?.chatMessages?.length ?? 0,
             minOpacity: rows.reduce(
               (minimum, row) => Math.min(minimum, Number.parseFloat(getComputedStyle(row).opacity)),
@@ -501,7 +499,7 @@ suite.define(() => {
       expect(returnedSamples.every((sample) => !sample.hiddenNotice)).toBe(true);
       expect(returnedSamples.every((sample) => !sample.loading)).toBe(true);
       expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
-      await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn + 1);
+      await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn);
       if (artifactDir) {
         await page.screenshot({
           path: `${artifactDir}/retained-history-return.png`,
@@ -587,6 +585,101 @@ suite.define(() => {
       expect(secondParams.idempotencyKey).toBe(runId);
       expect(secondParams.message).toBe(prompt);
       await queue.waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("dismisses an ACK-lost banner after exact authoritative history proof", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.history": {
+          messages: [],
+          sessionId: "control-ui-e2e-session",
+          sessionInfo: { hasActiveRun: false, status: "done" },
+          thinkingLevel: null,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.deferNext("chat.send");
+
+      const prompt = "already accepted after the reconnect";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const firstRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(firstRequest.params).idempotencyKey,
+        "first idempotency key",
+      );
+      await gateway.closeLatest(1006, "lost ack");
+
+      const queue = page.locator(".chat-queue");
+      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/01-delivery-uncertain.png`, fullPage: true });
+      }
+
+      await gateway.setHistoryMessages([
+        {
+          content: "different delivered turn",
+          idempotencyKey: "different-run:user",
+          role: "user",
+          timestamp: Date.now(),
+        },
+      ]);
+      await gateway.emitGatewayEvent("session.message", {
+        hasActiveRun: false,
+        messageId: "different-history-turn",
+        messageSeq: 1,
+        sessionKey: "main",
+        status: "done",
+      });
+      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/02-different-key-still-uncertain.png`,
+          fullPage: true,
+        });
+      }
+
+      await gateway.setHistoryMessages([
+        {
+          content: prompt,
+          idempotencyKey: `${runId}:user`,
+          role: "user",
+          timestamp: Date.now(),
+        },
+      ]);
+      await gateway.emitGatewayEvent("session.message", {
+        clientRunId: runId,
+        hasActiveRun: true,
+        messageId: "accepted-history-turn",
+        messageSeq: 2,
+        sessionKey: "main",
+        status: "running",
+      });
+
+      await queue.waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".chat-group.user").getByText(prompt).waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/03-delivery-proven.png`, fullPage: true });
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }

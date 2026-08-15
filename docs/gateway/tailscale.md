@@ -65,10 +65,11 @@ Use this to have the gateway listen directly on the Tailnet IP, with no Serve/Fu
 }
 ```
 
-Connect from another Tailnet device:
+Connect a native or CLI client from another Tailnet device:
 
-- Control UI: `http://<tailscale-ip>:18789/`
 - WebSocket: `ws://<tailscale-ip>:18789`
+
+Do not use the direct plain-HTTP address for the browser Control UI. Remote plain HTTP cannot create browser device identity, and token/password auth does not replace it. Use Tailscale Serve for the Control UI.
 
 <Note>
 When a bindable Tailnet IPv4 is present, the Gateway also requires `http://127.0.0.1:18789` for authenticated same-host clients. If no Tailnet address is available at startup, it falls back to loopback only; restart after Tailscale becomes available to add direct Tailnet access. Neither path adds LAN or public exposure.

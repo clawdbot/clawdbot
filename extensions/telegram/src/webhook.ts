@@ -296,12 +296,14 @@ function resolveTelegramWebhookRateLimitKey(
 export async function startTelegramWebhook(opts: {
   token: string;
   accountId?: string;
+  ownerAgentId?: string;
   config?: OpenClawConfig;
   path?: string;
   port?: number;
   host?: string;
   secret?: string;
   runtime?: RuntimeEnv;
+  buildContext?: Parameters<typeof createTelegramBot>[0]["buildContext"];
   fetch?: typeof fetch;
   abortSignal?: AbortSignal;
   healthPath?: string;
@@ -313,6 +315,9 @@ export async function startTelegramWebhook(opts: {
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
+  if (path === healthPath) {
+    throw new Error(`Telegram webhook path "${path}" conflicts with the health path.`);
+  }
   const port = opts.port ?? 8787;
   const host = opts.host ?? "127.0.0.1";
   const secret = normalizeOptionalString(opts.secret) ?? "";
@@ -330,6 +335,9 @@ export async function startTelegramWebhook(opts: {
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const spoolDir = opts.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: opts.accountId });
   let shutDown = false;
+  let ownedServer: ReturnType<typeof createServer> | undefined = undefined;
+  let webhookIngressMonitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
+  let diagnosticsStarted = false;
   const shutdownAbortController = new AbortController();
   const telegramAccountConfig = opts.config
     ? mergeTelegramAccountConfig(opts.config, opts.accountId ?? "default")
@@ -352,33 +360,75 @@ export async function startTelegramWebhook(opts: {
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
+    buildContext: opts.buildContext,
     proxyFetch: opts.fetch,
     fetchAbortSignal: botFetchAbortSignal,
     accountAbortSignal,
     config: opts.config,
     accountId: opts.accountId,
+    ownerAgentId: opts.ownerAgentId,
     telegramTransport,
   });
-  try {
-    await initializeTelegramWebhookBot({
+  const runShutdownPhase = async (
+    label: string,
+    run: () => void | Promise<void>,
+  ): Promise<void> => {
+    try {
+      await run();
+    } catch (err) {
+      runtime.error?.(`telegram webhook ${label} failed: ${formatErrorMessage(err)}`);
+    }
+  };
+  const shutdown = async () => {
+    if (shutDown) {
+      return;
+    }
+    shutDown = true;
+    botAbortController.abort();
+    shutdownAbortController.abort();
+    // Every fallible phase is isolated so one failed release cannot skip the
+    // remaining resources or reject the fire-and-forget abort hook.
+    const ingressMonitor = webhookIngressMonitor;
+    webhookIngressMonitor = undefined;
+    const ingressStopTask = ingressMonitor
+      ? runShutdownPhase("ingress stop", () => ingressMonitor.stop())
+      : undefined;
+    await runShutdownPhase("server close", () => {
+      ownedServer?.close();
+    });
+    await runShutdownPhase("bot stop", () => bot.stop());
+    // The webhook owns this transport because it resolved and injected it into
+    // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
+    await runShutdownPhase("transport close", closeTransportOnce);
+    await runShutdownPhase("ingress drain", () => waitForWebhookIngressStop(ingressStopTask));
+    await runShutdownPhase("status update", () => status.noteWebhookStop());
+    if (diagnosticsStarted) {
+      await runShutdownPhase("diagnostics stop", () => stopDiagnosticHeartbeat());
+    }
+  };
+  const runStartupPhase = async <T>(run: () => T | Promise<T>): Promise<T> => {
+    try {
+      return await run();
+    } catch (err) {
+      if (!opts.abortSignal?.aborted) {
+        status.noteWebhookRegistrationFailure(
+          formatErrorMessage(err),
+          isTelegramAuthenticationError(err) ? "blocked" : undefined,
+        );
+      }
+      await shutdown();
+      throw err;
+    }
+  };
+  await runStartupPhase(() =>
+    initializeTelegramWebhookBot({
       bot,
       runtime,
       abortSignal: opts.abortSignal,
       onRetry: () => status.noteWebhookRecovery(),
       retryPolicy: webhookRegistrationRetryPolicy,
-    });
-  } catch (err) {
-    if (!opts.abortSignal?.aborted) {
-      status.noteWebhookRegistrationFailure(
-        formatErrorMessage(err),
-        isTelegramAuthenticationError(err) ? "blocked" : undefined,
-      );
-    }
-    botAbortController.abort();
-    await bot.stop();
-    await closeTransportOnce();
-    throw err;
-  }
+    }),
+  );
   const botInfo = bot.botInfo;
   const telegramWebhookRateLimiter = createFixedWindowRateLimiter({
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
@@ -387,10 +437,10 @@ export async function startTelegramWebhook(opts: {
   });
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat(opts.config);
+    diagnosticsStarted = true;
   }
 
   const log = (line: string) => runtime.log?.(line);
-  let webhookIngressMonitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
   const startWebhookSpoolDrain = () => {
     if (webhookIngressMonitor) {
       return;
@@ -406,8 +456,6 @@ export async function startTelegramWebhook(opts: {
       botInfo,
       cfg: opts.config ?? {},
       accountId: opts.accountId ?? "default",
-      // Pre-migration product default: 25m claim→adoption stall for webhook.
-      adoptionStallTimeoutMs: 25 * 60_000,
       pollIntervalMs: TELEGRAM_WEBHOOK_SPOOLED_DRAIN_INTERVAL_MS,
       abortSignal: webhookAbortSignal,
       onLog: (message) => log(`webhook ${message}`),
@@ -514,12 +562,15 @@ export async function startTelegramWebhook(opts: {
       respondText(500);
     });
   });
+  ownedServer = server;
 
-  await listenHttpServer({
-    server,
-    port,
-    host,
-  });
+  await runStartupPhase(() =>
+    listenHttpServer({
+      server,
+      port,
+      host,
+    }),
+  );
   const boundAddress = server.address();
   const boundPort = boundAddress && typeof boundAddress !== "string" ? boundAddress.port : port;
 
@@ -532,43 +583,6 @@ export async function startTelegramWebhook(opts: {
   });
 
   let webhookAdvertised = false;
-  const runShutdownPhase = async (
-    label: string,
-    run: () => void | Promise<void>,
-  ): Promise<void> => {
-    try {
-      await run();
-    } catch (err) {
-      runtime.error?.(`telegram webhook ${label} failed: ${formatErrorMessage(err)}`);
-    }
-  };
-  const shutdown = async () => {
-    if (shutDown) {
-      return;
-    }
-    shutDown = true;
-    botAbortController.abort();
-    shutdownAbortController.abort();
-    // Every fallible phase is isolated so one failed release cannot skip the
-    // remaining resources or reject the fire-and-forget abort hook.
-    const ingressMonitor = webhookIngressMonitor;
-    webhookIngressMonitor = undefined;
-    const ingressStopTask = ingressMonitor
-      ? runShutdownPhase("ingress stop", () => ingressMonitor.stop())
-      : undefined;
-    await runShutdownPhase("server close", () => {
-      server.close();
-    });
-    await runShutdownPhase("bot stop", () => bot.stop());
-    // The webhook owns this transport because it resolved and injected it into
-    // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
-    await runShutdownPhase("transport close", closeTransportOnce);
-    await runShutdownPhase("ingress drain", () => waitForWebhookIngressStop(ingressStopTask));
-    await runShutdownPhase("status update", () => status.noteWebhookStop());
-    if (diagnosticsEnabled) {
-      await runShutdownPhase("diagnostics stop", () => stopDiagnosticHeartbeat());
-    }
-  };
   if (opts.abortSignal?.aborted) {
     void shutdown();
   } else if (opts.abortSignal) {
@@ -660,7 +674,7 @@ export async function startTelegramWebhook(opts: {
   // Drain only after registration succeeds or after the retrying startup path
   // is ready to return a stop handle; failed startup must not claim durable work.
   if (!shutDown) {
-    startWebhookSpoolDrain();
+    await runStartupPhase(startWebhookSpoolDrain);
   }
 
   return { server, bot, stop: shutdown };

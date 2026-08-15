@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined } from "../gateway/credentials.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { renderQrTerminal } from "../media/qr-terminal.ts";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -33,7 +35,7 @@ const LIMITED_TRANSPORT_WARNING =
   "This Gateway URL uses plaintext ws://, so the setup code was limited for safety. Use wss:// or Tailscale Serve, then generate a new code for full access.";
 
 function renderQrAscii(data: string): Promise<string> {
-  return renderQrTerminal(data);
+  return renderQrTerminal(data, { small: true });
 }
 function readDevicePairPublicUrlFromConfig(cfg: OpenClawConfig): string | undefined {
   const value = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
@@ -220,6 +222,10 @@ export function registerQrCli(program: Command) {
             await runCommandWithTimeout(argv, {
               timeoutMs: runOpts.timeoutMs,
             }),
+          loadLocalTlsFingerprint: async () => {
+            const tls = await loadGatewayTlsRuntime(cfg.gateway?.tls);
+            return tls.enabled ? tls.fingerprintSha256 : undefined;
+          },
         });
 
         if (!resolved.ok) {
@@ -277,7 +283,7 @@ export function registerQrCli(program: Command) {
 
         defaultRuntime.log(lines.join("\n"));
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }
     });

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isValidProfileName } from "../cli/profile-utils.js";
+import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
@@ -126,18 +126,6 @@ export function isDefaultStateDir(
   );
 }
 
-/** Canonical state directory name for the selected profile, mirroring root `--profile`. */
-function profileStateDirName(env: NodeJS.ProcessEnv): string | null {
-  const profile = env.OPENCLAW_PROFILE?.trim();
-  if (!profile || profile.toLowerCase() === "default") {
-    return NEW_STATE_DIRNAME;
-  }
-  if (!isValidProfileName(profile)) {
-    return null;
-  }
-  return `${NEW_STATE_DIRNAME}-${profile}`;
-}
-
 export function resolveNativeServiceProfileConflict(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
@@ -187,13 +175,14 @@ export function isDefaultInstallIdentity(
   ) {
     return false;
   }
-  const stateDirName = profileStateDirName(env);
-  // Environment profiles can bypass root CLI parsing. Reject them before path
-  // construction so separators or dot segments cannot authorize a host service.
-  if (!stateDirName) {
+  let canonicalStateDir: string;
+  try {
+    canonicalStateDir = resolveProfileStateDir(env.OPENCLAW_PROFILE ?? "default", env, homedir);
+  } catch {
+    // Environment profiles can bypass root CLI parsing. Reject invalid names
+    // before path construction so separators cannot authorize a host service.
     return false;
   }
-  const canonicalStateDir = path.join(accountHome, stateDirName);
   if (
     normalizePathForComparison(resolveStateDir(env, envHomedir(env))) !==
     normalizePathForComparison(canonicalStateDir)
@@ -202,13 +191,22 @@ export function isDefaultInstallIdentity(
   }
   // Default installs historically allow implicit legacy config discovery.
   // Named profiles must resolve their own config so they cannot inherit the default profile.
-  if (stateDirName === NEW_STATE_DIRNAME && !env.OPENCLAW_CONFIG_PATH?.trim()) {
+  if (!isNamedProfile(env) && !env.OPENCLAW_CONFIG_PATH?.trim()) {
     return true;
   }
   return (
     normalizePathForComparison(resolveConfigPathCandidate(env, envHomedir(env))) ===
     normalizePathForComparison(path.join(canonicalStateDir, CONFIG_FILENAME))
   );
+}
+
+/** Whether external session catalogs may inherit a scan root from process HOME. */
+export function allowsProcessHomeSessionScan(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = resolveSystemAccountHomeDir,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return !isNamedProfile(env) && isDefaultInstallIdentity(env, homedir, platform);
 }
 
 export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {
@@ -405,8 +403,10 @@ export const DEFAULT_GATEWAY_PORT = 18789;
  * Gateway lock directory inside the selected state tree.
  * Default: $OPENCLAW_STATE_DIR/tmp/openclaw-<uid> (uid suffix when available).
  */
-export function resolveGatewayLockDir(stateDir: string = resolveStateDir()): string {
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+export function resolveGatewayLockDir(
+  stateDir: string = resolveStateDir(),
+  uid: number | undefined = typeof process.getuid === "function" ? process.getuid() : undefined,
+): string {
   const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
   // Clean break: older binaries still use process temp and do not exclude a
   // state-local binary during a mixed-version upgrade.
@@ -477,5 +477,15 @@ export function resolveGatewayPort(
       return configPort;
     }
   }
-  return DEFAULT_GATEWAY_PORT;
+  const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
+  if (!profile) {
+    return DEFAULT_GATEWAY_PORT;
+  }
+  // Keep byte-for-byte aligned with AppProfile.defaultGatewayPort in
+  // apps/macos/Sources/OpenClaw/AppProfile.swift so both surfaces connect to the same Gateway.
+  let hash = 2_166_136_261;
+  for (const byte of Buffer.from(profile, "utf8")) {
+    hash = Math.imul(hash ^ byte, 16_777_619) >>> 0;
+  }
+  return 20_000 + (hash % 40_000);
 }

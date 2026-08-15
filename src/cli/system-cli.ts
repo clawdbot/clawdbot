@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
@@ -35,15 +36,21 @@ async function runSystemGatewayCommand(
   action: () => Promise<unknown>,
   successText?: string,
 ): Promise<void> {
+  const machineOutput = opts.json || successText === undefined;
   try {
     const result = await action();
-    if (opts.json || successText === undefined) {
+    if (machineOutput) {
       defaultRuntime.writeJson(result);
     } else {
       defaultRuntime.log(successText);
     }
   } catch (err) {
-    defaultRuntime.error(danger(String(err)));
+    const message = formatErrorMessage(err);
+    if (machineOutput) {
+      defaultRuntime.writeJson({ error: message });
+    } else {
+      defaultRuntime.error(danger(message));
+    }
     defaultRuntime.exit(1);
   }
 }

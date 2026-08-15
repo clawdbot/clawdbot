@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { Context, Tool } from "../types.js";
 import { convertMessages, convertTools } from "./google-shared.js";
 import {
-  asRecord,
+  assertRecord,
   expectConvertedRoles,
   getFirstToolParameters,
   makeGeminiCliAssistantMessage,
@@ -107,11 +107,11 @@ describe("google-shared convertTools", () => {
     const params = getFirstToolParameters(
       converted as Parameters<typeof getFirstToolParameters>[0],
     );
-    const properties = asRecord(params.properties);
-    const mode = asRecord(properties.mode);
-    const options = asRecord(properties.options);
-    const list = asRecord(properties.list);
-    const items = asRecord(list.items);
+    const properties = assertRecord(params.properties);
+    const mode = assertRecord(properties.mode);
+    const options = assertRecord(properties.options);
+    const list = assertRecord(properties.list);
+    const items = assertRecord(list.items);
 
     expect(params.patternProperties).toEqual({ "^x-": { type: "string" } });
     expect(params.additionalProperties).toBe(false);
@@ -150,11 +150,11 @@ describe("google-shared convertTools", () => {
     const params = getFirstToolParameters(
       converted as Parameters<typeof getFirstToolParameters>[0],
     );
-    const config = asRecord(asRecord(params.properties).config);
-    const configProps = asRecord(config.properties);
-    const retries = asRecord(configProps.retries);
-    const tags = asRecord(configProps.tags);
-    const items = asRecord(tags.items);
+    const config = assertRecord(assertRecord(params.properties).config);
+    const configProps = assertRecord(config.properties);
+    const retries = assertRecord(configProps.retries);
+    const tags = assertRecord(configProps.tags);
+    const items = assertRecord(tags.items);
 
     expect(params.type).toBe("object");
     expect(config.type).toBe("object");
@@ -456,7 +456,7 @@ describe("google-shared convertMessages", () => {
     const contents = convertMessagesForTest(model, context);
     expect(contents).toHaveLength(1);
     expect(expectDefined(contents[0], "contents[0] test invariant").role).toBe("model");
-    const part = asRecord(expectDefined(contents[0], "contents[0] test invariant").parts?.[0]);
+    const part = assertRecord(expectDefined(contents[0], "contents[0] test invariant").parts?.[0]);
     expect(part.thought).toBe(true);
     expect(part.thoughtSignature).toBe("c2ln");
   });
@@ -478,7 +478,7 @@ describe("google-shared convertMessages", () => {
     const contents = convertMessagesForTest(model, context);
     const parts = contents?.[0]?.parts ?? [];
     expect(parts).toHaveLength(1);
-    const part = asRecord(parts[0]);
+    const part = assertRecord(parts[0]);
     expect(part.thought).toBe(true);
     expect(part.thoughtSignature).toBe("c2ln");
   });
@@ -558,7 +558,7 @@ describe("google-shared convertMessages", () => {
     const toolResponsePart = expectDefined(contents[2], "contents[2] test invariant").parts?.find(
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
-    const toolResponse = asRecord(toolResponsePart);
+    const toolResponse = assertRecord(toolResponsePart);
     expect(requireRecordProperty(toolResponse, "functionResponse").name).toBe("myTool");
     expect(expectDefined(contents[3], "contents[3] test invariant").role).toBe("user");
   });
@@ -588,7 +588,7 @@ describe("google-shared convertMessages", () => {
     const toolCallPart = expectDefined(contents[2], "contents[2] test invariant").parts?.find(
       (part) => typeof part === "object" && part !== null && "functionCall" in part,
     );
-    const toolCall = asRecord(toolCallPart);
+    const toolCall = assertRecord(toolCallPart);
     expect(requireRecordProperty(toolCall, "functionCall").name).toBe("myTool");
   });
 
@@ -629,11 +629,11 @@ describe("google-shared convertMessages", () => {
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
 
-    const toolCall = asRecord(toolCallPart);
-    const toolResponse = asRecord(toolResponsePart);
+    const toolCall = assertRecord(toolCallPart);
+    const toolResponse = assertRecord(toolResponsePart);
 
-    expect(asRecord(toolCall.functionCall).id).toBeUndefined();
-    expect(asRecord(toolResponse.functionResponse).id).toBeUndefined();
+    expect(assertRecord(toolCall.functionCall).id).toBeUndefined();
+    expect(assertRecord(toolResponse.functionResponse).id).toBeUndefined();
   });
 
   it("serializes structured tool results into function responses", () => {
@@ -654,9 +654,8 @@ describe("google-shared convertMessages", () => {
     const toolResponsePart = contents[0]?.parts?.find(
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
-    expect(toolResponsePart).toBeDefined();
-    const toolResponse = requireRecordProperty(asRecord(toolResponsePart), "functionResponse");
-    expect(asRecord(toolResponse.response).output).toBe(
+    const toolResponse = requireRecordProperty(assertRecord(toolResponsePart), "functionResponse");
+    expect(assertRecord(toolResponse.response).output).toBe(
       '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',
     );
   });

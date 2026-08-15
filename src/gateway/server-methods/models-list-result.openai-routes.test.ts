@@ -1,74 +1,46 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildModelsListResult } from "./models-list-result.js";
+import {
+  catalogEntry,
+  listModels,
+  providerCatalogEntry,
+  registerTestCatalogAccess,
+  WITHOUT_OPENAI_ENV_AUTH,
+} from "./models-list-result.openai-routes.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
-const WITHOUT_OPENAI_ENV_AUTH = {
-  CODEX_API_KEY: undefined,
-  CODEX_HOME: "/__openclaw_models_list_test__/codex",
-  OPENAI_API_KEY: undefined,
-  OPENAI_BASE_URL: undefined,
-  OPENAI_OAUTH_TOKEN: undefined,
-  CHATGPT_OAUTH_TOKEN: undefined,
+const IMPLICIT_CODEX_RUNTIME = {
+  id: "codex",
+  cloudPlacementSupported: false,
+  source: "implicit",
 } as const;
-const IMPLICIT_CODEX_RUNTIME = { id: "codex", source: "implicit" } as const;
-const IMPLICIT_OPENCLAW_RUNTIME = { id: "openclaw", source: "implicit" } as const;
+const IMPLICIT_OPENCLAW_RUNTIME = {
+  id: "openclaw",
+  cloudPlacementSupported: true,
+  source: "implicit",
+} as const;
 
-function catalogEntry(id: string, api: ModelCatalogEntry["api"]): ModelCatalogEntry {
-  return { id, name: id, provider: "openai", api };
+function preparedOwnerFacts(config: OpenClawConfig) {
+  return {
+    authStore: { version: 1, profiles: {} },
+    metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
+  } as const;
 }
 
-function providerCatalogEntry(provider: string, id: string): ModelCatalogEntry {
-  return { ...catalogEntry(id, "openai-completions"), provider };
-}
-
-async function listModels(params: {
-  catalog: ModelCatalogEntry[];
-  cfg?: OpenClawConfig;
-  discoveryModes?: Record<string, "refreshable" | "runtime" | "static">;
-  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
-  view?: "all" | "configured" | "provider-config" | "default";
-}) {
-  const config = params.cfg ?? ({} as OpenClawConfig);
-  const context = {
-    getRuntimeConfig: () => config,
-    loadGatewayModelCatalog: vi.fn(() => Promise.resolve(params.catalog)),
-    loadGatewayModelCatalogSnapshot: vi.fn(() =>
-      Promise.resolve({
-        agentId: "main",
-        agentDir: "/tmp/models-list-openai-agent",
-        config,
-        entries: params.catalog,
-        routeVariants: params.catalog,
-      }),
-    ),
-    logGateway: { debug: vi.fn() },
-  } as unknown as GatewayRequestContext;
-  return await buildModelsListResult({
-    context,
-    params: { view: params.view ?? "all" },
-    ...(params.discoveryModes
-      ? {
-          preloadedCatalog: {
-            agentId: "main",
-            config,
-            snapshot: { entries: params.catalog, routeVariants: params.catalog },
-          },
-          catalogProjector: {
-            metadataSnapshot: {
-              plugins: [
-                { id: "test-provider", modelCatalog: { discovery: params.discoveryModes } },
-              ],
-            },
-          } as never,
-        }
-      : {}),
-    ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
-  });
+function emptyPreparedOwner(config: OpenClawConfig) {
+  return {
+    agentId: "main",
+    agentDir: "/tmp/models-list-openai-agent",
+    config,
+    entries: [],
+    routeVariants: [],
+    ...preparedOwnerFacts(config),
+  } as never;
 }
 
 describe("models.list OpenAI routes", () => {
@@ -83,6 +55,7 @@ describe("models.list OpenAI routes", () => {
       Promise.resolve({
         agentDir: "/tmp/models-list-openai-agent",
         config,
+        ...preparedOwnerFacts(config),
         entries: [],
         routeVariants: [],
       }),
@@ -92,6 +65,7 @@ describe("models.list OpenAI routes", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context, async () => emptyPreparedOwner(config));
     const preloadedCatalog: ModelCatalogSnapshot = {
       entries: [catalogEntry("gpt-main", "openai-responses")],
       routeVariants: [],
@@ -111,11 +85,12 @@ describe("models.list OpenAI routes", () => {
   });
 
   it("does not reuse a preloaded catalog from another config generation", async () => {
-    const config = {} as OpenClawConfig;
+    const config = { agents: { defaults: { model: "openai/current" } } } as OpenClawConfig;
     const loadGatewayModelCatalogSnapshot = vi.fn(() =>
       Promise.resolve({
         agentDir: "/tmp/models-list-openai-agent",
         config,
+        ...preparedOwnerFacts(config),
         entries: [],
         routeVariants: [],
       }),
@@ -125,6 +100,7 @@ describe("models.list OpenAI routes", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(
       buildModelsListResult({
@@ -132,7 +108,7 @@ describe("models.list OpenAI routes", () => {
         params: { view: "default" },
         preloadedCatalog: {
           agentId: "main",
-          config: {} as OpenClawConfig,
+          config: { agents: { defaults: { model: "openai/stale" } } } as OpenClawConfig,
           snapshot: { entries: [catalogEntry("stale", "openai-responses")], routeVariants: [] },
         },
       }),
@@ -147,6 +123,7 @@ describe("models.list OpenAI routes", () => {
       Promise.resolve({
         agentDir: "/tmp/models-list-openai-agent",
         config: replacementConfig,
+        ...preparedOwnerFacts(replacementConfig),
         entries: [],
         routeVariants: [],
       }),
@@ -157,6 +134,7 @@ describe("models.list OpenAI routes", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context, async () => emptyPreparedOwner(config));
 
     await expect(
       buildModelsListResult({
@@ -170,10 +148,9 @@ describe("models.list OpenAI routes", () => {
         catalogProjector: { evaluateEntry } as never,
       }),
     ).resolves.toEqual({ models: [] });
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
-      agentId: "main",
-      readOnly: false,
-    });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", readOnly: false }),
+    );
     expect(evaluateEntry).not.toHaveBeenCalled();
   });
 
@@ -185,6 +162,7 @@ describe("models.list OpenAI routes", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context, async () => emptyPreparedOwner(config));
 
     await expect(
       buildModelsListResult({
@@ -226,12 +204,14 @@ describe("models.list OpenAI routes", () => {
           agentId: "main",
           agentDir: "/tmp/models-list-openai-agent",
           config,
+          ...preparedOwnerFacts(config),
           entries: [ownerEntry],
           routeVariants: [ownerEntry],
         }),
       ),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     const result = await buildModelsListResult({
       context,
@@ -243,14 +223,13 @@ describe("models.list OpenAI routes", () => {
         expect.objectContaining({
           id: "gpt-owner",
           provider: "openai",
-          agentRuntime: { id: "codex", source: "model" },
+          agentRuntime: { id: "codex", cloudPlacementSupported: false, source: "model" },
         }),
       ],
     });
-    expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
-      agentId: "worker",
-      readOnly: false,
-    });
+    expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "worker", readOnly: false }),
+    );
   });
 
   it("escalates full discovery using the replacement owner's agent", async () => {
@@ -269,16 +248,20 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "main",
         agentDir: "/tmp/models-list-main-agent",
+        catalogComplete: false,
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
+        ...preparedOwnerFacts(replacementConfig),
         entries: [entry],
         routeVariants: [entry],
       })
       .mockResolvedValueOnce({
         agentId: "main",
         agentDir: "/tmp/models-list-main-agent",
+        catalogComplete: true,
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
+        ...preparedOwnerFacts(replacementConfig),
         entries: [entry],
         routeVariants: [entry],
       });
@@ -287,12 +270,13 @@ describe("models.list OpenAI routes", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await buildModelsListResult({ context, params: { view: "configured" } });
 
     expect(loadGatewayModelCatalogSnapshot.mock.calls).toEqual([
-      [{ agentId: "worker", readOnly: true }],
-      [{ agentId: "main", readOnly: false }],
+      [expect.objectContaining({ agentId: "worker", readOnly: true })],
+      [expect.objectContaining({ agentId: "main", readOnly: false })],
     ]);
   });
 
@@ -312,16 +296,20 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "main",
         agentDir: "/tmp/models-list-main-agent",
+        catalogComplete: false,
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
+        ...preparedOwnerFacts(replacementConfig),
         entries: [entry],
         routeVariants: [entry],
       })
       .mockResolvedValueOnce({
         agentId: "worker",
         agentDir: "/tmp/models-list-worker-agent",
+        catalogComplete: true,
         workspaceDir: "/tmp/models-list-worker-workspace",
         config: replacementConfig,
+        ...preparedOwnerFacts(replacementConfig),
         entries: [entry],
         routeVariants: [entry],
       });
@@ -330,6 +318,7 @@ describe("models.list OpenAI routes", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(
       buildModelsListResult({ context, params: { view: "configured" } }),
@@ -347,6 +336,7 @@ describe("models.list OpenAI routes", () => {
           agentDir: "/tmp/models-list-openai-agent",
           workspaceDir: "/tmp/models-list-openai-workspace",
           config,
+          ...preparedOwnerFacts(config),
           entries: [],
           routeVariants: [],
         }),
@@ -356,14 +346,14 @@ describe("models.list OpenAI routes", () => {
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(buildModelsListResult({ context, params: { view: "all" } })).resolves.toEqual({
       models: [],
     });
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
-      agentId: "main",
-      readOnly: false,
-    });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", readOnly: false }),
+    );
   });
 
   it("does not project an ownerless catalog as the requested agent", async () => {
@@ -386,12 +376,14 @@ describe("models.list OpenAI routes", () => {
         Promise.resolve({
           agentDir: "/tmp/models-list-openai-agent",
           config,
+          ...preparedOwnerFacts(config),
           entries: [ownerlessEntry],
           routeVariants: [ownerlessEntry],
         }),
       ),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(
       buildModelsListResult({
@@ -417,12 +409,14 @@ describe("models.list OpenAI routes", () => {
           agentId: "main",
           agentDir: "/tmp/models-list-main-agent",
           config,
+          ...preparedOwnerFacts(config),
           entries: [mainEntry],
           routeVariants: [mainEntry],
         }),
       ),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(
       buildModelsListResult({
@@ -454,12 +448,14 @@ describe("models.list OpenAI routes", () => {
           agentId: "worker",
           agentDir: "/tmp/models-list-worker-agent",
           config,
+          ...preparedOwnerFacts(config),
           entries: [workerEntry],
           routeVariants: [workerEntry],
         }),
       ),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerTestCatalogAccess(context);
 
     await expect(
       buildModelsListResult({
@@ -472,7 +468,7 @@ describe("models.list OpenAI routes", () => {
         expect.objectContaining({
           id: "gpt-worker",
           provider: "openai",
-          agentRuntime: { id: "openclaw", source: "model" },
+          agentRuntime: { id: "openclaw", cloudPlacementSupported: true, source: "model" },
         }),
       ],
     });
@@ -627,7 +623,7 @@ describe("models.list OpenAI routes", () => {
     await withEnvAsync({ ...WITHOUT_OPENAI_ENV_AUTH, OPENAI_API_KEY: "test-key" }, async () => {
       await expect(listModels({ catalog: [row], cfg })).resolves.toEqual({
         models: [
-          {
+          expect.objectContaining({
             id: "gpt-5.4-nano",
             name: "GPT-5.4 Nano",
             provider: "openai",
@@ -635,7 +631,7 @@ describe("models.list OpenAI routes", () => {
             contextWindow: 1_000_000,
             reasoning: true,
             available: true,
-          },
+          }),
         ],
       });
     });
@@ -739,13 +735,13 @@ describe("models.list OpenAI routes", () => {
 
           await expect(listModels({ catalog: [row], cfg })).resolves.toEqual({
             models: [
-              {
+              expect.objectContaining({
                 id: "gpt-5.5",
                 name: "gpt-5.5",
                 provider: "openai",
                 agentRuntime: IMPLICIT_CODEX_RUNTIME,
                 available: true,
-              },
+              }),
             ],
           });
 
@@ -760,7 +756,7 @@ describe("models.list OpenAI routes", () => {
           } as ModelCatalogEntry;
           const subscriptionProjection = {
             models: [
-              {
+              expect.objectContaining({
                 id: "gpt-5.5",
                 name: "gpt-5.5",
                 provider: "openai",
@@ -768,7 +764,7 @@ describe("models.list OpenAI routes", () => {
                 contextWindow: 400_000,
                 reasoning: true,
                 available: true,
-              },
+              }),
             ],
           };
           await expect(listModels({ catalog: [row, chatGPTRow], cfg })).resolves.toEqual(
@@ -799,7 +795,7 @@ describe("models.list OpenAI routes", () => {
             }),
           ).resolves.toEqual({
             models: [
-              {
+              expect.objectContaining({
                 id: "gpt-5.5",
                 name: "GPT-5.5",
                 provider: "openai",
@@ -808,7 +804,7 @@ describe("models.list OpenAI routes", () => {
                 reasoning: true,
                 input: ["text", "video"],
                 available: true,
-              },
+              }),
             ],
           });
 
@@ -821,7 +817,7 @@ describe("models.list OpenAI routes", () => {
           } as unknown as OpenClawConfig;
           await expect(listModels({ catalog: [row], cfg: apiKeyFirst })).resolves.toEqual({
             models: [
-              {
+              expect.objectContaining({
                 id: "gpt-5.5",
                 name: "gpt-5.5",
                 provider: "openai",
@@ -829,7 +825,7 @@ describe("models.list OpenAI routes", () => {
                 contextWindow: 1_000_000,
                 reasoning: true,
                 available: true,
-              },
+              }),
             ],
           });
         },
@@ -1042,7 +1038,7 @@ describe("models.list OpenAI routes", () => {
         expect(result.models).toContainEqual(
           expect.objectContaining({
             id: "gpt-5.4-nano",
-            agentRuntime: { id: "codex", source: "model" },
+            agentRuntime: { id: "codex", cloudPlacementSupported: false, source: "model" },
           }),
         );
       },

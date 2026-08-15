@@ -1,7 +1,8 @@
 // Memory Wiki tests cover lint plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { lintMemoryWikiVault } from "./lint.js";
 import {
   renderWikiMarkdown,
@@ -11,6 +12,14 @@ import {
 } from "./markdown.js";
 import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    replaceFileAtomic: vi.fn(actual.replaceFileAtomic),
+  };
+});
 
 const { createVault } = createMemoryWikiTestHarness();
 
@@ -704,6 +713,52 @@ describe("lintMemoryWikiVault", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain(
       "Frontmatter failed to parse: Unexpected scalar",
     );
+  });
+
+  it("keeps the previous lint report when atomic publication fails", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-atomic-report-",
+    });
+    const reportsDir = path.join(rootDir, "reports");
+    const reportPath = path.join(reportsDir, "lint.md");
+    await fs.mkdir(reportsDir, { recursive: true });
+    const previousReport = renderWikiMarkdown({
+      frontmatter: {
+        pageType: "report",
+        id: "report.lint",
+        title: "Lint Report",
+        status: "active",
+      },
+      body: "# Lint Report\n\nPrevious valid lint report.\n",
+    });
+    await fs.writeFile(reportPath, previousReport, "utf8");
+    await fs.chmod(reportPath, 0o640);
+    const previousBytes = await fs.readFile(reportPath);
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+      "openclaw/plugin-sdk/security-runtime",
+    );
+    const publicationError = Object.assign(new Error("injected lint report publication failure"), {
+      code: "EIO",
+    });
+    vi.mocked(replaceFileAtomic).mockImplementationOnce((options) =>
+      actual.replaceFileAtomic({
+        ...options,
+        beforeRename: async ({ tempPath }) => {
+          await fs.writeFile(tempPath, "partial lint report", "utf8");
+          throw publicationError;
+        },
+      }),
+    );
+
+    await expect(lintMemoryWikiVault(config)).rejects.toBe(publicationError);
+    await expect(fs.readFile(reportPath)).resolves.toEqual(previousBytes);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(reportPath)).mode & 0o777).toBe(0o640);
+    }
+    const lintPublicationFiles = (await fs.readdir(reportsDir)).filter(
+      (entry) => entry === "lint.md" || entry.startsWith("lint.md.lint-report."),
+    );
+    expect(lintPublicationFiles).toEqual(["lint.md"]);
   });
 
   it.each([

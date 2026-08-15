@@ -4,10 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
-import { resolveStorePath } from "../../../../src/config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../../src/config/sessions/paths.js";
 import {
   appendTranscriptMessage,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
 import { createManagedOutgoingMediaBlocks } from "../../../../src/gateway/managed-image-attachments.js";
@@ -16,39 +16,18 @@ import { startGatewayServer } from "../../../../src/gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
+import type { WorkerEnvironmentServiceRecord } from "../../../../src/gateway/worker-environments/service-contract.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { createTaskRecord, deleteTaskRecordById } from "../../../../src/tasks/task-registry.js";
 import { captureEnv, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
-type WorkerRecord = {
-  environmentId: string;
-  providerId: string;
-  leaseId: string | null;
-  state:
-    | "requested"
-    | "provisioning"
-    | "bootstrapping"
-    | "ready"
-    | "attached"
-    | "idle"
-    | "draining"
-    | "destroying"
-    | "destroyed"
-    | "failed"
-    | "orphaned";
-  ownerEpoch: number;
-  createdAtMs: number;
-  idleSinceAtMs: number | null;
-  attachedSessionIds: readonly string[];
-  tunnelStatus: "stopped" | "connecting" | "connected" | "reconnecting";
-};
-
 const injectedWorkerService = vi.hoisted(() => {
-  const records = new Map<string, WorkerRecord>();
+  const records = new Map<string, WorkerEnvironmentServiceRecord>();
   const idempotency = new Map<string, string>();
   let createCount = 0;
 
@@ -62,15 +41,18 @@ const injectedWorkerService = vi.hoisted(() => {
       }
       createCount += 1;
       const environmentId = `worker-qa-${createCount}`;
-      const record: WorkerRecord = {
+      const record: WorkerEnvironmentServiceRecord = {
         environmentId,
         providerId: profileId,
         leaseId: `lease-${createCount}`,
+        sharedHost: null,
         state: "ready",
         ownerEpoch: 1,
         createdAtMs: 1_800_000_000_000,
         idleSinceAtMs: null,
         attachedSessionIds: [],
+        desktopAvailable: false,
+        desktopApps: [],
         tunnelStatus: "stopped",
       };
       records.set(environmentId, record);
@@ -120,11 +102,11 @@ vi.mock("../../../../src/gateway/server-request-context.js", async () => {
 
 const ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
-  "OPENCLAW_GATEWAY_PORT",
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
   "OPENCLAW_SKIP_CRON",
@@ -203,13 +185,12 @@ describe("Gateway agent and artifact APIs", () => {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
     let server = await startGatewayServer(port, {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,
-      sidecarStartup: "defer",
     });
     cleanup.push(() => server.close());
 
@@ -230,7 +211,6 @@ describe("Gateway agent and artifact APIs", () => {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
-        sidecarStartup: "defer",
       });
       client = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
@@ -290,6 +270,21 @@ describe("Gateway agent and artifact APIs", () => {
       workspace: createdWorkspace,
     });
     await restartGateway("gateway agent artifact APIs after create");
+    const createdEnvironmentAfterRestart = await client.request<{ id: string }>(
+      "environments.create",
+      {
+        profileId: "qa-provider",
+        idempotencyKey: "qa-environment-request-after-restart",
+      },
+    );
+    await expect(client.request("environments.list", {})).resolves.toMatchObject({
+      environments: expect.arrayContaining([
+        expect.objectContaining({
+          id: createdEnvironmentAfterRestart.id,
+          status: "available",
+        }),
+      ]),
+    });
     await expect(client.request("agents.list", {})).resolves.toMatchObject({
       agents: expect.arrayContaining([
         expect.objectContaining({
@@ -344,9 +339,9 @@ describe("Gateway agent and artifact APIs", () => {
     const sessionKey = "agent:main:artifact-api";
     const sessionId = "gateway-agent-artifact-session";
     const messageId = "gateway-agent-artifact-message";
-    const storePath = resolveStorePath(undefined, { agentId: "main" });
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
     const task = createTaskRecord({
       runtime: "cli",
       requesterSessionKey: sessionKey,

@@ -113,7 +113,7 @@ function releaseSyncPrefixRoot(options: { prefix: string; parentDir?: string }) 
   });
 }
 
-export async function withTempDir<T>(
+export async function withTestDir<T>(
   options: {
     prefix: string;
     parentDir?: string;
@@ -149,19 +149,19 @@ export function createSuiteTempRootTracker(options: { prefix: string; parentDir?
   let nextIndex = 0;
 
   return {
-    async setup(): Promise<string> {
+    setup: async (): Promise<string> => {
       root = await fs.realpath(
         await fs.mkdtemp(path.join(options.parentDir ?? os.tmpdir(), options.prefix)),
       );
       nextIndex = 0;
       return root;
     },
-    async make(prefix = "case"): Promise<string> {
+    make: async (prefix = "case"): Promise<string> => {
       const dir = path.join(root, `${prefix}-${nextIndex++}`);
       await fs.mkdir(dir, { recursive: true });
       return dir;
     },
-    async cleanup(): Promise<void> {
+    cleanup: async (): Promise<void> => {
       if (!root) {
         return;
       }

@@ -8,7 +8,7 @@ import {
   markConversationDeliverySent,
 } from "../../config/sessions/conversation-delivery-store.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptEventSync,
   loadSessionEntryReadOnly,
@@ -91,7 +91,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
       : normalizeOptionalString(String(params.ctx.MessageThreadId));
   const agentId =
     normalizeOptionalString(params.ctx.AgentId) ?? resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
   const sessionEntry = loadSessionEntryReadOnly({
     agentId,
     sessionKey,

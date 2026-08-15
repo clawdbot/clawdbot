@@ -423,7 +423,7 @@ Notes:
 - `set` expects one JSON object value on the command line.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
 - `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
-- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. The first run prints an authorization URL; rerun with `--code` after approval.
+- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
 - `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.
 - Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
@@ -544,7 +544,8 @@ Use `--json` for scripts and dashboards. Field sets can grow over time, so consu
             "hasClientInformation": true,
             "hasCodeVerifier": false,
             "hasDiscoveryState": true,
-            "hasLastAuthorizationUrl": false
+            "hasLastAuthorizationUrl": false,
+            "state": "authorized"
           },
           "requestTimeoutMs": 20000,
           "connectionTimeoutMs": 5000,
@@ -697,17 +698,52 @@ Sensitive values in `url` (userinfo) and `headers` are redacted in logs and stat
 
 ### OAuth workflow
 
-OAuth is for HTTP MCP servers that advertise the MCP OAuth flow. Static `Authorization` headers are ignored for a server while `auth: "oauth"` is enabled. Credentials saved by `openclaw mcp login` work with embedded MCP, CLI runners, and the local Codex app-server.
+OAuth is for HTTP MCP servers that advertise the MCP OAuth flow. Static `Authorization` headers are ignored for a server while `auth: "oauth"` is enabled. By default, OAuth credentials are shared and operator-managed. Credentials saved by `openclaw mcp login` work with embedded MCP, CLI runners, and the local Codex app-server.
 
 Native MCP OAuth sessions live in the owner-only shared SQLite database at `<state-dir>/state/openclaw.sqlite` (`mcp_oauth_stores`). The row can contain access and refresh tokens, dynamic client registration secrets, discovery metadata, and the temporary PKCE verifier. Refresh, login, and logout use the same SQLite lease, so parallel OpenClaw processes cannot consume one refresh token or resurrect a logged-out session.
 
 Upgrades from the retired `<state-dir>/mcp-oauth/*.json` store are handled only by `openclaw doctor --fix`. Runtime code never reads, writes, or falls back to those files.
 
-Until credentials are available, OpenClaw omits only that MCP server from the agent runtime instead of failing the agent turn. The operator, or an agent with shell access, can then run `openclaw mcp login <name>` and use the server on a later turn.
+Until shared credentials are available, OpenClaw omits only that MCP server from the agent runtime instead of failing the agent turn. The operator, or an agent with shell access, can then run `openclaw mcp login <name>` and use the server on a later turn.
 
 If a server rejects a token with `insufficient_scope`, OpenClaw preserves the requested scope and asks for `openclaw mcp login <name>` instead of repeating a refresh that cannot grant new scope. That login starts a new authorization request while keeping the previous token until replacement credentials are saved.
 
 When a remote MCP service is already backed by a separate OpenClaw refresh-capable auth profile, you can optionally set `oauth.authProfileId`. OpenClaw refreshes either credential source before runtime projection and passes only the current access token to the downstream MCP client.
+
+Set `oauth.identity: "per-requester"` when every authenticated sender should connect a separate account. Per-requester OAuth requires an HTTP server URL and cannot use `oauth.authProfileId`. Configure `gateway.publicOrigin` as the externally reachable HTTPS origin of the Gateway; HTTP is accepted only for literal loopback hosts (`localhost`, `127.0.0.1`, or `[::1]`) during local development. The provider redirects to `<gateway.publicOrigin>/oauth/mcp/callback` after authorization.
+
+```json5
+{
+  gateway: {
+    publicOrigin: "https://gateway.example.com",
+  },
+  mcp: {
+    servers: {
+      docs: {
+        url: "https://mcp.example.com/mcp",
+        transport: "streamable-http",
+        auth: "oauth",
+        oauth: {
+          identity: "per-requester",
+          scope: "docs.read",
+        },
+      },
+    },
+  },
+}
+```
+
+The per-requester flow is sender-driven:
+
+1. The sender calls a tool from the server before connecting an account.
+2. OpenClaw returns a sign-in link for that sender instead of exposing another sender's credentials.
+3. The provider redirects through the Gateway callback. After the callback succeeds, the sender retries the tool call with their connected account.
+
+If `gateway.publicOrigin` is missing, the sign-in result names that setting and `openclaw doctor` reports the same operator fix. `openclaw mcp login` and `openclaw mcp logout` remain operator-only commands for shared credentials; they do not manage per-requester accounts.
+
+Sign-in links are single-use bearer links: any chat participant who opens one connects their own account to the sender the link was issued for. Use per-requester OAuth in channels where every trusted sender is mutually trusted; a requester-private sign-in handoff is tracked as follow-up work.
+
+The shared operator flow uses the following commands:
 
 <Steps>
   <Step title="Save the server">
@@ -731,11 +767,11 @@ When a remote MCP service is already backed by a separate OpenClaw refresh-capab
     openclaw mcp login docs
     ```
 
-    OpenClaw prints the authorization URL and stores temporary OAuth verifier state in shared SQLite.
+    OpenClaw starts the registered loopback callback, prints the authorization URL, and stores temporary OAuth verifier state in shared SQLite. Approve the request in the browser and return to the terminal; token exchange completes automatically after the callback arrives.
 
   </Step>
-  <Step title="Finish with the code">
-    After approving in the browser, pass the returned code back to OpenClaw.
+  <Step title="Use the manual fallback when needed">
+    If the browser runs on another machine or cannot reach the printed loopback address, copy the returned code and pass it back to OpenClaw.
 
     ```bash
     openclaw mcp login docs --code abc123

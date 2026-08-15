@@ -2,15 +2,22 @@
 import { isDeepStrictEqual } from "node:util";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
-import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import {
+  normalizeCronScheduledToolCallerOrigin,
+  normalizeCronScheduledToolPolicy,
+} from "../scheduled-tool-policy.js";
+import type {
+  CronScheduledToolCallerOrigin,
+  CronScheduledToolPolicy,
+} from "../scheduled-tool-policy.js";
 import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;
@@ -227,6 +234,7 @@ export function createCronRunContinuationSession(params: {
   toolsAllow?: string[];
   toolsAllowIsDefault?: boolean;
   scheduledToolPolicy?: CronScheduledToolPolicy;
+  scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
   cliSessionBindingFacts?: {
     extraSystemPromptStatic?: string;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -234,16 +242,20 @@ export function createCronRunContinuationSession(params: {
   };
   persistSessionEntry: PersistSessionEntry;
 }): CronRunContinuationSession {
-  const scheduledToolPolicy = resolveScheduledToolPolicyContext({
-    toolsAllow: params.toolsAllow,
-    scheduledToolPolicy: params.scheduledToolPolicy,
-  });
+  const scheduledToolPolicy =
+    params.toolsAllow === undefined
+      ? undefined
+      : normalizeCronScheduledToolPolicy(params.scheduledToolPolicy);
+  const scheduledToolCallerOrigin = normalizeCronScheduledToolCallerOrigin(
+    params.scheduledToolCallerOrigin,
+  );
   const continuation: NonNullable<SessionEntry["cronRunContinuation"]> = {
     lifecycleRevision: params.cronSession.lifecycleRevision,
     phase: "running" as const,
     ...(params.toolsAllow !== undefined ? { toolsAllow: [...params.toolsAllow] } : {}),
     ...(params.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
     ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
+    ...(scheduledToolPolicy?.mode === "account" ? { scheduledToolCallerOrigin } : {}),
     ...(params.cliSessionBindingFacts
       ? { cliSessionBindingFacts: { ...params.cliSessionBindingFacts } }
       : {}),
@@ -392,11 +404,15 @@ export function syncCronSessionLiveSelection(params: {
     delete params.entry.agentRuntimeOverride;
   }
   if (params.liveSelection.authProfileId) {
+    const source =
+      params.liveSelection.authProfileIdSource ??
+      (params.entry.authProfileOverride?.trim() === params.liveSelection.authProfileId.trim()
+        ? resolveSessionAuthProfileOverrideSource(params.entry)
+        : "user");
     params.entry.authProfileOverride = params.liveSelection.authProfileId;
-    params.entry.authProfileOverrideSource = params.liveSelection.authProfileIdSource;
-    if (params.liveSelection.authProfileIdSource === "auto") {
-      // Auto-selected profiles are tied to the compaction generation that
-      // resolved them; manual overrides should survive later compactions.
+    params.entry.authProfileOverrideSource = source;
+    if (source === "auto") {
+      // Auto pins track their compaction generation; manual pins do not.
       params.entry.authProfileOverrideCompactionCount = params.entry.compactionCount ?? 0;
     } else {
       delete params.entry.authProfileOverrideCompactionCount;

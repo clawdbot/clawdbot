@@ -78,24 +78,27 @@ async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   }
   if (!loaded) {
     runtime.log(`Gateway service ${service.notLoadedText}.`);
-    return true;
   }
-  try {
-    await service.stop({ env: process.env, stdout: process.stdout });
-  } catch (err) {
-    runtime.error(
-      `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`,
-    );
+  let stopped = true;
+  if (loaded) {
+    try {
+      await service.stop({ env: process.env, stdout: process.stdout });
+    } catch (err) {
+      stopped = false;
+      runtime.error(
+        `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`,
+      );
+    }
   }
   try {
     await service.uninstall({ env: process.env, stdout: process.stdout });
-    return true;
   } catch (err) {
     runtime.error(
       `Gateway uninstall failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for the service state.`,
     );
     return false;
   }
+  return stopped;
 }
 
 async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean) {
@@ -188,8 +191,11 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   if (scopes.has("service")) {
     if (dryRun) {
       runtime.log("[dry-run] remove gateway service");
-    } else {
-      await stopAndUninstallService(runtime);
+    } else if (!(await stopAndUninstallService(runtime))) {
+      // Service removal may prevent relaunch even when runtime termination is
+      // uncertain; preserve mutable user data until teardown can be verified.
+      runtime.exit(1);
+      return;
     }
   }
 

@@ -59,6 +59,56 @@ async function closeContext(context: BrowserContext): Promise<void> {
 }
 
 suite.define(() => {
+  it("reloads once for a build rejection, then keeps visible recovery guidance", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      const key = "openclaw.control-ui-e2e.build-rejection-loads";
+      const count = Number.parseInt(sessionStorage.getItem(key) ?? "0", 10);
+      sessionStorage.setItem(key, String(count + 1));
+    });
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    const mismatch = {
+      code: "UNAVAILABLE",
+      message: "Control UI updated; reload this page to continue",
+      details: {
+        code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+        gatewayBuildId: "replacement-build",
+        reloadRequired: true,
+      },
+      retryable: false,
+    };
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", mismatch);
+      await page.waitForFunction(
+        () =>
+          sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ===
+            "replacement-build" &&
+          sessionStorage.getItem("openclaw.control-ui-e2e.build-rejection-loads") === "2",
+      );
+
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", mismatch);
+      const failure = page.locator('.login-gate__failure[data-kind="build-mismatch"]');
+      await failure.waitFor({ timeout: 10_000 });
+      expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(
+        "Server updated",
+      );
+      expect(await failure.locator(".login-gate__failure-refresh").isVisible()).toBe(true);
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
+      expect(
+        await page.evaluate(() =>
+          sessionStorage.getItem("openclaw.control-ui-e2e.build-rejection-loads"),
+        ),
+      ).toBe("2");
+    } finally {
+      await closeContext(context);
+    }
+  });
+
   it("shows a protocol mismatch without reconnecting", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
@@ -70,7 +120,7 @@ suite.define(() => {
       await gateway.waitForRequest("connect");
       await gateway.rejectDeferred("connect", {
         code: "INVALID_REQUEST",
-        message: "protocol mismatch",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
         details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
       });
 
@@ -79,8 +129,59 @@ suite.define(() => {
       expect((await failure.textContent())?.toLowerCase()).toContain(
         "supported connection protocol",
       );
+      expect(await page.locator(".login-gate__failure-refresh").isVisible()).toBe(true);
       await page.clock.runFor(1_600);
       expect(await gateway.getRequests("connect")).toHaveLength(1);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it.each([
+    {
+      name: "missing token",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      },
+      expectedKind: "auth-required",
+      expectedTitle: "Auth required",
+    },
+    {
+      name: "pairing approval",
+      error: {
+        code: "NOT_PAIRED",
+        message: "device is not approved",
+        details: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
+      },
+      expectedKind: "pairing-required",
+      expectedTitle: "Device pairing required",
+    },
+    {
+      name: "generic transport",
+      error: {
+        code: "UNAVAILABLE",
+        message: "WebSocket connection failed",
+      },
+      expectedKind: "network",
+      expectedTitle: "Could not connect",
+    },
+  ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", fixture.error);
+
+      const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
+      await failure.waitFor({ timeout: 10_000 });
+      expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(
+        fixture.expectedTitle,
+      );
     } finally {
       await closeContext(context);
     }

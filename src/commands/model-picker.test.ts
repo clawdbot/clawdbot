@@ -21,6 +21,7 @@ const modelCatalogRouteVariants = vi.hoisted(() => ({
   value: undefined as readonly ModelCatalogEntry[] | undefined,
 }));
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
     return { entries, routeVariants: modelCatalogRouteVariants.value ?? entries };

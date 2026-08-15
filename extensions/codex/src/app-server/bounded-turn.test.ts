@@ -104,6 +104,7 @@ function createClientFactory(
     errorBeforeCompletion?: { message: string; willRetry: boolean };
     terminalStatus?: "completed" | "interrupted";
     assistantDelta?: string;
+    emptyAnswer?: boolean;
     completeTurn?: boolean;
   } = {},
 ) {
@@ -126,7 +127,19 @@ function createClientFactory(
       return threadStartResult();
     }
     if (method === "mcpServerStatus/list") {
-      return { data: options.mcpServers ?? [], nextCursor: null };
+      return {
+        data: options.mcpServers ?? [
+          {
+            name: "inherited",
+            serverInfo: null,
+            tools: {},
+            resources: [],
+            resourceTemplates: [],
+            authStatus: "unsupported",
+          },
+        ],
+        nextCursor: null,
+      };
     }
     if (method === "thread/inject_items") {
       return {};
@@ -185,7 +198,7 @@ function createClientFactory(
                 cachedInputTokens: 2,
                 cacheWriteInputTokens: 1,
                 outputTokens: 4,
-                reasoningOutputTokens: 0,
+                reasoningOutputTokens: 3,
               },
             },
           });
@@ -197,7 +210,9 @@ function createClientFactory(
               turn: {
                 ...completedTurnResult().turn,
                 status: options.terminalStatus ?? "completed",
-                ...(options.terminalStatus === "interrupted" ? { items: [] } : {}),
+                ...(options.terminalStatus === "interrupted" || options.emptyAnswer
+                  ? { items: [] }
+                  : {}),
               },
             },
           });
@@ -318,6 +333,42 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     ).resolves.toMatchObject({ text: "The message was sent successfully." });
   });
 
+  it("can return a completed turn without text when the finalization caller opts in", async () => {
+    const fake = createClientFactory({ emptyAnswer: true });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+        allowEmptyText: true,
+      }),
+    ).resolves.toMatchObject({ text: "", model: "gpt-5.4" });
+  });
+
+  it("rejects a completed turn without text for ordinary bounded callers", async () => {
+    const fake = createClientFactory({ emptyAnswer: true });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find the answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toThrow("hosted search turn returned no text");
+  });
+
   it("still fails on a terminal error notification", async () => {
     const fake = createClientFactory({
       errorBeforeCompletion: { message: "terminal upstream failure", willRetry: false },
@@ -359,6 +410,56 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     ).rejects.toThrow("turn ended with status interrupted");
   });
 
+  it("forwards one prepared authorization selection to the isolated client", async () => {
+    const fake = createClientFactory();
+    const preparedAuth = { kind: "api-key" as const, apiKey: "test-key" };
+
+    await runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: "gpt-5.4" },
+      preparedAuth,
+      authRequirement: "api-key",
+      timeoutMs: 5_000,
+      options: {
+        clientFactory: fake.factory,
+        pluginConfig: { appServer: { homeScope: "user" } },
+      },
+      taskLabel: "isolated completion",
+      developerInstructions: "Answer only.",
+      input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+      requiredModalities: ["text"],
+      isolation: "private-stdio",
+      requireNoExternalCapabilities: true,
+    });
+
+    expect(fake.factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preparedAuth,
+        authRequirement: "api-key",
+        startOptions: expect.objectContaining({ homeScope: "agent" }),
+      }),
+    );
+    expect(vi.mocked(fake.factory).mock.calls[0]?.[0]).not.toHaveProperty("authProfileId");
+  });
+
+  it("preserves the configured native model provider when no override is supplied", async () => {
+    const fake = createClientFactory();
+
+    await runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: "gpt-5.4" },
+      timeoutMs: 5_000,
+      options: { clientFactory: fake.factory },
+      taskLabel: "isolated completion",
+      developerInstructions: "Answer only.",
+      input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+      requiredModalities: ["text"],
+      isolation: "configured-transport",
+      requireNoExternalCapabilities: true,
+    });
+
+    const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    expect(startParams).not.toHaveProperty("modelProvider");
+  });
+
   it("attests ring-zero and injects frozen history before starting the final turn", async () => {
     const fake = createClientFactory();
     const historyItems: JsonValue[] = [
@@ -387,6 +488,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         output: 4,
         cacheRead: 2,
         cacheWrite: 1,
+        reasoningTokens: 3,
         total: 12,
       },
     });
@@ -413,9 +515,13 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         "features.hooks": false,
         "features.multi_agent": false,
         "features.multi_agent_v2": false,
+        "features.code_mode": false,
+        "features.code_mode_only": false,
         "skills.include_instructions": false,
         include_environment_context: false,
         mcp_servers: { inherited: { enabled: false } },
+        "tools.experimental_request_user_input.enabled": false,
+        "tools.update_plan.enabled": false,
       },
     });
     const turnParams = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
@@ -429,7 +535,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   });
 
   it("fails before history injection when the started thread exposes an MCP server", async () => {
-    const fake = createClientFactory({ mcpServers: [{ name: "unexpected" }] });
+    const fake = createClientFactory({
+      mcpServers: [{ name: "unexpected", serverInfo: null, tools: {} }],
+    });
 
     await expect(
       runBoundedCodexAppServerTurn({
@@ -444,7 +552,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         historyItems: [{ type: "function_call_output", call_id: "call-1", output: "sent" }],
         requireNoExternalCapabilities: true,
       }),
-    ).rejects.toThrow("Codex ring-zero MCP attestation found server unexpected");
+    ).rejects.toThrow(
+      "Codex restricted-tool-surface MCP attestation found unexpected server unexpected",
+    );
     expect(fake.methods).not.toContain("thread/inject_items");
     expect(fake.methods).not.toContain("turn/start");
   });

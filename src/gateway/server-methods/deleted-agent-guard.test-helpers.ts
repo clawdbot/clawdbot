@@ -5,20 +5,20 @@ import { vi } from "vitest";
 
 const deletedAgentSessionMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
-  loadSessionEntryReadOnly: vi.fn(),
+  loadGatewaySessionEntryReadOnly: vi.fn(),
   resolveDeletedAgentIdFromSessionKey: vi.fn(),
 }));
 
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: deletedAgentSessionMocks.loadSessionEntry,
-  loadSessionEntryReadOnly: deletedAgentSessionMocks.loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly: deletedAgentSessionMocks.loadGatewaySessionEntryReadOnly,
   resolveDeletedAgentIdFromSessionKey: deletedAgentSessionMocks.resolveDeletedAgentIdFromSessionKey,
 }));
 
 /** Resets mocked deleted-agent session lookups between tests. */
 export function resetDeletedAgentSessionMocks(): void {
   deletedAgentSessionMocks.loadSessionEntry.mockReset();
-  deletedAgentSessionMocks.loadSessionEntryReadOnly.mockReset();
+  deletedAgentSessionMocks.loadGatewaySessionEntryReadOnly.mockReset();
   deletedAgentSessionMocks.resolveDeletedAgentIdFromSessionKey.mockReset();
 }
 

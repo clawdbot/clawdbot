@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
+import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
+import {
+  configureChannelAdmissionDecisionSink,
+  configureChannelAdmissionEvidenceCollection,
+} from "../../channels/message-access/admission-evidence.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
@@ -25,6 +30,71 @@ import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.
 const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
+  it("attributes one admitted channel participant before its admission decision", async () => {
+    const order: string[] = [];
+    const identityWork: unknown[] = [];
+    const decisionReceipts: unknown[] = [];
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const clearIdentitySink = configureExecutionIdentityAdmissionSink((work) => {
+      order.push("identity");
+      identityWork.push(work);
+      return true;
+    });
+    const clearDecisionSink = configureChannelAdmissionDecisionSink((receipt) => {
+      order.push("decision");
+      decisionReceipts.push(receipt);
+      return true;
+    });
+    try {
+      const followupRun = createFollowupRun();
+      followupRun.run.config = { logging: { audit: { executionIdentity: true } } };
+      followupRun.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        channelId: "whatsapp",
+        accountId: "default",
+        participantId: "person-42",
+      });
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        const admission = (
+          params as EmbeddedAgentParams & {
+            preparedRunAdmission: { admit: (kind: "embedded") => Promise<unknown> };
+          }
+        ).preparedRunAdmission;
+        await admission.admit("embedded");
+        return { payloads: [{ text: "ok" }], meta: {} };
+      });
+
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+      });
+
+      expect(order).toEqual(["identity", "decision"]);
+      expect(identityWork).toMatchObject([
+        {
+          kind: "capture",
+          envelope: {
+            ingress: { kind: "channel", state: "present" },
+            invoker: {
+              state: "present",
+              kind: "person",
+              rawPrincipalRef: '["whatsapp","default","person-42"]',
+            },
+          },
+        },
+      ]);
+      expect(decisionReceipts).toMatchObject([
+        {
+          action: { family: "channel", operation: "admission" },
+          enforcement: { coverageState: "attribution-only" },
+        },
+      ]);
+    } finally {
+      clearDecisionSink();
+      clearIdentitySink();
+      clearCollection();
+    }
+  });
+
   it("passes the reply abort signal to fallback orchestration and candidates", async () => {
     const { replyOperation } = createMockReplyOperation();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -550,41 +620,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(runtime.pendingMcpAppModelContext).toBeUndefined();
   });
 
-  it("propagates commitment-only bootstrap scope to CLI runs", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "sonnet-4.6"),
-      provider: "claude-cli",
-      model: "sonnet-4.6",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "claude-cli";
-    followupRun.run.model = "sonnet-4.6";
-    const params = createMinimalRunAgentTurnParams({
-      followupRun,
-      opts: {
-        isHeartbeat: true,
-        bootstrapContextMode: "lightweight",
-        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
-      },
-    });
-    params.isHeartbeat = true;
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(params);
-
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      trigger: "heartbeat",
-      bootstrapContextMode: "lightweight",
-      bootstrapContextRunKind: "commitment-only",
-    });
-  });
-
   it("registers run ownership before asynchronous image preflight", async () => {
     const agentRunRegistry = await import("../../infra/agent-run-registry.js");
     const registerAgentRunContext = vi.mocked(agentRunRegistry.registerAgentRunContext);
@@ -601,29 +636,19 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const runPromise = executeAgentTurn(
-      createMinimalRunAgentTurnParams({ opts: { runId: "queued-turn-attribution" } }),
-    );
+    const runPromise = executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(registerAgentRunContext).toHaveBeenCalledWith(
-      "queued-turn-attribution",
+      expect.any(String),
       expect.objectContaining({
         sessionKey: "main",
         sessionId: "session",
-        attribution: expect.objectContaining({
-          runId: "queued-turn-attribution",
-          sessionKey: "main",
-          sessionId: "session",
-        }),
       }),
     );
-    const attribution = registerAgentRunContext.mock.calls[0]?.[1]?.attribution;
-    expect(Object.isFrozen(attribution)).toBe(true);
     expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
 
     resolveImages?.();
     await runPromise;
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.attribution).toBe(attribution);
   });
 
   it("clears run ownership when image preflight fails", async () => {
@@ -642,6 +667,62 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
     expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
     expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
+  });
+
+  it("does not consume channel evidence until a retry reaches runtime admission", async () => {
+    const captured: unknown[] = [];
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const clearSink = configureExecutionIdentityAdmissionSink((work) => {
+      captured.push(work);
+      return true;
+    });
+    try {
+      const followupRun = createFollowupRun();
+      followupRun.run.config = { logging: { audit: { executionIdentity: true } } };
+      followupRun.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        channelId: "whatsapp",
+        participantId: "person-1",
+      });
+      state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
+
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      await expect(
+        executeAgentTurn(
+          createMinimalRunAgentTurnParams({
+            followupRun,
+            opts: { runId: "preflight-failure" },
+          }),
+        ),
+      ).rejects.toThrow("invalid image metadata");
+      expect(captured).toEqual([]);
+
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        const admission = (
+          params as EmbeddedAgentParams & {
+            preparedRunAdmission: { admit: (kind: "embedded") => Promise<unknown> };
+          }
+        ).preparedRunAdmission;
+        await admission.admit("embedded");
+        return { payloads: [{ text: "ok" }], meta: {} };
+      });
+      await executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          opts: { runId: "preflight-success" },
+        }),
+      );
+
+      expect(captured).toHaveLength(1);
+      expect(captured).toMatchObject([
+        {
+          kind: "capture",
+          envelope: { ingress: { state: "present" }, invoker: { state: "present" } },
+        },
+      ]);
+    } finally {
+      clearSink();
+      clearCollection();
+    }
   });
 
   it("passes runtime toolsAllow to embedded agent runs", async () => {

@@ -1,7 +1,7 @@
 // Approval renderer helpers convert approval request data into channel-safe display text.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
-  buildApprovalPresentation,
+  buildApprovalButtonPresentation,
   buildTypedApprovalPresentation,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
@@ -43,7 +43,7 @@ export function buildApprovalPendingReplyPayload(
   const allowedDecisions = params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS;
   return {
     text: params.text,
-    presentation: buildApprovalPresentation({
+    presentation: buildApprovalButtonPresentation({
       approvalId: params.approvalId,
       allowedDecisions,
     }),

@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../config/bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "../../config/schema-base.js";
@@ -54,21 +55,20 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
   return out;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
+function assertRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
     throw new Error("expected record");
   }
-  expect(Array.isArray(value)).toBe(false);
-  return value as Record<string, unknown>;
+  return value;
 }
 
 describe("config footprint guardrails", () => {
   it("keeps plugin entry config generic in the generated base schema", () => {
-    const root = asRecord(BASE_CONFIG_SCHEMA.schema);
-    const plugins = asRecord(asRecord(root.properties).plugins);
-    const entries = asRecord(asRecord(plugins.properties).entries);
-    const entry = asRecord(entries.additionalProperties);
-    const pluginConfig = asRecord(asRecord(entry.properties).config);
+    const root = assertRecord(BASE_CONFIG_SCHEMA.schema);
+    const plugins = assertRecord(assertRecord(root.properties).plugins);
+    const entries = assertRecord(assertRecord(plugins.properties).entries);
+    const entry = assertRecord(entries.additionalProperties);
+    const pluginConfig = assertRecord(assertRecord(entry.properties).config);
 
     expect(pluginConfig.type).toBe("object");
     expect(pluginConfig.additionalProperties).toStrictEqual({});

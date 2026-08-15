@@ -2,7 +2,7 @@
 // On these machines the local gateway daemon is absent by design, but the node service may point at a remote gateway.
 
 import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";
-import { loadNodeHostConfig } from "../node-host/config.js";
+import { loadNodeHostConfigReadOnly } from "../node-host/config.js";
 
 type NodeOnlyServiceLike = {
   installed: boolean | null;
@@ -66,7 +66,7 @@ export async function resolveNodeOnlyGatewayInfo(params: {
     return null;
   }
 
-  const gatewayTarget = resolveNodeGatewayTarget((await loadNodeHostConfig())?.gateway);
+  const gatewayTarget = resolveNodeGatewayTarget((await loadNodeHostConfigReadOnly())?.gateway);
   return {
     gatewayTarget,
     gatewayValue: `node → ${gatewayTarget} · no local gateway`,

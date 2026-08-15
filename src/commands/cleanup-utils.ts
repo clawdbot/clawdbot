@@ -236,46 +236,61 @@ export async function removeStateAndLinkedPaths(
 export async function removeWorkspaceDirs(
   workspaceDirs: readonly string[],
   runtime: RuntimeEnv,
-  opts?: { dryRun?: boolean; removeStateRows?: boolean },
-): Promise<void> {
-  for (const workspace of workspaceDirs) {
-    const legacyPlan = prepareLegacyWorkspaceStateReset(workspace);
-    const statePlan = opts?.removeStateRows ? prepareWorkspaceStateDeletion(workspace) : undefined;
-    const result = await removePath(workspace, runtime, {
-      dryRun: opts?.dryRun,
-      label: workspace,
-    });
-    if (opts?.dryRun) {
-      if (!result.ok) {
-        continue;
-      }
-      const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan, { dryRun: true });
-      for (const removedPath of legacyCleanup.removedPaths) {
-        runtime.log(`[dry-run] remove ${shortenHomeInString(removedPath)}`);
-      }
-      for (const warning of legacyCleanup.warnings) {
-        runtime.error(warning);
-      }
-      continue;
-    }
-    if (!result.ok || result.skipped) {
-      continue;
-    }
+  opts?: {
+    dryRun?: boolean;
+    removeStateRows?: boolean;
+    removeWorkspace?: (workspace: string) => Promise<boolean>;
+  },
+): Promise<string[]> {
+  const failures = new Set<string>();
+  const attempt = async <T>(label: string, action: () => T | Promise<T>) => {
     try {
-      const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
-      for (const warning of legacyCleanup.warnings) {
-        runtime.error(warning);
-      }
-      if (!opts?.removeStateRows) {
-        continue;
-      }
-      deleteWorkspaceState(statePlan!);
+      return await action();
     } catch (error) {
-      runtime.error(
-        `Failed to remove workspace state for ${shortenHomeInString(workspace)}: ${String(error)}`,
+      failures.add(label);
+      runtime.error?.(`Failed to clean up ${shortenHomeInString(label)}: ${String(error)}`);
+      return undefined;
+    }
+  };
+  for (const workspace of workspaceDirs) {
+    const legacyLabel = `${workspace} (retired workspace state)`;
+    const stateLabel = `${workspace} (workspace state)`;
+    const legacyPlan = await attempt(legacyLabel, () =>
+      prepareLegacyWorkspaceStateReset(workspace),
+    );
+    const statePlan = opts?.removeStateRows
+      ? await attempt(stateLabel, () => prepareWorkspaceStateDeletion(workspace))
+      : undefined;
+    const result = opts?.removeWorkspace
+      ? { ok: (await attempt(workspace, () => opts.removeWorkspace!(workspace))) === true }
+      : await removePath(workspace, runtime, { dryRun: opts?.dryRun, label: workspace });
+    if (!result.ok) {
+      failures.add(workspace);
+      continue;
+    }
+    if (legacyPlan) {
+      const legacyCleanup = await attempt(legacyLabel, () =>
+        removeLegacyWorkspaceStateForReset(legacyPlan, opts?.dryRun ? { dryRun: true } : undefined),
       );
+      if (legacyCleanup) {
+        if (opts?.dryRun) {
+          for (const removedPath of legacyCleanup.removedPaths) {
+            runtime.log(`[dry-run] remove ${shortenHomeInString(removedPath)}`);
+          }
+        }
+        for (const warning of legacyCleanup.warnings) {
+          (opts?.removeWorkspace ? runtime.log : runtime.error)(warning);
+          failures.add(warning);
+        }
+      }
+    }
+    if (!opts?.dryRun && statePlan) {
+      await attempt(stateLabel, () => {
+        deleteWorkspaceState(statePlan);
+      });
     }
   }
+  return [...failures];
 }
 
 /** List per-agent session directories beneath a state directory. */
@@ -286,7 +301,10 @@ export async function listAgentSessionDirs(stateDir: string): Promise<string[]> 
     return entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => path.join(root, entry.name, "sessions"));
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
   }
 }

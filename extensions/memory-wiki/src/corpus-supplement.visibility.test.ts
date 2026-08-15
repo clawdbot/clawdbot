@@ -49,7 +49,7 @@ async function writeBridgePage(params: {
   );
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
+function assertToolDetailsRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Expected tool details object");
   }
@@ -217,29 +217,29 @@ describe("memory-wiki corpus supplement visibility", () => {
         corpus: "wiki",
       });
 
-      expect(asRecord(foreignGet.details)).toMatchObject({
+      expect(assertToolDetailsRecord(foreignGet.details)).toMatchObject({
         text: "",
         disabled: true,
         error: "wiki corpus result not found",
       });
-      expect(asRecord(unownedGet.details)).toMatchObject({
+      expect(assertToolDetailsRecord(unownedGet.details)).toMatchObject({
         text: "",
         disabled: true,
         error: "wiki corpus result not found",
       });
-      expect(asRecord(ownGet.details)).toMatchObject({
+      expect(assertToolDetailsRecord(ownGet.details)).toMatchObject({
         path: "sources/main-private.md",
         text: expect.stringContaining("REDACTED-OWN-MARKER"),
       });
-      expect(asRecord(foreignSearch.details).results).toEqual([]);
-      expect(asRecord(ownSearch.details).results).toEqual([
+      expect(assertToolDetailsRecord(foreignSearch.details).results).toEqual([]);
+      expect(assertToolDetailsRecord(ownSearch.details).results).toEqual([
         expect.objectContaining({ path: "sources/main-private.md" }),
       ]);
-      expect(asRecord(openForeignGet.details)).toMatchObject({
+      expect(assertToolDetailsRecord(openForeignGet.details)).toMatchObject({
         path: "sources/secondary-private.md",
         text: expect.stringContaining("REDACTED-FOREIGN-MARKER"),
       });
-      expect(asRecord(openForeignSearch.details).results).toEqual([
+      expect(assertToolDetailsRecord(openForeignSearch.details).results).toEqual([
         expect.objectContaining({ path: "sources/secondary-private.md" }),
       ]);
     } finally {

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { auditHandlers, testApi } from "./audit.js";
+import { ExecutionDecisionCursorError } from "../../audit/execution-decision-receipts.js";
+import { auditHandlers } from "./audit.js";
 
 const { inspectExecutionIdentityRun, listAuditEvents } = vi.hoisted(() => ({
   inspectExecutionIdentityRun: vi.fn(),
@@ -178,28 +179,41 @@ describe("audit gateway methods", () => {
     expect(result.events?.[0]).not.toHaveProperty("runId");
   });
 
-  it("projects a store-validated channel-sender identity", () => {
-    expect(
-      testApi.mapAuditActivityEvent({
-        schemaVersion: 1,
-        eventId: "event-message-2",
-        sequence: 12,
-        sourceSequence: 4,
-        occurredAt: 102,
-        kind: "message",
-        action: "message.inbound.processed",
-        status: "succeeded",
-        actorType: "channel_sender",
-        actorId: accountRef,
-        direction: "inbound",
-        channel: "telegram",
-        conversationKind: "direct",
-        outcome: "completed",
-        redaction: "metadata_only",
-      }),
-    ).toMatchObject({
-      eventType: "inbound_message",
-      actor: { type: "channel_sender", id: accountRef },
+  it("projects a store-validated channel-sender identity", async () => {
+    listAuditEvents.mockReturnValue({
+      events: [
+        {
+          schemaVersion: 1,
+          eventId: "event-message-2",
+          sequence: 12,
+          sourceSequence: 4,
+          occurredAt: 102,
+          kind: "message",
+          action: "message.inbound.processed",
+          status: "succeeded",
+          actorType: "channel_sender",
+          actorId: accountRef,
+          direction: "inbound",
+          channel: "telegram",
+          conversationKind: "direct",
+          outcome: "completed",
+          redaction: "metadata_only",
+        },
+      ],
+    });
+
+    const respond = await runAuditHandler("audit.activity.list", {
+      kind: "message",
+      direction: "inbound",
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      events: [
+        expect.objectContaining({
+          eventType: "inbound_message",
+          actor: { type: "channel_sender", id: accountRef },
+        }),
+      ],
     });
   });
 
@@ -257,14 +271,14 @@ describe("audit gateway methods", () => {
       runId: "run-1",
       executionCursor: " 2 ",
       executionLimit: 10,
-      decisionCursor: " 1 ",
+      decisionCursor: "a:2000:42",
       decisionLimit: 25,
     });
     expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
       runId: "run-1",
       executionOffset: 2,
       executionLimit: 10,
-      decisionOffset: 1,
+      decisionCursor: "a:2000:42",
       decisionLimit: 25,
     });
 
@@ -276,6 +290,45 @@ describe("audit gateway methods", () => {
       executionId: "execution-1",
       decisionLimit: 20,
     });
+
+    await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      executionCursor: "1",
+      decisionCursor: "1",
+      decisionLimit: 25,
+    });
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      executionOffset: 1,
+      executionLimit: 50,
+      decisionCursor: "1",
+      decisionLimit: 25,
+    });
+
+    await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      executionCursor: "001",
+      decisionCursor: "001",
+      decisionLimit: 25,
+    });
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      executionOffset: 1,
+      executionLimit: 50,
+      decisionCursor: "001",
+      decisionLimit: 25,
+    });
+
+    await runAuditHandler("audit.run.inspect", {
+      executionId: "execution-1",
+      decisionCursor: "1",
+      decisionLimit: 20,
+    });
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      executionId: "execution-1",
+      decisionCursor: "1",
+      decisionLimit: 20,
+    });
   });
 
   it("rejects malformed run inspection before storage access", async () => {
@@ -285,6 +338,11 @@ describe("audit gateway methods", () => {
     expect(
       await runAuditHandler("audit.run.inspect", { runId: "run-1", decisionCursor: "0" }),
     ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    for (const decisionCursor of ["-1", "1.5", "1a", "a:1:2x", "9007199254740992"]) {
+      expect(
+        await runAuditHandler("audit.run.inspect", { runId: "run-1", decisionCursor }),
+      ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    }
     expect(
       await runAuditHandler("audit.run.inspect", {
         runId: "run-1",
@@ -292,5 +350,25 @@ describe("audit gateway methods", () => {
       }),
     ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
     expect(inspectExecutionIdentityRun).not.toHaveBeenCalled();
+  });
+
+  it("tells the operator how to recover from an expired decision cursor", async () => {
+    inspectExecutionIdentityRun.mockImplementationOnce(() => {
+      throw new ExecutionDecisionCursorError(
+        "decision cursor is no longer retained; restart inspection without --cursor",
+      );
+    });
+
+    const respond = await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      decisionCursor: "a:2000:42",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "decision cursor is no longer retained; restart inspection without --cursor",
+      }),
+    );
   });
 });

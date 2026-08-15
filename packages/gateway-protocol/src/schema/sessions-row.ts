@@ -2,6 +2,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionClassificationSchema, SessionPeerKindSchema } from "./session-classification.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 export const SessionToolOverridesSchema = closedObject({
@@ -35,11 +36,19 @@ export const SessionRowSchema = Type.Object(
       Type.Literal("unknown"),
     ]),
     label: Type.Optional(Type.String()),
+    icon: Type.Optional(Type.String()),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
     channel: Type.Optional(Type.String()),
+    /** Stable non-sensitive facts derived from the canonical session route. */
+    classification: Type.Optional(SessionClassificationSchema),
+    agentId: Type.Optional(NonEmptyString),
+    accountId: Type.Optional(NonEmptyString),
+    peerKind: Type.Optional(SessionPeerKindSchema),
+    isMain: Type.Optional(Type.Boolean()),
+    isBackground: Type.Optional(Type.Boolean()),
     chatType: Type.Optional(
       Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
     ),
@@ -49,7 +58,6 @@ export const SessionRowSchema = Type.Object(
     archivedBy: Type.Optional(SessionCreatedActorSchema),
     pinned: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
-    icon: Type.Optional(Type.String()),
     unread: Type.Optional(Type.Boolean()),
     lastReadAt: Type.Optional(Type.Number()),
     lastActivityAt: Type.Optional(Type.Number()),
@@ -64,6 +72,7 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     lastRunError: Type.Optional(Type.String()),
+    restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),
@@ -127,3 +136,4 @@ export const SessionRowSchema = Type.Object(
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
+export type SessionRunStatus = NonNullable<SessionRow["status"]>;

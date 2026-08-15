@@ -11,6 +11,7 @@ import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
+import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES } from "../plugins/official-external-plugin-bundled-catalogs.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 
 type ChannelCatalogEntryLike = {
@@ -73,12 +74,15 @@ function readBundledExtensionCatalogEntriesSync(): ChannelCatalogEntryLike[] {
 }
 
 function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
+  const bundledExternalEntries = BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES.filter(
+    (entry): entry is ChannelCatalogEntryLike => typeof entry === "object" && entry !== null,
+  );
   for (const packageRoot of listPackageRoots()) {
     const candidate = path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH);
     const cached = officialCatalogFileCache.get(candidate);
     if (cached !== undefined) {
       if (cached) {
-        return cached;
+        return [...bundledExternalEntries, ...cached];
       }
       continue;
     }
@@ -92,11 +96,14 @@ function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
         ? (payload.entries as ChannelCatalogEntryLike[])
         : [];
       officialCatalogFileCache.set(candidate, entries);
-      return entries;
+      // The source catalog is available before dist/channel-catalog.json exists and carries
+      // promotion metadata for external channels. Keep it first so a stale local dist artifact
+      // cannot hide current metadata; the generated dist catalog still contributes bundled rows.
+      return [...bundledExternalEntries, ...entries];
     }
     officialCatalogFileCache.set(candidate, null);
   }
-  return [];
+  return bundledExternalEntries;
 }
 
 function isChannelCatalogEntryLike(

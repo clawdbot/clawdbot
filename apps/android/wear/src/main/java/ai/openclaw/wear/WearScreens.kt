@@ -38,6 +38,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -70,6 +71,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.foundation.pager.HorizontalPager
@@ -90,7 +94,15 @@ internal enum class WearHomePage {
   Chat,
   Voice,
   Controls,
+  Pulse,
 }
+
+internal fun wearHomePages(agentPulseSupported: Boolean): List<WearHomePage> =
+  if (agentPulseSupported) {
+    WearHomePage.entries
+  } else {
+    WearHomePage.entries.filterNot { it == WearHomePage.Pulse }
+  }
 
 private const val VOICE_MODE_COUNT = 2
 private const val VOICE_HOME_MODE = 0
@@ -154,6 +166,8 @@ internal fun OpenClawWearScreens(
   onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
   onSelectModel: (String) -> Unit,
+  onAgentPulseVisibilityChanged: (Boolean) -> Unit = {},
+  onAgentPulseRefresh: () -> Unit = {},
   onRefresh: () -> Unit,
   onGatewayEnabledChange: (Boolean) -> Unit,
   onThemeModeChange: (WearThemeMode) -> Unit,
@@ -163,6 +177,47 @@ internal fun OpenClawWearScreens(
   onSpeakLatest: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val agentPulseSupported = snapshot?.agentPulseSupported == true
+  val homePages = remember(agentPulseSupported) { wearHomePages(agentPulseSupported) }
+  val initialPageIndex = homePages.indexOf(initialPage).takeIf { it >= 0 } ?: 0
+  val pagerState =
+    rememberPagerState(
+      initialPage = initialPageIndex,
+      pageCount = { homePages.size },
+    )
+  var lifecycleResumed by remember(lifecycleOwner) {
+    mutableStateOf(
+      lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+    )
+  }
+  DisposableEffect(lifecycleOwner) {
+    val observer =
+      LifecycleEventObserver { _, _ ->
+        val resumed =
+          lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        lifecycleResumed = resumed
+        if (!resumed) {
+          onAgentPulseVisibilityChanged(false)
+        }
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      onAgentPulseVisibilityChanged(false)
+    }
+  }
+  LaunchedEffect(homePages) {
+    if (homePages.getOrNull(pagerState.currentPage) == null) {
+      pagerState.scrollToPage(homePages.indexOf(WearHomePage.Chat))
+    }
+  }
+  LaunchedEffect(pagerState, lifecycleResumed, snapshot != null, homePages) {
+    snapshotFlow { homePages.getOrNull(pagerState.currentPage) == WearHomePage.Pulse }
+      .collect { selected ->
+        onAgentPulseVisibilityChanged(snapshot != null && lifecycleResumed && selected)
+      }
+  }
   if (snapshot == null) {
     ConnectionStateScreen(
       loading = loading,
@@ -173,11 +228,6 @@ internal fun OpenClawWearScreens(
   }
 
   val colors = OpenClawWearTheme.colors
-  val pagerState =
-    rememberPagerState(
-      initialPage = initialPage.ordinal,
-      pageCount = { WearHomePage.entries.size },
-    )
   val voicePagerState = rememberPagerState(pageCount = { VOICE_MODE_COUNT })
   val pagerScope = rememberCoroutineScope()
   val realtimeActive = snapshot.realtimeTalk.active || realtimeCapturing
@@ -187,11 +237,12 @@ internal fun OpenClawWearScreens(
   LaunchedEffect(navigationRequest?.id) {
     val request = navigationRequest ?: return@LaunchedEffect
     val destination = wearLaunchPage(request.target, realtimeActive)
-    pagerState.scrollToPage(destination.ordinal)
+    val destinationIndex = homePages.indexOf(destination).takeIf { it >= 0 } ?: 0
+    pagerState.scrollToPage(destinationIndex)
     onNavigationRequestHandled(request.id)
   }
   LaunchedEffect(pagerState.currentPage, showVoiceSwipeHint) {
-    if (pagerState.currentPage == WearHomePage.Voice.ordinal && showVoiceSwipeHint) {
+    if (homePages.getOrNull(pagerState.currentPage) == WearHomePage.Voice && showVoiceSwipeHint) {
       delay(1_800L)
       showVoiceSwipeHint = false
     }
@@ -212,9 +263,9 @@ internal fun OpenClawWearScreens(
       delay(250L)
     }
   }
-  BackHandler(enabled = pagerState.currentPage == WearHomePage.Voice.ordinal) {
+  BackHandler(enabled = homePages.getOrNull(pagerState.currentPage) == WearHomePage.Voice) {
     pagerScope.launch {
-      pagerState.animateScrollToPage(WearHomePage.Chat.ordinal)
+      pagerState.animateScrollToPage(homePages.indexOf(WearHomePage.Chat))
     }
   }
   HorizontalPagerScaffold(
@@ -229,12 +280,12 @@ internal fun OpenClawWearScreens(
       modifier = Modifier.fillMaxSize(),
       rotaryScrollableBehavior = null,
       userScrollEnabled =
-        pagerState.currentPage != WearHomePage.Voice.ordinal ||
+        homePages.getOrNull(pagerState.currentPage) != WearHomePage.Voice ||
           voicePagerState.currentPage == VOICE_HOME_MODE ||
           voicePagerState.currentPage == VOICE_THREAD_MODE,
     ) { page ->
-      when (page) {
-        WearHomePage.Chat.ordinal ->
+      when (homePages.getOrNull(page)) {
+        WearHomePage.Chat ->
           ChatPage(
             snapshot = snapshot,
             interaction = interaction,
@@ -251,25 +302,10 @@ internal fun OpenClawWearScreens(
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
           )
-        WearHomePage.Controls.ordinal ->
-          ControlsPage(
-            snapshot = snapshot,
-            themeMode = themeMode,
-            autoSpeak = autoSpeak,
-            notificationsGranted = notificationsGranted,
-            gatewayControlSupported = snapshot.gatewayControlsSupported,
-            actionBusy = actionBusy,
-            onThemeModeChange = onThemeModeChange,
-            onAutoSpeakChange = onAutoSpeakChange,
-            onRequestNotifications = onRequestNotifications,
-            onOpenNotificationSettings = onOpenNotificationSettings,
-            onRefresh = onRefresh,
-            onGatewayEnabledChange = onGatewayEnabledChange,
-          )
-        else ->
+        WearHomePage.Voice ->
           VoicePage(
             voicePagerState = voicePagerState,
-            showSwipeHint = showVoiceSwipeHint && pagerState.currentPage == WearHomePage.Voice.ordinal,
+            showSwipeHint = showVoiceSwipeHint && homePages.getOrNull(pagerState.currentPage) == WearHomePage.Voice,
             realtimeTalk = snapshot.realtimeTalk,
             speaking = speaking,
             realtimeCapturing = realtimeCapturing,
@@ -285,6 +321,33 @@ internal fun OpenClawWearScreens(
             onRealtimeTalk = onRealtimeTalk,
             onStopSpeaking = onStopSpeaking,
           )
+        WearHomePage.Controls ->
+          ControlsPage(
+            snapshot = snapshot,
+            themeMode = themeMode,
+            autoSpeak = autoSpeak,
+            notificationsGranted = notificationsGranted,
+            gatewayControlSupported = snapshot.gatewayControlsSupported,
+            actionBusy = actionBusy,
+            onThemeModeChange = onThemeModeChange,
+            onAutoSpeakChange = onAutoSpeakChange,
+            onRequestNotifications = onRequestNotifications,
+            onOpenNotificationSettings = onOpenNotificationSettings,
+            onRefresh = onRefresh,
+            onGatewayEnabledChange = onGatewayEnabledChange,
+          )
+        WearHomePage.Pulse ->
+          AgentPulsePage(
+            snapshot = snapshot,
+            onRefresh = {
+              if (snapshot.agentPulseSupported) {
+                onAgentPulseRefresh()
+              } else {
+                onRefresh()
+              }
+            },
+          )
+        else -> Unit
       }
     }
   }
@@ -312,92 +375,161 @@ private fun ChatPage(
   onSpeakLatest: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
-  val colors = OpenClawWearTheme.colors
-  WearPage(pageLabel = stringResource(R.string.chat)) {
-    item {
-      ConversationIdentity(
-        snapshot = snapshot,
-        actionBusy = actionBusy,
-        onSelectAgent = onSelectAgent,
-        onSelectSession = onSelectSession,
-        onSelectModel = onSelectModel,
+  val listState = rememberTransformingLazyColumnState()
+  val coroutineScope = rememberCoroutineScope()
+  val visibleMessages = snapshot.messages.takeLast(VISIBLE_MESSAGE_COUNT)
+  val streamingText = snapshot.streamingAssistantText?.takeIf(String::isNotBlank)
+  val hasAssistant = snapshot.messages.any { message -> message.chatRole == WearChatRole.ASSISTANT }
+  val latestAnchorIndex =
+    wearChatLatestAnchorIndex(
+      visibleMessageCount = visibleMessages.size,
+      hasStreaming = streamingText != null,
+      canAbort = canAbort,
+      hasAssistant = hasAssistant,
+      hasFailure = snapshot.failure != null,
+    )
+  val contentRevision =
+    wearChatContentRevision(
+      sessionId = snapshot.activeSessionId,
+      messages = visibleMessages,
+      streamingText = streamingText,
+      latestAnchorIndex = latestAnchorIndex,
+    )
+  var followState by remember(snapshot.activeSessionId) { mutableStateOf(WearThreadFollowState()) }
+
+  LaunchedEffect(listState, snapshot.activeSessionId) {
+    snapshotFlow {
+      WearThreadViewport(
+        atLatest = !listState.canScrollForward,
+        scrollingBackward = listState.isScrollInProgress && listState.lastScrolledBackward,
       )
+    }.collect { viewport ->
+      followState =
+        nextWearThreadFollowForViewport(
+          state = followState,
+          atLatest = viewport.atLatest,
+          scrollingBackward = viewport.scrollingBackward,
+        )
     }
-    item {
-      ConversationStatus(
-        interaction = interaction,
-        speaking = speaking,
-        gatewayConnected = snapshot.gatewayState == WearGatewayState.CONNECTED,
+  }
+  LaunchedEffect(snapshot.activeSessionId, contentRevision) {
+    val update =
+      nextWearThreadFollowForContent(
+        state = followState,
+        contentRevision = contentRevision,
       )
+    followState = update.state
+    if (update.scrollToLatest && latestAnchorIndex >= 0) {
+      listState.requestScrollToItem(latestAnchorIndex)
     }
-    item {
-      Row(
-        modifier =
-          Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        ActionButton(
-          label = stringResource(R.string.talk),
-          enabled = inputEnabled && !actionBusy && !speaking,
-          onClick = onTalk,
-          modifier = Modifier.weight(1f),
-        )
-        ActionButton(
-          label = stringResource(R.string.type),
-          enabled = inputEnabled && !actionBusy && !speaking,
-          onClick = onType,
-          modifier = Modifier.weight(1f),
-        )
-      }
-    }
-    if (canAbort) {
+  }
+
+  Box(modifier = Modifier.fillMaxSize()) {
+    WearPage(
+      pageLabel = stringResource(R.string.chat),
+      listState = listState,
+    ) {
       item {
-        SecondaryButton(
-          label = stringResource(R.string.abort_run),
-          enabled = true,
-          onClick = onAbort,
+        ConversationIdentity(
+          snapshot = snapshot,
+          actionBusy = actionBusy,
+          onSelectAgent = onSelectAgent,
+          onSelectSession = onSelectSession,
+          onSelectModel = onSelectModel,
         )
       }
-    }
-    if (snapshot.messages.isEmpty() && snapshot.streamingAssistantText.isNullOrBlank()) {
       item {
-        EmptyConversation()
+        ConversationStatus(
+          interaction = interaction,
+          speaking = speaking,
+          gatewayConnected = snapshot.gatewayState == WearGatewayState.CONNECTED,
+        )
       }
-    } else {
-      snapshot.messages
-        .takeLast(VISIBLE_MESSAGE_COUNT)
-        .forEach { message ->
+      item {
+        Row(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          ActionButton(
+            label = stringResource(R.string.talk),
+            enabled = inputEnabled && !actionBusy && !speaking,
+            onClick = onTalk,
+            modifier = Modifier.weight(1f),
+          )
+          ActionButton(
+            label = stringResource(R.string.type),
+            enabled = inputEnabled && !actionBusy && !speaking,
+            onClick = onType,
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
+      if (canAbort) {
+        item {
+          SecondaryButton(
+            label = stringResource(R.string.abort_run),
+            enabled = true,
+            onClick = onAbort,
+          )
+        }
+      }
+      if (visibleMessages.isEmpty() && streamingText == null) {
+        item {
+          EmptyConversation()
+        }
+      } else {
+        visibleMessages.forEach { message ->
           item(key = message.id ?: "${message.role}:${message.timestamp}:${message.text.hashCode()}") {
             MessageBubble(message = message)
           }
         }
-      snapshot.streamingAssistantText
-        ?.takeIf(String::isNotBlank)
-        ?.let { streaming ->
+        streamingText?.let { streaming ->
           item {
             StreamingBubble(text = streaming)
           }
         }
-    }
-    if (snapshot.messages.any { message -> message.chatRole == WearChatRole.ASSISTANT }) {
-      item {
-        SecondaryButton(
-          label =
-            if (speaking) {
-              stringResource(R.string.stop_speaking)
-            } else {
-              stringResource(R.string.speak_reply)
-            },
-          enabled = !actionBusy || speaking,
-          onClick = if (speaking) onStopSpeaking else onSpeakLatest,
-        )
+      }
+      if (hasAssistant) {
+        item {
+          SecondaryButton(
+            label =
+              if (speaking) {
+                stringResource(R.string.stop_speaking)
+              } else {
+                stringResource(R.string.speak_reply)
+              },
+            enabled = !actionBusy || speaking,
+            onClick = if (speaking) onStopSpeaking else onSpeakLatest,
+          )
+        }
+      }
+      snapshot.failure?.let { failure ->
+        item {
+          InlineError(text = failureDetail(failure))
+        }
+      }
+      if (latestAnchorIndex >= 0) {
+        item(key = "chat-end") {
+          Spacer(modifier = Modifier.height(1.dp))
+        }
       }
     }
-    snapshot.failure?.let { failure ->
-      item {
-        InlineError(text = failureDetail(failure))
+    if (followState.hasNewContent) {
+      NewMessagesAction(
+        modifier =
+          Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 8.dp),
+      ) {
+        followState = wearThreadFollowLatest(followState)
+        if (latestAnchorIndex >= 0) {
+          coroutineScope.launch {
+            listState.animateScrollToItem(latestAnchorIndex)
+          }
+        }
       }
     }
   }
@@ -870,33 +1002,18 @@ private fun ThreadVoiceMode(
       }
     }
     if (followState.hasNewContent) {
-      Box(
+      NewMessagesAction(
         modifier =
           Modifier
             .align(Alignment.BottomCenter)
-            .padding(bottom = 44.dp)
-            .minimumInteractiveComponentSize()
-            .background(colors.voiceAccentSoft, RoundedCornerShape(14.dp))
-            .border(1.dp, colors.voiceAccent, RoundedCornerShape(14.dp))
-            .clickable(
-              role = Role.Button,
-              onClickLabel = stringResource(R.string.show_new_messages),
-            ) {
-              followState = wearThreadFollowLatest(followState)
-              if (latestAnchorIndex >= 0) {
-                coroutineScope.launch {
-                  listState.animateScrollToItem(latestAnchorIndex)
-                }
-              }
-            }.padding(horizontal = 10.dp, vertical = 5.dp),
-        contentAlignment = Alignment.Center,
+            .padding(bottom = 44.dp),
       ) {
-        Text(
-          text = stringResource(R.string.new_messages) + " ↓",
-          color = colors.voiceAccent,
-          fontSize = 10.sp,
-          fontWeight = FontWeight.Bold,
-        )
+        followState = wearThreadFollowLatest(followState)
+        if (latestAnchorIndex >= 0) {
+          coroutineScope.launch {
+            listState.animateScrollToItem(latestAnchorIndex)
+          }
+        }
       }
     }
     Row(
@@ -965,6 +1082,34 @@ private fun ThreadVoiceMode(
 }
 
 @Composable
+private fun NewMessagesAction(
+  modifier: Modifier,
+  onClick: () -> Unit,
+) {
+  val colors = OpenClawWearTheme.colors
+  Box(
+    modifier =
+      modifier
+        .minimumInteractiveComponentSize()
+        .background(colors.voiceAccentSoft, RoundedCornerShape(14.dp))
+        .border(1.dp, colors.voiceAccent, RoundedCornerShape(14.dp))
+        .clickable(
+          role = Role.Button,
+          onClickLabel = stringResource(R.string.show_new_messages),
+          onClick = onClick,
+        ).padding(horizontal = 10.dp, vertical = 5.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Text(
+      text = stringResource(R.string.new_messages) + " ↓",
+      color = colors.voiceAccent,
+      fontSize = 10.sp,
+      fontWeight = FontWeight.Bold,
+    )
+  }
+}
+
+@Composable
 private fun WearThreadThinking() {
   val colors = OpenClawWearTheme.colors
   Box(
@@ -1021,6 +1166,48 @@ internal fun wearThreadContentRevision(
     latestStreaming = latest?.streaming == true,
     thinking = thinking,
   )
+}
+
+internal fun wearChatContentRevision(
+  sessionId: String?,
+  messages: List<WearChatMessage>,
+  streamingText: String?,
+  latestAnchorIndex: Int,
+): WearThreadContentRevision =
+  WearThreadContentRevision(
+    entryCount = messages.size,
+    latestEntryId = sessionId,
+    latestText =
+      buildString {
+        append(latestAnchorIndex)
+        messages.forEach { message ->
+          append('\u0000')
+          append(message.id)
+          append('\u0001')
+          append(message.role)
+          append('\u0001')
+          append(message.timestamp)
+          append('\u0001')
+          append(message.text)
+        }
+        append('\u0000')
+        append(streamingText)
+      },
+    latestStreaming = !streamingText.isNullOrBlank(),
+    thinking = false,
+  )
+
+internal fun wearChatLatestAnchorIndex(
+  visibleMessageCount: Int,
+  hasStreaming: Boolean,
+  canAbort: Boolean,
+  hasAssistant: Boolean,
+  hasFailure: Boolean,
+): Int {
+  if (visibleMessageCount == 0 && !hasStreaming) return -1
+  return CHAT_FIXED_ITEM_COUNT +
+    visibleMessageCount +
+    listOf(canAbort, hasStreaming, hasAssistant, hasFailure).count { it }
 }
 
 internal fun wearThreadLatestAnchorIndex(
@@ -1302,6 +1489,254 @@ private fun ControlsPage(
 }
 
 @Composable
+private fun AgentPulsePage(
+  snapshot: WearConversationSnapshot,
+  onRefresh: () -> Unit,
+) {
+  val pulse = snapshot.agentPulse
+  WearPage(pageLabel = stringResource(R.string.pulse)) {
+    when {
+      snapshot.gatewayState != WearGatewayState.CONNECTED ->
+        item {
+          EmptyPanel(
+            title = stringResource(R.string.pulse_unavailable),
+            detail = stringResource(R.string.gateway_offline_detail),
+          )
+        }
+      !snapshot.agentPulseSupported ->
+        item {
+          EmptyPanel(
+            title = stringResource(R.string.pulse_unavailable),
+            detail = stringResource(R.string.update_required_detail),
+          )
+        }
+      pulse == null ->
+        item {
+          EmptyPanel(
+            title =
+              if (snapshot.agentPulseLoading) {
+                stringResource(R.string.pulse_loading)
+              } else {
+                stringResource(R.string.pulse_unavailable)
+              },
+            detail =
+              when {
+                snapshot.agentPulseLoading -> stringResource(R.string.pulse_loading_detail)
+                snapshot.agentPulseFailure != null -> failureDetail(snapshot.agentPulseFailure)
+                else -> stringResource(R.string.try_again)
+              },
+          )
+        }
+      else -> {
+        item { AgentPulseTasksPanel(pulse.tasks) }
+        item { AgentPulseSwarmPanel(pulse.swarm) }
+        item { AgentPulseApprovalsPanel(pulse.approvals) }
+        snapshot.agentPulseFailure?.let { pulseFailure ->
+          item { InlineError(text = failureDetail(pulseFailure)) }
+        }
+      }
+    }
+    item {
+      SecondaryButton(
+        label = stringResource(R.string.refresh),
+        enabled = !snapshot.agentPulseLoading,
+        onClick = onRefresh,
+      )
+    }
+  }
+}
+
+@Composable
+private fun AgentPulseTasksPanel(tasks: WearAgentPulseTasks) {
+  val ready = tasks.state == WearAgentPulseTaskState.Ready
+  Panel {
+    AgentPulsePanelHeader(
+      title = stringResource(R.string.pulse_tasks),
+      status =
+        if (ready) {
+          stringResource(R.string.pulse_ready)
+        } else {
+          stringResource(R.string.pulse_unavailable)
+        },
+      statusColor =
+        if (ready) {
+          OpenClawWearTheme.colors.success
+        } else {
+          OpenClawWearTheme.colors.danger
+        },
+    )
+    if (ready) {
+      AgentPulseMetricRow(stringResource(R.string.pulse_queued), tasks.queued)
+      AgentPulseMetricRow(stringResource(R.string.pulse_running), tasks.running)
+      AgentPulseMetricRow(stringResource(R.string.pulse_completed), tasks.completed)
+      AgentPulseMetricRow(stringResource(R.string.pulse_failed), tasks.failed)
+      AgentPulseDetail(text = stringResource(R.string.pulse_task_snapshot_bounded))
+      if (tasks.activeAtLimit == true) {
+        AgentPulseDetail(
+          text = stringResource(R.string.pulse_active_at_limit),
+          color = OpenClawWearTheme.colors.warning,
+        )
+      }
+      if (tasks.recentAtLimit == true) {
+        AgentPulseDetail(
+          text = stringResource(R.string.pulse_recent_at_limit),
+          color = OpenClawWearTheme.colors.warning,
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun AgentPulseSwarmPanel(swarm: WearAgentPulseSwarm) {
+  val colors = OpenClawWearTheme.colors
+  val status =
+    when (swarm.state) {
+      WearAgentPulseSwarmState.Active -> stringResource(R.string.pulse_swarm_active)
+      WearAgentPulseSwarmState.Idle -> stringResource(R.string.pulse_swarm_idle)
+      WearAgentPulseSwarmState.Unavailable -> stringResource(R.string.pulse_unavailable)
+    }
+  val statusColor =
+    when (swarm.state) {
+      WearAgentPulseSwarmState.Active -> colors.warning
+      WearAgentPulseSwarmState.Idle -> colors.success
+      WearAgentPulseSwarmState.Unavailable -> colors.danger
+    }
+  Panel {
+    AgentPulsePanelHeader(
+      title = stringResource(R.string.pulse_swarm),
+      status = status,
+      statusColor = statusColor,
+    )
+    if (swarm.state == WearAgentPulseSwarmState.Active) {
+      AgentPulseMetricRow(stringResource(R.string.pulse_groups), swarm.groups)
+      AgentPulseMetricRow(stringResource(R.string.pulse_running), swarm.running)
+      AgentPulseMetricRow(stringResource(R.string.pulse_done), swarm.done)
+      AgentPulseMetricRow(stringResource(R.string.pulse_failed), swarm.failed)
+      swarm.phases.forEachIndexed { index, phase ->
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+          text = stringResource(R.string.pulse_phase, index + 1),
+          color = colors.text,
+          fontSize = 11.sp,
+          fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+          text =
+            stringResource(
+              R.string.pulse_phase_counts,
+              phase.queued,
+              phase.running,
+              phase.done,
+              phase.failed,
+              phase.hidden,
+            ),
+          color = colors.textMuted,
+          fontSize = 10.sp,
+          lineHeight = 14.sp,
+        )
+      }
+      if (swarm.morePhases == true) {
+        AgentPulseDetail(text = stringResource(R.string.pulse_more_phases))
+      }
+    }
+  }
+}
+
+@Composable
+private fun AgentPulseApprovalsPanel(approvals: WearAgentPulseApprovals) {
+  val colors = OpenClawWearTheme.colors
+  val status =
+    when (approvals.state) {
+      WearAgentPulseApprovalsState.Ready -> stringResource(R.string.pulse_ready)
+      WearAgentPulseApprovalsState.Refreshing -> stringResource(R.string.pulse_refreshing)
+      WearAgentPulseApprovalsState.Unavailable -> stringResource(R.string.pulse_unavailable)
+    }
+  val statusColor =
+    when (approvals.state) {
+      WearAgentPulseApprovalsState.Ready -> colors.success
+      WearAgentPulseApprovalsState.Refreshing -> colors.warning
+      WearAgentPulseApprovalsState.Unavailable -> colors.danger
+    }
+  Panel {
+    AgentPulsePanelHeader(
+      title = stringResource(R.string.pulse_attention),
+      status = status,
+      statusColor = statusColor,
+    )
+    if (approvals.state == WearAgentPulseApprovalsState.Ready) {
+      AgentPulseMetricRow(
+        label = stringResource(R.string.pulse_pending_requests),
+        value = approvals.pending,
+      )
+    }
+  }
+}
+
+@Composable
+private fun AgentPulsePanelHeader(
+  title: String,
+  status: String,
+  statusColor: Color,
+) {
+  Text(
+    text = title,
+    color = OpenClawWearTheme.colors.text,
+    fontSize = 15.sp,
+    fontWeight = FontWeight.SemiBold,
+    modifier = Modifier.fillMaxWidth(),
+  )
+  Text(
+    text = stringResource(R.string.pulse_status, status),
+    color = statusColor,
+    fontSize = 11.sp,
+    fontWeight = FontWeight.SemiBold,
+    modifier = Modifier.fillMaxWidth(),
+  )
+  Spacer(modifier = Modifier.height(6.dp))
+}
+
+@Composable
+private fun AgentPulseMetricRow(
+  label: String,
+  value: Int?,
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text = label,
+      color = OpenClawWearTheme.colors.textMuted,
+      fontSize = 11.sp,
+      modifier = Modifier.weight(1f),
+    )
+    Text(
+      text = value?.toString() ?: stringResource(R.string.pulse_unknown),
+      color = OpenClawWearTheme.colors.text,
+      fontSize = 11.sp,
+      fontWeight = FontWeight.SemiBold,
+    )
+  }
+}
+
+@Composable
+private fun AgentPulseDetail(
+  text: String,
+  color: Color = OpenClawWearTheme.colors.textMuted,
+) {
+  Spacer(modifier = Modifier.height(4.dp))
+  Text(
+    text = text,
+    color = color,
+    fontSize = 10.sp,
+    lineHeight = 14.sp,
+    modifier = Modifier.fillMaxWidth(),
+  )
+}
+
+@Composable
 private fun ConnectionStateScreen(
   loading: Boolean,
   failure: WearConversationFailure?,
@@ -1353,17 +1788,18 @@ private fun ConnectionStateScreen(
 @Composable
 private fun WearPage(
   pageLabel: String,
+  listState: androidx.wear.compose.foundation.lazy.TransformingLazyColumnState? = null,
   content: androidx.wear.compose.foundation.lazy.TransformingLazyColumnScope.() -> Unit,
 ) {
   val colors = OpenClawWearTheme.colors
-  val listState = rememberTransformingLazyColumnState()
-  ScreenScaffold(scrollState = listState) { contentPadding ->
+  val resolvedListState = listState ?: rememberTransformingLazyColumnState()
+  ScreenScaffold(scrollState = resolvedListState) { contentPadding ->
     TransformingLazyColumn(
       modifier =
         Modifier
           .fillMaxSize()
           .background(colors.canvas),
-      state = listState,
+      state = resolvedListState,
       contentPadding = contentPadding,
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2062,5 +2498,6 @@ private fun failureDetail(failure: WearConversationFailure?): String =
     -> stringResource(R.string.try_again)
   }
 
+private const val CHAT_FIXED_ITEM_COUNT = 4
 private const val VISIBLE_MESSAGE_COUNT = 8
 private const val VISIBLE_REALTIME_ENTRY_COUNT = 6

@@ -1,13 +1,12 @@
 // Embedded run entry integration tests cover persisted runtime skill entries.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
 import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
 function restoreBundledPluginsDir() {
@@ -18,15 +17,9 @@ function restoreBundledPluginsDir() {
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledDir;
 }
 
-async function createTempDir(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
 async function setupBundledDiffsPlugin() {
-  const bundledPluginsDir = await createTempDir("openclaw-bundled-");
-  const workspaceDir = await createTempDir("openclaw-workspace-");
+  const bundledPluginsDir = tempDirs.make("openclaw-bundled-");
+  const workspaceDir = tempDirs.make("openclaw-workspace-");
   const pluginRoot = path.join(bundledPluginsDir, "diffs");
 
   await writePluginWithSkill({
@@ -46,9 +39,9 @@ async function resolveBundledDiffsSkillEntries(config?: OpenClawConfig) {
   return resolveEmbeddedRunSkillEntries({ workspaceDir, ...(config ? { config } : {}) });
 }
 
-afterEach(async () => {
+afterEach(() => {
   restoreBundledPluginsDir();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  tempDirs.cleanup();
 });
 
 describe("resolveEmbeddedRunSkillEntries (integration)", () => {

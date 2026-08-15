@@ -20,7 +20,7 @@ import {
   SESSION_STORE_TEMP_STALE_MS,
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
-import { resolveSessionFilePath } from "./paths.js";
+import { resolveSessionFilePathCore } from "./paths.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "./session-sqlite-target.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
@@ -151,7 +151,7 @@ function resolveSessionTranscriptPathForEntry(params: {
     return null;
   }
   try {
-    const resolved = resolveSessionFilePath(params.entry.sessionId, params.entry, {
+    const resolved = resolveSessionFilePathCore(params.entry.sessionId, params.entry, {
       sessionsDir: params.sessionsDir,
     });
     const resolvedSessionsDir = canonicalizePathForComparison(params.sessionsDir);
@@ -318,6 +318,7 @@ export async function hasRetainedSessionTranscriptArchives(storePath: string): P
 
 /** Removes oldest retained reset/delete archives, remeasuring physical usage after each file. */
 export async function pruneSessionTranscriptArchivesToHighWater(params: {
+  excludeNames?: ReadonlySet<string>;
   highWaterBytes: number;
   storePath: string;
 }): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
@@ -325,7 +326,10 @@ export async function pruneSessionTranscriptArchivesToHighWater(params: {
   // may prune an archive the current pass just extracted, which is preferred
   // over evicting additional sessions' searchable rows to spare a copy.
   const files = (await readSessionsDirFiles(path.dirname(params.storePath)))
-    .filter((file) => isRetainedSessionTranscriptArchiveName(file.name))
+    .filter(
+      (file) =>
+        isRetainedSessionTranscriptArchiveName(file.name) && !params.excludeNames?.has(file.name),
+    )
     .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
   let usage = await measureSessionPhysicalDiskUsage(params.storePath);
   let removedFiles = 0;

@@ -1,3 +1,4 @@
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 // Guarded fetch SSRF tests cover redirect hardening, pinned dispatcher setup,
 // trusted proxy modes, and safe header retention.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -8,6 +9,7 @@ import {
   GUARDED_FETCH_MODE,
   retainSafeHeadersForCrossOriginRedirectHeaders,
 } from "./fetch-guard.js";
+import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 import {
   ensureGlobalUndiciStreamTimeouts,
   resetGlobalUndiciStreamTimeoutsForTests,
@@ -1987,6 +1989,79 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("revalidates DNS before reusing an exact direct pinned dispatcher", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const pool = new PinnedDispatcherPool({ maxEntries: 2, idleTtlMs: 60_000 });
+    const lookupFn = createPublicLookup();
+    const dispatchers: unknown[] = [];
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      dispatchers.push((init as RequestInit & { dispatcher?: unknown })?.dispatcher);
+      return okResponse();
+    });
+
+    const first = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      dispatcherPool: pool,
+    });
+    await first.release();
+    const second = await fetchWithSsrFGuard({
+      url: "https://public.example/other",
+      fetchImpl,
+      lookupFn,
+      dispatcherPool: pool,
+    });
+
+    expect(lookupFn).toHaveBeenCalledTimes(2);
+    expect(agentCtor).toHaveBeenCalledOnce();
+    expect(dispatchers[1]).toBe(dispatchers[0]);
+    expect(first.dispatcherReused).toBe(false);
+    expect(second.dispatcherReused).toBe(true);
+    await second.release();
+    await pool.closeAll();
+  });
+
+  it("blocks a private DNS rebind before consulting a warm dispatcher", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const pool = new PinnedDispatcherPool({ maxEntries: 2, idleTtlMs: 60_000 });
+    const lookupFn = vi
+      .fn()
+      .mockResolvedValueOnce([{ address: "93.184.216.34", family: 4 }])
+      .mockResolvedValueOnce([{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+    const first = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      dispatcherPool: pool,
+    });
+    await first.release();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/other",
+        fetchImpl,
+        lookupFn,
+        dispatcherPool: pool,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(agentCtor).toHaveBeenCalledOnce();
+    await pool.closeAll();
+  });
+
   it("rejects timed-out fetches even when dispatcher close stalls", async () => {
     agentCtor.mockImplementationOnce(function MockAgent(this: { close: () => Promise<void> }) {
       this.close = () => new Promise(() => {});
@@ -2415,17 +2490,4 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

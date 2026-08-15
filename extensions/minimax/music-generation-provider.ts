@@ -1,17 +1,16 @@
 // Minimax provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import type {
-  GeneratedMusicAsset,
-  MusicGenerationProvider,
+import {
+  downloadGeneratedMusicAsset,
+  type GeneratedMusicAsset,
+  type MusicGenerationProvider,
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
-  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
-  createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   postJsonRequest,
@@ -90,72 +89,46 @@ async function downloadTrackFromUrl(params: {
   maxBytes: number;
   policy: MinimaxRequestPolicy;
 }): Promise<GeneratedMusicAsset> {
-  const deadline = createProviderOperationDeadline({
+  return await downloadGeneratedMusicAsset({
+    candidate: { url: params.url },
     timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    label: "MiniMax generated music download",
-  });
-  const timeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-  const result = await executeProviderOperationWithRetry({
-    provider: "minimax",
-    stage: "download",
-    operation: async () => {
-      const guardedResult = await fetchWithTimeoutGuarded(
-        params.url,
-        { method: "GET" },
-        timeoutMs(),
-        params.fetchFn,
-        resolveMinimaxGuardedRequestOptions(params.policy),
-      );
-      try {
-        await assertOkOrThrowHttpError(
-          guardedResult.response,
-          "MiniMax generated music download failed",
-        );
-      } catch (error) {
-        await guardedResult.release();
-        throw error;
-      }
-      return guardedResult;
+    fetchFn: params.fetchFn,
+    provider: "MiniMax",
+    requestFailedMessage: "MiniMax generated music download failed",
+    maxBytes: params.maxBytes,
+    validateBinaryResponse: true,
+    includeSourceUrl: false,
+    fetchResponse: async ({ timeoutMs }) => {
+      const result = await executeProviderOperationWithRetry({
+        provider: "minimax",
+        stage: "download",
+        operation: async () => {
+          const guardedResult = await fetchWithTimeoutGuarded(
+            params.url,
+            { method: "GET" },
+            timeoutMs(),
+            params.fetchFn,
+            resolveMinimaxGuardedRequestOptions(params.policy),
+          );
+          try {
+            await assertOkOrThrowHttpError(
+              guardedResult.response,
+              "MiniMax generated music download failed",
+            );
+          } catch (error) {
+            await guardedResult.release();
+            throw error;
+          }
+          return guardedResult;
+        },
+      });
+      return {
+        ...result,
+        mimeType:
+          normalizeOptionalString(result.response.headers.get("content-type")) ?? "audio/mpeg",
+      };
     },
   });
-  try {
-    try {
-      assertProviderBinaryResponseContent(
-        result.response,
-        "MiniMax generated music download",
-        "audio",
-      );
-    } catch (error) {
-      // Release the unread response before its guarded dispatcher is closed.
-      await result.response.body?.cancel().catch(() => undefined);
-      throw error;
-    }
-    const mimeType =
-      normalizeOptionalString(result.response.headers.get("content-type")) ?? "audio/mpeg";
-    const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
-    const buffer = await readResponseWithLimit(result.response, params.maxBytes, {
-      timeoutMs,
-      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `MiniMax generated music download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
-      onOverflow: ({ maxBytes }) =>
-        new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`),
-    });
-    if (buffer.byteLength === 0) {
-      throw new Error("MiniMax generated music download: malformed audio response");
-    }
-    return {
-      buffer,
-      mimeType,
-      fileName: `track-1.${ext}`,
-    };
-  } finally {
-    await result.release();
-  }
 }
 
 function resolveBodyReadTimeoutMs(deadline: ProviderOperationDeadline): number {

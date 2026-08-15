@@ -1,5 +1,5 @@
 // Control UI tests cover the initial-connect splash shown instead of the
-// login gate while a first connect backed by stored credentials is in flight.
+// login gate while the Gateway resolves its first connection attempt.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -34,7 +35,7 @@ async function createPage(): Promise<Page> {
   });
   openContexts.add(context);
   const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
+  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   return page;
 }
 
@@ -43,6 +44,38 @@ async function captureProof(page: Page, name: string): Promise<void> {
     return;
   }
   await page.screenshot({ fullPage: true, path: path.join(artifactDir, `${name}.png`) });
+}
+
+async function traceLoginGateMounts(page: Page): Promise<() => Promise<boolean>> {
+  await page.addInitScript(() => {
+    const trace = { mounted: false };
+    (
+      window as Window & {
+        openclawLoginGateMountTrace?: typeof trace;
+      }
+    ).openclawLoginGateMountTrace = trace;
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (
+            node instanceof Element &&
+            (node.localName === "openclaw-login-gate" || node.querySelector("openclaw-login-gate"))
+          ) {
+            trace.mounted = true;
+          }
+        }
+      }
+    }).observe(document, { childList: true, subtree: true });
+  });
+  return () =>
+    page.evaluate(
+      () =>
+        (
+          window as Window & {
+            openclawLoginGateMountTrace?: { mounted: boolean };
+          }
+        ).openclawLoginGateMountTrace?.mounted ?? false,
+    );
 }
 
 describeControlUiE2e("Control UI initial connect splash E2E", () => {
@@ -69,6 +102,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
 
   it("shows the splash instead of the login gate while a configured token connects", async () => {
     const page = await createPage();
+    const loginGateMounted = await traceLoginGateMounts(page);
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
     await page.goto(`${server.baseUrl}#token=e2e-shared-token`);
@@ -93,6 +127,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await gateway.resolveDeferred("connect");
     await page.locator("openclaw-app-shell").waitFor();
     expect(await page.locator(".connect-splash").count()).toBe(0);
+    expect(await loginGateMounted()).toBe(false);
     await captureProof(page, "02-connected-content");
   });
 
@@ -159,14 +194,22 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     }
   });
 
-  it("keeps the login gate for first connects without stored credentials", async () => {
+  it("shows the splash while a credential-less first connection resolves", async () => {
     const page = await createPage();
+    const loginGateMounted = await traceLoginGateMounts(page);
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
     await page.goto(server.baseUrl);
     await gateway.waitForRequest("connect");
-    await page.locator("openclaw-login-gate").waitFor();
+    await page.locator(".connect-splash").waitFor();
+    expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+    expect(await loginGateMounted()).toBe(false);
+    await captureProof(page, "05-credentialless-connecting-mascot");
+
+    await gateway.resolveDeferred("connect");
+    await page.locator("openclaw-app-shell").waitFor();
     expect(await page.locator(".connect-splash").count()).toBe(0);
+    expect(await loginGateMounted()).toBe(false);
   });
 
   it("falls back to the login gate when stored credentials are rejected", async () => {
@@ -190,10 +233,10 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const page = await createPage();
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
-    // First visit has no credentials: the login gate owns the pending connect.
+    // First visit has no credentials, but the Gateway still owns the pending attempt.
     await page.goto(server.baseUrl);
     await gateway.waitForRequest("connect");
-    await page.locator("openclaw-login-gate").waitFor();
+    await page.locator(".connect-splash").waitFor();
     await gateway.resolveDeferred("connect");
     await page.locator("openclaw-app-shell").waitFor();
 

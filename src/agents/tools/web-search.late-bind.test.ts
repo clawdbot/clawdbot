@@ -7,7 +7,7 @@ import { createWebSearchTool } from "./web-search.js";
 const mocks = vi.hoisted(() => ({
   runWebSearch: vi.fn(),
   resolveManifestContractOwnerPluginId: vi.fn(),
-  getActiveRuntimeWebToolsMetadata: vi.fn(),
+  getActiveRuntimeWebToolsMetadataFromState: vi.fn(),
   getActiveSecretsRuntimeConfigSnapshot: vi.fn(),
 }));
 
@@ -21,7 +21,7 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
 }));
 
 vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
-  getActiveRuntimeWebToolsMetadata: mocks.getActiveRuntimeWebToolsMetadata,
+  getActiveRuntimeWebToolsMetadataFromState: mocks.getActiveRuntimeWebToolsMetadataFromState,
 }));
 
 vi.mock("../../secrets/runtime-state.js", () => ({
@@ -49,8 +49,8 @@ describe("web_search late-bound runtime fallback", () => {
     });
     mocks.resolveManifestContractOwnerPluginId.mockReset();
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue(undefined);
-    mocks.getActiveRuntimeWebToolsMetadata.mockReset();
-    mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue(null);
+    mocks.getActiveRuntimeWebToolsMetadataFromState.mockReset();
+    mocks.getActiveRuntimeWebToolsMetadataFromState.mockReturnValue(null);
     mocks.getActiveSecretsRuntimeConfigSnapshot.mockReset();
     mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue(null);
   });
@@ -136,7 +136,7 @@ describe("web_search late-bound runtime fallback", () => {
   it("prefers active runtime metadata over options.runtimeWebSearch when present", async () => {
     // Active runtime metadata reflects the newest credential snapshot; fallback
     // options only cover tools created before that state exists.
-    mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue({
+    mocks.getActiveRuntimeWebToolsMetadataFromState.mockReturnValue({
       search: {
         selectedProvider: "perplexity",
         providerConfigured: "perplexity",

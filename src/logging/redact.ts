@@ -25,8 +25,8 @@ import {
 } from "./redact-patterns.js";
 import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
 
-export type RedactSensitiveMode = "off" | "tools";
-export type RedactPattern = string | RegExp;
+type RedactSensitiveMode = "off" | "tools";
+type RedactPattern = string | RegExp;
 type LoggingConfig = OpenClawConfig["logging"];
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
@@ -127,12 +127,12 @@ const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
   "iu",
 );
 
-export type RedactOptions = {
+type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: RedactPattern[];
 };
 
-export type ResolvedRedactOptions = {
+type ResolvedRedactOptions = {
   mode: RedactSensitiveMode;
   patterns: RegExp[];
   redactFormBodies: boolean;
@@ -941,10 +941,17 @@ function redactSensitiveFieldValueWithOptions(
   if (resolved.mode === "off") {
     return exactRedacted;
   }
-  const redacted = redactText(exactRedacted, resolved.patterns, {
-    redactFormBodies: resolved.redactFormBodies,
-    redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
-  });
+  // Structured payloads can contain thousands of short, benign strings. Avoid
+  // walking the full default pattern table for each one; the prefilter is kept
+  // in sync with every built-in pattern and sensitive form/URL key. Explicit
+  // user patterns still require the full scan because they have no prefilter.
+  const redacted =
+    options.patterns?.length || couldMatchDefaultRedactPatterns(exactRedacted)
+      ? redactText(exactRedacted, resolved.patterns, {
+          redactFormBodies: resolved.redactFormBodies,
+          redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
+        })
+      : exactRedacted;
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
   if (shouldRedactAppPassword) {
     const appRedacted = redactAppSpecificPasswords(redacted);

@@ -89,28 +89,4 @@ describe("invokeNodeClaudeCliRun", () => {
       }),
     );
   });
-
-  it("forwards admitted session attribution to the envelope and legacy command params", async () => {
-    mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
-    mocks.invoke.mockResolvedValue({ ok: true });
-
-    await invokeNodeClaudeCliRun({
-      nodeId: "node-1",
-      argv: ["-p"],
-      stdin: "hello",
-      sessionKey: "agent:main:claude",
-      timeoutMs: 10_000,
-      idleTimeoutMs: 1_000,
-      onProgress: () => {},
-    });
-
-    expect(mocks.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:claude",
-        params: expect.objectContaining({
-          sessionKey: "agent:main:claude",
-        }),
-      }),
-    );
-  });
 });

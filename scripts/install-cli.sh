@@ -41,27 +41,27 @@ cleanup_tmpfiles() {
 }
 trap cleanup_tmpfiles EXIT
 
-resolve_openclaw_effective_home() {
-  local openclaw_home="${OPENCLAW_HOME:-}"
-  if [[ -z "$openclaw_home" ]]; then
-    echo "$HOME"
-    return 0
-  fi
-
-  case "$openclaw_home" in
-    \~)
-      echo "$HOME"
-      ;;
-    \~/*)
-      echo "${HOME}/${openclaw_home#~/}"
-      ;;
-    *)
-      echo "$openclaw_home"
-      ;;
+resolve_home_path() {
+  local input="$1"
+  case "$input" in
+    \~) echo "$HOME" ;;
+    \~/*) echo "${HOME}${input:1}" ;;
+    *) echo "$input" ;;
   esac
 }
 
-OPENCLAW_EFFECTIVE_HOME="$(resolve_openclaw_effective_home)"
+INSTALLER_CWD="$(pwd -P)"
+resolve_installer_path() {
+  local input
+  input="$(resolve_home_path "$1")"
+  case "$input" in
+    "") echo "" ;;
+    /*) echo "$input" ;;
+    *) echo "${INSTALLER_CWD}/${input}" ;;
+  esac
+}
+
+OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
@@ -85,6 +85,7 @@ JSON=0
 RUN_ONBOARD=0
 SET_NPM_PREFIX=0
 PNPM_CMD=()
+FRESH_GIT_MIN_FREE_KIB=$((6 * 1024 * 1024))
 
 print_usage() {
   cat <<EOF
@@ -195,6 +196,47 @@ require_bin() {
   if ! command -v "$name" >/dev/null 2>&1; then
     fail "Missing required binary: $name"
   fi
+}
+
+available_disk_kib() {
+  local target="$1"
+  df -Pk "$target" 2>/dev/null | awk 'NR == 2 { print $4; exit }' || true
+}
+
+preflight_fresh_git_disk_space() {
+  local repo_dir="$1"
+  local ancestor
+  local available_kib
+  local available_gib
+
+  if [[ -d "$repo_dir/.git" ]]; then
+    return 0
+  fi
+
+  emit_json "{\"event\":\"step\",\"name\":\"disk-space\",\"status\":\"start\"}"
+  ancestor="$repo_dir"
+  while [[ ! -e "$ancestor" ]]; do
+    local parent
+    parent="$(dirname "$ancestor")"
+    if [[ "$parent" == "$ancestor" ]]; then
+      break
+    fi
+    ancestor="$parent"
+  done
+  if [[ ! -d "$ancestor" ]]; then
+    ancestor="$(dirname "$ancestor")"
+  fi
+
+  available_kib="$(available_disk_kib "$ancestor")"
+  if [[ ! "$available_kib" =~ ^[0-9]+$ ]]; then
+    emit_json "{\"event\":\"step\",\"name\":\"disk-space\",\"status\":\"warn\",\"reason\":\"unreadable\"}"
+    return 0
+  fi
+  if ((available_kib < FRESH_GIT_MIN_FREE_KIB)); then
+    available_gib="$(awk -v kib="$available_kib" 'BEGIN { printf "%.1f", kib / 1048576 }')"
+    fail "Fresh Git installs require at least 6 GiB of free disk space; only ${available_gib} GiB is available. Free disk space and retry."
+  fi
+  emit_json "{\"event\":\"step\",\"name\":\"disk-space\",\"status\":\"ok\"}"
 }
 
 has_sudo() {
@@ -1306,12 +1348,10 @@ ensure_pnpm_git_prepare_allowlist() {
 install_openclaw_from_git() {
   local repo_dir="$1"
   local repo_url="https://github.com/openclaw/openclaw.git"
+  local fresh_checkout=0
 
   if [[ -z "$repo_dir" ]]; then
     fail "Git install dir cannot be empty"
-  fi
-  if [[ "$repo_dir" != /* ]]; then
-    repo_dir="$(pwd)/$repo_dir"
   fi
   mkdir -p "$(dirname "$repo_dir")"
   repo_dir="$(cd "$(dirname "$repo_dir")" && pwd)/$(basename "$repo_dir")"
@@ -1323,9 +1363,11 @@ install_openclaw_from_git() {
     log "Installing Openclaw from GitHub (${repo_url})..."
   fi
 
+  emit_json '{"event":"step","name":"git-tools","status":"start"}'
   ensure_git
   ensure_pnpm
   ensure_pnpm_binary_for_scripts
+  emit_json '{"event":"step","name":"git-tools","status":"ok"}'
 
   if [[ -d "$repo_dir/.git" ]] &&
     ! git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
@@ -1336,21 +1378,34 @@ install_openclaw_from_git() {
     :
   elif [[ -d "$repo_dir" ]]; then
     if [[ -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
+      emit_json '{"event":"step","name":"git-clone","status":"start"}'
       git clone "$repo_url" "$repo_dir"
+      emit_json '{"event":"step","name":"git-clone","status":"ok"}'
+      fresh_checkout=1
     else
       fail "Git install dir exists but is not a git repo: ${repo_dir}"
     fi
   else
+    emit_json '{"event":"step","name":"git-clone","status":"start"}'
     git clone "$repo_url" "$repo_dir"
+    emit_json '{"event":"step","name":"git-clone","status":"ok"}'
+    fresh_checkout=1
   fi
 
   local git_ref
   git_ref="$(resolve_git_openclaw_ref)"
   if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
     log "Using git ref: ${git_ref}"
+    if [[ "$fresh_checkout" -eq 0 ]]; then
+      emit_json '{"event":"step","name":"git-update","status":"start"}'
+    fi
     checkout_git_openclaw_ref "$repo_dir" "$git_ref"
+    if [[ "$fresh_checkout" -eq 0 ]]; then
+      emit_json '{"event":"step","name":"git-update","status":"ok"}'
+    fi
   else
     log "Repo is dirty; skipping git checkout/update"
+    emit_json '{"event":"step","name":"git-update","status":"warn","reason":"dirty"}'
   fi
 
   if [[ -n "${REQUIRED_COMPATIBLE_VERSION:-}" ]]; then
@@ -1368,12 +1423,20 @@ install_openclaw_from_git() {
 
   local install_lockfile_flag
   install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
+  emit_json '{"event":"step","name":"dependencies","status":"start"}'
   CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
+  emit_json '{"event":"step","name":"dependencies","status":"ok"}'
 
+  emit_json '{"event":"step","name":"control-ui","status":"start"}'
   if ! run_pnpm -C "$repo_dir" ui:build; then
     log "UI build failed; continuing (CLI may still work)"
+    emit_json '{"event":"step","name":"control-ui","status":"warn"}'
+  else
+    emit_json '{"event":"step","name":"control-ui","status":"ok"}'
   fi
+  emit_json '{"event":"step","name":"cli-build","status":"start"}'
   run_pnpm -C "$repo_dir" build
+  emit_json '{"event":"step","name":"cli-build","status":"ok"}'
 
   mkdir -p "${PREFIX}/bin"
   cat > "${PREFIX}/bin/openclaw" <<EOF
@@ -1383,14 +1446,6 @@ exec "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js" "\$@"
 EOF
   chmod +x "${PREFIX}/bin/openclaw"
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"ok\",\"method\":\"git\"}"
-}
-
-resolve_openclaw_version() {
-  local version=""
-  if [[ -x "${PREFIX}/bin/openclaw" ]]; then
-    version="$("${PREFIX}/bin/openclaw" --version 2>/dev/null | head -n 1 | tr -d '\r')"
-  fi
-  echo "$version"
 }
 
 is_gateway_daemon_loaded() {
@@ -1446,9 +1501,15 @@ refresh_gateway_service_if_loaded() {
 
 main() {
   parse_args "$@"
+  PREFIX="$(resolve_installer_path "$PREFIX")"
+  GIT_DIR="$(resolve_installer_path "$GIT_DIR")"
 
   if [[ "${OPENCLAW_NO_ONBOARD:-0}" == "1" ]]; then
     RUN_ONBOARD=0
+  fi
+
+  if [[ "$INSTALL_METHOD" == "git" ]]; then
+    preflight_fresh_git_disk_space "$GIT_DIR"
   fi
 
   select_node_version_for_platform "$(os_detect)" "$(arch_detect)"
@@ -1468,17 +1529,15 @@ main() {
     fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
   fi
 
-  refresh_gateway_service_if_loaded
-
   local installed_version
-  installed_version="$(resolve_openclaw_version)"
-  if [[ -n "$installed_version" ]]; then
-    emit_json "{\"event\":\"done\",\"ok\":true,\"version\":\"${installed_version//\"/\\\"}\"}"
-    log "OpenClaw installed (${installed_version})."
-  else
-    emit_json "{\"event\":\"done\",\"ok\":true}"
-    log "OpenClaw installed."
+  if ! installed_version="$("${PREFIX}/bin/openclaw" --version 2>/dev/null | head -n 1 | tr -d '\r')" ||
+    [[ -z "$installed_version" ]]; then
+    fail "Installed OpenClaw CLI did not return a version successfully from ${PREFIX}/bin/openclaw."
   fi
+
+  refresh_gateway_service_if_loaded
+  emit_json "{\"event\":\"done\",\"ok\":true,\"version\":\"${installed_version//\"/\\\"}\"}"
+  log "OpenClaw installed (${installed_version})."
 
   if [[ "$RUN_ONBOARD" -eq 1 ]]; then
     "${PREFIX}/bin/openclaw" onboard

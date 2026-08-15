@@ -7,6 +7,10 @@ import type {
   WorkerLiveEventParams,
   WorkerLiveEventResponseFrame,
   WorkerProtocolCloseReason,
+  WorkerSessionsSendParams,
+  WorkerSessionsSendResponseFrame,
+  WorkerSessionsSpawnParams,
+  WorkerSessionsSpawnResponseFrame,
   WorkerTranscriptCommitParams,
   WorkerTranscriptCommitResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -32,12 +36,13 @@ import {
   WorkerFencedError,
   isFencedCloseReason,
   resolvePositiveTimeout,
-  toError,
+  toWorkerConnectionError,
   type WorkerConnectionExit,
   type WorkerConnectionOptions,
   type WorkerConnectionState,
   type WorkerFencedReason,
 } from "./worker-connection-contract.js";
+import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 
 export {
@@ -57,6 +62,8 @@ const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
 const DEFAULT_ADMISSION_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 const DEFAULT_ADMISSION_DEADLINE_MS = 120_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const WORKER_SESSION_SPAWN_TIMEOUT_MS = 15 * 60_000;
+const WORKER_SESSION_SEND_TIMEOUT_SLACK_MS = 60_000;
 
 type ReadyWaiter = {
   resolve: (hello: WorkerHelloOk) => void;
@@ -196,6 +203,41 @@ export class WorkerConnection {
     return this.frames.request("live-event", params);
   }
 
+  requestSessionsSpawn(
+    params: WorkerSessionsSpawnParams,
+  ): Promise<WorkerSessionsSpawnResponseFrame> {
+    const timeoutMs = Math.max(this.requestTimeoutMs, WORKER_SESSION_SPAWN_TIMEOUT_MS);
+    return this.requestDurableSessionOperation(() =>
+      this.frames.request("sessions-spawn", params, undefined, timeoutMs),
+    );
+  }
+
+  requestSessionsSend(params: WorkerSessionsSendParams): Promise<WorkerSessionsSendResponseFrame> {
+    const requestedTimeoutMs =
+      (params.timeoutSeconds ?? 30) * 1_000 + WORKER_SESSION_SEND_TIMEOUT_SLACK_MS;
+    const timeoutMs = Math.max(this.requestTimeoutMs, requestedTimeoutMs);
+    return this.requestDurableSessionOperation(() =>
+      this.frames.request("sessions-send", params, undefined, timeoutMs),
+    );
+  }
+
+  private async requestDurableSessionOperation<T>(request: () => Promise<T>): Promise<T> {
+    for (;;) {
+      try {
+        return await request();
+      } catch (error) {
+        if (!(error instanceof WorkerConnectionInterruptedError) || this.isTerminal()) {
+          throw error;
+        }
+        // The Gateway durably coordinates these calls by toolCallId. Reconnect
+        // and replay the identical request until a response arrives or the
+        // credential/connection is terminal; transient reconnects cannot invent
+        // a second operation.
+        await this.waitForReady();
+      }
+    }
+  }
+
   requestInferenceStart(
     params: WorkerInferenceStartParams,
     beforeResolve?: (frame: WorkerInferenceStartResponseFrame) => void,
@@ -228,7 +270,7 @@ export class WorkerConnection {
             this.reconnectAbort.signal,
           );
         } catch (error) {
-          throw this.isTerminal() ? this.terminalError() : toError(error);
+          throw this.isTerminal() ? this.terminalError() : toWorkerConnectionError(error);
         }
         remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
         if (remainingMs <= 0) {
@@ -236,8 +278,17 @@ export class WorkerConnection {
         }
       }
       try {
-        return await this.connectOnce(attempt, Math.min(this.admissionTimeoutMs, remainingMs));
+        const hello = await this.connectOnce(
+          attempt,
+          Math.min(this.admissionTimeoutMs, remainingMs),
+        );
+        this.reportConnectionFailure(undefined);
+        return hello;
       } catch (error) {
+        if (this.isTerminal()) {
+          throw this.terminalError();
+        }
+        this.reportConnectionFailure(toWorkerConnectionError(error));
         if (error instanceof WorkerAdmissionError) {
           if (error.retryable) {
             attempt += 1;
@@ -246,8 +297,9 @@ export class WorkerConnection {
           this.handleAdmissionFailure(error);
           throw error;
         }
-        if (this.isTerminal()) {
-          throw this.terminalError();
+        if (error instanceof WorkerConnectionEndpointError) {
+          this.finishFailed(error);
+          throw error;
         }
         attempt += 1;
       }
@@ -310,7 +362,7 @@ export class WorkerConnection {
       await this.connectUntilReady();
     } catch (error) {
       if (!this.isTerminal()) {
-        this.finishFailed(toError(error));
+        this.finishFailed(toWorkerConnectionError(error));
       }
     } finally {
       this.reconnectPromise = undefined;
@@ -358,7 +410,7 @@ export class WorkerConnection {
       }
     } catch (error) {
       if (!(error instanceof WorkerConnectionInterruptedError) && !this.isTerminal()) {
-        this.finishFailed(toError(error));
+        this.finishFailed(toWorkerConnectionError(error));
         return;
       }
     }
@@ -393,6 +445,14 @@ export class WorkerConnection {
   private transition(state: WorkerConnectionState): void {
     this.stateValue = state;
     notifyListeners(this.stateListeners, state);
+  }
+
+  private reportConnectionFailure(error: Error | undefined): void {
+    try {
+      this.options.onConnectionFailure?.(error);
+    } catch {
+      // Diagnostics must never change connection retry or admission behavior.
+    }
   }
 
   private finishFenced(reason: WorkerFencedReason): void {

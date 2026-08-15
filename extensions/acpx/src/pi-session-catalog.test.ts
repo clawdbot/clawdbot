@@ -46,10 +46,12 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
 import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
 import { listLocalPiSessionPage, readLocalPiTranscriptPage } from "./pi-session-catalog.js";
 import {
+  bindTestCatalogOwner,
   capturePiContinuationCatalog,
   createPiStoreFixture,
   installFakePiFixture,
   registerPiNodeHostCommands,
+  type TestSessionCatalogProvider,
 } from "./pi-session-catalog.test-support.js";
 import { listPiSummaryPage } from "./pi-session-store.js";
 
@@ -182,22 +184,42 @@ describe("Pi session catalog", () => {
       readLocalPiTranscriptPage({ threadId: "pi-session", cursor: 123 }),
     ).rejects.toThrow("cursor is invalid");
 
-    let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
+    let provider: TestSessionCatalogProvider | undefined;
     registerPiSessionCatalog({
       pluginConfig: {},
       runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
-      registerSessionCatalog: (value: NonNullable<typeof provider>) => {
-        provider = value;
+      registerSessionCatalog: (
+        value: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0],
+      ) => {
+        provider = bindTestCatalogOwner(value);
       },
       registerNodeHostCommand: vi.fn(),
       registerNodeInvokePolicy: vi.fn(),
     } as unknown as OpenClawPluginApi);
     await expect(
-      provider!.read({ hostId: "gateway", threadId: "pi-session", limit: 2 }),
+      provider!.read({
+        allowProcessHomeFallback: false,
+        hostId: "gateway",
+        threadId: "pi-session",
+        limit: 2,
+      }),
     ).resolves.toMatchObject({ threadId: "pi-session", items: expect.any(Array) });
-    await expect(provider!.list({})).resolves.toEqual([
+    await expect(provider!.list({ allowProcessHomeFallback: false })).resolves.toEqual([
       expect.objectContaining({ hostId: "gateway", sessions: [expect.any(Object)] }),
     ]);
+
+    for (const key of ["PI_CODING_AGENT_SESSION_DIR", "PI_CODING_AGENT_DIR"] as const) {
+      delete process.env[key];
+    }
+    process.env.HOME = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-isolated-home-"));
+    temporaryDirectories.push(process.env.HOME);
+    const request = { hostId: "gateway", threadId: "pi-session" };
+    const isolatedRequest = { ...request, allowProcessHomeFallback: false };
+    for (const operation of [provider!.continueSession, provider!.openTerminal]) {
+      await expect(operation?.(isolatedRequest)).rejects.toThrow(
+        "local Pi sessions are unavailable in isolated state",
+      );
+    }
   });
 
   it("recognizes Pi sessions when the agent directory uses a symlinked path", async () => {
@@ -664,69 +686,69 @@ describe("Pi session catalog", () => {
     ).toBe(false);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "opens validated local Pi sessions with the upstream terminal resume contract",
-    async () => {
-      await createPiStore();
-      await installFakePi();
-      let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
-      const commands: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0][] = [];
-      registerPiSessionCatalog({
-        pluginConfig: {},
-        runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
-        registerSessionCatalog: (value: NonNullable<typeof provider>) => {
-          provider = value;
-        },
-        registerNodeHostCommand: (
-          command: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0],
-        ) => commands.push(command),
-        registerNodeInvokePolicy: vi.fn(),
-      } as unknown as OpenClawPluginApi);
+  it("opens validated local Pi sessions with the upstream terminal resume contract", async () => {
+    await createPiStore();
+    const binDirectory = await installFakePi();
+    const executable = path.join(binDirectory, process.platform === "win32" ? "pi.cmd" : "pi");
+    let provider: TestSessionCatalogProvider | undefined;
+    const commands: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0][] = [];
+    registerPiSessionCatalog({
+      pluginConfig: {},
+      runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
+      registerSessionCatalog: (
+        value: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0],
+      ) => {
+        provider = bindTestCatalogOwner(value);
+      },
+      registerNodeHostCommand: (
+        command: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0],
+      ) => commands.push(command),
+      registerNodeInvokePolicy: vi.fn(),
+    } as unknown as OpenClawPluginApi);
 
-      await expect(provider!.list({ hostIds: ["gateway"] })).resolves.toEqual([
-        expect.objectContaining({
-          sessions: [expect.objectContaining({ threadId: "pi-session", canOpenTerminal: true })],
-        }),
-      ]);
-      await expect(
-        provider!.openTerminal!({ hostId: "gateway", threadId: "pi-session" }),
-      ).resolves.toEqual({
-        kind: "local",
-        argv: [expect.stringMatching(/pi$/u), "--session", "pi-session"],
+    await expect(provider!.list({ hostIds: ["gateway"] })).resolves.toEqual([
+      expect.objectContaining({
+        sessions: [expect.objectContaining({ threadId: "pi-session", canOpenTerminal: true })],
+      }),
+    ]);
+    await expect(
+      provider!.openTerminal!({ hostId: "gateway", threadId: "pi-session" }),
+    ).resolves.toEqual({
+      kind: "local",
+      argv: [executable, "--session", "pi-session"],
+      cwd: "/workspace",
+      title: "pi --session pi-session…",
+    });
+    await expect(
+      provider!.openTerminal!({ hostId: "gateway", threadId: "missing" }),
+    ).rejects.toThrow("Pi session is unavailable");
+
+    const terminal = commands.find((command) => command.command === PI_TERMINAL_RESUME_COMMAND)!;
+    const io = {
+      signal: new AbortController().signal,
+      onInput: vi.fn(),
+      emitChunk: vi.fn(),
+    };
+    await expect(
+      terminal.handle?.(
+        JSON.stringify({ threadId: "pi-session", cols: 100, rows: 30 }),
+        io as never,
+      ),
+    ).resolves.toBe(JSON.stringify({ exitCode: 0 }));
+    expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
+      {
+        file: executable,
+        args: ["--session", "pi-session"],
         cwd: "/workspace",
-        title: "pi --session pi-session…",
-      });
-      await expect(
-        provider!.openTerminal!({ hostId: "gateway", threadId: "missing" }),
-      ).rejects.toThrow("Pi session is unavailable");
-
-      const terminal = commands.find((command) => command.command === PI_TERMINAL_RESUME_COMMAND)!;
-      const io = {
-        signal: new AbortController().signal,
-        onInput: vi.fn(),
-        emitChunk: vi.fn(),
-      };
-      await expect(
-        terminal.handle?.(
-          JSON.stringify({ threadId: "pi-session", cols: 100, rows: 30 }),
-          io as never,
-        ),
-      ).resolves.toBe(JSON.stringify({ exitCode: 0 }));
-      expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
-        {
-          file: expect.stringMatching(/pi$/u),
-          args: ["--session", "pi-session"],
-          cwd: "/workspace",
-          cols: 100,
-          rows: 30,
-        },
-        io,
-      );
-      await expect(
-        terminal.handle?.(JSON.stringify({ threadId: "--help", cols: 100, rows: 30 }), io as never),
-      ).rejects.toThrow("threadId is invalid");
-    },
-  );
+        cols: 100,
+        rows: 30,
+      },
+      io,
+    );
+    await expect(
+      terminal.handle?.(JSON.stringify({ threadId: "--help", cols: 100, rows: 30 }), io as never),
+    ).rejects.toThrow("threadId is invalid");
+  });
 
   it("hides and rejects Continue when ACP cannot resume Pi", async () => {
     await createPiStore("hi", "Pi catalog session", { command: "pwd" }, true);
@@ -778,7 +800,7 @@ describe("Pi session catalog", () => {
   });
 
   it("opens paired-node Pi sessions only through the advertised terminal command", async () => {
-    let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
+    let provider: TestSessionCatalogProvider | undefined;
     const page = {
       payloadJSON: JSON.stringify({
         sessions: [
@@ -811,8 +833,10 @@ describe("Pi session catalog", () => {
           invoke,
         },
       },
-      registerSessionCatalog: (value: NonNullable<typeof provider>) => {
-        provider = value;
+      registerSessionCatalog: (
+        value: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0],
+      ) => {
+        provider = bindTestCatalogOwner(value);
       },
       registerNodeHostCommand: vi.fn(),
       registerNodeInvokePolicy: vi.fn(),
@@ -871,179 +895,5 @@ describe("Pi session catalog", () => {
     } as unknown as OpenClawPluginApi;
     registerPiSessionCatalog(api);
     expect(registerSessionCatalog).not.toHaveBeenCalled();
-  });
-
-  it("bridges paired-node list and read requests without undefined transport fields", async () => {
-    let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
-    const invoke = vi
-      .fn()
-      .mockResolvedValueOnce({
-        payloadJSON: JSON.stringify({
-          sessions: [
-            {
-              threadId: "pi-remote",
-              status: "stored",
-              source: "pi-cli",
-              archived: false,
-              canContinue: false,
-              canArchive: false,
-            },
-          ],
-        }),
-      })
-      .mockResolvedValueOnce({
-        payloadJSON: JSON.stringify({
-          threadId: "pi-remote",
-          items: [{ type: "agentMessage", text: "remote answer" }],
-        }),
-      });
-    const api = {
-      pluginConfig: {},
-      runtime: {
-        nodes: {
-          list: vi.fn().mockResolvedValue({
-            nodes: [
-              {
-                nodeId: "node-1",
-                displayName: "Remote",
-                connected: true,
-                commands: [PI_SESSIONS_LIST_COMMAND, PI_SESSION_READ_COMMAND],
-              },
-            ],
-          }),
-          invoke,
-        },
-      },
-      registerSessionCatalog: (value: NonNullable<typeof provider>) => {
-        provider = value;
-      },
-      registerNodeHostCommand: vi.fn(),
-      registerNodeInvokePolicy: vi.fn(),
-    } as unknown as OpenClawPluginApi;
-
-    registerPiSessionCatalog(api);
-    const catalog = provider;
-    expect(catalog).toBeDefined();
-    await catalog!.list({ hostIds: ["node:node-1"] });
-    await catalog!.read({ hostId: "node:node-1", threadId: "pi-remote" });
-
-    expect(invoke).toHaveBeenNthCalledWith(1, {
-      nodeId: "node-1",
-      command: PI_SESSIONS_LIST_COMMAND,
-      params: {},
-      timeoutMs: 20_000,
-      scopes: ["operator.write"],
-    });
-    expect(invoke).toHaveBeenNthCalledWith(2, {
-      nodeId: "node-1",
-      command: PI_SESSION_READ_COMMAND,
-      params: { threadId: "pi-remote" },
-      timeoutMs: 20_000,
-      scopes: ["operator.write"],
-    });
-
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        sessions: [
-          {
-            threadId: 123,
-            status: "stored",
-            archived: false,
-            canContinue: false,
-            canArchive: false,
-          },
-        ],
-      }),
-    });
-    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
-      expect.objectContaining({
-        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
-      }),
-    ]);
-
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        sessions: [
-          {
-            threadId: "--help",
-            status: "stored",
-            archived: false,
-            canContinue: false,
-            canArchive: false,
-          },
-        ],
-      }),
-    });
-    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
-      expect.objectContaining({
-        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
-      }),
-    ]);
-
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        threadId: "pi-remote",
-        items: [{ type: "invalid", text: "bad" }],
-      }),
-    });
-    await expect(catalog!.read({ hostId: "node:node-1", threadId: "pi-remote" })).rejects.toThrow(
-      "invalid transcript page",
-    );
-
-    invoke.mockClear();
-    await expect(
-      catalog!.read({ hostId: "node:node-1", threadId: "pi-remote", cursor: "" }),
-    ).rejects.toThrow("cursor is invalid");
-    await expect(
-      catalog!.list({
-        hostIds: ["node:node-1"],
-        cursors: { "node:node-1": "" },
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
-      }),
-    ]);
-    expect(invoke).not.toHaveBeenCalled();
-
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({ sessions: [], nextCursor: " wrapped " }),
-    });
-    await expect(catalog!.list({ hostIds: ["node:node-1"] })).resolves.toEqual([
-      expect.objectContaining({
-        error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) },
-      }),
-    ]);
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({
-        threadId: "pi-remote",
-        items: [],
-        nextCursor: " wrapped ",
-      }),
-    });
-    await expect(catalog!.read({ hostId: "node:node-1", threadId: "pi-remote" })).rejects.toThrow(
-      "invalid cursor",
-    );
-
-    const exactCursor = Buffer.from(JSON.stringify({ offset: 1 }), "utf8").toString("base64url");
-    invoke.mockResolvedValueOnce({ payloadJSON: JSON.stringify({ sessions: [] }) });
-    await catalog!.list({
-      hostIds: ["node:node-1"],
-      cursors: { "node:node-1": exactCursor },
-    });
-    expect(invoke).toHaveBeenLastCalledWith(
-      expect.objectContaining({ params: { cursor: exactCursor } }),
-    );
-    invoke.mockResolvedValueOnce({
-      payloadJSON: JSON.stringify({ threadId: "pi-remote", items: [] }),
-    });
-    await catalog!.read({
-      hostId: "node:node-1",
-      threadId: "pi-remote",
-      cursor: exactCursor,
-    });
-    expect(invoke).toHaveBeenLastCalledWith(
-      expect.objectContaining({ params: { threadId: "pi-remote", cursor: exactCursor } }),
-    );
   });
 });

@@ -12,7 +12,7 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
-import { normalizePluginsConfigWithResolver } from "../plugins/config-normalization-shared.js";
+import { normalizePluginsConfigWithResolverCore } from "../plugins/config-normalization-shared.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
@@ -123,7 +123,7 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
   }
   return passesManifestOwnerBasePolicy({
     plugin: { id: "browser" },
-    normalizedConfig: normalizePluginsConfigWithResolver(
+    normalizedConfig: normalizePluginsConfigWithResolverCore(
       cfg.plugins,
       (pluginId) => normalizeOptionalLowercaseString(pluginId) ?? "",
     ),

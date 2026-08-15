@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAgentExecutionAttribution } from "../../agents/agent-execution-attribution.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
   createMinimalRunAgentTurnParams,
@@ -32,40 +31,6 @@ describe("executeAgentTurn contract", () => {
         result: { payloads: [{ text: "done" }] },
       },
     });
-  });
-
-  it("uses supplied attribution as the run-id authority", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "done" }],
-      meta: {},
-    });
-    const attribution = createAgentExecutionAttribution({
-      runId: "attributed-run",
-      lifecycleGeneration: "generation-1",
-    });
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams(),
-      attribution,
-    });
-
-    expect(result.runId).toBe("attributed-run");
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.attribution).toBe(attribution);
-  });
-
-  it("rejects conflicting flat and attributed run ids before execution", async () => {
-    const attribution = createAgentExecutionAttribution({
-      runId: "attributed-run",
-      lifecycleGeneration: "generation-1",
-    });
-
-    await expect(
-      executeAgentTurn({
-        ...createMinimalRunAgentTurnParams({ opts: { runId: "flat-run" } }),
-        attribution,
-      }),
-    ).rejects.toThrow("Agent turn attribution disagrees with opts.runId");
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("retains a late completed result for accounting after user abort was accepted", async () => {

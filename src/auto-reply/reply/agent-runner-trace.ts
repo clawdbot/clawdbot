@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
@@ -133,7 +134,7 @@ function formatKeyValueTraceBlock(
   return `🔎 ${title}:\n~~~text\n${lines.join("\n")}\n~~~`;
 }
 
-function inferFallbackAttemptResult(attempt: { reason?: string; status?: number }): string {
+function inferFallbackAttemptResult(attempt: { reason?: FailoverReason; status?: number }): string {
   if (attempt.reason === "timeout") {
     return "timeout";
   }
@@ -144,7 +145,7 @@ export function mergeExecutionTrace(params: {
   fallbackAttempts?: Array<{
     provider: string;
     model: string;
-    reason?: string;
+    reason?: FailoverReason;
     status?: number;
   }>;
   executionTrace?: {

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -144,7 +144,7 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
         lastHeartbeatSentAt: previousSentAt,
       });
       replySpy.mockImplementation(async () => {
-        await patchSessionEntry(
+        await patchSessionEntryCore(
           { storePath, sessionKey },
           () => ({
             pendingFinalDelivery: {

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { resolveNpmJsonEntries } from "../../lib/npm-json-output.mjs";
+import { resolveNpmJsonEntries } from "../../lib/npm-json-output.mts";
 import { sleep as delay } from "../../lib/sleep.mjs";
 import { readPositiveIntEnv } from "./env-limits.ts";
 import { exists, readJson } from "./filesystem.ts";

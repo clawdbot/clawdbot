@@ -9,7 +9,10 @@ import {
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
+import {
+  resolveSkillInvocationPolicy,
+  resolveSkillManifestMetadata,
+} from "../loading/frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "../loading/local-loader.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry } from "../types.js";
@@ -68,7 +71,7 @@ function loadTestWorkspaceSkillEntries(workspaceDir: string): SkillEntry[] {
     return {
       skill,
       frontmatter,
-      metadata: resolveOpenClawMetadata(frontmatter),
+      metadata: resolveSkillManifestMetadata(frontmatter),
       invocation,
       exposure: {
         includeInRuntimeRegistry: true,
@@ -115,7 +118,7 @@ describe("installSkill before_install hooks", () => {
     resetGlobalHookRunner();
     runCommandWithTimeoutMock.mockClear();
     skillsInstallTesting.setDepsForTest({
-      loadWorkspaceSkillEntries: loadTestWorkspaceSkillEntries,
+      loadWorkspaceSkills: loadTestWorkspaceSkillEntries,
       resolveNodeInstallStateDir: () => {
         const stateDir = process.env.OPENCLAW_STATE_DIR;
         if (!stateDir) {

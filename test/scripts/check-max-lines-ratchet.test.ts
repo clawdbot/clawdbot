@@ -12,7 +12,7 @@ import {
   isGovernedSourcePath,
   main,
   parseBaseline,
-} from "../../scripts/check-max-lines-ratchet.mjs";
+} from "../../scripts/check-max-lines-ratchet.mts";
 
 const tempDirs: string[] = [];
 const nestedGitEnvKeys = [

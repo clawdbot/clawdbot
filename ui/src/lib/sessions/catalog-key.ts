@@ -16,7 +16,10 @@ export type CatalogSessionKey = {
     instead of waiting for the next catalog poll. */
 export const CATALOG_SESSION_CONTINUED_EVENT = "openclaw-session-catalog-continued";
 
-export type CatalogSessionContinuedDetail = CatalogSessionKey & { sessionKey: string };
+export type CatalogSessionContinuedDetail = CatalogSessionKey & {
+  agentId: string;
+  sessionKey: string;
+};
 
 export function announceCatalogSessionContinued(detail: CatalogSessionContinuedDetail): void {
   document.dispatchEvent(
@@ -38,14 +41,16 @@ type CatalogSessionLookup = {
 export async function lookupCatalogSession(params: {
   client: Pick<GatewayBrowserClient, "request">;
   key: CatalogSessionKey;
+  agentId: string;
   isCurrent: () => boolean;
 }): Promise<CatalogSessionLookup | null> {
-  const { client, key } = params;
+  const { agentId, client, key } = params;
   let cursor: string | undefined;
   const seenCursors = new Set<string>();
   let host: SessionCatalogHost | null = null;
   for (let pageIndex = 0; pageIndex < CATALOG_SESSION_LOOKUP_MAX_PAGES; pageIndex += 1) {
     const listed = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+      agentId,
       catalogId: key.catalogId,
       hostIds: [key.hostId],
       limitPerHost: CATALOG_SESSION_LOOKUP_PAGE_LIMIT,

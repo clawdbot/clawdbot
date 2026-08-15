@@ -31,23 +31,23 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 
 ### Tool groups
 
-| Group              | Tools                                                                                                                                                                                                                                                  |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                                                                                                                                                        |
-| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                                                                                                                                                 |
-| `group:sessions`   | `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `spawn_task`, `dismiss_task` |
-| `group:memory`     | `memory_search`, `memory_get`                                                                                                                                                                                                                          |
-| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                                                                                                  |
-| `group:ui`         | `browser`, `screen`, `terminal`, `canvas`, `show_widget`                                                                                                                                                                                               |
-| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                                                                                                                 |
-| `group:messaging`  | `message`                                                                                                                                                                                                                                              |
-| `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                    |
-| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`                                                                                                                                                   |
-| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                                                                                                                   |
-| `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                                                                                                                  |
-| `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                           |
+| Group              | Tools                                                                                                                                                                                                                                                    |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                                                                                                                                                          |
+| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                                                                                                                                                   |
+| `group:sessions`   | `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `suggest_task`, `dismiss_task` |
+| `group:memory`     | `memory_search`, `memory_get`                                                                                                                                                                                                                            |
+| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                                                                                                    |
+| `group:ui`         | `browser`, `screen`, `dashboard`, `terminal`, `portal`, `canvas`, `show_widget`                                                                                                                                                                          |
+| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                                                                                                                   |
+| `group:messaging`  | `message`                                                                                                                                                                                                                                                |
+| `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
+| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`                                                                                                                                                     |
+| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                                                                                                                     |
+| `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                                                                                                                    |
+| `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                             |
 
-`spawn_task` lets a coding agent propose confirmed follow-up work without starting it. The Control UI shows the title and summary as an actionable chip; a Gateway-backed TUI shows an equivalent interactive prompt. Accepting either creates a fresh managed-worktree session and sends the full prompt there while the current turn continues. `dismiss_task` withdraws a still-pending suggestion by the ephemeral `task_id` returned from `spawn_task`.
+`suggest_task` lets a coding agent propose confirmed follow-up work without starting it. The suggestion's project directory must be a git checkout; invalid suggestions, including a non-git directory or blank prompt, are rejected when the tool records them. The Control UI shows the title and summary as an actionable chip; a Gateway-backed TUI shows an equivalent interactive prompt. Accepting a suggestion can start it in a fresh managed worktree (the default), start it locally in a new session in the suggested checkout, send it to a cloud worker profile when one is configured, or deliver it into the source session. OpenClaw sends the full prompt to the selected destination while the current turn continues. `dismiss_task` withdraws a still-pending suggestion by the ephemeral `task_id` returned from `suggest_task`.
 
 The tools are offered only when the initiating operator surface can receive and action Gateway task-suggestion events. Channel sessions and local/embedded TUI sessions do not receive them; channel transports need a portable typed task action before they can safely expose this flow. Suggestions are process-local and disappear when the Gateway restarts. Both tools remain in the `coding` profile and `group:sessions`, so normal `tools.allow` and `tools.deny` policy configures them automatically when the surface supports them.
 
@@ -210,7 +210,7 @@ Controls elevated exec access outside the sandbox:
   tools: {
     exec: {
       backgroundMs: 10000,
-      timeoutSec: 1800,
+      timeoutSeconds: 1800,
       cleanupMs: 1800000,
       approvalRunningNoticeMs: 10000,
       notifyOnExit: true,
@@ -501,8 +501,8 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - Merge precedence for matching provider IDs:
       - Non-empty agent `models.json` `baseUrl` values win.
       - Non-empty agent `apiKey` values win only when that provider is not SecretRef-managed in current config/auth-profile context.
-      - SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
-      - SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs).
+      - SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec/store refs) instead of persisting resolved secrets.
+      - SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec/store refs).
       - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
       - Matching model `contextWindow`/`maxTokens`: the explicit config value wins when present and valid (a positive finite number); otherwise the implicit/generated catalog value is used.
       - Matching model `contextTokens` follows the same explicit-wins-else-implicit rule; use it to limit effective context without changing native model metadata.
@@ -607,7 +607,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
 
     ```json5
     {
-      env: { CEREBRAS_API_KEY: "sk-..." },
+      env: { vars: { CEREBRAS_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: {
@@ -643,7 +643,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
   <Accordion title="Kimi Coding">
     ```json5
     {
-      env: { KIMI_API_KEY: "sk-..." },
+      env: { vars: { KIMI_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "kimi/kimi-for-coding" },
@@ -738,7 +738,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
   <Accordion title="Moonshot AI (Kimi)">
     ```json5
     {
-      env: { MOONSHOT_API_KEY: "sk-..." },
+      env: { vars: { MOONSHOT_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "moonshot/kimi-k2.6" },
@@ -792,7 +792,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
   <Accordion title="Synthetic (Anthropic-compatible)">
     ```json5
     {
-      env: { SYNTHETIC_API_KEY: "sk-..." },
+      env: { vars: { SYNTHETIC_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },

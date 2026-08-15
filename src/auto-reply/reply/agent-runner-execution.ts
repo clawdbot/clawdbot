@@ -6,15 +6,17 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
+import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import {
-  formatRateLimitOrOverloadedErrorCopy,
+  classifyFailoverReason,
   isContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
@@ -25,11 +27,7 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import {
-  AgentRunAttributionCollisionError,
-  clearAgentRunContext,
-  registerAgentRunContext,
-} from "../../infra/agent-run-registry.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -46,14 +44,12 @@ import {
   markOverloadRetryUnsafeToReplay,
   type OverloadRetryState,
 } from "./agent-runner-error-handler.js";
-import { admitAutoReplyExecutionAttribution } from "./agent-runner-execution-identity.js";
 import type {
   AgentTurnExecutionResult,
   AgentTurnInternalResult,
   AgentTurnParams,
   RuntimeFallbackAttempt,
 } from "./agent-runner-execution.types.js";
-import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import {
   buildTerminalAgentRunFailureReplyPayload,
   markAgentRunFailureReplyPayload,
@@ -66,6 +62,7 @@ import {
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
@@ -108,6 +105,7 @@ async function executeAgentTurnInternalWithRetryState(
   commitTerminalOutcome: () => void,
   overloadRetryState: OverloadRetryState,
   commitMcpAppModelContext: () => void,
+  preparedRunAdmission: PreparedAgentRunAdmission,
 ): Promise<AgentTurnInternalResult> {
   const heartbeatState = { didLogStrip: false };
   let autoCompactionCount = 0;
@@ -156,11 +154,9 @@ async function executeAgentTurnInternalWithRetryState(
       params.sessionCtx.Surface ??
       params.sessionCtx.Provider,
   );
-  let lifecycleGeneration =
-    params.attribution?.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
+  let lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
-      ...(params.attribution ? { attribution: params.attribution } : {}),
       sessionKey: params.sessionKey,
       ...(params.followupRun.run.sessionId ? { sessionId: params.followupRun.run.sessionId } : {}),
       agentId: params.followupRun.run.agentId,
@@ -306,6 +302,7 @@ async function executeAgentTurnInternalWithRetryState(
         heartbeatState,
       });
       const cycle = await executeAgentFallbackCycle({
+        preparedRunAdmission,
         turn: params,
         effectiveRun,
         runtimeConfig,
@@ -429,9 +426,11 @@ async function executeAgentTurnInternalWithRetryState(
           (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),
         )?.text ?? "";
       const errorCandidate = metaErrorMsg || rawErrorPayloadText;
-      const formattedErrorCandidate = errorCandidate
-        ? formatRateLimitOrOverloadedErrorCopy(errorCandidate)
-        : undefined;
+      const candidateReason = errorCandidate ? classifyFailoverReason(errorCandidate) : null;
+      const formattedErrorCandidate =
+        candidateReason === "rate_limit" || candidateReason === "overloaded"
+          ? renderRateLimitOrOverloadedCopy({ reason: candidateReason, raw: errorCandidate })
+          : undefined;
       if (formattedErrorCandidate) {
         runResult.payloads = [
           markAgentRunFailureReplyPayload({
@@ -489,93 +488,34 @@ async function executeAgentTurnInternal(
     noticeSent: false,
     completed: false,
   };
+  const runId = params.opts?.runId ?? crypto.randomUUID();
+  const preparedRunAdmission = prepareChannelRunAdmission({
+    cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
+    runId,
+    agentId: params.followupRun.run.agentId,
+    ingressKind: "channel",
+    boundary: "auto-reply.agent-runner",
+    evidence: params.followupRun.channelAdmissionEvidence,
+  });
   try {
     return await executeAgentTurnInternalWithRetryState(
       params,
       commitTerminalOutcome,
       overloadRetryState,
       commitMcpAppModelContext,
+      preparedRunAdmission,
     );
   } finally {
+    preparedRunAdmission.close();
     await cancelOverloadRetryNotice(overloadRetryState);
-  }
-}
-
-function resolveAgentTurnRunId(params: AgentTurnParams): string {
-  const attributedRunId = params.attribution?.runId;
-  const requestedRunId = params.opts?.runId;
-  if (attributedRunId && requestedRunId && attributedRunId !== requestedRunId) {
-    throw new TypeError("Agent turn attribution disagrees with opts.runId");
-  }
-  return attributedRunId ?? requestedRunId ?? crypto.randomUUID();
-}
-
-function tryAdmitAgentTurnExecutionAttribution(
-  params: Parameters<typeof admitAutoReplyExecutionAttribution>[0],
-):
-  | { kind: "admitted"; attribution: ReturnType<typeof admitAutoReplyExecutionAttribution> }
-  | { kind: "collision" } {
-  try {
-    return { kind: "admitted", attribution: admitAutoReplyExecutionAttribution(params) };
-  } catch (error) {
-    if (error instanceof AgentRunAttributionCollisionError) {
-      return { kind: "collision" };
-    }
-    throw error;
   }
 }
 
 /** Runs the agent turn with provider/model fallback, retry, and closed settlement. */
 export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
-  const runId = resolveAgentTurnRunId(params);
-  const baseExecutionParams =
-    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
-  const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
-  const attributionAdmission = tryAdmitAgentTurnExecutionAttribution({
-    attribution: baseExecutionParams.attribution,
-    config: resolveQueuedReplyRuntimeConfig(baseExecutionParams.followupRun.run.config),
-    lifecycleGeneration,
-    runId,
-    context: {
-      accountId:
-        baseExecutionParams.followupRun.originatingAccountId ??
-        baseExecutionParams.sessionCtx.AccountId,
-      agentId: baseExecutionParams.followupRun.run.agentId,
-      chatId:
-        baseExecutionParams.sessionCtx.ChatId ?? baseExecutionParams.sessionCtx.NativeChannelId,
-      channel:
-        baseExecutionParams.followupRun.originatingChannel ??
-        baseExecutionParams.sessionCtx.Surface ??
-        baseExecutionParams.sessionCtx.Provider,
-      inputProvenance: baseExecutionParams.sessionCtx.InputProvenance,
-      isHeartbeat: baseExecutionParams.isHeartbeat,
-      messageId:
-        baseExecutionParams.sessionCtx.MessageSidFull ?? baseExecutionParams.sessionCtx.MessageSid,
-      senderId: baseExecutionParams.sessionCtx.SenderId,
-      senderIsBot: baseExecutionParams.sessionCtx.SenderIsBot,
-      senderLabel:
-        baseExecutionParams.sessionCtx.SenderName ?? baseExecutionParams.sessionCtx.SenderUsername,
-      sessionId: baseExecutionParams.followupRun.run.sessionId,
-      sessionKey: baseExecutionParams.sessionKey,
-      threadId:
-        baseExecutionParams.followupRun.originatingThreadId ??
-        baseExecutionParams.sessionCtx.MessageThreadId,
-    },
-  });
-  if (attributionAdmission.kind === "collision") {
-    return {
-      runId,
-      outcome: {
-        kind: "rejected",
-        payload: { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true },
-      },
-    };
-  }
-  const attribution = attributionAdmission.attribution;
+  const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
-    baseExecutionParams.attribution === attribution
-      ? baseExecutionParams
-      : { ...baseExecutionParams, attribution };
+    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   // Gateway writes require exact view identity against this bare session runtime;
   // requester-scoped and combined runtimes cannot cross the App view boundary.
   const runtime = executionParams.isHeartbeat
@@ -608,6 +548,7 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     terminalOutcomeCommitted = true;
     executionParams.replyOperation?.freezeAbort();
   };
+  const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   try {
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
@@ -670,7 +611,6 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
       },
     };
   } catch (error) {
-    clearAgentRunContext(runId, lifecycleGeneration);
     if (
       isReplyOperationRestartAbort(executionParams.replyOperation) ||
       isAgentRunRestartAbortReason(error)

@@ -650,7 +650,10 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     );
     expect(first.status).toBe("waiting");
     expect(first.output).toEqual([{ type: "text", text: "before timeout" }]);
-    expect(first.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
+    // The fast call may settle as the snapshot is parked, but the slow call must remain pending.
+    expect(first.pendingToolCalls).toContainEqual(
+      expect.objectContaining({ id: "bridge:callValue:2", method: "callValue" }),
+    );
     const runId = first.runId;
     expect(typeof runId).toBe("string");
     if (typeof runId !== "string") {

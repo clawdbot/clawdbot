@@ -4,7 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 // Browser tests cover server.agent contract form layout act commands plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
@@ -15,6 +15,7 @@ import {
 import {
   getBrowserControlServerTestState,
   getPwMocks,
+  makeResponse,
   setBrowserControlServerSsrFPolicy,
   setBrowserControlServerTabUrl,
 } from "./server.control-server.test-harness.js";
@@ -720,6 +721,40 @@ describe("browser control server", () => {
       expect(pwMocks[mockName]).toHaveBeenCalled();
     },
   );
+
+  it("keeps act:close bound to the tab it closed", async () => {
+    const base = await startServerAndBase();
+    requirePwMock("closePageViaPlaywright").mockImplementationOnce(async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (!url.includes("/json/list")) {
+            return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
+          }
+          return makeResponse([
+            {
+              id: "abce9999",
+              title: "Survivor",
+              url: "https://other",
+              webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/abce9999",
+              type: "page",
+            },
+          ]);
+        }),
+      );
+    });
+
+    const result = await postJson<{ ok?: boolean; targetId?: string; url?: string }>(
+      `${base}/act`,
+      { kind: "close", targetId: "abcd1234" },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      targetId: "abcd1234",
+      url: "https://example.com",
+    });
+  });
 
   it("wait/download rejects traversal path outside downloads dir", async () => {
     const base = await startServerAndBase();

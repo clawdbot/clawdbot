@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveCrossOsCompanionPackages } from "../../scripts/lib/cross-os-release-checks/companions.ts";
 import {
   PREPUBLISH_PLUGIN_REGISTRY_MANIFEST,
   createPrepublishPluginRegistryArtifact,
@@ -79,6 +80,27 @@ function firstPackage(paths: ReturnType<typeof fixture>) {
     throw new Error("fixture manifest must contain one package");
   }
   return entry;
+}
+
+function addCompanionPackage(paths: ReturnType<typeof fixture>) {
+  const name = "@openclaw/feishu";
+  const tarball = "openclaw-feishu-2026.8.1-beta.1.tgz";
+  const archiveRoot = path.join(path.dirname(paths.artifactDir), "feishu-package");
+  const packageRoot = path.join(archiveRoot, "package");
+  mkdirSync(packageRoot, { recursive: true });
+  writeFileSync(
+    path.join(packageRoot, "package.json"),
+    `${JSON.stringify({ name, version: VERSION })}\n`,
+  );
+  const tarballPath = path.join(paths.artifactDir, tarball);
+  execFileSync("tar", ["-czf", tarballPath, "-C", archiveRoot, "package"]);
+  paths.manifest.packages.push({
+    name,
+    version: VERSION,
+    tarball,
+    sha256: sha256(tarballPath),
+  });
+  paths.writeManifest();
 }
 
 function cliFixture() {
@@ -159,6 +181,60 @@ describe("prepublish plugin registry artifact", () => {
         validatePrepublishPluginRegistryArtifact({ ...common, [field]: undefined }),
       ).toThrow(field);
     }
+  });
+
+  it("accepts immutable companion packages beyond the selected Docker plan", () => {
+    const paths = fixture();
+    addCompanionPackage(paths);
+
+    expect(validate(paths).manifest.packages.map((entry) => entry.name)).toEqual([
+      "@openclaw/discord",
+      "@openclaw/feishu",
+    ]);
+  });
+
+  it("extracts only required cross-OS companions from the validated registry", () => {
+    const paths = fixture();
+    addCompanionPackage(paths);
+
+    expect(
+      resolveCrossOsCompanionPackages({
+        artifactDir: paths.artifactDir,
+        candidateVersion: VERSION,
+        manifestSha256: sha256(paths.manifestPath),
+        requiredPackages: ["@openclaw/feishu"],
+        sourceSha: SOURCE_SHA,
+      }),
+    ).toEqual([
+      {
+        name: "@openclaw/feishu",
+        tarballPath: path.join(paths.artifactDir, "openclaw-feishu-2026.8.1-beta.1.tgz"),
+      },
+    ]);
+  });
+
+  it("rejects mismatched cross-OS companion registry identities", () => {
+    const paths = fixture();
+    const common = {
+      artifactDir: paths.artifactDir,
+      candidateVersion: VERSION,
+      manifestSha256: sha256(paths.manifestPath),
+      requiredPackages: [PACKAGE_NAME],
+      sourceSha: SOURCE_SHA,
+    };
+
+    expect(() => resolveCrossOsCompanionPackages({ ...common, sourceSha: "b".repeat(40) })).toThrow(
+      "source SHA differs",
+    );
+    expect(() =>
+      resolveCrossOsCompanionPackages({ ...common, candidateVersion: "2026.8.1-beta.2" }),
+    ).toThrow("version differs");
+    expect(() =>
+      resolveCrossOsCompanionPackages({ ...common, manifestSha256: "c".repeat(64) }),
+    ).toThrow("manifest SHA-256 differs");
+
+    writeFileSync(paths.tarballPath, "tampered");
+    expect(() => resolveCrossOsCompanionPackages(common)).toThrow("tarball SHA-256 mismatch");
   });
 
   it("refuses to create an artifact from tracked changes under the same HEAD", () => {
@@ -275,7 +351,7 @@ describe("prepublish plugin registry artifact", () => {
 
     const required = fixture();
     expect(() => validate(required, { requiredPackages: ["@openclaw/feishu"] })).toThrow(
-      "package set differs",
+      "missing Docker-plan package",
     );
   });
 });

@@ -16,24 +16,13 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { pluginTabSearch } from "../pages/plugin/route.ts";
 import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
 import { icons, type IconName } from "./icons.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type SidebarMenuPosition = { x: number; y: number };
-
-/** Ordinary primary click without modifiers; anything else keeps native link behavior. */
-export function shouldHandleNavigationClick(event: MouseEvent): boolean {
-  return (
-    !event.defaultPrevented &&
-    event.button === 0 &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !event.altKey
-  );
-}
 
 /** Settings routes highlight Settings; hub tabs highlight their hub entry. */
 export function isSidebarRouteActive(
@@ -160,6 +149,7 @@ function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavR
       @pointerleave=${params.onCancelPreload}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
+          // wa-select also fires for native clicks; mark them so it does not add SPA navigation.
           (event.currentTarget as HTMLElement).dataset.nativeNavigation = "true";
           return;
         }

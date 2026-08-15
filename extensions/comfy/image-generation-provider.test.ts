@@ -1,7 +1,6 @@
 // Comfy tests cover image generation provider plugin behavior.
 import type { LookupAddress } from "node:dns";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
 import {
@@ -11,11 +10,22 @@ import {
   mockComfyProviderApiKey,
   parseComfyJsonBody,
 } from "./test-helpers.js";
-import { setComfyFetchGuardForTesting } from "./test-support.js";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+type FetchWithSsrFGuard = (typeof import("openclaw/plugin-sdk/ssrf-runtime"))["fetchWithSsrFGuard"];
+
+const { fetchWithSsrFGuardMock, ssrfGuardState } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
+  ssrfGuardState: {} as { actual?: FetchWithSsrFGuard },
 }));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  ssrfGuardState.actual = actual.fetchWithSsrFGuard;
+  return {
+    ...actual,
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  };
+});
 
 type FetchGuardRequest = {
   url?: unknown;
@@ -28,7 +38,7 @@ type FetchGuardRequest = {
     body?: BodyInit | null;
   };
 };
-type RealGuardParams = Parameters<typeof fetchWithSsrFGuard>[0];
+type RealGuardParams = Parameters<FetchWithSsrFGuard>[0];
 type RealGuardFetchImpl = NonNullable<RealGuardParams["fetchImpl"]>;
 type RealGuardLookupFn = NonNullable<RealGuardParams["lookupFn"]>;
 type RealGuardHarness = {
@@ -206,9 +216,13 @@ function installRealComfyFetchGuard(options: RealComfyFetchOptions): RealGuardHa
     });
   };
 
-  setComfyFetchGuardForTesting(async (params) => {
+  const actualFetchWithSsrFGuard = ssrfGuardState.actual;
+  if (!actualFetchWithSsrFGuard) {
+    throw new Error("expected actual SSRF guard");
+  }
+  fetchWithSsrFGuardMock.mockImplementation(async (params) => {
     guardCalls.push(params);
-    return await fetchWithSsrFGuard({
+    return await actualFetchWithSsrFGuard({
       ...params,
       fetchImpl,
       lookupFn,
@@ -219,11 +233,12 @@ function installRealComfyFetchGuard(options: RealComfyFetchOptions): RealGuardHa
 
 describe("comfy image-generation provider", () => {
   beforeEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
     vi.clearAllMocks();
   });
 
   afterEach(() => {
-    setComfyFetchGuardForTesting(null);
+    fetchWithSsrFGuardMock.mockReset();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
@@ -353,7 +368,6 @@ describe("comfy image-generation provider", () => {
   });
 
   it("submits a local workflow, waits for history, and downloads images", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ prompt_id: "local-prompt-1" }), {
@@ -441,7 +455,6 @@ describe("comfy image-generation provider", () => {
   });
 
   it("honors local private-network access for service-discovery hostnames", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockLocalImageResponses("compose-prompt-1");
 
     const provider = buildComfyImageGenerationProvider();
@@ -468,7 +481,6 @@ describe("comfy image-generation provider", () => {
   });
 
   it("keeps local public-looking hostnames strict without explicit private-network access", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockLocalImageResponses("public-host-prompt-1");
 
     const provider = buildComfyImageGenerationProvider();
@@ -492,7 +504,6 @@ describe("comfy image-generation provider", () => {
   });
 
   it("keeps cloud service-discovery hostnames strict without explicit private-network access", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-data"),
       contentType: "image/png",
@@ -525,7 +536,6 @@ describe("comfy image-generation provider", () => {
   });
 
   it("honors explicit cloud private-network access for service-discovery hostnames", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-data"),
       contentType: "image/png",
@@ -787,7 +797,6 @@ describe("comfy image-generation provider", () => {
   });
 
   it("caps oversized local workflow timeouts", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     const nowSpy = vi.spyOn(Date, "now");
     nowSpy
       .mockReturnValueOnce(0)
@@ -836,7 +845,6 @@ describe("comfy image-generation provider", () => {
   });
 
   it("rejects generated image downloads that exceed the configured media cap", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ prompt_id: "local-prompt-1" }), {
@@ -893,7 +901,6 @@ describe("comfy image-generation provider", () => {
   });
 
   it("reports malformed local workflow submit JSON as a provider error", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response("{ nope", {
@@ -922,8 +929,54 @@ describe("comfy image-generation provider", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds oversized local workflow submit responses and releases the request", async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    const totalBytes = 32 * chunk.length;
+    let bytesPulled = 0;
+    let canceled = false;
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (bytesPulled >= totalBytes) {
+              controller.close();
+              return;
+            }
+            bytesPulled += chunk.length;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      release,
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+        }),
+      }),
+    ).rejects.toThrow("Comfy workflow submit failed: JSON response exceeds 16777216 bytes");
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(totalBytes);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("uploads reference images for local edit workflows", async () => {
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ name: "upload.png" }), {
@@ -1011,7 +1064,6 @@ describe("comfy image-generation provider", () => {
 
   it("uses cloud endpoints, auth headers, and partner-node extra_data", async () => {
     mockComfyProviderApiKey();
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-data"),
       contentType: "image/png",
@@ -1072,7 +1124,6 @@ describe("comfy image-generation provider", () => {
 
   it("uses plugin config env SecretRef auth for cloud workflows", async () => {
     vi.stubEnv("COMFY_TEST_API_KEY", "comfy-secret-ref-key");
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-data"),
       contentType: "image/png",
@@ -1110,7 +1161,6 @@ describe("comfy image-generation provider", () => {
   it("uses provider auth fallback for cloud workflows without plugin config API keys", async () => {
     vi.stubEnv("COMFY_API_KEY", "stale-env-key");
     mockComfyProviderApiKey("profile-key");
-    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-data"),
       contentType: "image/png",

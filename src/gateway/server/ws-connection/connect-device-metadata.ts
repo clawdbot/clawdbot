@@ -9,6 +9,7 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
   deviceBootstrapProfilesEqual,
   isMobilePairingSetupBootstrapProfile,
+  isNodePairingSetupBootstrapProfile,
   isVoiceNodePairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
@@ -66,6 +67,8 @@ export function isSetupCodeHandoffBootstrapClient(params: {
   return (
     (isMobilePairingSetupBootstrapProfile(params.profile) &&
       isSetupCodeMobileBootstrapClient(params.client)) ||
+    (isNodePairingSetupBootstrapProfile(params.profile) &&
+      params.client.id === GATEWAY_CLIENT_IDS.NODE_HOST) ||
     (isVoiceNodePairingSetupBootstrapProfile(params.profile) &&
       isSetupCodeVoiceNodeBootstrapClient(params.client))
   );
@@ -269,16 +272,15 @@ export function resolvePinnedClientMetadata(params: {
     !isNodeHostUsingMacAppPlatformPin &&
     !isNativeAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
-  const pinnedPlatform =
-    claimedPlatform === pairedPlatform
+  const pinnedPlatform = isLegacyNodeHostPlatformPin
+    ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
+    : claimedPlatform === pairedPlatform
       ? params.pairedPlatform
-      : isLegacyNodeHostPlatformPin
-        ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
-        : isNodeHostUsingMacAppPlatformPin
-          ? params.pairedPlatform
-          : isNativeAppPlatformVersionRefresh
-            ? params.claimedPlatform
-            : undefined;
+      : isNodeHostUsingMacAppPlatformPin
+        ? params.pairedPlatform
+        : isNativeAppPlatformVersionRefresh
+          ? params.claimedPlatform
+          : undefined;
   return {
     platformMismatch,
     deviceFamilyMismatch,

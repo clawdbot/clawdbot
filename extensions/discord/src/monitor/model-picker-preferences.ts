@@ -10,8 +10,8 @@ import { getDiscordRuntime } from "../runtime.js";
 import {
   buildPreferenceModelKey,
   normalizeModelRef,
+  preferenceTimestampMs,
   sanitizeRecentModels,
-  timestampMs,
 } from "./model-picker-preference-primitives.js";
 
 const DEFAULT_RECENT_LIMIT = 5;
@@ -96,7 +96,7 @@ function comparePreferenceEntries(
   right: { key: string; value: ModelPickerPreferencesEntry },
 ): number {
   return (
-    timestampMs(right.value.updatedAt) - timestampMs(left.value.updatedAt) ||
+    preferenceTimestampMs(right.value.updatedAt) - preferenceTimestampMs(left.value.updatedAt) ||
     timestampOrder(right.value.updatedOrder) - timestampOrder(left.value.updatedOrder) ||
     left.key.localeCompare(right.key)
   );
@@ -107,7 +107,7 @@ function nextPreferenceTimestamp(existingEntries: ModelPickerPreferencesEntry[])
   updatedOrder: number;
 } {
   const existingMaxTimestampMs = existingEntries.reduce(
-    (max, entry) => Math.max(max, timestampMs(entry.updatedAt)),
+    (max, entry) => Math.max(max, preferenceTimestampMs(entry.updatedAt)),
     0,
   );
   lastPreferenceTimestampMs = Math.min(

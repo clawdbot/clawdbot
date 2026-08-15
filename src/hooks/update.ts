@@ -5,6 +5,7 @@ import {
   expectedIntegrityForUpdate,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
+import type { InstallSafetyOverrides } from "../plugins/install-security-scan.types.js";
 import {
   installHooksFromNpmSpec,
   type HookNpmIntegrityDriftParams,
@@ -75,6 +76,8 @@ function createHookPackUpdateIntegrityDriftHandler(params: {
 /** Update npm-installed hook packs and return config changes plus per-pack outcomes. */
 export async function updateNpmInstalledHookPacks(params: {
   config: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   logger?: HookPackUpdateLogger;
   hookIds?: string[];
   dryRun?: boolean;
@@ -137,6 +140,8 @@ export async function updateNpmInstalledHookPacks(params: {
     const currentVersion = await readInstalledPackageVersion(installPath);
     const result = await installHooksFromNpmSpec({
       config: params.config,
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       spec: effectiveSpec,
       mode: "update",
       dryRun: params.dryRun,

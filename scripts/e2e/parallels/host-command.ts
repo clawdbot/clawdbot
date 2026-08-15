@@ -8,8 +8,8 @@ import {
   addTimerTimeoutGraceMs,
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { resolveNpmRunner } from "../../npm-runner.mjs";
-import { resolvePnpmRunner } from "../../pnpm-runner.mjs";
+import { resolveNpmRunner } from "../../npm-runner.mts";
+import { resolvePnpmRunner } from "../../pnpm-runner.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
 import type { CommandResult, RunOptions } from "./types.ts";
 

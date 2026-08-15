@@ -227,5 +227,16 @@ function assertBoundaryRead(
     return;
   }
   const reason = opened.reason === "validation" ? "unsafe path" : "path not found";
-  throw new Error(`Failed boundary read for ${targetPath} (${reason})`);
+  const error = new Error(`Failed boundary read for ${targetPath} (${reason})`) as Error & {
+    code?: string;
+  };
+  const sourceCode =
+    opened.error && typeof opened.error === "object" && "code" in opened.error
+      ? opened.error.code
+      : undefined;
+  if (sourceCode === "ENOENT" || sourceCode === "ENOTDIR") {
+    // Preserve the producer's classification so provenance observers do not parse messages.
+    error.code = sourceCode;
+  }
+  throw error;
 }

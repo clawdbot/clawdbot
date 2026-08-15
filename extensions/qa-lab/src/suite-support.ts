@@ -1,7 +1,7 @@
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
+import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaSuiteChannelDriverSelection } from "./crabline-artifacts.js";
 import type { QaProviderMode } from "./model-selection.js";
-import { parseQaProgressBooleanEnv as parseQaSuiteBooleanEnv } from "./progress-format.js";
 import type { QaTransportId } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import type { RuntimeId } from "./runtime-parity.js";
@@ -79,6 +79,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
     channelId: params.input?.channelId,
     repoRoot: params.repoRoot,
     sutOpenClawCommand: params.input?.sutOpenClawCommand,
+    mutateConfig: params.input?.mutateConfig,
     outputDir: params.outputDir,
     providerMode: params.providerMode,
     transportId: params.transportId,
@@ -120,13 +121,13 @@ export function remapModelRefForForcedRuntime(params: {
   return `openai/${split.model}`;
 }
 
-export function appendNodeOption(raw: string | undefined, option: string) {
+function appendNodeOption(raw: string | undefined, option: string) {
   const parts = (raw ?? "").split(/\s+/u).filter(Boolean);
   return parts.includes(option) ? parts.join(" ") : [...parts, option].join(" ");
 }
 
 export function shouldCaptureGatewayHeapCheckpoints(env: NodeJS.ProcessEnv = process.env) {
-  return parseQaSuiteBooleanEnv(env.OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS) === true;
+  return parseBooleanValue(env.OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS) === true;
 }
 
 export function buildQaGatewayHeapCheckpointRuntimeEnvPatch(

@@ -101,6 +101,22 @@ describe("login gate failure recovery", () => {
     ]);
   });
 
+  it("offers only supported recovery for an insecure browser context", async () => {
+    const element = await mountFailure(
+      "device identity required",
+      ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+    );
+
+    const steps = Array.from(
+      element.querySelectorAll<HTMLElement>(".login-gate__failure-steps li"),
+      (entry) => entry.textContent?.trim(),
+    );
+    expect(steps).toEqual([
+      "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
+      "Do not use a remote plain-HTTP URL; a token or password cannot replace browser device identity.",
+    ]);
+  });
+
   it.each(["click", "Enter", " ", "nested button"])(
     "surfaces denied gateway-command copying from the %s interaction",
     async (interaction) => {

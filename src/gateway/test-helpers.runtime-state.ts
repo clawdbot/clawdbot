@@ -158,11 +158,11 @@ export const testTailnetIPv4 = gatewayTestHoisted.testTailnetIPv4;
 export const testTailscaleWhois = gatewayTestHoisted.testTailscaleWhois;
 export const agentDiscoveryMock = gatewayTestHoisted.agentDiscoveryMock;
 export const cronIsolatedRun = gatewayTestHoisted.cronIsolatedRun;
-export const agentCommand = gatewayTestHoisted.agentCommand;
+export const agentCommandMock = gatewayTestHoisted.agentCommand;
 export const dispatchInboundMessageMock = gatewayTestHoisted.dispatchInboundMessage;
-export const getReplyFromConfig = gatewayTestHoisted.getReplyFromConfig;
+export const gatewayReplyMock = gatewayTestHoisted.getReplyFromConfig;
 export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {
-  getReplyFromConfig.mockImplementationOnce(impl);
+  gatewayReplyMock.mockImplementationOnce(impl);
 };
 export const sendWhatsAppMock = gatewayTestHoisted.sendWhatsAppMock;
 export const testState = gatewayTestHoisted.testState;

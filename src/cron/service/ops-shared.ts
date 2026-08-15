@@ -1,12 +1,12 @@
 /** Shared cron operation invariants used across lifecycle, CRUD, and manual runs. */
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { clearCronJobActive, markCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
+import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
-import { normalizeOptionalAgentId } from "./normalize.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import { recomputeUnownedCronSchedules } from "./run-recovery.js";
+import { applyCronRuntimeRowsToState } from "./runtime-store.js";
+import type { CronServiceState } from "./state.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import {
   type IsolatedAgentSetupTimeoutSignal,
   maybeNotifyIsolatedAgentSetupTimeout,
@@ -18,14 +18,7 @@ export function resolveEffectiveJobAgentId(
   job: { agentId?: string | null; sessionKey?: string | null },
   defaultAgentId: string | undefined,
 ): string {
-  const agentId =
-    normalizeOptionalAgentId(job.agentId) ??
-    normalizeOptionalAgentId(parseAgentSessionKey(job.sessionKey)?.agentId) ??
-    normalizeOptionalAgentId(defaultAgentId);
-  if (!agentId) {
-    throw new Error("Cron job requires an agent id or prepared configured default.");
-  }
-  return agentId;
+  return resolveCronJobEffectiveAgentId(job, defaultAgentId);
 }
 
 export function markManualCronJobActive(
@@ -72,16 +65,10 @@ export async function ensureLoadedForRead(state: CronServiceState) {
   if (!state.store) {
     return;
   }
-  // Use the maintenance-only version so that read-only operations never
-  // advance a past-due nextRunAtMs without executing the job (#16156).
-  const rollbackSnapshot = snapshotStoreForRollback(state);
-  const postPersistNotifications: DeferredCronNotifications = [];
-  const changed = recomputeNextRunsForMaintenance(state, {
-    deferredNotifications: postPersistNotifications,
-  });
-  if (changed) {
-    await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
-  }
+  // Read repair is row-owned and never advances a past-due slot (#16156).
+  const maintenance = recomputeUnownedCronSchedules(state);
+  runPostPersistCronNotifications(state, maintenance.notifications);
+  applyCronRuntimeRowsToState(state, maintenance.jobs);
 }
 
 /** Resolves the current configured default agent without caching reloadable state. */

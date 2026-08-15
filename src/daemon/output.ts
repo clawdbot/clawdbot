@@ -2,7 +2,7 @@
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 
 /** Normalizes Windows separators for command output paths. */
-export const toPosixPath = (value: string) => value.replace(/\\/g, "/");
+export const normalizeWindowsPathSeparators = (value: string) => value.replace(/\\/g, "/");
 
 /** Formats a labeled daemon output line with terminal-aware styling. */
 export function formatLine(label: string, value: string): string {

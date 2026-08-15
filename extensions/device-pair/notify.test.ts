@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { listDevicePairing as listDevicePairingFn } from "openclaw/plugin-sdk/device-bootstrap";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
@@ -35,16 +36,6 @@ afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/device-bootstrap");
   vi.resetModules();
 });
-
-function createDeferred<T>() {
-  let resolve: (value: T) => void;
-  let reject: (reason?: unknown) => void;
-  const promise = new Promise<T>((innerResolve, innerReject) => {
-    resolve = innerResolve;
-    reject = innerReject;
-  });
-  return { promise, resolve: resolve!, reject: reject! };
-}
 
 describe("device-pair notify persistence", () => {
   let stateDir: string;

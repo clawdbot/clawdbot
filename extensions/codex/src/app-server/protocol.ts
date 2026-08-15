@@ -1,3 +1,4 @@
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
 import type {
   CodexAppInfo,
@@ -127,6 +128,11 @@ export type CodexUserInput =
     }
   | {
       type: "localImage";
+      path: string;
+    }
+  | {
+      type: "skill";
+      name: string;
       path: string;
     };
 
@@ -365,6 +371,7 @@ type CodexTurnInterruptParams = JsonObject & {
 export type CodexTurnStartParams = JsonObject & {
   threadId: string;
   input: CodexUserInput[];
+  additionalContext?: Record<string, { kind: "untrusted" | "application"; value: string }>;
   cwd?: string;
   model?: string;
   approvalPolicy?: CodexApprovalPolicy | null;
@@ -706,7 +713,7 @@ type CodexAppServerRequestResultMap = {
 };
 
 export function isJsonObject(value: unknown): value is JsonObject {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  return isRecord(value);
 }
 
 export function isRpcResponse(message: RpcMessage): message is RpcResponse {

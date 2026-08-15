@@ -4,6 +4,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { AgentConfig } from "../config/types.agents.js";
 
 const {
+  loadFullModelCatalogMock,
   loadModelCatalogMock,
   getModelRefStatusMock,
   normalizeModelSelectionMock,
@@ -11,6 +12,7 @@ const {
   resolveConfiguredModelRefMock,
   resolveHooksGmailModelMock,
 } = vi.hoisted(() => ({
+  loadFullModelCatalogMock: vi.fn(),
   loadModelCatalogMock: vi.fn(),
   getModelRefStatusMock: vi.fn(),
   normalizeModelSelectionMock: vi.fn((value: unknown) => {
@@ -46,7 +48,7 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
     cfg: { agents?: { list?: Array<AgentConfig & { workspace?: string }> } },
     agentId: string,
   ) => cfg.agents?.list?.find((agent) => agent.id === agentId)?.workspace ?? "/tmp/workspace",
-  resolveAllowedModelRef: resolveAllowedModelRefMock,
+  resolveAllowedModelRefCore: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
   resolveSubagentModelConfigSelectionResult: ({
@@ -58,8 +60,8 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   }) => {
     for (const candidate of [
       { raw: agentConfigOverride?.subagents?.model, source: "subagent" as const },
-      { raw: agentConfigOverride?.model, source: "agent" as const },
       { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
+      { raw: agentConfigOverride?.model, source: "agent" as const },
     ]) {
       if (normalizeModelSelectionMock(candidate.raw)) {
         return candidate;
@@ -175,14 +177,23 @@ describe("cron model formatting and precedence edge cases", () => {
         config: Record<string, unknown>;
         agentId?: string;
         agentDir: string;
+        readOnly?: boolean;
         workspaceDir: string;
-      }) => ({
-        agentId: params.agentId ?? "main",
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        config: params.config,
-        modelCatalog: { entries: [], routeVariants: [] },
-      }),
+      }) => {
+        if (params.readOnly !== true) {
+          await loadFullModelCatalogMock();
+        }
+        return {
+          agentId: params.agentId ?? "main",
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          config: params.config,
+          modelCatalog: { entries: [], routeVariants: [] },
+        };
+      },
+    );
+    loadFullModelCatalogMock.mockRejectedValue(
+      new Error("cron model selection must not materialize the full model catalog"),
     );
     getModelRefStatusMock.mockReturnValue({ allowed: false });
     resolveHooksGmailModelMock.mockReturnValue(null);
@@ -196,6 +207,17 @@ describe("cron model formatting and precedence edge cases", () => {
   });
 
   describe("parseModelRef formatting", () => {
+    it("keeps cron owner selection on the published read-only catalog", async () => {
+      await expectDefaultSelectedModel();
+
+      expect(loadModelCatalogMock).toHaveBeenCalledWith({
+        config: {},
+        readOnly: true,
+        allowGatewaySubagentBinding: true,
+      });
+      expect(loadFullModelCatalogMock).not.toHaveBeenCalled();
+    });
+
     it("splits standard provider/model", async () => {
       await expectSelectedModel(
         {
@@ -382,6 +404,7 @@ describe("cron model formatting and precedence edge cases", () => {
       expect(loadModelCatalogMock).toHaveBeenCalledOnce();
       expect(loadModelCatalogMock).toHaveBeenCalledWith({
         config: callerConfig,
+        readOnly: true,
         allowGatewaySubagentBinding: true,
       });
       expect(resolveConfiguredModelRefMock).toHaveBeenCalledWith(
@@ -774,7 +797,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("falls through fallback-only subagents.model to the agent model", async () => {
+    it("falls through fallback-only subagents.model to the global subagent default", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -790,7 +813,7 @@ describe("cron model formatting and precedence edge cases", () => {
             subagents: { model: { fallbacks: [] } },
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "ollama", model: "llama3.2:3b" },
       );
     });
 
@@ -815,7 +838,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("prefers the agent model over agents.defaults.subagents.model", async () => {
+    it("prefers agents.defaults.subagents.model over the agent model", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -830,7 +853,7 @@ describe("cron model formatting and precedence edge cases", () => {
             model: { primary: "anthropic/claude-opus-4-6" },
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "ollama", model: "llama3.2:3b" },
       );
     });
   });

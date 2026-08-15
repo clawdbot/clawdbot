@@ -18,8 +18,9 @@ import {
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
-} from "../../scripts/test-live-shard.mjs";
+} from "../../scripts/test-live-shard.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { waitForPidFile } from "../helpers/process-wait.js";
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
@@ -102,6 +103,10 @@ describe("scripts/test-live-shard", () => {
       "src/gateway/gateway-cli-backend.live.test.ts",
       "src/gateway/gateway-codex-bind.live.test.ts",
       "src/gateway/gateway-codex-harness.live.test.ts",
+    ]);
+    expect(selectLiveShardFiles("native-live-src-gateway-profiles", allFiles)).toEqual([
+      "src/gateway/gateway-models.profiles.live.test.ts",
+      "src/gateway/gateway-openai-long-context.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).toEqual([
       "src/gateway/android-node.capabilities.live.test.ts",
@@ -390,6 +395,38 @@ describe("scripts/test-live-shard", () => {
     });
   });
 
+  it("allows the OpenAI long-context live file to be skipped until its env is enabled", () => {
+    const profilesFile = "src/gateway/gateway-models.profiles.live.test.ts";
+    const longContextFile = "src/gateway/gateway-openai-long-context.live.test.ts";
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 2,
+      testResults: [
+        {
+          name: path.join(process.cwd(), profilesFile),
+          assertionResults: [{ status: "passed" }],
+        },
+        {
+          name: path.join(process.cwd(), longContextFile),
+          assertionResults: [{ status: "skipped" }],
+        },
+      ],
+    };
+    const expectedFiles = [profilesFile, longContextFile];
+
+    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
+      ok: true,
+    });
+    expect(
+      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
+        OPENCLAW_LIVE_OPENAI_LONG_CONTEXT: "1",
+      }),
+    ).toEqual({
+      ok: false,
+      reason: `Vitest report selected live test files had no passing assertions: ${longContextFile}`,
+    });
+  });
+
   it("allows the experience review live file to be skipped until its env is enabled", () => {
     const reviewFile = "src/skills/workshop/experience-review.live.test.ts";
     const payload = {
@@ -550,12 +587,8 @@ describe("scripts/test-live-shard", () => {
           },
         );
 
-        await waitFor(() => existsSync(childPidPath), 5_000);
-        await waitFor(() => existsSync(descendantPidPath), 5_000);
-        childPid = Number(readFileSync(childPidPath, "utf8"));
-        descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
-        expect(Number.isInteger(childPid)).toBe(true);
-        expect(Number.isInteger(descendantPid)).toBe(true);
+        childPid = await waitForPidFile(childPidPath, 5_000);
+        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
 
         runner.kill("SIGTERM");
 

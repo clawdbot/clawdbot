@@ -243,6 +243,8 @@ send_skills_flow() {
 }
 
 send_guided_skip_ui_flow() {
+  wait_for_log "What should we call your first agent?" 120 || return $?
+  send $'\r' 0.8
   wait_for_log "How should I set things up?" 120 || return $?
   send $'\r' 0.8
   wait_for_log "Use Current model?" 120 || return $?

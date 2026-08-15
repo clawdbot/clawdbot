@@ -22,32 +22,31 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
 import { log } from "../logger.js";
-import {
-  createEmbeddedAttemptExternalAbortController,
-  type EmbeddedAttemptAbortStatePort,
-} from "./attempt-abort.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 import type { EmbeddedAttemptExecutionState } from "./attempt-execution-types.js";
-import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-cleanup.js";
-import { prepareEmbeddedAttemptSessionLock } from "./attempt-session-lock-prepare.js";
-import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
-import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
-import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 import {
-  prepareEmbeddedAttemptSkills,
-  startEmbeddedAttemptDiagnostics,
-  type EmitDiagnosticRunCompleted,
-} from "./attempt-startup.js";
-import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
-import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
-import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
-import type { EmbeddedAttemptSessionFileOwner } from "./attempt.session-lock.js";
+  createEmbeddedAttemptExternalAbortController,
+  type EmbeddedAttemptAbortStatePort,
+} from "./attempt-finalize.js";
+import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
+import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-settle.js";
 import {
   queueSessionsYieldInterruptMessage,
   SESSIONS_YIELD_ABORT_REASON,
-} from "./attempt.sessions-yield.js";
+} from "./attempt-sessions-yield.js";
+import {
+  prepareEmbeddedAttemptSetup,
+  prepareEmbeddedAttemptSkills,
+  startEmbeddedAttemptDiagnostics,
+  type EmitDiagnosticRunCompleted,
+} from "./attempt-setup.js";
+import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
+import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
+import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
+import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
+import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import {
   measureEmbeddedAgentPreparation,
   measureEmbeddedAgentPreparationSync,
@@ -86,7 +85,6 @@ export async function runEmbeddedAttempt(
 
   let restoreSkillEnv: (() => void) | undefined;
   const executionState: EmbeddedAttemptExecutionState = {
-    beforeAgentRunBlocked: false,
     beforeAgentRunBlockedBy: undefined,
     terminal: params.abortSignal?.aborted
       ? { kind: "aborted", source: "external" }
@@ -97,13 +95,11 @@ export async function runEmbeddedAttempt(
     executionState.terminal = mergeAgentRunAttemptTerminal(executionState.terminal, incoming);
   };
   let emitDiagnosticRunCompleted: EmitDiagnosticRunCompleted | undefined;
-  // Releases the eager session lock if post-prompt code exits before cleanup.
-  let releaseRetainedSessionLock: (() => Promise<void>) | undefined;
-  let retainedSessionFileOwner: EmbeddedAttemptSessionFileOwner | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
+  let runCleanups: Array<(reason: string) => Promise<void>> = [];
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
     if (toolSearchCatalogApplied) {
       clearToolSearchCatalog({
@@ -233,11 +229,13 @@ export async function runEmbeddedAttempt(
       computerContextEpoch,
       localModelLeanEnabled,
       replaySafetyOptions,
+      runCleanups: preparedRunCleanups,
       toolSearchControlsEnabledForRun,
       toolSearchRuntimeConfig,
       toolsEnabled,
       toolsRaw,
     } = preparedToolBase;
+    runCleanups = preparedRunCleanups;
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
     const preparedBootstrap = await measureEmbeddedAgentPreparation(
@@ -348,21 +346,14 @@ export async function runEmbeddedAttempt(
     const {
       compactionTimeoutMs,
       ownedTranscriptWriteContext,
-      sessionLockController,
-      withOwnedSessionWriteLock,
+      transcriptLifecycle,
+      withOwnedTranscriptWrite,
     } = await measureEmbeddedAgentPreparation(
-      "attempt.session-lock",
+      "attempt.transcript-lifecycle",
       () =>
-        prepareEmbeddedAttemptSessionLock({
+        prepareEmbeddedAttemptTranscriptLifecycle({
           attempt: params,
           externalAbortController,
-          getSessionManager: () => sessionManager,
-          onSessionFileOwnerAcquired: (owner) => {
-            retainedSessionFileOwner = owner;
-          },
-          onSessionLockReleaseReady: (release) => {
-            releaseRetainedSessionLock = release;
-          },
         }),
       { config: params.config },
     );
@@ -390,8 +381,8 @@ export async function runEmbeddedAttempt(
               replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
               resolveActiveContextEnginePluginId,
               sessionAgentId,
-              sessionLockController,
-              withOwnedSessionWriteLock,
+              transcriptLifecycle,
+              withOwnedTranscriptWrite,
             },
             agentSession: {
               agentCoreThinkingLevel,
@@ -478,8 +469,7 @@ export async function runEmbeddedAttempt(
         sessionLock: {
           compactionTimeoutMs,
           ownedTranscriptWriteContext,
-          sessionLockController,
-          withOwnedSessionWriteLock,
+          withOwnedTranscriptWrite,
         },
         setup: {
           effectiveFsWorkspaceOnly,
@@ -521,7 +511,7 @@ export async function runEmbeddedAttempt(
         attempt: params,
         session,
         sessionManager,
-        sessionLockController,
+        transcriptLifecycle,
         bundleMcpRuntime,
         bundleLspRuntime,
         removeToolResultContextGuard,
@@ -535,7 +525,6 @@ export async function runEmbeddedAttempt(
         emitDiagnosticRunCompleted,
         readState: () => ({
           ...projectAgentRunAttemptTerminal(executionState.terminal),
-          beforeAgentRunBlocked: executionState.beforeAgentRunBlocked,
           beforeAgentRunBlockedBy: executionState.beforeAgentRunBlockedBy,
         }),
       });
@@ -550,6 +539,19 @@ export async function runEmbeddedAttempt(
     }
     throw error;
   } finally {
+    const cleanupTerminal = projectAgentRunAttemptTerminal(executionState.terminal);
+    const cleanupReason =
+      cleanupTerminal.timedOut ||
+      cleanupTerminal.timedOutDuringCompaction ||
+      cleanupTerminal.timedOutDuringToolExecution
+        ? "timeout"
+        : cleanupTerminal.aborted
+          ? "cancel"
+          : cleanupTerminal.failed
+            ? "error"
+            : "completion";
+    const cleanups = runCleanups.splice(0);
+    await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
     externalAbortController.dispose();
     clearToolActivityRun(params.runId);
     try {
@@ -559,14 +561,6 @@ export async function runEmbeddedAttempt(
         `failed to clean up embedded prep resources after early attempt exit: runId=${params.runId} ${String(cleanupErr)}`,
       );
     }
-    try {
-      await releaseRetainedSessionLock?.();
-    } catch (releaseErr) {
-      log.error(
-        `failed to release retained session lock on attempt teardown: runId=${params.runId} ${String(releaseErr)}`,
-      );
-    }
-    retainedSessionFileOwner?.release();
     const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
     emitDiagnosticRunCompleted?.(
       terminal.aborted ? "aborted" : "error",

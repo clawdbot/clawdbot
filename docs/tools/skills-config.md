@@ -175,10 +175,40 @@ directories. Symlinks and insecure paths are rejected.
 The policy receives one JSON object on stdin with `protocolVersion: 1`,
 `openclawVersion`, `targetType`, `targetName`, `sourcePath`, `sourcePathKind`,
 optional structured `source`, structured `origin`, and `request`. It must
-write one JSON object on stdout: `{ "protocolVersion": 1, "decision": "allow" }`
-or `{ "protocolVersion": 1, "decision": "block", "reason": "..." }`. Non-zero
-exit, timeout, malformed JSON, missing fields, or unsupported protocol
-versions fail closed.
+write one JSON object on stdout with an `allow`, `warn`, or `block` decision.
+`warn` and `block` require a non-empty `reason`; every decision may include a
+`findings` array. Each finding requires non-empty string `ruleId` and `message`
+fields plus a `severity` of `info`, `warn`, or `critical`. Optional `file` and
+`evidence` values must be non-empty strings; a finite numeric `line` is rounded
+down and clamped to the safe-integer range from 1 through `Number.MAX_SAFE_INTEGER`.
+Malformed finding entries are ignored, and
+invalid optional fields are omitted. A non-array `findings` value is treated as
+absent. Operator-facing reason and finding text are limited to 1,000 characters.
+OpenClaw retains at most 100 normalized findings for display. Only a `warn`
+response with more than 100 valid findings fails closed and cannot be
+acknowledged; `allow` and `block` retain the first 100. A warning stops the
+install before commit. A `warn` review whose fully rendered notice, including
+its title, target, sanitized reason and findings, and recovery guidance, exceeds
+the 4,000-character aggregate display limit fails closed without presenting a
+partial review. An over-budget `block` remains terminal with a
+bounded denial, while over-budget findings on `allow` are summarized in bounded
+diagnostic output. Interactive CLI
+plugin and skill commands ask the operator to type the target name using the
+same `install anyway` or `update anyway` copy as suspicious ClawHub releases,
+then run policy again before continuing. Declined and non-interactive commands
+on the direct CLI may use `--acknowledge-install-policy-warning` as explicit
+approval after review for every warning in that command invocation;
+every approved warning is re-evaluated before continuing.
+The Control UI can review and approve warnings for its plugin install request;
+that approval covers every warning in the invocation, and each warning is
+still re-evaluated. Other Gateway-backed and automatic installs remain blocked
+when they have no operator-confirmation flow. Use an equivalent direct plugin
+or skill command to review and approve the warning when one exists. Otherwise,
+change `security.installPolicy` to return `allow` for the reviewed request,
+then retry the managed flow. `--force` does not approve policy warnings. A `block`,
+non-zero exit, timeout, invalid JSON, non-object response, missing or invalid
+protocol version or decision, or missing or empty `warn`/`block` reason always
+fails closed.
 
 OpenClaw does not execute install policy during normal Gateway startup.
 Installs and updates fail closed when policy is enabled but unavailable.
@@ -294,11 +324,11 @@ different visible skill set per agent.
     defaults: {
       skills: ["github", "weather"], // shared baseline
     },
-    list: [
-      { id: "writer" }, // inherits github, weather
-      { id: "docs", skills: ["docs-search"] }, // replaces defaults entirely
-      { id: "locked-down", skills: [] }, // no skills
-    ],
+    entries: {
+      writer: { default: true }, // inherits github, weather
+      docs: { skills: ["docs-search"] }, // replaces defaults entirely
+      "locked-down": { skills: [] }, // no skills
+    },
   },
 }
 ```
@@ -333,8 +363,9 @@ different visible skill set per agent.
   `off` disables autonomous capture while keeping the durable-instruction
   suggestion nudge. `propose` creates pending proposals from corrections and
   substantial completed work. `auto` sends the same captures through the normal
-  scanner-gated Workshop apply path. User-prompted skill creation, `/learn`, and
-  manual history scan continue to work in every mode.
+  scanner-gated Workshop apply path and runs daily collection cleanup that can
+  rewrite or drop eligible writable skills. User-prompted skill creation,
+  `/learn`, and manual history scan continue to work in every mode.
 </ParamField>
 
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,

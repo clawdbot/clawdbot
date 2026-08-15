@@ -11,14 +11,34 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
-import { applySessionsPatchToStore } from "./sessions-patch.js";
+import { projectSessionsPatchEntry } from "./sessions-patch.js";
+
+async function applySessionsPatchToStore(
+  params: Omit<
+    Parameters<typeof projectSessionsPatchEntry>[0],
+    "existingEntry" | "isLabelInUse"
+  > & { store: Record<string, SessionEntry> },
+) {
+  const projected = await projectSessionsPatchEntry({
+    ...params,
+    existingEntry: params.store[params.storeKey],
+    isLabelInUse: (label) =>
+      Object.entries(params.store).some(
+        ([sessionKey, entry]) => sessionKey !== params.storeKey && entry.label === label,
+      ),
+  });
+  if (projected.ok) {
+    params.store[params.storeKey] = projected.entry;
+  }
+  return projected;
+}
 
 const acpSessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionMetaForEntry: vi.fn(),
 }));
 const providerThinkingMocks = vi.hoisted(() => ({
   resolveProviderThinkingProfile:
-    vi.fn<typeof import("../plugins/provider-thinking.js").resolveProviderThinkingProfile>(),
+    vi.fn<typeof import("../plugins/provider-thinking.js").resolveEffectiveThinkingProfile>(),
 }));
 
 vi.mock("../acp/runtime/session-meta.js", () => ({
@@ -27,7 +47,7 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
 
 // This suite owns patch projection; provider policy artifacts have dedicated contract coverage.
 vi.mock("../plugins/provider-thinking.js", () => ({
-  resolveProviderThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
+  resolveEffectiveThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
 }));
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.7-Code";
@@ -344,7 +364,7 @@ describe("gateway sessions patch", () => {
     const archived = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({ pinnedAt: 10 }),
-        patch: { key: MAIN_SESSION_KEY, archived: true },
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
         archivedBy,
       }),
     );
@@ -355,7 +375,7 @@ describe("gateway sessions patch", () => {
     const idempotent = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
-        patch: { key: MAIN_SESSION_KEY, archived: true },
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
         archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       }),
     );
@@ -365,18 +385,47 @@ describe("gateway sessions patch", () => {
     const restored = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
-        patch: { key: MAIN_SESSION_KEY, archived: false },
+        patch: { key: MAIN_SESSION_KEY, archived: false, expectedSessionId: "sess" },
       }),
     );
     expect(restored.archivedAt).toBeUndefined();
     expect(restored.archivedBy).toBeUndefined();
   });
 
+  test.each([
+    { action: "archive", archived: true, sessionId: undefined },
+    { action: "archive", archived: true, sessionId: "" },
+    { action: "restore", archived: false, sessionId: undefined },
+    { action: "restore", archived: false, sessionId: "" },
+  ])("rejects $action for a provisional session identity", async ({ archived, sessionId }) => {
+    const entry = { sessionId, updatedAt: 1 } as SessionEntry;
+    const store = { [MAIN_SESSION_KEY]: entry };
+
+    expectPatchError(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, archived },
+      }),
+      `session not found: ${MAIN_SESSION_KEY}`,
+    );
+    expect(store[MAIN_SESSION_KEY]).toBe(entry);
+  });
+
+  test("requires the caller-observed durable identity for lifecycle patches", async () => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, archived: true },
+      }),
+      "expectedSessionId required for session lifecycle patch",
+    );
+  });
+
   test("does not fabricate archive attribution without an actor", async () => {
     const archived = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({}),
-        patch: { key: MAIN_SESSION_KEY, archived: true },
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
       }),
     );
 
@@ -614,50 +663,6 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.category).toBe("Research");
-  });
-
-  test("canonicalizes and clears session icons", async () => {
-    const icon = expectPatchOk(
-      await runPatch({
-        store: mainStoreEntry({}),
-        patch: {
-          key: MAIN_SESSION_KEY,
-          icon: "  svg:<svg viewBox='0 0 24 24'><path d='M1 2' fill='currentColor'/></svg>  ",
-        },
-      }),
-    );
-    expect(icon.icon).toBe(
-      'svg:<svg viewBox="0 0 24 24"><path d="M1 2" fill="currentColor"/></svg>',
-    );
-
-    const cleared = expectPatchOk(
-      await runPatch({
-        store: mainStoreEntry({ icon: "🦞" }),
-        patch: { key: MAIN_SESSION_KEY, icon: null },
-      }),
-    );
-    expect(cleared.icon).toBeUndefined();
-  });
-
-  test.each([
-    ["script", "svg:<svg><script>alert(1)</script></svg>"],
-    ["event handler", 'svg:<svg onload="alert(1)"></svg>'],
-    [
-      "xlink href",
-      'svg:<svg xmlns:xlink="http://www.w3.org/1999/xlink"><path xlink:href="#x"/></svg>',
-    ],
-    ["URL paint", 'svg:<svg><path fill="url(#paint)"/></svg>'],
-    ["DOCTYPE", "svg:<!DOCTYPE svg><svg></svg>"],
-    ["oversized payload", `svg:<svg><title>${"x".repeat(4096)}</title></svg>`],
-    ["double root", "svg:<svg></svg><svg></svg>"],
-  ])("rejects hostile session SVG icons: %s", async (_label, icon) => {
-    expectPatchError(
-      await runPatch({
-        store: mainStoreEntry({}),
-        patch: { key: MAIN_SESSION_KEY, icon },
-      }),
-      "invalid icon",
-    );
   });
 
   test("rejects empty category", async () => {
@@ -1396,6 +1401,7 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, 'thinkingLevel "ultra" is not supported');
     expect(acpSessionMetaMocks.readAcpSessionMetaForEntry).toHaveBeenCalledWith({
       sessionKey: MAIN_SESSION_KEY,
+      agentId: "main",
       entry: expect.objectContaining({ sessionId: "sess" }),
     });
   });

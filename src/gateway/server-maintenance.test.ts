@@ -6,6 +6,7 @@ import type { HealthSummary } from "./health/types.js";
 const CURATOR_INITIAL_DELAY_MS = 5 * 60_000;
 const CURATOR_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { createChatAbortMarker } from "./server-chat-state.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
@@ -17,6 +18,30 @@ const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
   deletedFileCount: 0,
   retainedCount: 0,
 }));
+const pruneExpiredDeliveryQueueTombstonesMock = vi.fn();
+const pruneExpiredDevicePairSetupCompletionsMock = vi.fn(async () => 0);
+const pruneOrphanedDeliveryQueueMediaMock = vi.fn(async () => undefined);
+
+vi.mock("../infra/device-bootstrap.js", () => ({
+  pruneExpiredDevicePairSetupCompletions: pruneExpiredDevicePairSetupCompletionsMock,
+}));
+
+vi.mock("../infra/delivery-queue-sqlite.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/delivery-queue-sqlite.js")>(
+    "../infra/delivery-queue-sqlite.js",
+  );
+  return {
+    ...actual,
+    pruneExpiredDeliveryQueueTombstones: pruneExpiredDeliveryQueueTombstonesMock,
+  };
+});
+
+vi.mock("../infra/outbound/delivery-queue-media-spool.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../infra/outbound/delivery-queue-media-spool.js")
+  >("../infra/outbound/delivery-queue-media-spool.js");
+  return { ...actual, pruneOrphanedDeliveryQueueMedia: pruneOrphanedDeliveryQueueMediaMock };
+});
 
 vi.mock("../media/store.js", async () => {
   const actual = await vi.importActual<typeof import("../media/store.js")>("../media/store.js");
@@ -48,7 +73,7 @@ function createActiveRun(
 function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
-    logHealth: { error: vi.fn() },
+    logHealth: { info: vi.fn(), error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
@@ -147,6 +172,7 @@ describe("startGatewayMaintenanceTimers", () => {
     vi.clearAllMocks();
     cleanOldMediaMock.mockReset().mockResolvedValue(undefined);
     prunePlaybackTranscodeCacheMock.mockReset().mockResolvedValue(undefined);
+    pruneExpiredDevicePairSetupCompletionsMock.mockReset().mockResolvedValue(0);
     cleanupManagedOutgoingMediaRecordsMock.mockReset().mockResolvedValue({
       deletedRecordCount: 0,
       deletedFileCount: 0,
@@ -226,6 +252,36 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
+  it("runs setup-outcome cleanup immediately without overlapping minute ticks", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    let resolvePrune = (_deletedCount: number) => {};
+    pruneExpiredDevicePairSetupCompletionsMock.mockImplementationOnce(
+      () =>
+        new Promise<number>((resolve) => {
+          resolvePrune = resolve;
+        }),
+    );
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
+
+    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledWith({
+      nowMs: Date.now(),
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(1);
+
+    resolvePrune(0);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenLastCalledWith({
+      nowMs: Date.now(),
+    });
+    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(2);
+
+    await stopMaintenanceTimers(timers);
+  });
+
   it("runs queue media cleanup at startup and hourly", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
@@ -236,11 +292,29 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(2);
+    expect(pruneExpiredDeliveryQueueTombstonesMock).not.toHaveBeenCalled();
 
     await stopMaintenanceTimers(timers);
   });
 
-  it("delays curator startup, skips overlap, and unregisters on cleanup", async () => {
+  it("runs tombstone expiry with default queue media cleanup at startup and hourly", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const { runDeliveryQueueMediaGc: _runDeliveryQueueMediaGc, ...deps } =
+      createMaintenanceTimerDeps();
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(1);
+    expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(2);
+    expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(2);
+
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("delays collection review and does not overlap runs", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     let resolveSweep = () => {};
@@ -250,16 +324,12 @@ describe("startGatewayMaintenanceTimers", () => {
           resolveSweep = resolve;
         }),
     );
-    const unregister = vi.fn();
-    const register = vi.fn(() => unregister);
     const timers = startGatewayMaintenanceTimers({
       ...createMaintenanceTimerDeps(),
       enableSkillCurator: true,
-      runSkillCuratorSweep: sweep,
-      registerSkillUsageTracking: register,
+      runSkillCollectionReconcile: sweep,
     });
 
-    expect(register).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(CURATOR_INITIAL_DELAY_MS - 1);
     expect(sweep).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -275,7 +345,6 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     await stopMaintenanceTimers(timers);
-    expect(unregister).toHaveBeenCalledTimes(1);
   });
 
   it("passes owner activity to default managed worktree cleanup", async () => {
@@ -332,7 +401,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = {
       ...createMaintenanceTimerDeps(),
-      logHealth: { error: vi.fn() },
+      logHealth: { info: vi.fn(), error: vi.fn() },
     };
 
     const timers = startGatewayMaintenanceTimers({
@@ -724,7 +793,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const runId = "run-aborted";
-    deps.chatRunState.getOrCreate(runId).abortMarker = staleRunTimestamp();
+    deps.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker(staleRunTimestamp());
     seedStaleRunBuffers(deps, runId);
     seedBufferedAgentEvent(deps, runId);
     const agentText = deps.chatRunState.getOrCreate(runId).agentText?.assistant;
@@ -898,6 +967,49 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
+  it("recovers a wedged terminal-pending run whose projection clear never ran", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-wedged-terminal-pending";
+    const wedgedRun = createActiveRun("main");
+    wedgedRun.expiresAtMs = Date.now() - 1;
+    wedgedRun.projectSessionActive = false;
+    wedgedRun.projectSessionTerminalPending = true;
+    // Stamped by the synchronous lifecycle listener; the async clear was lost.
+    wedgedRun.projectSessionTerminalObservedAt = Date.now() - 120_000;
+    deps.chatAbortControllers.set(runId, wedgedRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(wedgedRun.controller.signal.aborted).toBe(false);
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("keeps a fresh terminal-pending run for its async projection owner", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-fresh-terminal-pending";
+    const freshRun = createActiveRun("main");
+    freshRun.expiresAtMs = Date.now() - 1;
+    freshRun.projectSessionTerminalPending = true;
+    // Abort owner reserves terminal ownership without a stamped observation;
+    // the sweeper must never race that owner.
+    freshRun.projectSessionTerminalObservedAt = undefined;
+    deps.chatAbortControllers.set(runId, freshRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.chatAbortControllers.has(runId)).toBe(true);
+    await stopMaintenanceTimers(timers);
+  });
+
   it("converts expired stalled terminal persistence into a recovery candidate", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
@@ -947,176 +1059,24 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("keeps active exec approval dedupe aliases past the normal ttl", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-    const runId = "exec-approval-followup:req-active:nonce:retry-1";
-    deps.chatAbortControllers.set(runId, createActiveRun("agent:main:main", "agent"));
-    deps.dedupe.set("agent:exec-approval-followup:req-active", {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: { runId, status: "accepted" },
-    });
-    deps.dedupe.set("agent:exec-approval-followup:req-stale", {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: { runId: "exec-approval-followup:req-stale:nonce:retry-1", status: "accepted" },
-    });
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.dedupe.has("agent:exec-approval-followup:req-active")).toBe(true);
-    expect(deps.dedupe.has("agent:exec-approval-followup:req-stale")).toBe(false);
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("keeps queued chat dedupe entries past the normal ttl", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-    const runId = "queued-chat";
-    deps.chatQueuedTurns.set(runId, {
-      controller: new AbortController(),
-      sessionId: "session-main",
-      sessionKey: "agent:main:main",
-    });
-    deps.dedupe.set(`chat:${runId}`, {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: { runId, status: "ok" },
-    });
-
-    const timers = startGatewayMaintenanceTimers(deps);
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.dedupe.has(`chat:${runId}`)).toBe(true);
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("keeps queued chat dedupe entries while trimming overflow", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-    const runId = "queued-oldest";
-    seedStableDedupeEntries(deps, now);
-    deps.chatQueuedTurns.set(runId, {
-      controller: new AbortController(),
-      sessionId: "session-main",
-      sessionKey: "agent:main:main",
-    });
-    deps.dedupe.set(`chat:${runId}`, {
-      ts: now - 10_000,
-      ok: true,
-      payload: { runId, status: "ok" },
-    });
-    deps.dedupe.set("overflow-newest", { ts: now, ok: true });
-
-    const timers = startGatewayMaintenanceTimers(deps);
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.dedupe.size).toBe(DEDUPE_MAX);
-    expect(deps.dedupe.has(`chat:${runId}`)).toBe(true);
-    expect(deps.dedupe.has("stable-0")).toBe(false);
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("evicts dedupe overflow by oldest timestamp even after reinsertion", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-
-    seedStableDedupeEntries(deps, now);
-
-    deps.dedupe.delete("stable-10");
-    deps.dedupe.set("stable-10", { ts: now - 2_000, ok: true });
-    deps.dedupe.set("overflow-newest", { ts: now - 100, ok: true });
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.dedupe.size).toBe(DEDUPE_MAX);
-    expect(deps.dedupe.has("stable-10")).toBe(false);
-    expect(deps.dedupe.has("stable-0")).toBe(true);
-    expect(deps.dedupe.has("overflow-newest")).toBe(true);
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("evicts multiple dedupe overflows by oldest timestamp with interleaved reinsertions", async () => {
+  it("evicts an expired non-abortable active run instead of retrying forever", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
-    const now = Date.now();
-
-    // Fill to max with sequential timestamps
-    for (let index = 0; index < DEDUPE_MAX; index += 1) {
-      deps.dedupe.set(`item-${index}`, { ts: now - 10_000 + index, ok: true });
-    }
-
-    // Interleave updates and overflows:
-    // 1. Move item-0 to be the newest (was oldest)
-    deps.dedupe.delete("item-0");
-    deps.dedupe.set("item-0", { ts: now, ok: true });
-
-    // 2. Add multiple overflows
-    deps.dedupe.set("overflow-1", { ts: now - 5_000, ok: true }); // Should survive (middle age)
-    deps.dedupe.set("overflow-2", { ts: now - 20_000, ok: true }); // Should be evicted (oldest)
-
-    // 3. Move item-500 to be very old
-    deps.dedupe.delete("item-500");
-    deps.dedupe.set("item-500", { ts: now - 30_000, ok: true }); // Should be evicted (new oldest)
+    const runId = "run-unabortable";
+    const wedged = createActiveRun("main");
+    wedged.expiresAtMs = Date.now() - 1;
+    // Owner cleanup lost after a direct controller.abort: the entry is no
+    // longer abortable, so the timeout abort returns { aborted: false } and
+    // pre-fix the entry survived every sweep as a phantom active run.
+    wedged.controller.abort();
+    deps.chatAbortControllers.set(runId, wedged);
 
     const timers = startGatewayMaintenanceTimers(deps);
-
-    // Initial size is DEDUPE_MAX + 2 (item-0 and item-500 were re-added, overflow-1 and overflow-2 added)
-    // Actually:
-    // item-1 to item-499 (499)
-    // item-501 to item-999 (499)
-    // item-0 (1)
-    // item-500 (1)
-    // overflow-1 (1)
-    // overflow-2 (1)
-    // Total: 499 + 499 + 1 + 1 + 1 + 1 = 1002
-    expect(deps.dedupe.size).toBe(DEDUPE_MAX + 2);
-
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(deps.dedupe.size).toBe(DEDUPE_MAX);
-
-    // item-500 (now - 30k) and overflow-2 (now - 20k) should be gone
-    expect(deps.dedupe.has("item-500")).toBe(false);
-    expect(deps.dedupe.has("overflow-2")).toBe(false);
-
-    // item-0 (now) and overflow-1 (now - 5k) should remain
-    expect(deps.dedupe.has("item-0")).toBe(true);
-    expect(deps.dedupe.has("overflow-1")).toBe(true);
-
-    // item-1 (now - 10k + 1) should remain as it is now one of the oldest but not evicted
-    expect(deps.dedupe.has("item-1")).toBe(true);
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("does not evict active agent dedupe entries while trimming overflow", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-
-    seedStableDedupeEntries(deps, now);
-    deps.chatAbortControllers.set("active-oldest", createActiveRun("agent:main:main", "agent"));
-    deps.dedupe.set("agent:active-oldest", {
-      ts: now - 10_000,
-      ok: true,
-      payload: { runId: "active-oldest", status: "accepted" },
-    });
-    deps.dedupe.set("overflow-newest", { ts: now, ok: true });
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.dedupe.size).toBe(DEDUPE_MAX);
-    expect(deps.dedupe.has("agent:active-oldest")).toBe(true);
-    expect(deps.dedupe.has("stable-0")).toBe(false);
-    expect(deps.dedupe.has("stable-1")).toBe(false);
-    expect(deps.dedupe.has("overflow-newest")).toBe(true);
-
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
     await stopMaintenanceTimers(timers);
   });
 });

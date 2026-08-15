@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -133,7 +134,8 @@ async function proxyReconnect(
 ): Promise<void> {
   await gateway.closeLatest(1001, "proxy idle timeout");
   await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(expectedSocketCount);
-  expect(await page.locator(".sidebar-identity-card__subtitle").count()).toBe(0);
+  await waitForControlUiGatewayReady(page);
+  expect(await page.locator(".sidebar-identity-card__status").textContent()).toBe("");
 }
 
 async function captureProof(page: Page, name: string): Promise<void> {

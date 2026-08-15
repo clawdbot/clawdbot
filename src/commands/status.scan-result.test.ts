@@ -66,6 +66,8 @@ describe("buildStatusScanResult", () => {
     ];
     const agentStatus = {
       defaultId: "main",
+      ownership: "sole" as const,
+      selectionRequired: false,
       totalSessions: 0,
       bootstrapPendingCount: 0,
       agents: [

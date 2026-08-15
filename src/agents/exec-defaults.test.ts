@@ -302,6 +302,26 @@ describe("resolveExecDefaults", () => {
     });
   });
 
+  it("uses the configured default agent for an unscoped session", () => {
+    expect(
+      resolveExecDefaults({
+        cfg: {
+          tools: { exec: { security: "full", ask: "off" } },
+          agents: {
+            entries: {
+              main: {},
+              ops: { default: true, tools: { exec: { security: "deny", ask: "always" } } },
+            },
+          },
+        },
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      security: "deny",
+      ask: "always",
+    });
+  });
+
   it("blocks node skill eligibility for deny policy and preserves node bindings", () => {
     expect(
       resolveNodeExecEligibility({
@@ -316,6 +336,18 @@ describe("resolveExecDefaults", () => {
         }),
       }),
     ).toEqual({ canExec: false, node: "build-mac" });
+  });
+
+  it("uses an explicitly loaded approval snapshot for read-only callers", () => {
+    const load = vi.mocked(execApprovals.loadExecApprovals);
+
+    expect(
+      resolveNodeExecEligibility({
+        cfg: withDefaultAgent({ tools: { exec: { host: "node", mode: "full" } } }),
+        execApprovals: { version: 1, defaults: { security: "deny" }, agents: {} },
+      }),
+    ).toEqual({ canExec: false });
+    expect(load).not.toHaveBeenCalled();
   });
 
   it("blocks node skill eligibility when the gateway denies system.run", () => {

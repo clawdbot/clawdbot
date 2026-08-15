@@ -37,6 +37,7 @@ class WearProxyControllerTest {
           },
           isGatewayConnected = { false },
           gatewayStatusText = { "Offline" },
+          hasOperatorAdminScope = { true },
         )
 
       val response = controller.handle(request(WearRpcMethod.ProxyStatus))
@@ -57,6 +58,91 @@ class WearProxyControllerTest {
         WearProxyCapability.entries.map(WearProxyCapability::wireValue),
         result.getValue("capabilities").jsonArray.map { it.jsonPrimitive.content },
       )
+    }
+
+  @Test
+  fun statusAdvertisesModelControlsOnlyWithOperatorAdminScope() =
+    runTest {
+      var hasOperatorAdminScope = false
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          hasOperatorAdminScope = { hasOperatorAdminScope },
+        )
+
+      val limitedCapabilities =
+        checkNotNull(controller.handle(request(WearRpcMethod.ProxyStatus)).result)
+          .jsonObject
+          .getValue("capabilities")
+          .jsonArray
+          .map { it.jsonPrimitive.content }
+      hasOperatorAdminScope = true
+      val adminCapabilities =
+        checkNotNull(controller.handle(request(WearRpcMethod.ProxyStatus)).result)
+          .jsonObject
+          .getValue("capabilities")
+          .jsonArray
+          .map { it.jsonPrimitive.content }
+
+      assertEquals(
+        WearProxyCapability.entries
+          .filter { it != WearProxyCapability.ModelControls }
+          .map(WearProxyCapability::wireValue),
+        limitedCapabilities,
+      )
+      assertEquals(
+        WearProxyCapability.entries.map(WearProxyCapability::wireValue),
+        adminCapabilities,
+      )
+    }
+
+  @Test
+  fun agentPulseAcceptsOnlyTheSelectedSessionAndCallsItsLoaderOnce() =
+    runTest {
+      var loaderCalls = 0
+      var requestedSessionKey: String? = null
+      val projected =
+        buildJsonObject {
+          put("tasks", buildJsonObject { put("state", "unavailable") })
+          put("swarm", buildJsonObject { put("state", "idle") })
+          put("approvals", buildJsonObject { put("state", "unavailable") })
+        }
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> error("Agent Pulse must stay on the Phone runtime boundary") },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          loadAgentPulse = { sessionKey ->
+            loaderCalls += 1
+            requestedSessionKey = sessionKey
+            projected
+          },
+        )
+
+      val response =
+        controller.handle(
+          request(
+            WearRpcMethod.AgentPulse,
+            buildJsonObject { put("sessionKey", "agent:main:thread-7") },
+          ),
+        )
+      val rejected =
+        controller.handle(
+          request(
+            WearRpcMethod.AgentPulse,
+            buildJsonObject { put("detail", true) },
+          ),
+        )
+
+      assertTrue(response.ok)
+      assertEquals(projected, response.result)
+      assertEquals("agent:main:thread-7", requestedSessionKey)
+      assertEquals(1, loaderCalls)
+      assertFalse(rejected.ok)
+      assertEquals("invalid_request", rejected.error?.code)
+      assertEquals(1, loaderCalls)
     }
 
   @Test

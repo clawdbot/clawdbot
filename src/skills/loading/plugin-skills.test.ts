@@ -98,6 +98,7 @@ function createSinglePluginRegistry(params: {
   pluginRoot: string;
   skills: string[];
   format?: "openclaw" | "bundle";
+  bundleFormat?: "agent" | "codex" | "claude" | "cursor";
   legacyPluginIds?: string[];
 }): PluginManifestRegistry {
   return {
@@ -107,6 +108,7 @@ function createSinglePluginRegistry(params: {
         id: "helper",
         name: "Helper",
         format: params.format,
+        bundleFormat: params.bundleFormat,
         channels: [],
         providers: [],
         cliBackends: [],
@@ -132,6 +134,20 @@ async function setupAcpxAndHelperRegistry() {
     buildRegistry({ acpxRoot, helperRoot }),
   );
   return { workspaceDir, acpxRoot, helperRoot };
+}
+
+function useStableMetadataSnapshot(manifestRegistry: PluginManifestRegistry): void {
+  const snapshot = {
+    manifestRegistry,
+    plugins: manifestRegistry.plugins,
+    normalizePluginId: (pluginId: string) =>
+      manifestRegistry.plugins.find((plugin) => plugin.legacyPluginIds?.includes(pluginId))?.id ??
+      pluginId,
+  };
+  hoisted.loadPluginMetadataSnapshot
+    .mockReturnValueOnce(snapshot)
+    .mockReturnValueOnce(snapshot)
+    .mockReturnValueOnce(snapshot);
 }
 
 async function setupPluginOutsideSkills() {
@@ -233,6 +249,57 @@ describe("resolvePluginSkillDirs", () => {
 
     expect(dirs).toEqual(expectedDirs({ acpxRoot, helperRoot }));
   });
+
+  it.each([
+    {
+      name: "unavailable to available",
+      initiallyAvailable: false,
+      firstIncludesAcpx: false,
+      secondIncludesAcpx: true,
+    },
+    {
+      name: "available to unavailable",
+      initiallyAvailable: true,
+      firstIncludesAcpx: true,
+      secondIncludesAcpx: false,
+    },
+  ])(
+    "invalidates the memo when ACP changes from $name with stable inputs",
+    async ({ initiallyAvailable, firstIncludesAcpx, secondIncludesAcpx }) => {
+      const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
+      const manifestRegistry = buildRegistry({ acpxRoot, helperRoot });
+      useStableMetadataSnapshot(manifestRegistry);
+      const config = {
+        acp: { enabled: true },
+        plugins: {
+          entries: {
+            acpx: { enabled: true },
+            helper: { enabled: true },
+          },
+        },
+      } as OpenClawConfig;
+      if (initiallyAvailable) {
+        registerHealthyAcpBackend();
+      }
+
+      const first = resolvePluginSkillDirs({ workspaceDir, config });
+
+      if (initiallyAvailable) {
+        acpRuntimeTesting.resetAcpRuntimeBackendsForTests();
+      } else {
+        registerHealthyAcpBackend();
+      }
+      const second = resolvePluginSkillDirs({ workspaceDir, config });
+
+      const dirsForState = (includeAcpx: boolean) => [
+        ...(includeAcpx ? [path.resolve(acpxRoot, "skills")] : []),
+        path.resolve(helperRoot, "skills"),
+      ];
+      expect(first).toEqual(dirsForState(firstIncludesAcpx));
+      expect(second).toEqual(dirsForState(secondIncludesAcpx));
+      expect(resolvePluginSkillDirs({ workspaceDir, config })).toBe(second);
+    },
+  );
 
   it("rejects plugin skill paths that escape the plugin root", async () => {
     const { workspaceDir, pluginRoot, outsideSkills } = await setupPluginOutsideSkills();
@@ -361,6 +428,43 @@ describe("resolvePluginSkillDirs", () => {
       path.resolve(pluginRoot, "skills"),
       path.resolve(pluginRoot, "commands"),
     ]);
+  });
+
+  it("limits Agent Plugins skills to valid immediate child directories", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const pluginRoot = await tempDirs.make("openclaw-agent-bundle-");
+    const pluginSkillsDir = await tempDirs.make("managed-plugin-skills-");
+    const skillsRoot = path.join(pluginRoot, "skills");
+    const validSkill = path.join(skillsRoot, "valid");
+    const nestedSkill = path.join(skillsRoot, "group", "deep");
+    await fs.mkdir(validSkill, { recursive: true });
+    await fs.mkdir(nestedSkill, { recursive: true });
+    await fs.mkdir(path.join(skillsRoot, "missing"), { recursive: true });
+    await fs.writeFile(path.join(skillsRoot, "SKILL.md"), "root skill must be ignored\n");
+    await fs.writeFile(path.join(validSkill, "SKILL.md"), "valid immediate skill\n");
+    await fs.writeFile(path.join(nestedSkill, "SKILL.md"), "nested skill must be ignored\n");
+
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createSinglePluginRegistry({
+        pluginRoot,
+        format: "bundle",
+        bundleFormat: "agent",
+        skills: ["skills"],
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      pluginSkillsDir,
+      config: {
+        plugins: { entries: { helper: { enabled: true } } },
+      } as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([validSkill]);
+    expect(fsSync.readlinkSync(path.join(pluginSkillsDir, "valid"))).toBe(validSkill);
+    expect(fsSync.existsSync(path.join(pluginSkillsDir, "deep"))).toBe(false);
+    expect(fsSync.existsSync(path.join(pluginSkillsDir, "skills"))).toBe(false);
   });
 
   it("resolves enabled plugin skills through legacy manifest aliases", async () => {

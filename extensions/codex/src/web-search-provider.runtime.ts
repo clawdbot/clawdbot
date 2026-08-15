@@ -6,6 +6,7 @@ import {
   wrapWebContent,
 } from "openclaw/plugin-sdk/provider-web-search";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   runBoundedCodexAppServerTurn,
   type CodexBoundedTurnOptions,
@@ -26,6 +27,7 @@ export async function executeCodexWebSearchProviderTool(
   const result = await runBoundedCodexAppServerTurn({
     config: ctx.config,
     model: { mode: "live-default" },
+    modelProvider: "openai",
     timeoutMs: resolveSearchTimeoutSeconds(ctx.searchConfig as SearchConfigRecord) * 1_000,
     signal: executionContext?.signal,
     agentDir: ctx.agentDir,
@@ -65,7 +67,7 @@ function summarizeCodexWebSearchItem(item: CodexThreadItem): Record<string, unkn
   const actionType = readNonEmptyString(action, "type");
   const queries = actionType === "search" ? readNonEmptyStringArray(action, "queries") : [];
   const query =
-    normalizeNonEmptyString(item.query) ??
+    normalizeOptionalString(item.query) ??
     (actionType === "search" ? readNonEmptyString(action, "query") : undefined) ??
     queries[0];
   const url = readNonEmptyString(action, "url");
@@ -80,7 +82,7 @@ function summarizeCodexWebSearchItem(item: CodexThreadItem): Record<string, unkn
 }
 
 function readNonEmptyString(record: JsonObject | undefined, key: string): string | undefined {
-  return record ? normalizeNonEmptyString(record[key]) : undefined;
+  return record ? normalizeOptionalString(record[key]) : undefined;
 }
 
 function readNonEmptyStringArray(record: JsonObject | undefined, key: string): string[] {
@@ -89,11 +91,7 @@ function readNonEmptyStringArray(record: JsonObject | undefined, key: string): s
     return [];
   }
   return value.flatMap((entry) => {
-    const normalized = normalizeNonEmptyString(entry);
+    const normalized = normalizeOptionalString(entry);
     return normalized ? [normalized] : [];
   });
-}
-
-function normalizeNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim() || undefined : undefined;
 }

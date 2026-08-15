@@ -18,11 +18,11 @@ export type SystemAgentOperation =
   | {
       kind: "config-set-ref";
       path: string;
-      source: "env" | "file" | "exec";
+      source: "env" | "file" | "exec" | "store";
       id: string;
       provider?: string;
     }
-  | { kind: "setup"; workspace?: string; model?: string }
+  | { kind: "setup"; workspace?: string; model?: string; agentName?: string }
   | { kind: "model-setup"; workspace?: string }
   | { kind: "channel-list" }
   | { kind: "channel-info"; channel: string }

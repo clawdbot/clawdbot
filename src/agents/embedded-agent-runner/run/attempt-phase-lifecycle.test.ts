@@ -1,4 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  appendTranscriptMessage,
+  readActiveTranscriptEntryAnchor,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 
 const hoisted = vi.hoisted(() => ({
   runAgentEndSideEffects: vi.fn(),
@@ -12,19 +22,25 @@ vi.mock("../../harness/agent-end-side-effects.js", () => ({
 vi.mock("./agent-end-context.js", () => ({
   buildEmbeddedAgentEndContext: () => ({}),
 }));
-vi.mock("./attempt.async-tasks.js", () => ({
+vi.mock("./attempt-async-tasks.js", () => ({
   shouldWaitForCompletionRequiredAsyncTasks: hoisted.shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks: hoisted.waitForCompletionRequiredAsyncTasks,
 }));
 
-import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
+import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("embedded attempt phase lifecycle state", () => {
   beforeEach(() => {
     hoisted.runAgentEndSideEffects.mockReset();
     hoisted.shouldWaitForCompletionRequiredAsyncTasks.mockReset().mockReturnValue(false);
     hoisted.waitForCompletionRequiredAsyncTasks.mockReset();
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
   });
 
   it("re-reads compaction timeout state after the retry wait", async () => {
@@ -57,8 +73,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [],
         waitForCompactionRetry: async () => {
@@ -138,8 +153,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [{ toolName: "exec", asyncStarted: true }],
         waitForCompactionRetry: async () => {},
@@ -224,8 +238,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [
           { toolName: "read", isError: true },
@@ -279,6 +292,7 @@ describe("embedded attempt phase lifecycle state", () => {
     expect(result.lastAssistant).toBe(modelAssistant);
     expect(result.currentAttemptAssistant).toBe(modelAssistant);
     expect(result.currentAttemptCompletedAssistant).toEqual(modelAssistant);
+    expect(result.successfulNestedToolNames).toEqual([]);
     expect(result.messagesSnapshot).toHaveLength(5);
     expect(result.messagesSnapshot.at(-2)).toMatchObject({
       role: "assistant",
@@ -290,6 +304,132 @@ describe("embedded attempt phase lifecycle state", () => {
       toolName: "read",
       isError: true,
     });
+  });
+
+  it("emits the persisted terminal boundary to the outer fallback owner", async () => {
+    const dir = tempDirs.make("openclaw-attempt-terminal-anchor-");
+    const target = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const userMessage = { role: "user" as const, content: "hello", timestamp: 1 };
+    const persistedUser = await appendTranscriptMessage(target, {
+      cwd: dir,
+      eventId: "user-1",
+      message: userMessage,
+      now: 1,
+    });
+    if (!persistedUser?.anchor) {
+      throw new Error("expected persisted user anchor");
+    }
+    const recorder = createUserTurnTranscriptRecorder({
+      message: userMessage,
+      target: async () => undefined,
+    });
+    recorder.markRuntimePersisted(userMessage, persistedUser.anchor);
+    const sessionManager = SessionManager.open(target, dir);
+    const terminalEntryId = sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "test-model",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const expectedTerminalAnchor = readActiveTranscriptEntryAnchor({
+      agentId: persistedUser.anchor.agentId,
+      sessionId: persistedUser.anchor.sessionId,
+      sessionKey: persistedUser.anchor.sessionKey,
+      storePath: persistedUser.anchor.storePath,
+      entryId: terminalEntryId,
+    });
+    if (!expectedTerminalAnchor) {
+      throw new Error("expected persisted terminal anchor");
+    }
+    const afterTurn = vi.fn(async () => {});
+    const maintain = vi.fn(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    const onContextEngineTurnCandidate = vi.fn();
+    await completeEmbeddedAttemptAfterTurn({
+      attempt: {
+        runId: "run-1",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionTarget: target,
+        sessionFile: target.sessionKey,
+        provider: "test",
+        modelId: "model",
+        model: { api: "openai-responses" },
+        userTurnTranscriptRecorder: recorder,
+        onContextEngineTurnCandidate,
+      } as never,
+      activeContextEngine: {
+        info: { id: "test", name: "Test" },
+        assemble: vi.fn(),
+        compact: vi.fn(),
+        ingest: vi.fn(),
+        afterTurn,
+        maintain,
+      } as never,
+      activeSession: {} as never,
+      sessionManager,
+      withOwnedTranscriptWrite: async (operation) => await operation(),
+      state: {
+        promptError: null,
+        yieldAborted: false,
+        sessionIdUsed: target.sessionId,
+        messagesSnapshot: [{ role: "assistant", content: "done" }] as never,
+        prePromptMessageCount: 0,
+        contextEngineAfterTurnCheckpoint: null,
+        compactionOccurredThisAttempt: false,
+      },
+      readLifecycleState: () => ({
+        aborted: false,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+      }),
+      runtime: {
+        effectiveWorkspace: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        sessionAgentId: "main",
+        resolveActiveContextEnginePluginId: () => "test",
+        shouldRecordCompletedBootstrapTurn: false,
+        cacheTrace: null,
+        anthropicPayloadLogger: null,
+        hookAgentId: "main",
+        diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never,
+        skillWorkshopAvailable: false,
+        hookRunner: null,
+        promptStartedAt: Date.now(),
+      },
+    });
+
+    expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boundary: {
+          admission: recorder.getAdmissionReceipt(),
+          terminal: expectedTerminalAnchor,
+        },
+      }),
+    );
+    expect(afterTurn).not.toHaveBeenCalled();
+    expect(maintain).not.toHaveBeenCalled();
   });
 
   it("emits an abort-classified agent_end event when a teardown error races the abort", async () => {
@@ -304,8 +444,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn() } as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: abortError,
         yieldAborted: false,
@@ -353,8 +492,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn() } as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => {
+      withOwnedTranscriptWrite: async (operation) => {
         aborted = true;
         return await operation();
       },
@@ -406,8 +544,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn() } as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: null,
         yieldAborted: false,

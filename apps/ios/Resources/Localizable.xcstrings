@@ -7073,6 +7073,142 @@
         }
       }
     },
+    "+%1$lld more working": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld more working"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld 个进行中"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld 個進行中"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld trabalhando"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld weitere aktiv"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld más trabajando"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+他%1$lld件が作業中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld개 더 작업 중"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld de plus en cours"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld और काम कर रहे हैं"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld أخرى قيد العمل"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld altri in esecuzione"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld tane daha çalışıyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+ще %1$lld працює"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld lagi bekerja"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld więcej pracuje"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld กำลังทำงานเพิ่มเติม"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld đang hoạt động"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld meer actief"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld مورد دیگر در حال کار"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld ещё в работе"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld till arbetar"
+          }
+        }
+      }
+    },
     "1 more worker": {
       "localizations": {
         "en": {
@@ -7899,20 +8035,20 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<已隐藏的密钥>"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<已遮蔽的密鑰>"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<segredo ocultado>"
           }
         },
         "de": {
@@ -7923,104 +8059,104 @@
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<secreto redactado>"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<編集済みのシークレット>"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<가려진 비밀 값>"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<secret masqué>"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<गोपनीय जानकारी हटाई गई>"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<سر محجوب>"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<segreto oscurato>"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<gizli bilgi çıkarıldı>"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<прихований секрет>"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<rahasia disunting>"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<sekret ukryty>"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<ข้อมูลลับถูกปกปิด>"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<bí mật đã được ẩn>"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<geheim geredigeerd>"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<رمز محرمانه حذف‌شده>"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<секрет скрыт>"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<dold hemlighet>"
           }
         }
       }
@@ -13873,142 +14009,6 @@
         }
       }
     },
-    "Allow": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Allow"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "允许"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "允許"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permitir"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erlauben"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permitir"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "許可"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "허용"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Autoriser"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "अनुमति दें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "السماح"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Consenti"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İzin Ver"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Дозволити"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Izinkan"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zezwól"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "อนุญาต"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cho phép"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sta toe"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اجازه دادن"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Разрешить"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tillåt"
-          }
-        }
-      }
-    },
     "Allow Always": {
       "localizations": {
         "en": {
@@ -14277,142 +14277,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tillåt en gång"
-          }
-        }
-      }
-    },
-    "Allow access": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Allow access"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "允许访问"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "允許存取"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permitir acesso"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zugriff erlauben"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permitir acceso"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "アクセスを許可"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "접근 허용"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Autoriser l’accès"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ऐक्सेस की अनुमति दें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "السماح بالوصول"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Consenti l'accesso"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erişime izin ver"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Надати доступ"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Izinkan akses"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zezwól na dostęp"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "อนุญาตการเข้าถึง"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cho phép truy cập"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Toegang toestaan"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اجازه دسترسی"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Разрешить доступ"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tillåt åtkomst"
           }
         }
       }
@@ -15773,142 +15637,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "En annan funktion är att använda mikrofonen."
-          }
-        }
-      }
-    },
-    "Answer location and nearby questions.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Answer location and nearby questions."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "回答有关位置和附近地点的问题。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "回答位置和附近地點的相關問題。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Responda a perguntas sobre localização e locais próximos."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fragen zum Standort und zur Umgebung beantworten."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Responde preguntas sobre ubicaciones y lugares cercanos."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "位置情報や周辺に関する質問に回答します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "위치 및 주변 지역에 관한 질문에 답변합니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Répondez aux questions sur la localisation et les lieux à proximité."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "स्थान और आस-पास से जुड़े प्रश्नों के उत्तर दें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "الإجابة عن الأسئلة المتعلقة بالموقع والأماكن القريبة."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rispondi a domande sulla posizione e sui luoghi nelle vicinanze."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Konum ve yakındaki yerlerle ilgili soruları yanıtlayın."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Відповіді на запитання про місцезнаходження та місця поблизу."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Jawab pertanyaan tentang lokasi dan tempat di sekitar."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Odpowiadanie na pytania dotyczące lokalizacji i pobliskich miejsc."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ตอบคำถามเกี่ยวกับตำแหน่งที่ตั้งและสถานที่ใกล้เคียง"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Trả lời các câu hỏi về vị trí và khu vực lân cận."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Beantwoord vragen over locaties en de omgeving."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "پاسخ به پرسش‌های مربوط به موقعیت مکانی و مکان‌های اطراف."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ответы на вопросы о местоположении и ближайших местах."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Besvara frågor om plats och närområde."
           }
         }
       }
@@ -31009,142 +30737,6 @@
         }
       }
     },
-    "Check and add calendar events.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Check and add calendar events."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "查看并添加日历事件。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "查看並新增行事曆活動。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Consulte e adicione eventos ao calendário."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kalendertermine prüfen und hinzufügen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Consulta y añade eventos del calendario."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "カレンダーの予定を確認、追加します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "캘린더 일정을 확인하고 추가합니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Consultez et ajoutez des événements au calendrier."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "कैलेंडर ईवेंट जाँचें और जोड़ें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "التحقق من أحداث التقويم وإضافتها."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Controlla e aggiungi eventi del calendario."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Takvim etkinliklerini kontrol edin ve ekleyin."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перевірка та додавання подій календаря."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Periksa dan tambahkan acara kalender."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sprawdzanie i dodawanie wydarzeń w kalendarzu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ตรวจสอบและเพิ่มกิจกรรมในปฏิทิน"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kiểm tra và thêm sự kiện lịch."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Controleer en voeg agenda-afspraken toe."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "بررسی و افزودن رویدادهای تقویم."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Просмотр и добавление событий календаря."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kontrollera och lägg till kalenderhändelser."
-          }
-        }
-      }
-    },
     "Check both": {
       "localizations": {
         "en": {
@@ -33453,142 +33045,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Välj systemets, ljust eller mörkt utseende"
-          }
-        }
-      }
-    },
-    "Choose what your agent can use on this iPhone. Nothing is on until you allow it.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose what your agent can use on this iPhone. Nothing is on until you allow it."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "选择您的智能体可以在此 iPhone 上使用的内容。获得您的允许前，所有权限均处于关闭状态。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "選擇您的代理程式可在此 iPhone 上使用的項目。在您允許之前，所有項目皆為關閉狀態。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escolha o que seu agente pode usar neste iPhone. Nada será ativado até que você permita."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wähle aus, was dein Agent auf diesem iPhone verwenden darf. Nichts ist aktiviert, bis du es erlaubst."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Elige qué puede usar tu agente en este iPhone. Nada estará activado hasta que lo permitas."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "このiPhoneでエージェントが使用できる項目を選択してください。許可するまで、どの項目も有効になりません。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "이 iPhone에서 에이전트가 사용할 수 있는 항목을 선택하세요. 허용하기 전에는 아무것도 활성화되지 않습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choisissez ce que votre agent peut utiliser sur cet iPhone. Rien n’est activé tant que vous ne l’autorisez pas."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "चुनें कि आपका एजेंट इस iPhone पर किन चीज़ों का उपयोग कर सकता है। आपकी अनुमति के बिना कुछ भी चालू नहीं होगा।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اختر ما يمكن لوكيلك استخدامه على هذا الـ iPhone. لن يتم تفعيل أي شيء حتى تسمح به."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scegli cosa può usare il tuo agente su questo iPhone. Nessun accesso è attivo finché non lo consenti."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aracınızın bu iPhone'da neleri kullanabileceğini seçin. Siz izin verene kadar hiçbirine erişilemez."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Виберіть, що ваш агент може використовувати на цьому iPhone. Нічого не ввімкнено, доки ви не надасте дозвіл."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pilih apa yang dapat digunakan agen Anda di iPhone ini. Tidak ada yang aktif sampai Anda mengizinkannya."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wybierz, z czego agent może korzystać na tym iPhonie. Żadna z tych funkcji nie jest aktywna, dopóki na nią nie zezwolisz."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "เลือกสิ่งที่เอเจนต์ของคุณสามารถใช้ได้บน iPhone เครื่องนี้ โดยจะไม่มีสิ่งใดเปิดใช้งานจนกว่าคุณจะอนุญาต"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chọn những gì agent của bạn có thể sử dụng trên iPhone này. Mọi quyền đều tắt cho đến khi bạn cho phép."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kies wat je agent op deze iPhone mag gebruiken. Niets is ingeschakeld totdat je toestemming geeft."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "انتخاب کنید عامل شما در این iPhone به چه چیزهایی دسترسی داشته باشد. تا زمانی که اجازه ندهید، هیچ‌چیز فعال نیست."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выберите, что ваш агент может использовать на этом iPhone. По умолчанию доступ ко всему отключён, пока вы его не разрешите."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Välj vad din agent får använda på denna iPhone. Inget är aktiverat förrän du tillåter det."
           }
         }
       }
@@ -37125,6 +36581,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Komprimera tråd"
+          }
+        }
+      }
+    },
+    "Compacted history": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compacted history"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已压缩历史记录"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已壓縮歷史記錄"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Histórico compactado"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verlauf komprimiert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Historial compactado"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "圧縮された履歴"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기록 압축됨"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Historique compacté"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "संक्षिप्त इतिहास"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سجل مضغوط"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cronologia compattata"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sıkıştırılmış geçmiş"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стиснена історія"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riwayat dipadatkan"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skompaktowana historia"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ประวัติที่บีบอัดแล้ว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lịch sử đã nén"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gecomprimeerde geschiedenis"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تاریخچه فشرده‌شده"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сжатая история"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komprimerad historik"
           }
         }
       }
@@ -42157,6 +41749,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Anslut till din Gateway för att öppna kontrollpanelen för den här sessionen."
+          }
+        }
+      }
+    },
+    "Connect to your gateway to view an observable machine.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to your gateway to view an observable machine."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接到你的 Gateway 以查看可观察的机器。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "連線至您的 gateway 以檢視可觀察的機器。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conecte-se ao seu gateway para ver uma máquina observável."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinden Sie sich mit Ihrem Gateway, um eine beobachtbare Maschine anzuzeigen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conéctate a tu gateway para ver una máquina observable."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "観測可能なマシンを表示するには gateway に接続してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "관찰 가능한 머신을 보려면 Gateway에 연결하세요."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connectez-vous à votre gateway pour afficher une machine observable."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "एक observable मशीन देखने के लिए अपने gateway से कनेक्ट करें।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اتصل بـ Gateway لعرض جهاز قابل للمراقبة."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connettiti al tuo gateway per visualizzare una macchina osservabile."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gözlemlenebilir bir makineyi görüntülemek için gateway'inize bağlanın."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Підключіться до свого gateway, щоб переглянути спостережувану машину."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hubungkan ke gateway Anda untuk melihat mesin yang dapat diamati."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Połącz się z gateway, aby wyświetlić obserwowalną maszynę."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เชื่อมต่อกับ Gateway ของคุณเพื่อดูเครื่องที่สังเกตได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kết nối với gateway của bạn để xem một máy có thể quan sát."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Maak verbinding met je gateway om een observeerbare machine te bekijken."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "برای مشاهده یک ماشین قابل‌رصد به Gateway خود متصل شوید."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключитесь к своему gateway, чтобы увидеть наблюдаемую машину."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anslut till din gateway för att visa en observerbar maskin."
           }
         }
       }
@@ -58073,6 +57801,278 @@
         }
       }
     },
+    "Desktop": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desktop"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "桌面"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "桌面"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Área de trabalho"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Desktop"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escritorio"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デスクトップ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "데스크톱"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bureau"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "डेस्कटॉप"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سطح المكتب"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Desktop"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masaüstü"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Робочий стіл"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Desktop"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pulpit"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เดสก์ท็อป"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Máy tính để bàn"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bureaublad"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "دسکتاپ"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рабочий стол"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skrivbord"
+          }
+        }
+      }
+    },
+    "Desktop needs a connected gateway": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desktop needs a connected gateway"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "桌面需要已连接的 Gateway"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "桌面需要已連線的 gateway"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Desktop precisa de um gateway conectado"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desktop benötigt ein verbundenes Gateway"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El escritorio necesita un gateway conectado"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デスクトップには接続された gateway が必要です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "데스크톱을 사용하려면 Gateway 연결이 필요합니다"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le bureau nécessite un gateway connecté"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "डेस्कटॉप के लिए एक कनेक्टेड gateway आवश्यक है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يحتاج سطح المكتب إلى Gateway متصل"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il desktop richiede un gateway connesso"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masaüstü için bağlı bir gateway gerekir"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для робочого стола потрібен підключений gateway"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desktop memerlukan gateway yang terhubung"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pulpit wymaga połączonego gateway"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เดสก์ท็อปต้องมี Gateway ที่เชื่อมต่อ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Máy tính để bàn cần một gateway đã kết nối"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bureaublad heeft een verbonden gateway nodig"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "دسکتاپ به یک Gateway متصل نیاز دارد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для рабочего стола нужен подключённый gateway"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skrivbordet behöver en ansluten gateway"
+          }
+        }
+      }
+    },
     "Details": {
       "localizations": {
         "en": {
@@ -62885,8 +62885,8 @@
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Docs"
+            "state": "translated",
+            "value": "Documentation"
           }
         },
         "hi": {
@@ -74661,6 +74661,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Förgrena härifrån"
+          }
+        }
+      }
+    },
+    "Fork from last completed message": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fork from last completed message"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从上一条已完成的消息分叉"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "從最後完成的訊息分支"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bifurcar a partir da última mensagem concluída"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ab letzter abgeschlossener Nachricht verzweigen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bifurcar desde el último mensaje completado"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最後に完了したメッセージから分岐"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "마지막으로 완료된 메시지에서 분기"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dériver à partir du dernier message terminé"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अंतिम पूर्ण संदेश से फ़ोर्क करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "التفريع من آخر رسالة مكتملة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ramifica dall'ultimo messaggio completato"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Son tamamlanan mesajdan çatalla"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відгалузити від останнього завершеного повідомлення"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fork dari pesan terakhir yang selesai"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rozgałęź od ostatniej ukończonej wiadomości"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "แยกจากข้อความที่เสร็จสมบูรณ์ล่าสุด"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rẽ nhánh từ tin nhắn hoàn tất gần nhất"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vertakken vanaf laatst voltooide bericht"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "انشعاب از آخرین پیام تکمیل‌شده"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответвить от последнего завершённого сообщения"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Förgrena från senast slutförda meddelande"
           }
         }
       }
@@ -99961,142 +100097,6 @@
         }
       }
     },
-    "Look up and add people you mention.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Look up and add people you mention."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "查找并添加你提到的人。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "查詢並新增您提到的人物。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pesquise e adicione pessoas que você mencionar."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erwähnte Personen suchen und hinzufügen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Busca y añade a las personas que menciones."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "名前が挙がった人を検索して連絡先に追加します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "언급한 사람을 검색하고 추가합니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recherchez et ajoutez les personnes que vous mentionnez."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आपके द्वारा उल्लेखित लोगों को खोजें और जोड़ें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "البحث عن الأشخاص الذين تذكرهم وإضافتهم."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cerca e aggiungi le persone che menzioni."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bahsettiğiniz kişileri bulun ve ekleyin."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Пошук і додавання згаданих вами людей."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cari dan tambahkan orang yang Anda sebutkan."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wyszukiwanie i dodawanie wspomnianych przez Ciebie osób."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ค้นหาและเพิ่มบุคคลที่คุณกล่าวถึง"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tìm kiếm và thêm những người bạn đề cập."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zoek mensen die je noemt op en voeg ze toe."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "جست‌وجو و افزودن افرادی که نام می‌برید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Поиск и добавление упомянутых вами людей."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sök efter och lägg till personer som du nämner."
-          }
-        }
-      }
-    },
     "Looking for a Gateway": {
       "localizations": {
         "en": {
@@ -122129,6 +122129,142 @@
         }
       }
     },
+    "Open Desktop": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Desktop"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开桌面"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開啟桌面"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir Desktop"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desktop öffnen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir escritorio"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デスクトップを開く"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "데스크톱 열기"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvrir le bureau"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "डेस्कटॉप खोलें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "فتح سطح المكتب"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri Desktop"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masaüstünü Aç"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Відкрити робочий стіл"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buka Desktop"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otwórz pulpit"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เปิดเดสก์ท็อป"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mở máy tính để bàn"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bureaublad openen"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "باز کردن دسکتاپ"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть рабочий стол"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öppna skrivbord"
+          }
+        }
+      }
+    },
     "Open Full Message": {
       "localizations": {
         "en": {
@@ -128925,142 +129061,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Parkopplingsgodkännande"
-          }
-        }
-      }
-    },
-    "Pairing approvals and replies from your agent.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pairing approvals and replies from your agent."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "接收来自智能体的配对批准和回复。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "來自您代理程式的配對核准與回覆。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aprovações de pareamento e respostas do seu agente."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kopplungsbestätigungen und Antworten von Ihrem Agenten."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aprobaciones de vinculación y respuestas de tu agente."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "エージェントからのペアリング承認依頼と返信。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "에이전트의 페어링 승인 요청과 답변을 받습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Approbations d’association et réponses de votre agent."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आपके एजेंट से पेयरिंग की स्वीकृतियाँ और जवाब।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "الموافقات على الاقتران والردود من وكيلك."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Approvazioni di associazione e risposte dal tuo agente."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agentinizden gelen eşleştirme onayları ve yanıtları."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Схвалення запитів на сполучення та відповіді від вашого агента."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persetujuan pemasangan dan balasan dari agen Anda."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Prośby o zatwierdzenie parowania i odpowiedzi od Twojego agenta."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "การอนุมัติการจับคู่และการตอบกลับจากเอเจนต์ของคุณ"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Phê duyệt yêu cầu ghép nối và phản hồi từ tác nhân của bạn."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Koppelingsgoedkeuringen en antwoorden van je agent."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تأیید درخواست‌های جفت‌سازی و پاسخ‌های عامل شما."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Запросы на сопряжение и ответы от вашего агента."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Parkopplingsgodkännanden och svar från din agent."
           }
         }
       }
@@ -157353,142 +157353,6 @@
         }
       }
     },
-    "Scan setup codes and take photos on request.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scan setup codes and take photos on request."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "扫描设置代码，并根据请求拍照。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "掃描設定代碼，並在要求時拍照。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escaneie códigos de configuração e tire fotos quando solicitado."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Einrichtungscodes scannen und auf Anfrage Fotos aufnehmen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escanea códigos de configuración y toma fotos cuando se solicite."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "セットアップコードをスキャンし、リクエストに応じて写真を撮影します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "설정 코드를 스캔하고 요청 시 사진을 촬영합니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scannez les codes de configuration et prenez des photos sur demande."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "सेटअप कोड स्कैन करें और अनुरोध पर फ़ोटो लें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "مسح رموز الإعداد ضوئيًا والتقاط الصور عند الطلب."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scansiona i codici di configurazione e scatta foto su richiesta."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kurulum kodlarını tarayın ve istendiğinde fotoğraf çekin."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сканування кодів налаштування та створення фотографій на запит."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pindai kode penyiapan dan ambil foto sesuai permintaan."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skanowanie kodów konfiguracji i robienie zdjęć na żądanie."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "สแกนรหัสการตั้งค่าและถ่ายรูปเมื่อได้รับคำขอ"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Quét mã thiết lập và chụp ảnh khi được yêu cầu."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scan installatiecodes en maak op verzoek foto's."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اسکن کدهای راه‌اندازی و گرفتن عکس در صورت درخواست."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сканирование кодов настройки и съёмка фотографий по запросу."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skanna konfigurationskoder och ta foton på begäran."
-          }
-        }
-      }
-    },
     "Schedule": {
       "localizations": {
         "en": {
@@ -164017,6 +163881,142 @@
         }
       }
     },
+    "Session reset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session reset"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会话已重置"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工作階段已重設"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessão redefinida"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzung zurückgesetzt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sesión restablecida"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "セッションをリセットしました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "세션 초기화됨"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session réinitialisée"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "सत्र रीसेट"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "إعادة تعيين الجلسة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessione reimpostata"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oturum sıfırlandı"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скидання сесії"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sesi disetel ulang"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset sesji"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "รีเซ็ตเซสชัน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đặt lại phiên"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessie opnieuw ingesteld"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "بازنشانی نشست"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сброс сессии"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessionen återställd"
+          }
+        }
+      }
+    },
     "Session target": {
       "localizations": {
         "en": {
@@ -166869,142 +166869,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Dela intag"
-          }
-        }
-      }
-    },
-    "Share recent photos when you ask.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Share recent photos when you ask."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "根据你的请求分享近期照片。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在您要求時分享最近的照片。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Compartilhe fotos recentes quando você pedir."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Auf Anfrage kürzlich aufgenommene Fotos teilen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Comparte fotos recientes cuando se lo pidas."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "依頼に応じて最近の写真を共有します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "요청 시 최근 사진을 공유합니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Partagez des photos récentes lorsque vous le demandez."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आपके कहने पर हाल की फ़ोटो साझा करें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "مشاركة الصور الحديثة عندما تطلب ذلك."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Condividi le foto recenti quando lo chiedi."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İstediğinizde son fotoğrafları paylaşın."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Надсилання нещодавніх фотографій на ваш запит."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bagikan foto terbaru saat Anda memintanya."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Udostępnianie ostatnich zdjęć na Twoją prośbę."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "แชร์รูปภาพล่าสุดเมื่อคุณขอ"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chia sẻ ảnh gần đây khi bạn yêu cầu."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Deel recente foto's wanneer je daarom vraagt."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اشتراک‌گذاری عکس‌های اخیر در صورت درخواست شما."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Предоставление доступа к недавним фотографиям по вашему запросу."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dela de senaste bilderna när du ber om det."
           }
         }
       }
@@ -178841,6 +178705,278 @@
         }
       }
     },
+    "System · gateway restarted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System · gateway restarted"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统 · gateway 已重启"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系統 · Gateway 已重啟"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistema · gateway reiniciado"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System · Gateway neu gestartet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistema · Gateway reiniciado"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "システム · Gateway を再起動しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "시스템 · Gateway 재시작됨"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Système · gateway redémarré"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System · Gateway पुनरारंभ हुआ"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "النظام · تمت إعادة تشغيل Gateway"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistema · gateway riavviato"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem · gateway yeniden başlatıldı"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Система · Gateway перезапущено"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem · gateway di-restart"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System · Gateway zrestartowany"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ระบบ · Gateway รีสตาร์ทแล้ว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hệ thống · Gateway đã khởi động lại"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Systeem · gateway opnieuw gestart"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سیستم · Gateway مجدداً راه‌اندازی شد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Система · gateway перезапущен"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System · Gateway startades om"
+          }
+        }
+      }
+    },
+    "System · restart recovery": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System · restart recovery"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系统 · 重启恢复"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "系統 · 重啟復原"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistema · recuperação de reinicialização"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System · Neustart-Wiederherstellung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistema · recuperación tras reinicio"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "システム · 再起動リカバリー"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "시스템 · 재시작 복구"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Système · récupération après redémarrage"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System · पुनरारंभ रिकवरी"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "النظام · استرداد بعد إعادة التشغيل"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistema · ripristino dopo riavvio"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem · yeniden başlatma kurtarması"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Система · відновлення після перезапуску"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem · pemulihan setelah restart"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System · odzyskiwanie po restarcie"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ระบบ · การกู้คืนจากการรีสตาร์ท"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hệ thống · khôi phục sau khởi động lại"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Systeem · herstel na herstart"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سیستم · بازیابی پس از راه‌اندازی مجدد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Система · восстановление после перезапуска"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System · återställning efter omstart"
+          }
+        }
+      }
+    },
     "TLS": {
       "localizations": {
         "en": {
@@ -180877,142 +181013,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Prata med Claw"
-          }
-        }
-      }
-    },
-    "Talk with your agent using voice.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Talk with your agent using voice."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "使用语音与智能体交谈。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "使用語音與您的代理程式交談。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Converse com seu agente usando a voz."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Per Sprache mit Ihrem Agenten sprechen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Habla con tu agente mediante la voz."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "音声を使ってエージェントと会話します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "음성으로 에이전트와 대화합니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Parlez avec votre agent à l’aide de votre voix."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आवाज़ का उपयोग करके अपने एजेंट से बात करें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تحدث مع وكيلك باستخدام صوتك."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Parla con il tuo agente usando la voce."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agentinizle sesli olarak konuşun."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Спілкування з вашим агентом за допомогою голосу."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bicara dengan agen Anda menggunakan suara."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rozmawianie z agentem za pomocą głosu."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "พูดคุยกับเอเจนต์ของคุณโดยใช้เสียง"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Trò chuyện với tác nhân của bạn bằng giọng nói."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Praat met je agent via spraak."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "گفت‌وگوی صوتی با عامل شما."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Общение с вашим агентом с помощью голоса."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Prata med din agent med hjälp av rösten."
           }
         }
       }
@@ -184821,6 +184821,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Dagboken finns, men den innehåller inga daterade Drömdagbok-block."
+          }
+        }
+      }
+    },
+    "The earlier conversation was cleared.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The earlier conversation was cleared."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先前的对话已被清除。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先前的對話已清除。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A conversa anterior foi apagada."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die vorherige Konversation wurde gelöscht."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se borró la conversación anterior."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以前の会話はクリアされました。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이전 대화가 지워졌습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La conversation précédente a été effacée."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "पिछली बातचीत साफ़ कर दी गई थी।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تم مسح المحادثة السابقة."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La conversazione precedente è stata cancellata."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki konuşma temizlendi."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Попередню розмову очищено."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percakapan sebelumnya telah dihapus."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wcześniejsza rozmowa została wyczyszczona."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "บทสนทนาก่อนหน้าถูกล้างแล้ว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cuộc trò chuyện trước đó đã được xóa."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Het eerdere gesprek is gewist."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "گفتگوی قبلی پاک شد."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Предыдущий разговор был очищен."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Den tidigare konversationen rensades."
           }
         }
       }
@@ -195021,6 +195157,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Stäng av sammanfattningar"
+          }
+        }
+      }
+    },
+    "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn interrupted by a gateway restart — asked the agent to resume and finish the response."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "对话因 gateway 重启而中断——已请求 agent 恢复并完成回复。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回合因 Gateway 重啟而中斷——已要求代理恢復並完成回應。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turno interrompido por uma reinicialização do gateway — solicitou ao agente que retomasse e concluísse a resposta."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zug durch einen Gateway-Neustart unterbrochen – der Agent wurde gebeten, fortzufahren und die Antwort abzuschließen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turno interrumpido por un reinicio del Gateway — se pidió al agente que reanudara y terminara la respuesta."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway の再起動によりターンが中断されました — エージェントに再開して応答を完了するよう依頼しました。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway 재시작으로 턴이 중단됨 — 에이전트에게 재개하여 응답을 완료하도록 요청했습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tour interrompu par un redémarrage du gateway — l'agent a été invité à reprendre et terminer la réponse."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway के पुनरारंभ से बारी बाधित हुई — एजेंट से प्रतिक्रिया फिर से शुरू करके पूरी करने को कहा।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تمت مقاطعة الدور بإعادة تشغيل Gateway — طُلب من الوكيل استئناف الرد وإكماله."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turno interrotto da un riavvio del gateway — è stato chiesto all'agente di riprendere e completare la risposta."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tur, gateway'in yeniden başlatılmasıyla kesintiye uğradı — ajandan devam etmesi ve yanıtı tamamlaması istendi."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хід перервано перезапуском Gateway — попросили агента продовжити й завершити відповідь."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Giliran terputus oleh restart gateway — meminta agen untuk melanjutkan dan menyelesaikan respons."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tura przerwana przez restart Gateway — poproszono agenta o wznowienie i dokończenie odpowiedzi."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "การสนทนาถูกขัดจังหวะโดยการรีสตาร์ท Gateway — ได้ขอให้เอเจนต์ทำต่อและตอบให้เสร็จ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lượt bị gián đoạn do Gateway khởi động lại — đã yêu cầu tác nhân tiếp tục và hoàn tất phản hồi."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beurt onderbroken door een herstart van de gateway — de agent gevraagd om verder te gaan en het antwoord af te maken."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "دور مکالمه به دلیل راه‌اندازی مجدد Gateway قطع شد — از عامل خواسته شد ادامه دهد و پاسخ را کامل کند."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ход прерван перезапуском gateway — агенту предложено продолжить и завершить ответ."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turen avbröts av en omstart av Gateway – bad agenten att återuppta och slutföra svaret."
           }
         }
       }
@@ -207129,142 +207401,6 @@
         }
       }
     },
-    "You can change any of these later in Settings.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You can change any of these later in Settings."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "您稍后可以在“设置”中更改其中任何一项。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "您稍後可隨時在「設定」中變更這些項目。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Você pode alterar qualquer uma dessas opções mais tarde em Ajustes."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kannst all dies später in den Einstellungen ändern."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puedes cambiar cualquiera de estas opciones más adelante en Ajustes."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "これらは後から「設定」でいつでも変更できます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "나중에 설정에서 언제든지 변경할 수 있습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vous pourrez modifier ces réglages plus tard dans Réglages."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आप बाद में Settings में इनमें से किसी को भी बदल सकते हैं।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يمكنك تغيير أي من هذه الخيارات لاحقًا في الإعدادات."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puoi modificare queste opzioni in seguito nelle Impostazioni."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bunlardan herhangi birini daha sonra Ayarlar'dan değiştirebilirsiniz."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Згодом ви зможете змінити будь-яке з цих налаштувань у розділі «Параметри»."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anda dapat mengubah semua ini nanti di Pengaturan."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Możesz później zmienić dowolne z tych ustawień."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "คุณสามารถเปลี่ยนแปลงรายการเหล่านี้ภายหลังได้ในการตั้งค่า"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bạn có thể thay đổi bất kỳ quyền nào trong số này sau tại Cài đặt."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je kunt dit later wijzigen in Instellingen."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "بعداً می‌توانید هرکدام از این موارد را در تنظیمات تغییر دهید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Позже вы сможете изменить любой из этих параметров в Настройках."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Du kan ändra detta senare i Inställningar."
-          }
-        }
-      }
-    },
     "You're connected": {
       "localizations": {
         "en": {
@@ -217601,6 +217737,142 @@
         }
       }
     },
+    "saved %@ tokens": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "saved %@ tokens"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节省了 %@ 个 token"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "節省了 %@ 個 token"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ tokens economizados"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ Tokens gespart"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "se ahorraron %@ tokens"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ トークンを節約しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "토큰 %@개 절약됨"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ jetons économisés"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ टोकन बचाए"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تم توفير %@ رمز"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "risparmiati %@ token"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ token tasarruf edildi"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "заощаджено %@ токенів"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "menghemat %@ token"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "zaoszczędzono %@ tokenów"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ประหยัดไป %@ โทเคน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "đã tiết kiệm %@ token"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ tokens bespaard"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ توکن ذخیره شد"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сэкономлено %@ токенов"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sparade %@ tokens"
+          }
+        }
+      }
+    },
     "saving": {
       "localizations": {
         "en": {
@@ -218427,8 +218699,8 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT License。"
           }
         },
         "zh-TW": {
@@ -218445,8 +218717,8 @@
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT-Lizenz."
           }
         },
         "es": {
@@ -218463,8 +218735,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT 라이선스."
           }
         },
         "fr": {
@@ -218535,8 +218807,8 @@
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — مجوز MIT."
           }
         },
         "ru": {

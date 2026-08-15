@@ -107,10 +107,10 @@ export type GatewayConnectPhaseContext = {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
   pendingNodePairingCleanup: {
-    value?: import("../../../infra/node-pairing.js").NodePairingCleanupClaim;
+    value?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
   };
   broadcastNodePairingResult: (
-    result: import("../../../infra/node-pairing.js").RequestNodePairingResult,
+    result: import("../../../infra/device-pairing-node.js").RequestNodePairingResult,
   ) => void;
   releasePendingNodePairingCleanup: () => Promise<void>;
 };

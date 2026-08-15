@@ -1,4 +1,4 @@
-import type { SwarmStructuredOutputState } from "../subagent-registry.types.js";
+import type { SwarmStructuredOutputState } from "../subagents/registry/subagent-registry.types.js";
 import "./structured-output-tool.js";
 
 type StructuredOutputToolTestApi = {

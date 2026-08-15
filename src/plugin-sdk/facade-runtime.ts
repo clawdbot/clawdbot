@@ -11,7 +11,7 @@ import {
 } from "../plugins/plugin-module-loader-cache.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
-  loadBundledPluginPublicSurfaceModuleSync as loadBundledPluginPublicSurfaceModuleSyncLight,
+  loadBundledPluginPublicSurfaceModuleSyncCore as loadBundledPluginPublicSurfaceModuleSyncLight,
   loadFacadeModuleAtLocationSync as loadFacadeModuleAtLocationSyncShared,
   resetFacadeLoaderStateForTest,
   type FacadeModuleLocation,

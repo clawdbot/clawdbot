@@ -19,6 +19,7 @@ import {
   CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
   CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
 } from "./control-ui-contract.js";
+import { respondNotFound as sendNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
 import { authorizeGatewayHttpRequestOrReply } from "./http-utils.js";
 
@@ -237,12 +238,6 @@ async function loadCatalogIcon(params: {
     pluginIconCache.delete(cacheKey);
   }
   return result;
-}
-
-function sendNotFound(res: ServerResponse): void {
-  res.statusCode = 404;
-  res.setHeader("content-type", "text/plain; charset=utf-8");
-  res.end("Not Found");
 }
 
 export function clearPluginIconCacheForTest(): void {

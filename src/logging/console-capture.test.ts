@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
-import { logError, logWarn } from "../logger.js";
+import { logError, logInfo, logWarn } from "../logger.js";
 import {
   createSubsystemLogger,
   enableConsoleCapture,
@@ -14,7 +14,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { testApi } from "./logger.js";
+import { testApi } from "./logger.test-support.js";
 import { loggingState } from "./state.js";
 import {
   captureConsoleSnapshot,
@@ -49,6 +49,7 @@ afterEach(() => {
   resetLogger();
   setLoggerOverride(null);
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 afterAll(async () => {
@@ -386,6 +387,32 @@ describe("enableConsoleCapture", () => {
     const content = fs.readFileSync(logPath, "utf-8");
     expect(countMatchingLines(content, "conflicting schema definitions")).toBe(1);
   });
+
+  it.each([
+    { name: "info", log: logInfo, consoleMethod: "log" as const },
+    { name: "error", log: logError, consoleMethod: "error" as const },
+  ])(
+    "routes non-subsystem $name logs through one file and console sink",
+    async ({ log, consoleMethod }) => {
+      vi.stubEnv("OPENCLAW_TEST_RUNTIME_LOG", "1");
+      const logPath = tempLogPath();
+      setLoggerOverride({ level: "info", file: logPath });
+      const consoleSpy = vi.fn();
+      console[consoleMethod] = consoleSpy;
+      enableConsoleCapture();
+
+      log(`[tools] operation failed: Authorization: Bearer ${secret}`);
+      await testApi.flushFileLogQueueForTests();
+
+      expect(
+        countMatchingLines(fs.readFileSync(logPath, "utf-8"), "[tools] operation failed"),
+      ).toBe(1);
+      expect(consoleSpy).toHaveBeenCalledTimes(1);
+      const consoleLine = firstMockArgAsString(consoleSpy);
+      expect(consoleLine).toContain("[tools] operation failed");
+      expect(consoleLine).not.toContain(secret);
+    },
+  );
 
   it("redacts credentials before forwarding console output", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });

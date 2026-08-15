@@ -997,6 +997,25 @@ describe("sendMessageMatrix media", () => {
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
 
+  it.each([{ mediaMaxMb: 0 }, { mediaMaxMb: -5 }])(
+    "leaves outbound media uncapped when mediaMaxMb is $mediaMaxMb",
+    async ({ mediaMaxMb }) => {
+      const { client } = makeClient();
+
+      await sendMessageMatrix("room:!room:example", "caption", {
+        client,
+        cfg: { channels: { matrix: { mediaMaxMb } } },
+        mediaUrl: "file:///tmp/photo.png",
+      });
+
+      const mediaOptions = requireRecord(
+        mockCallArg(loadWebMediaMock, "loadWebMedia", 1),
+        "media options",
+      );
+      expect(mediaOptions.maxBytes).toBeUndefined();
+    },
+  );
+
   it("passes caller mediaLocalRoots to media loading", async () => {
     const { client } = makeClient();
 
