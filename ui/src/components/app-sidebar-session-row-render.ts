@@ -242,8 +242,7 @@ export function renderRecentSession(params: {
     requiredScope: "operator.write",
   });
   const rowDraggable = !session.isChild && groupWriteAccess.allowed;
-  // Empty 16/20px lead columns indent titles past section labels and siblings.
-  const showLead = leadingIndicator !== nothing || session.visibility === "draft";
+  // Always reserve the lead so every title shares the section-label text line.
   const row = html`
     <div
       class=${rowClass}
@@ -278,18 +277,14 @@ export function renderRecentSession(params: {
         aria-describedby=${[stateId, metaId].filter(Boolean).join(" ") || nothing}
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
       >
-        ${showLead
-          ? html`<span class="sidebar-session-indicator"
-              >${leadingIndicator}
-              ${session.visibility === "draft"
-                ? html`<span
-                    class="session-row-draft-indicator"
-                    title=${t("chat.sessionSharing.draft")}
-                    >👻</span
-                  >`
-                : nothing}</span
-            >`
-          : nothing}
+        <span class="sidebar-session-indicator"
+          >${leadingIndicator}
+          ${session.visibility === "draft"
+            ? html`<span class="session-row-draft-indicator" title=${t("chat.sessionSharing.draft")}
+                >👻</span
+              >`
+            : nothing}</span
+        >
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee"
             >${session.archived
