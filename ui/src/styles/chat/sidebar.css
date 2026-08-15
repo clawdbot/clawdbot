@@ -358,8 +358,8 @@ openclaw-chat-sidebar-region,
   white-space: nowrap;
 }
 
-.side-panel__header .tabstrip-tab:hover::part(base) {
-  background: transparent;
+.side-panel__header .tabstrip-tab:not([active]):hover::part(base) {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
 }
 
