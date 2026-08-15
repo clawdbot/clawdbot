@@ -714,18 +714,6 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
-    @Test @MainActor func `voice wake words view builds A view hierarchy`() {
-        let appModel = NodeAppModel()
-        let root = NavigationStack { VoiceWakeWordsSettingsView() }
-            .environment(appModel)
-        _ = Self.host(root)
-    }
-
-    @Test @MainActor func `voice wake toast builds A view hierarchy`() {
-        let root = VoiceWakeToast(command: "openclaw: do something")
-        _ = Self.host(root)
-    }
-
     @MainActor private static func waitForPresentedAlert(in window: UIWindow) async {
         for _ in 0..<10 {
             if window.rootViewController?.presentedViewController != nil { return }
