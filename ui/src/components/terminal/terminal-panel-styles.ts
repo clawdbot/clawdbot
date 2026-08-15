@@ -33,17 +33,42 @@ export const terminalPanelStyles = css`
     height: 100%;
     align-self: stretch;
   }
+  .tp-header .tabstrip::part(base) {
+    height: 100%;
+  }
   .tp-header .tabstrip::part(nav),
   .tp-header .tabstrip::part(tabs) {
     height: 100%;
     align-items: stretch;
   }
+  /* The whole row shares one axis: tabs stretch the full rail height so their
+     underline lands on the rail's bottom edge, which puts their centred content
+     on the same line as the management icons on the right. */
+  .tp-header .tabstrip-tab,
+  .tp-header .tabstrip-tab__close,
+  .tp-header .tabstrip-new {
+    height: 100%;
+    align-self: stretch;
+  }
   .tp-header .tabstrip-tab::part(base) {
     box-sizing: border-box;
     height: 100%;
+    /* Offset the underline so the label centres on the same line as the
+       management icons instead of riding 2px high. */
+    padding-top: 2px;
   }
   .tp-header .tabstrip-tab__icon {
     color: var(--muted, #8a919e);
+  }
+  /* Same glyph system as the side panel rail. */
+  .tp-header {
+    --rail-header-action-glyph-size: 15px;
+  }
+  .tp-header .tabstrip-tab__icon svg,
+  .tp-header .tp-icon svg {
+    width: 15px;
+    height: 15px;
+    stroke-width: 1.6px;
   }
   .tp-header .tabstrip-tab[active]::part(base) {
     border-bottom-color: var(--text, #d7dae0);
