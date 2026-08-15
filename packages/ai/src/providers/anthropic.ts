@@ -9,6 +9,7 @@ import type {
   RawMessageStreamEvent,
   TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import {
@@ -448,7 +449,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
           // and allowing the thinking-block recovery retry to fire.
           eventSink.push({ type: "start", partial: output });
         } else if (event.type === "content_block_start") {
-          const rawContentBlock = event.content_block as unknown as Record<string, unknown>;
+          const rawContentBlock = isRecord(event.content_block) ? event.content_block : undefined;
           if (
             requestOptions?.anthropicServerCompaction === true &&
             compactionCapture.begin(event.index, rawContentBlock, output.content.length)
@@ -566,7 +567,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             });
           }
         } else if (event.type === "content_block_delta") {
-          const rawDelta = event.delta as unknown as Record<string, unknown>;
+          const rawDelta = isRecord(event.delta) ? event.delta : undefined;
           if (compactionCapture.delta(event.index, rawDelta)) {
             continue;
           } else if (event.delta.type === "text_delta") {

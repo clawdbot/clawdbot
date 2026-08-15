@@ -233,10 +233,8 @@ export function serverPrefsLocalPatch(
       const resetPatch = specification.clearable ? specification.reset?.(settings) : undefined;
       if (resetPatch) {
         for (const [resetKey, resetValue] of Object.entries(resetPatch)) {
-          if (
-            !prefValuesEqual((settings as unknown as Record<string, unknown>)[resetKey], resetValue)
-          ) {
-            (patch as Record<string, unknown>)[resetKey] = resetValue;
+          if (!prefValuesEqual(Reflect.get(settings, resetKey), resetValue)) {
+            Reflect.set(patch, resetKey, resetValue);
           }
         }
       }
