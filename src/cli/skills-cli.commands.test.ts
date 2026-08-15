@@ -1,6 +1,10 @@
 // Skills CLI command tests cover skill command registration and subcommand behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AgentSelectionRequiredError,
+  type AgentSelectionContext,
+} from "../agents/agent-scope-config.js";
 import { registerSkillsCli } from "./skills-cli.js";
 
 const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -95,7 +99,9 @@ const mocks = vi.hoisted(() => {
   return {
     callGatewayMock: vi.fn(),
     loadConfigMock: vi.fn((_options?: unknown) => ({})),
-    resolveDefaultAgentIdMock: vi.fn((_configForTest: unknown) => "main"),
+    resolveDefaultAgentIdMock: vi.fn(
+      (_configForTest: unknown, _context?: AgentSelectionContext) => "main",
+    ),
     resolveAgentIdByWorkspacePathMock: vi.fn(
       (_configForTest: unknown, _workspacePath: string): string | undefined => undefined,
     ),
@@ -252,7 +258,8 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentIdByWorkspacePath: (config: unknown, workspacePath: string) =>
     mocks.resolveAgentIdByWorkspacePathMock(config, workspacePath),
-  resolveDefaultAgentId: (config: unknown) => mocks.resolveDefaultAgentIdMock(config),
+  resolveDefaultAgentId: (config: unknown, context?: AgentSelectionContext) =>
+    mocks.resolveDefaultAgentIdMock(config, context),
   resolveAgentWorkspaceDir: (config: unknown, agentId: string) =>
     mocks.resolveAgentWorkspaceDirMock(config, agentId),
 }));
@@ -1473,22 +1480,24 @@ describe("skills cli commands", () => {
     });
 
     expect(resolveAgentIdByWorkspacePathMock).toHaveBeenCalledWith({}, "/tmp/unrelated");
-    expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith({});
+    expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ hint: "Pass --agent <id>." }),
+    );
     expectStatusWorkspaceCall("/tmp/workspace-main");
   });
 
-  it("renders named agent-selection errors without the internal class name", async () => {
-    const error = new Error(
-      "Multiple agents are configured, but this operation has no explicit owner.",
-    );
-    error.name = "AgentSelectionRequiredError";
-    resolveDefaultAgentIdMock.mockImplementationOnce(() => {
-      throw error;
+  it("renders the supported skills escape without advertising --all-agents", async () => {
+    resolveDefaultAgentIdMock.mockImplementationOnce((_config, context) => {
+      throw new AgentSelectionRequiredError(["main", "helper", "third"], context);
     });
 
     await expect(runCommand(["skills", "list"])).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors).toStrictEqual([error.message]);
+    expect(runtimeErrors).toStrictEqual([
+      "Multiple agents are configured, but the skills command has no explicit owner. Pass --agent <id>.",
+    ]);
+    expect(runtimeErrors[0]).not.toContain("--all-agents");
   });
 
   it("redacts secrets from rendered skills CLI errors", async () => {

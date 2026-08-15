@@ -154,7 +154,13 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   const inferredAgentId = explicitAgentId
     ? undefined
     : resolveAgentIdByWorkspacePath(config, options?.cwd ?? process.cwd());
-  const agentId = explicitAgentId ?? inferredAgentId ?? resolveDefaultAgentId(config);
+  const agentId =
+    explicitAgentId ??
+    inferredAgentId ??
+    resolveDefaultAgentId(config, {
+      surface: "the skills command",
+      hint: "Pass --agent <id>.",
+    });
   return {
     config,
     agentId,
