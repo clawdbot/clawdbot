@@ -7,8 +7,31 @@ import {
   type CuaDriverArtifactVerification,
 } from "./driver-artifact-verification.js";
 
-const PLUGIN_MANIFEST_PATH = fileURLToPath(new URL("../package.json", import.meta.url));
-const requireFromPlugin = createRequire(import.meta.url);
+const PLUGIN_PACKAGE = "@openclaw/cua-computer";
+
+function resolvePluginManifestPath(): string {
+  let current = path.dirname(fileURLToPath(import.meta.url));
+  while (true) {
+    for (const candidate of [
+      path.join(current, "package.json"),
+      path.join(current, "extensions", "cua-computer", "package.json"),
+    ]) {
+      try {
+        if (readPackageIdentity(candidate).name === PLUGIN_PACKAGE) {
+          return candidate;
+        }
+      } catch {}
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new Error(`unable to locate ${PLUGIN_PACKAGE} package.json`);
+    }
+    current = parent;
+  }
+}
+
+const PLUGIN_MANIFEST_PATH = resolvePluginManifestPath();
+const requireFromPlugin = createRequire(PLUGIN_MANIFEST_PATH);
 
 function resolvePackageJson(packageName: string): string | undefined {
   try {
@@ -16,9 +39,13 @@ function resolvePackageJson(packageName: string): string | undefined {
   } catch {}
   let entry: string;
   try {
-    entry = requireFromPlugin.resolve(packageName);
+    entry = fileURLToPath(import.meta.resolve(packageName));
   } catch {
-    return undefined;
+    try {
+      entry = requireFromPlugin.resolve(packageName);
+    } catch {
+      return undefined;
+    }
   }
   let current = path.dirname(entry);
   while (true) {

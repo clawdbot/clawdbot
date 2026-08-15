@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { inspectCuaDriverArtifacts } from "./driver-artifact-verification.js";
+import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -68,6 +69,18 @@ afterEach(() => {
 });
 
 describe("CUA Driver artifact verification", () => {
+  it.runIf(process.platform === "linux" && ["arm64", "x64"].includes(process.arch))(
+    "verifies the installed ESM-only SDK and native Linux package",
+    () => {
+      expect(verifyInstalledCuaDriverArtifacts()).toEqual({
+        ok: true,
+        applicable: true,
+        version: "0.19.3",
+        platformPackage: `@trycua/cua-driver-linux-${process.arch}-gnu`,
+      });
+    },
+  );
+
   it("accepts the pinned SDK and native file digest", () => {
     const fixture = createArtifactFixture();
 
