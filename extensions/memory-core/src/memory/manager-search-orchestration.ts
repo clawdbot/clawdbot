@@ -364,6 +364,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             candidates,
             sourceFilterList,
             vectorProviderIdentity,
+            opts?.signal,
           ).catch((err: unknown) => {
             log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
             return [];
@@ -425,6 +426,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     limit: number,
     sourceFilterList: MemorySource[],
     providerIdentity: { model: string; aliases: string[] },
+    signal?: AbortSignal,
   ): Promise<Array<MemorySearchResult & { id: string }>> {
     const results = await searchVector({
       db: this.db,
@@ -434,6 +436,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       queryVec,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
+      signal,
       ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
       sourceFilterChunks: this.buildSourceFilter(undefined, sourceFilterList),
