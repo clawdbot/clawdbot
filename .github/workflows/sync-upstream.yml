@@ -2,13 +2,11 @@ name: Sync Upstream
 
 on:
   schedule:
-    # 每天北京时间 08:00，GitHub cron 使用 UTC
-    - cron: "0 0 * * *"
+    - cron: "0 22 * * *" # 北京时间每天 06:00
   workflow_dispatch:
 
 permissions:
   contents: write
-  actions: write
 
 concurrency:
   group: sync-upstream-main
@@ -16,7 +14,7 @@ concurrency:
 
 jobs:
   sync_upstream:
-    name: 同步上游并触发 Android 编译
+    name: 同步上游
     runs-on: ubuntu-latest
 
     steps:
@@ -53,14 +51,3 @@ jobs:
             echo "已同步上游更新"
           fi
 
-      - name: 触发 Android Release
-        if: steps.sync.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          gh workflow run android-release.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref main \
-            -f tag="test"
