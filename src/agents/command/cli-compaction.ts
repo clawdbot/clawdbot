@@ -177,14 +177,8 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
   return Math.floor(value);
 }
 
-function getSessionBranchMessages(sessionManager: SessionManagerLike): AgentMessage[] {
-  return sessionManager
-    .getBranch()
-    .flatMap((entry) =>
-      entry.type === "message" && typeof entry.message === "object" && entry.message !== null
-        ? [entry.message]
-        : [],
-    );
+function getSessionContextMessages(sessionManager: SessionManagerLike): AgentMessage[] {
+  return sessionManager.buildSessionContext().messages;
 }
 
 function resolveSessionTokenSnapshot(sessionEntry: SessionEntry | undefined): number | undefined {
@@ -609,7 +603,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   });
 
   const preemptiveCompaction = cliCompactionDeps.shouldPreemptivelyCompactBeforePrompt({
-    messages: getSessionBranchMessages(sessionManager),
+    messages: getSessionContextMessages(sessionManager),
     prompt: "",
     contextTokenBudget,
     reserveTokens: settingsManager.getCompactionReserveTokens(),

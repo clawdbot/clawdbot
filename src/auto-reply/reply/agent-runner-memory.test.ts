@@ -2920,6 +2920,68 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
+  it("does not re-count history covered by exact provider context usage", async () => {
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        ...Array.from({ length: 10 }, () => ({
+          type: "message" as const,
+          message: { role: "user" as const, content: "测".repeat(30_000) },
+        })),
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "small answer",
+            usage: {
+              input: 240_000,
+              output: 304,
+              contextUsage: {
+                state: "available",
+                promptTokens: 240_000,
+                totalTokens: 240_304,
+              },
+              totalTokens: 240_304,
+            },
+          },
+        },
+        {
+          type: "message",
+          message: { role: "user", content: "next turn" },
+        },
+      ],
+    });
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 20_000,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionKey: "main" }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 276_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
   it("keeps preflight compaction conservative for content appended after latest usage", async () => {
     const sessionFile = path.join(rootDir, "post-usage-tail-session.jsonl");
     await writeTestSessionTranscript({

@@ -36,6 +36,32 @@ function makeAssistantHistory(text: string): AgentMessage {
   } as AgentMessage;
 }
 
+function makeProviderAssistant(params: {
+  promptTokens: number;
+  totalTokens: number;
+  text?: string;
+}): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: params.text ?? "provider answer" }],
+    usage: {
+      input: params.promptTokens,
+      output: params.totalTokens - params.promptTokens,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: params.totalTokens,
+      contextUsage: {
+        state: "available",
+        promptTokens: params.promptTokens,
+        totalTokens: params.totalTokens,
+      },
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: timestamp++,
+  } as AgentMessage;
+}
+
 function makeToolResultMessage(...texts: string[]): AgentMessage {
   return {
     role: "toolResult",
@@ -129,6 +155,77 @@ describe("preemptive-compaction", () => {
     expect(result.shouldCompact).toBe(false);
     expect(result.route).toBe("fits");
     expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
+  });
+
+  it("uses exact provider context plus only later transcript pressure", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [
+        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
+        makeProviderAssistant({ promptTokens: 240_000, totalTokens: 240_304 }),
+        { role: "user", content: "small tail", timestamp: timestamp++ } as AgentMessage,
+      ],
+      systemPrompt: "already provider-accounted system prompt".repeat(1_000),
+      prompt: "continue",
+      contextTokenBudget: 272_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.pressureSource).toBe("provider_context_usage");
+    expect(result.estimatedPromptTokens).toBeGreaterThan(240_304);
+    expect(result.estimatedPromptTokens).toBeLessThan(252_000);
+    expect(result.route).toBe("fits");
+  });
+
+  it("uses the later assistant boundary when distinct responses have equal totals", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [
+        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000, text: "first" }),
+        makeToolResultMessage("x".repeat(100_000)),
+        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000, text: "second" }),
+        { role: "user", content: "small tail", timestamp: timestamp++ } as AgentMessage,
+      ],
+      prompt: "continue",
+      contextTokenBudget: 210_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.estimatedPromptTokens).toBeGreaterThan(180_000);
+    expect(result.estimatedPromptTokens).toBeLessThan(190_000);
+    expect(result.route).toBe("fits");
+  });
+
+  it("still compacts when content after the provider boundary exceeds the budget", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [
+        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
+        makeToolResultMessage("x".repeat(40_000)),
+      ],
+      prompt: "continue",
+      contextTokenBudget: 210_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.estimatedPromptTokens).toBeGreaterThan(190_000);
+    expect(result.route).not.toBe("fits");
+  });
+
+  it("falls back to full transcript pressure without available provider context", () => {
+    const unavailable = makeProviderAssistant({ promptTokens: 1, totalTokens: 2 });
+    if (unavailable.role === "assistant") {
+      unavailable.usage.contextUsage = { state: "unavailable" };
+    }
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [
+        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
+        unavailable,
+      ],
+      prompt: "continue",
+      contextTokenBudget: 210_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.pressureSource).toBe("transcript_estimate");
+    expect(result.route).not.toBe("fits");
   });
 
   it("formats all-route pre-prompt diagnostics for a fits decision", () => {

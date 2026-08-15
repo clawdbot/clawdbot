@@ -9,6 +9,7 @@ import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/se
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { shouldPreemptivelyCompactBeforePrompt as shouldPreemptivelyCompactBeforePromptImpl } from "../embedded-agent-runner/run/preemptive-compaction.js";
 import {
   resetCliCompactionTestDeps,
   runCliTurnCompactionLifecycle,
@@ -254,6 +255,54 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry).toBe(scenario.sessionEntry);
   });
 
+  it("does not re-count transcript history covered by provider context usage", async () => {
+    const providerPromptTokens = 600;
+    const scenario = await prepareCompactionScenario({
+      suffix: "provider-context-boundary",
+      tmpDir,
+      sessionEntry: { totalTokens: providerPromptTokens },
+      deps: {
+        openSessionManager: () =>
+          ({
+            getBranch: () => {
+              throw new Error("raw branch must not be used for context pressure");
+            },
+            buildSessionContext: () => ({
+              messages: [
+                { role: "user", content: "x".repeat(4_000), timestamp: 1 },
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: "provider answer" }],
+                  timestamp: 2,
+                  stopReason: "stop",
+                  usage: {
+                    input: providerPromptTokens,
+                    output: 10,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    totalTokens: providerPromptTokens + 10,
+                    contextUsage: {
+                      state: "available",
+                      promptTokens: providerPromptTokens,
+                      totalTokens: providerPromptTokens + 10,
+                    },
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                  },
+                },
+                { role: "user", content: "small tail", timestamp: 3 },
+              ],
+            }),
+          }) as never,
+        shouldPreemptivelyCompactBeforePrompt: shouldPreemptivelyCompactBeforePromptImpl,
+      },
+    });
+
+    const updatedEntry = await scenario.run();
+
+    expect(scenario.compactCalls).toEqual([]);
+    expect(updatedEntry).toBe(scenario.sessionEntry);
+  });
+
   it("accepts no compactable entries only from a successful compaction result", async () => {
     let result = { ok: true, compacted: false, reason: "no real conversation messages" };
     const scenario = await prepareCompactionScenario({
@@ -267,7 +316,9 @@ describe("runCliTurnCompactionLifecycle", () => {
           return result;
         },
       }),
-      deps: { openSessionManager: () => ({ getBranch: () => [] }) as never },
+      deps: {
+        openSessionManager: () => ({ buildSessionContext: () => ({ messages: [] }) }) as never,
+      },
     });
     const runLifecycle = (
       ok: boolean,

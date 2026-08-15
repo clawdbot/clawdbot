@@ -599,18 +599,13 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     const promptTokens = snapshot.usage?.promptTokens;
     const trailingBytesTokens = snapshot.usage?.trailingBytesTokens;
     const outputTokens = snapshot.usage?.outputTokens;
-    if (
-      typeof promptTokens === "number" &&
-      Number.isFinite(promptTokens) &&
-      promptTokens > 0 &&
-      trailingBytesTokens === 0 &&
-      typeof outputTokens === "number" &&
-      Number.isFinite(outputTokens) &&
-      outputTokens > 0
-    ) {
+    if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
       return {
-        promptTokens: Math.ceil(promptTokens),
-        outputTokens: Math.ceil(outputTokens),
+        promptTokens: Math.ceil(promptTokens) + (trailingBytesTokens ?? 0),
+        outputTokens:
+          typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
+            ? Math.ceil(outputTokens)
+            : undefined,
         transcriptByteSize: snapshot.byteSize,
         transcriptBytesTokens,
       };
@@ -635,18 +630,6 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       const tokens = estimateMessagesTokens(messages);
       return Number.isFinite(tokens) && tokens > 0 ? Math.ceil(tokens) : undefined;
     })();
-    if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
-      const usagePromptTokens = Math.ceil(promptTokens) + (trailingBytesTokens ?? 0);
-      return {
-        promptTokens: Math.max(usagePromptTokens, estimatedMessageTokens ?? 0),
-        outputTokens:
-          typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
-            ? Math.ceil(outputTokens)
-            : undefined,
-        transcriptByteSize: snapshot.byteSize,
-        transcriptBytesTokens,
-      };
-    }
     const estimatedTokens = estimatedMessageTokens ?? transcriptBytesTokens;
     if (estimatedTokens === undefined) {
       return undefined;

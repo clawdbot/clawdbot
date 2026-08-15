@@ -230,19 +230,58 @@ function estimateRenderedPromptTokens(params: { systemPrompt?: string; prompt: s
   );
 }
 
+type TranscriptBoundaryTokenPressure = {
+  estimatedPromptTokens: number;
+  messagesForPressure: AgentMessage[];
+  source: "provider_context_usage" | "transcript_estimate";
+};
+
+function resolveProviderContextBoundary(
+  messages: AgentMessage[],
+): { index: number; totalTokens: number } | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const contextUsage = message?.role === "assistant" ? message.usage?.contextUsage : undefined;
+    if (
+      contextUsage?.state === "available" &&
+      Number.isFinite(contextUsage.totalTokens) &&
+      contextUsage.totalTokens > 0
+    ) {
+      return { index, totalTokens: Math.ceil(contextUsage.totalTokens) };
+    }
+  }
+  return undefined;
+}
+
+function estimateTranscriptBoundaryTokenPressure(params: {
+  messages: AgentMessage[];
+  systemPrompt?: string;
+  prompt: string;
+}): TranscriptBoundaryTokenPressure {
+  const boundary = resolveProviderContextBoundary(params.messages);
+  // The provider total owns every prompt item through its assistant record.
+  // Only later transcript items and the new prompt still need local estimation.
+  const messagesForPressure = boundary
+    ? params.messages.slice(boundary.index + 1)
+    : params.messages;
+  const locallyEstimatedTokens = messagesForPressure.reduce(
+    (sum, message) => sum + estimateMessageTokenPressure(message),
+    estimateRenderedPromptTokens(boundary ? { prompt: params.prompt } : params),
+  );
+  return {
+    estimatedPromptTokens:
+      (boundary?.totalTokens ?? 0) + Math.ceil(locallyEstimatedTokens * SAFETY_MARGIN),
+    messagesForPressure,
+    source: boundary ? "provider_context_usage" : "transcript_estimate",
+  };
+}
+
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
 }): number {
-  const historyTokens = params.messages.reduce(
-    (sum, message) => sum + estimateMessageTokenPressure(message),
-    0,
-  );
-  return Math.max(
-    0,
-    Math.ceil((historyTokens + estimateRenderedPromptTokens(params)) * SAFETY_MARGIN),
-  );
+  return estimateTranscriptBoundaryTokenPressure(params).estimatedPromptTokens;
 }
 
 /** Estimates only the rendered prompt/system portion when history has already been accounted for. */
@@ -288,24 +327,32 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   const llmBoundaryTokenPressure = normalizeLlmBoundaryTokenPressure(
     params.llmBoundaryTokenPressure,
   );
+  const transcriptTokenPressure = llmBoundaryTokenPressure
+    ? undefined
+    : estimateTranscriptBoundaryTokenPressure({
+        messages: params.messages,
+        systemPrompt: params.systemPrompt,
+        prompt: params.prompt,
+      });
+  if (transcriptTokenPressure) {
+    messagesForPressure = transcriptTokenPressure.messagesForPressure;
+  }
   let estimatedPromptTokens =
     llmBoundaryTokenPressure?.estimatedPromptTokens ??
-    estimateLlmBoundaryTokenPressure({
-      messages: params.messages,
-      systemPrompt: params.systemPrompt,
-      prompt: params.prompt,
-    });
-  let pressureSource = llmBoundaryTokenPressure?.source ?? "transcript_estimate";
+    transcriptTokenPressure?.estimatedPromptTokens ??
+    0;
+  let pressureSource =
+    llmBoundaryTokenPressure?.source ?? transcriptTokenPressure?.source ?? "transcript_estimate";
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
-    const unwindowedEstimatedPromptTokens = estimateLlmBoundaryTokenPressure({
+    const unwindowedTokenPressure = estimateTranscriptBoundaryTokenPressure({
       messages: params.unwindowedMessages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
     });
-    if (unwindowedEstimatedPromptTokens > estimatedPromptTokens) {
-      estimatedPromptTokens = unwindowedEstimatedPromptTokens;
-      messagesForPressure = params.unwindowedMessages;
-      pressureSource = "unwindowed_transcript_estimate";
+    if (unwindowedTokenPressure.estimatedPromptTokens > estimatedPromptTokens) {
+      estimatedPromptTokens = unwindowedTokenPressure.estimatedPromptTokens;
+      messagesForPressure = unwindowedTokenPressure.messagesForPressure;
+      pressureSource = `unwindowed_${unwindowedTokenPressure.source}`;
     }
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
