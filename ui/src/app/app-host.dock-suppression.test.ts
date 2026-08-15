@@ -163,7 +163,13 @@ describe("OpenClaw shell dock suppression", () => {
 
     shell.routeState = { routeId: "chat" };
     renderLit(shell.render(), container);
-    expect(container.querySelector("openclaw-terminal-panel")).toBeNull();
+    expect(
+      (
+        container.querySelector("openclaw-terminal-panel") as HTMLElement & {
+          sessionBottomOnly: boolean;
+        }
+      ).sessionBottomOnly,
+    ).toBe(true);
     expect(container.querySelector("openclaw-browser-panel")).toBeNull();
     expect(container.querySelector("openclaw-desktop-panel")).toBeNull();
 

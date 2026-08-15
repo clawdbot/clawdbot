@@ -16,6 +16,7 @@ import { createDockPanelLayout, type DockPanelPlacement } from "../dock-panel-la
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
   isTerminalPanelShortcut,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type TerminalPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
@@ -74,6 +75,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ type: Boolean }) fullscreen = false;
   /** Hosted by the chat side panel, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
+  /** Shell instance reserved for a terminal explicitly moved below a chat session. */
+  @property({ type: Boolean }) sessionBottomOnly = false;
   @property({ type: Boolean, attribute: false }) deferInitialRestore = false;
 
   @state() terminalPanelErrorText: string | null = null;
@@ -112,13 +115,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private readonly dockLayout = new DockLayoutController(this, {
     layout: panelLayout,
     reservationPrefix: "terminal",
-    isAvailable: () => this.available,
+    isAvailable: () => this.isDockLayoutAvailable(),
     isFullscreen: () => this.fullscreen,
     onResize: () =>
       fitActiveTerminalSession(this.terminalSessions.tabs, this.terminalSessions.activeId),
   });
   private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
+  private readonly onDockBottomRequest = (event: Event) => this.handleToggleRequest(event);
   private readonly onDocumentPointerDown = (event: PointerEvent) =>
     this.handleDocumentPointerDown(event);
 
@@ -128,9 +132,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     // A settings takeover can already own the viewport when the panel mounts.
     // Suppress before the restored open state boots a session nobody can see.
     this.dockLayout.setSuppressed(this.suppressed);
-    if (!this.fullscreen && !this.embedded) {
+    if (!this.fullscreen && !this.embedded && !this.sessionBottomOnly) {
       window.addEventListener("keydown", this.onGlobalKeyDown);
       window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    }
+    if (!this.fullscreen && !this.embedded) {
+      window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onDockBottomRequest);
     }
     document.addEventListener("pointerdown", this.onDocumentPointerDown, true);
     if (this.dockLayout.open) {
@@ -142,18 +149,24 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     super.disconnectedCallback();
     window.removeEventListener("keydown", this.onGlobalKeyDown);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onDockBottomRequest);
     document.removeEventListener("pointerdown", this.onDocumentPointerDown, true);
     this.terminalSessions.disconnectHost();
   }
 
   override updated(changed: Map<string, unknown>): void {
-    if (changed.has("embedded") && !this.fullscreen) {
-      if (this.embedded) {
+    if ((changed.has("embedded") || changed.has("sessionBottomOnly")) && !this.fullscreen) {
+      if (this.embedded || this.sessionBottomOnly) {
         window.removeEventListener("keydown", this.onGlobalKeyDown);
         window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
       } else {
         window.addEventListener("keydown", this.onGlobalKeyDown);
         window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      }
+      if (this.embedded) {
+        window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onDockBottomRequest);
+      } else {
+        window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onDockBottomRequest);
       }
     }
     if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
@@ -261,6 +274,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
+  private isDockLayoutAvailable(): boolean {
+    return this.available && (!this.sessionBottomOnly || this.dockLayout.dock === "bottom");
+  }
+
   private toggleSessionPicker(): void {
     if (this.sessionPickerOpen) {
       this.closeSessionPicker(true);
@@ -332,6 +349,17 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   private setDock(dock: TerminalDock): void {
+    // Embedded chrome cannot dock itself: it asks the host to take the panel
+    // out to the bottom slot. Every other target stays with the dock layout,
+    // where "main" toggles instead of pinning.
+    if (this.embedded && dock === "bottom") {
+      window.dispatchEvent(
+        new CustomEvent<TerminalPanelToggleDetail>(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, {
+          detail: { agentId: this.agentId, dock: "bottom", open: true },
+        }),
+      );
+      return;
+    }
     if (dock === "main") {
       this.dockLayout.toggleDock(dock);
     } else {
@@ -355,7 +383,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   override render() {
-    if (!this.available || (!this.embedded && !this.dockLayout.open)) {
+    if (
+      !this.available ||
+      (!this.embedded && !this.dockLayout.open) ||
+      (this.sessionBottomOnly && this.dockLayout.dock !== "bottom")
+    ) {
       return nothing;
     }
     const mode = this.embedded ? "embedded" : this.fullscreen ? "fullscreen" : this.dockLayout.dock;

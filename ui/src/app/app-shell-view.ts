@@ -626,17 +626,18 @@ export function renderApplicationShell(host: ShellViewHost) {
           .notFoundRecoveryReady=${gatewayConnected}
         ></openclaw-router-outlet>
       </main>
+      <openclaw-terminal-panel
+        .client=${gatewayConnected ? gatewaySnapshot.client : null}
+        .available=${terminalAvailable}
+        .agentId=${selectedAgentId}
+        .suppressed=${settingsTakeover}
+        .sessionBottomOnly=${isSessionRouteId(activeRoute)}
+        .themeMode=${resolveTerminalThemeMode()}
+        .basePath=${context.basePath}
+      ></openclaw-terminal-panel>
       ${isSessionRouteId(activeRoute)
         ? nothing
         : html`
-            <openclaw-terminal-panel
-              .client=${gatewayConnected ? gatewaySnapshot.client : null}
-              .available=${terminalAvailable}
-              .agentId=${selectedAgentId}
-              .suppressed=${settingsTakeover}
-              .themeMode=${resolveTerminalThemeMode()}
-              .basePath=${context.basePath}
-            ></openclaw-terminal-panel>
             <openclaw-browser-panel
               data-chat-autotype-exempt
               .client=${gatewayConnected ? gatewaySnapshot.client : null}

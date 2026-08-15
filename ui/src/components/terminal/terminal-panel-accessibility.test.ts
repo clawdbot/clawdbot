@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { TERMINAL_PANEL_DOCK_BOTTOM_EVENT } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
@@ -57,6 +58,25 @@ describe("OpenClawTerminalPanel accessibility", () => {
         switcher?.querySelector(`[aria-label="${label}"]`),
       ),
     ).toBe(true);
+  });
+
+  it("offers bottom docking from an embedded terminal", async () => {
+    const event = vi.fn();
+    window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, event);
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = createPickerClient();
+    panel.available = true;
+    panel.agentId = "main";
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.renderRoot.querySelector<HTMLButtonElement>('[aria-label="Dock to bottom"]')?.click();
+
+    expect(event).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: { agentId: "main", dock: "bottom", open: true } }),
+    );
+    window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, event);
   });
 
   it("opens the base-mounted full-screen terminal in an isolated tab", async () => {

@@ -17,6 +17,7 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
@@ -503,8 +504,17 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       window.addEventListener(eventName, listener);
       return () => window.removeEventListener(eventName, listener);
     });
+    const handleTerminalDockBottom = () => {
+      const state = this.state;
+      if (!state || !this.active || !this.presented) {
+        return;
+      }
+      state.updateSidebarLayout(closeSlot(state.sidebarLayout, "terminal"));
+    };
+    window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, handleTerminalDockBottom);
     chatState.addCleanup(() => {
       panelToggleCleanups.forEach((cleanup) => cleanup());
+      window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, handleTerminalDockBottom);
       this.pendingPanelToggleRequests.clear();
     });
     // Interactive widget prompts bubble from the widget iframe; a listener on

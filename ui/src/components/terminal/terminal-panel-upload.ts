@@ -341,7 +341,15 @@ export function renderTerminalPanelActions(params: {
     ${params.fullscreen
       ? nothing
       : html`${params.sessionPicker}${params.embedded
-          ? nothing
+          ? html`<button
+              class="rail-header__action tp-icon"
+              type="button"
+              title=${t("terminal.dockBottom")}
+              aria-label=${t("terminal.dockBottom")}
+              @click=${() => params.onDock("bottom")}
+            >
+              ${icons.panelBottomOpen}
+            </button>`
           : html`<span class="tp-dock-modes" role="group" aria-label=${t("terminal.dockMode")}
                 ><button
                   class="rail-header__action tp-icon ${params.dock === "bottom" ? "is-active" : ""}"
