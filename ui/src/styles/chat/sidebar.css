@@ -317,16 +317,17 @@ openclaw-chat-sidebar-region,
 
 /* Overflow indicator: the edge that still hides tabs fades out, so a partially
    scrolled pill reads as "more tabs this way" instead of a hard cut or a tab
-   that lost its label. Edge classes come from panelTabScrollEdgesRef. */
-.side-panel__header .tabstrip.has-scroll-end {
+   that lost its label. The classes are physical because the masks are: the ref
+   measures client rects so they stay correct under RTL. */
+.side-panel__header .tabstrip.has-scroll-right {
   mask-image: linear-gradient(to right, black calc(100% - 30px), transparent 100%);
 }
 
-.side-panel__header .tabstrip.has-scroll-start {
+.side-panel__header .tabstrip.has-scroll-left {
   mask-image: linear-gradient(to right, transparent 0, black 30px);
 }
 
-.side-panel__header .tabstrip.has-scroll-start.has-scroll-end {
+.side-panel__header .tabstrip.has-scroll-left.has-scroll-right {
   mask-image: linear-gradient(
     to right,
     transparent 0,
@@ -353,7 +354,7 @@ openclaw-chat-sidebar-region,
   align-items: center;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-left: 6px;
+  padding-inline-start: 6px;
   scrollbar-width: none;
   scroll-snap-type: inline proximity;
   scroll-padding-inline: 6px;
@@ -407,11 +408,11 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header .tabstrip-tab.is-drop-before::after {
-  left: 0;
+  inset-inline-start: 0;
 }
 
 .side-panel__header .tabstrip-tab.is-drop-after::after {
-  right: 0;
+  inset-inline-end: 0;
 }
 
 .side-panel__header .tabstrip-tab::part(base) {

@@ -86,11 +86,19 @@ function panelTabLabelOverflowRef() {
 }
 
 /** Marks which edges of the tab row still hide tabs, so CSS can fade them out
- *  instead of letting the scroller slice a pill into an icon-only stub. */
+ *  instead of letting the scroller slice a pill into an icon-only stub. Edges
+ *  are measured from client rects because `scrollLeft` flips sign under RTL,
+ *  while rects — and the fade masks they drive — are always physical. */
 function panelTabScrollEdgesRef() {
   let resizeObserver: ResizeObserver | null = null;
   let detach: (() => void) | null = null;
+  // Installation resumes after an await, so a ref swap inside that window has to
+  // cancel the pending body; otherwise its listener and observer outlive every
+  // cleanup and accumulate once per render.
+  let generation = 0;
   return (element: Element | undefined) => {
+    generation += 1;
+    const installing = generation;
     resizeObserver?.disconnect();
     resizeObserver = null;
     detach?.();
@@ -102,16 +110,22 @@ function panelTabScrollEdgesRef() {
       // The scroller is the group's own tabs part, so wait for its first render.
       await (element as HTMLElement & { updateComplete?: Promise<unknown> }).updateComplete;
       const scroller = element.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
-      if (!scroller || !element.isConnected) {
+      if (!scroller || !element.isConnected || installing !== generation) {
         return;
       }
       const update = () => {
         // Ignore sub-pixel and padding-sized offsets so a resting row does not
         // fade its first tab for the scroller's own inline padding.
         const edgeSlack = 8;
-        const hidden = scroller.scrollWidth - scroller.clientWidth;
-        element.classList.toggle("has-scroll-start", scroller.scrollLeft > edgeSlack);
-        element.classList.toggle("has-scroll-end", hidden - scroller.scrollLeft > edgeSlack);
+        const rects = [...element.children].map((item) => item.getBoundingClientRect());
+        if (rects.length === 0) {
+          return;
+        }
+        const viewport = scroller.getBoundingClientRect();
+        const contentLeft = Math.min(...rects.map((rect) => rect.left));
+        const contentRight = Math.max(...rects.map((rect) => rect.right));
+        element.classList.toggle("has-scroll-left", viewport.left - contentLeft > edgeSlack);
+        element.classList.toggle("has-scroll-right", contentRight - viewport.right > edgeSlack);
       };
       update();
       scroller.addEventListener("scroll", update, { passive: true });
@@ -122,6 +136,16 @@ function panelTabScrollEdgesRef() {
       }
     })();
   };
+}
+
+/** "before"/"after" are array order, but pointer position is physical: under RTL
+ *  the visually leading half of a tab is its right half. Both drag handlers read
+ *  this, or the indicator previews the opposite edge from the actual drop. */
+function panelTabDropPlacement(event: DragEvent, target: Element): "before" | "after" {
+  const bounds = target.getBoundingClientRect();
+  const pastMidpoint = event.clientX > bounds.left + bounds.width / 2;
+  const isRtl = getComputedStyle(target).direction === "rtl";
+  return pastMidpoint === isRtl ? "before" : "after";
 }
 
 function reconcileSelectedTabElement(
@@ -287,12 +311,7 @@ export function renderPanelTabStrip(params: {
                   return;
                 }
                 clearPanelTabDropTargets(target);
-                const bounds = target.getBoundingClientRect();
-                target.classList.add(
-                  event.clientX < bounds.left + bounds.width / 2
-                    ? "is-drop-before"
-                    : "is-drop-after",
-                );
+                target.classList.add(`is-drop-${panelTabDropPlacement(event, target)}`);
               }}
               @dragleave=${(event: DragEvent) => {
                 if (
@@ -318,9 +337,7 @@ export function renderPanelTabStrip(params: {
                   return;
                 }
                 event.preventDefault();
-                const bounds = target.getBoundingClientRect();
-                const placement =
-                  event.clientX < bounds.left + bounds.width / 2 ? "before" : "after";
+                const placement = panelTabDropPlacement(event, target);
                 finishPanelTabDrag(target);
                 params.onReorder(sourceId, tab.id, placement);
               }}
