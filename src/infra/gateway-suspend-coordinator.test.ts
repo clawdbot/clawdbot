@@ -14,7 +14,10 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
+import {
+  createGatewayActiveWorkSnapshot,
+  type GatewayActiveWorkInspectors,
+} from "./gateway-active-work.js";
 import {
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
@@ -121,6 +124,102 @@ describe("gateway suspend coordinator", () => {
     expect(result.status).toBe("busy");
     expect(events).toEqual(["pause", "inspect", "resume"]);
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
+  it.each([undefined, "preserve"] as const)(
+    "keeps terminal sessions blocking with terminal policy %s",
+    (terminalPolicy) => {
+      expect(
+        prepareGatewaySuspend({
+          requestId: `request-terminal-${terminalPolicy ?? "default"}`,
+          terminalPolicy,
+          pauseScheduling: vi.fn(),
+          resumeScheduling: vi.fn(),
+          inspect: inspectors({ getTerminalSessions: () => 2 }),
+        }),
+      ).toEqual({
+        status: "busy",
+        reason: "active-work",
+        retryAfterMs: SUSPEND_RETRY_AFTER_MS,
+        activeCount: 2,
+        blockers: [
+          {
+            kind: "terminal-session",
+            count: 2,
+            message: "2 open terminal session(s)",
+          },
+        ],
+      });
+    },
+  );
+
+  it("retains terminal diagnostics when terminal sessions are not blockers", () => {
+    const preserving = createGatewayActiveWorkSnapshot(
+      inspectors({ getTerminalSessions: () => 2 }),
+    );
+    const ignoring = createGatewayActiveWorkSnapshot(inspectors({ getTerminalSessions: () => 2 }), {
+      ignoreTerminalSessions: true,
+    });
+
+    expect(preserving).toMatchObject({
+      idle: false,
+      counts: { terminalSessions: 2, totalActive: 2 },
+      blockers: [expect.objectContaining({ kind: "terminal-session", count: 2 })],
+    });
+    expect(ignoring).toMatchObject({
+      idle: true,
+      counts: { terminalSessions: 2, totalActive: 0 },
+      blockers: [],
+    });
+  });
+
+  it("prepares with terminal sessions excluded when they will be terminated", () => {
+    const params = {
+      requestId: "request-terminal-terminate",
+      terminalPolicy: "terminate" as const,
+      pauseScheduling: vi.fn(),
+      resumeScheduling: vi.fn(),
+      inspect: inspectors({ getTerminalSessions: () => 2 }),
+    };
+    const ready = prepareGatewaySuspend(params);
+    expect(ready).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
+    expect(prepareGatewaySuspend(params)).toMatchObject({
+      status: "ready",
+      activeCount: 0,
+      blockers: [],
+    });
+    expect(prepareGatewaySuspend({ ...params, terminalPolicy: "preserve" })).toMatchObject({
+      status: "conflict",
+    });
+  });
+
+  it("keeps persistence and other active work blocking under terminal termination policy", () => {
+    expect(
+      prepareGatewaySuspend({
+        requestId: "request-terminal-terminate-busy",
+        terminalPolicy: "terminate",
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        inspect: inspectors({
+          getQueueSize: () => 1,
+          getTerminalPersistence: () => 1,
+          getTerminalSessions: () => 2,
+        }),
+      }),
+    ).toEqual({
+      status: "busy",
+      reason: "active-work",
+      retryAfterMs: SUSPEND_RETRY_AFTER_MS,
+      activeCount: 2,
+      blockers: [
+        { kind: "queue", count: 1, message: "1 queued or active operation(s)" },
+        {
+          kind: "terminal-persistence",
+          count: 1,
+          message: "1 pending terminal session write(s)",
+        },
+      ],
+    });
   });
 
   it("stays busy after a background session is hidden until its process exits", () => {

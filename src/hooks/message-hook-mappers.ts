@@ -1,6 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
@@ -80,6 +81,8 @@ type CanonicalInboundMessageHookContext = {
   isGroup: boolean;
   groupId?: string;
   topicName?: string;
+  location?: PluginHookInboundClaimEvent["location"];
+  providerUpdate?: PluginHookInboundClaimEvent["providerUpdate"];
   trace?: DiagnosticTraceContext;
   callDepth?: number;
 };
@@ -100,10 +103,6 @@ type CanonicalSentMessageHookContext = {
   isGroup?: boolean;
   groupId?: string;
 };
-
-function readNonBlankString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
 
 function assignRemoteMediaStagingMetadata(
   target: Record<string, unknown>,
@@ -171,6 +170,17 @@ export function deriveInboundMessageHookContext(
   const mediaUrls = compact(media.map((fact) => fact.url ?? fact.path));
   const mediaTypes = compact(media.map((fact) => fact.contentType ?? fact.kind));
   const firstMedia = media[0];
+  const hasLocation =
+    typeof ctx.LocationLat === "number" &&
+    Number.isFinite(ctx.LocationLat) &&
+    typeof ctx.LocationLon === "number" &&
+    Number.isFinite(ctx.LocationLon);
+  const locationSource =
+    ctx.LocationSource === "pin" || ctx.LocationSource === "place" || ctx.LocationSource === "live"
+      ? ctx.LocationSource
+      : undefined;
+  const providerUpdateId = normalizeOptionalString(ctx.ProviderUpdateId);
+  const providerUpdateKind = normalizeOptionalString(ctx.ProviderUpdateKind);
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -220,6 +230,43 @@ export function deriveInboundMessageHookContext(
     isGroup,
     groupId: isGroup ? conversationId : undefined,
     topicName: ctx.TopicName,
+    ...(hasLocation
+      ? {
+          location: {
+            latitude: ctx.LocationLat as number,
+            longitude: ctx.LocationLon as number,
+            ...(typeof ctx.LocationAccuracy === "number" ? { accuracy: ctx.LocationAccuracy } : {}),
+            ...(ctx.LocationName ? { name: ctx.LocationName } : {}),
+            ...(ctx.LocationAddress ? { address: ctx.LocationAddress } : {}),
+            ...(locationSource ? { source: locationSource } : {}),
+            ...(typeof ctx.LocationIsLive === "boolean" ? { isLive: ctx.LocationIsLive } : {}),
+            ...(typeof ctx.LocationLivePeriodSeconds === "number" &&
+            Number.isFinite(ctx.LocationLivePeriodSeconds)
+              ? { livePeriodSeconds: ctx.LocationLivePeriodSeconds }
+              : {}),
+            ...(ctx.LocationCaption ? { caption: ctx.LocationCaption } : {}),
+          },
+        }
+      : {}),
+    ...(providerUpdateId && providerUpdateKind
+      ? {
+          providerUpdate: {
+            id: providerUpdateId,
+            kind: providerUpdateKind,
+            ...(normalizeOptionalString(ctx.MessageSidFull ?? ctx.MessageSid)
+              ? { messageId: normalizeOptionalString(ctx.MessageSidFull ?? ctx.MessageSid) }
+              : {}),
+            ...(typeof ctx.ProviderMessageTimestamp === "number" &&
+            Number.isFinite(ctx.ProviderMessageTimestamp)
+              ? { messageTimestamp: ctx.ProviderMessageTimestamp }
+              : {}),
+            ...(typeof ctx.ProviderEditTimestamp === "number" &&
+            Number.isFinite(ctx.ProviderEditTimestamp)
+              ? { editedTimestamp: ctx.ProviderEditTimestamp }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -439,6 +486,8 @@ function buildPluginInboundClaimEvent(
     isGroup: canonical.isGroup,
     commandAuthorized: extras?.commandAuthorized,
     wasMentioned: extras?.wasMentioned,
+    ...(canonical.location ? { location: { ...canonical.location } } : {}),
+    ...(canonical.providerUpdate ? { providerUpdate: { ...canonical.providerUpdate } } : {}),
     ...projectHookMediaState(canonical),
     metadata: {
       from: canonical.from,
@@ -507,6 +556,8 @@ export function toPluginMessageReceivedEvent(
     ...(canonical.replyToIsQuote !== undefined ? { replyToIsQuote: canonical.replyToIsQuote } : {}),
     sessionKey: canonical.sessionKey,
     runId: canonical.runId,
+    ...(canonical.location ? { location: { ...canonical.location } } : {}),
+    ...(canonical.providerUpdate ? { providerUpdate: { ...canonical.providerUpdate } } : {}),
     ...projectHookMediaState(canonical),
     metadata: {
       to: canonical.to,

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginRuntime } from "./runtime/types.js";
 import { importSessionCatalogHistory } from "./session-catalog-history-import.js";
+import { listSessionCatalogEntries } from "./session-catalog.js";
 
 const transcript = vi.hoisted(() => ({
   messages: [] as Array<Record<string, unknown>>,
@@ -85,6 +88,47 @@ function messageText(message: Record<string, unknown>): string | undefined {
     : undefined;
 }
 
+describe("listSessionCatalogEntries", () => {
+  it("scans the retained compatibility owner first", () => {
+    const config = retainLegacyDefaultAgentId(
+      {
+        agents: { list: [{ id: "alpha" }, { id: "beta" }] },
+      } as OpenClawConfig,
+      "beta",
+    );
+    const listSessionEntries = vi.fn((_params: { agentId: string }) => []);
+    const runtime = {
+      agent: { session: { listSessionEntries } },
+    } as unknown as PluginRuntime;
+
+    expect(listSessionCatalogEntries({ config, runtime })).toEqual([]);
+    expect(listSessionEntries.mock.calls.map(([params]) => params.agentId)).toEqual([
+      "beta",
+      "alpha",
+    ]);
+  });
+
+  it("requires and scopes an owner under explicit multi-agent ownership", () => {
+    const config = {
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "alpha" }, { id: "beta" }],
+      },
+    } as OpenClawConfig;
+    const listSessionEntries = vi.fn(() => []);
+    const runtime = {
+      agent: { session: { listSessionEntries } },
+    } as unknown as PluginRuntime;
+
+    expect(() => listSessionCatalogEntries({ config, runtime })).toThrow(
+      "session agent resolution has no explicit owner",
+    );
+    expect(listSessionCatalogEntries({ agentId: "beta", config, runtime })).toEqual([]);
+    expect(listSessionEntries).toHaveBeenCalledOnce();
+    expect(listSessionEntries).toHaveBeenCalledWith({ agentId: "beta", readOnly: true });
+  });
+});
+
 describe("importSessionCatalogHistory", () => {
   beforeEach(() => {
     transcript.messages.length = 0;
@@ -98,6 +142,8 @@ describe("importSessionCatalogHistory", () => {
       const { result } = importHistory(
         [
           { id: "u-1", type: "userMessage", text: "repeat me", timestamp: "not-a-date" },
+          { id: "u-2", type: "userMessage", text: "numeric year", timestamp: "2026" },
+          { id: "u-3", type: "userMessage", text: "numeric zero", timestamp: "0" },
           { id: "r-empty", type: "reasoning" },
           {
             id: "r-1",
@@ -118,6 +164,8 @@ describe("importSessionCatalogHistory", () => {
 
     expect(transcript.messages.map(messageText)).toEqual([
       "repeat me",
+      "numeric year",
+      "numeric zero",
       "Thinking\n\ncareful",
       "answer",
       "Tool call\n\nbash",
@@ -126,10 +174,15 @@ describe("importSessionCatalogHistory", () => {
     expect(transcript.messages[0]?.["__openclaw"]).toEqual({
       mirrorOrigin: "pi-catalog-import",
     });
-    expect(transcript.messages[1]?.timestamp).toBe(-1_000);
-    expect(transcript.messages[2]?.model).toBe("anthropic/claude");
+    expect(transcript.messages[0]?.timestamp).toBe(Date.parse("2026-07-25T12:00:00.000Z"));
+    expect(transcript.messages[1]?.timestamp).toBe(Date.parse("2026"));
+    expect(transcript.messages[2]?.timestamp).toBe(Date.parse("0"));
+    expect(transcript.messages[3]?.timestamp).toBe(-1_000);
+    expect(transcript.messages[4]?.model).toBe("anthropic/claude");
     expect(transcript.messages.map((message) => message.idempotencyKey)).toEqual([
       "pi-catalog:thread-1:u-1",
+      "pi-catalog:thread-1:u-2",
+      "pi-catalog:thread-1:u-3",
       "pi-catalog:thread-1:r-1",
       "pi-catalog:thread-1:a-1",
       "pi-catalog:thread-1:t-1",

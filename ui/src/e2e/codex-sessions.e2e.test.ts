@@ -1,24 +1,17 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
-import {
-  canRunPlaywrightChromium,
-  controlUiSessionPath,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const available = canRunPlaywrightChromium(executablePath);
-const allowMissing = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const suite = available || !allowMissing ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Codex native session catalog",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
-let browser: Browser;
-let server: ControlUiE2eServer;
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const catalogGroupingStorageKey = "openclaw:sidebar:sessions:catalog-grouping";
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
@@ -49,22 +42,9 @@ async function expandCodingSection(page: Page, required = false) {
   }
 }
 
-suite("Codex native session catalog", () => {
-  beforeAll(async () => {
-    if (!available) {
-      throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("omits empty native session catalogs from the sidebar", async () => {
-    const page = await browser.newPage();
+    const page = await suite.browser.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: {
@@ -103,7 +83,7 @@ suite("Codex native session catalog", () => {
       },
     });
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.waitForRequest("sessions.catalog.list");
     expect(await page.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
     expect(await page.locator('[data-session-section="catalog:claude"]').count()).toBe(0);
@@ -111,7 +91,7 @@ suite("Codex native session catalog", () => {
   });
 
   it("separates native catalogs from live Coding rows", async () => {
-    const page = await browser.newPage({
+    const page = await suite.browser.newPage({
       deviceScaleFactor: 2,
       viewport: { height: 900, width: 1280 },
     });
@@ -208,7 +188,7 @@ suite("Codex native session catalog", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
       await expandCodingSection(page, true);
       const sessionGroups = page.locator(".sidebar-recent-sessions");
@@ -240,7 +220,16 @@ suite("Codex native session catalog", () => {
       ]);
       expect(liveRowsBox).not.toBeNull();
       expect(catalogBox).not.toBeNull();
-      expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(10);
+      // Read the rhythm from the token instead of restating it: the guard is
+      // that catalogs are a separate group, not that the gap is any one number.
+      const groupGap = await page.evaluate(() => {
+        const sidebar = document.querySelector(".sidebar");
+        return sidebar
+          ? Number.parseInt(getComputedStyle(sidebar).getPropertyValue("--sidebar-group-gap"), 10)
+          : Number.NaN;
+      });
+      expect(groupGap).toBeGreaterThan(0);
+      expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(groupGap);
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });
         await sessionGroups.screenshot({
@@ -254,14 +243,14 @@ suite("Codex native session catalog", () => {
   });
 
   it("shows a completed host while the aggregate catalog request is still pending", async () => {
-    const page = await browser.newPage({ viewport: { height: 900, width: 1280 } });
+    const page = await suite.browser.newPage({ viewport: { height: 900, width: 1280 } });
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.catalog.list"],
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       const request = await gateway.waitForRequest("sessions.catalog.list");
       const progressId = (request.params as { progressId?: string })?.progressId;
       expect(progressId).toEqual(expect.any(String));
@@ -316,7 +305,7 @@ suite("Codex native session catalog", () => {
   });
 
   it("groups sessions by host and hides empty offline nodes", async () => {
-    const page = await browser.newPage({
+    const page = await suite.browser.newPage({
       deviceScaleFactor: 2,
       viewport: { height: 1100, width: 1440 },
     });
@@ -437,7 +426,7 @@ suite("Codex native session catalog", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await page.evaluate(() => {
         document.documentElement.setAttribute("data-theme", "openknot");
         document.documentElement.setAttribute("data-theme-mode", "dark");
@@ -450,11 +439,24 @@ suite("Codex native session catalog", () => {
       expect(await section.locator('[data-session-catalog-host="node:build"]').count()).toBe(1);
       expect(await section.getByText("Offline Workstation", { exact: true }).count()).toBe(0);
       expect(await section.getByText("Offline Laptop", { exact: true }).count()).toBe(0);
+      const localHost = section.locator('[data-session-catalog-host="gateway:local"]');
+      const localHostList = localHost.locator(":scope > .sidebar-session-catalog-host__sessions");
+      expect(await localHostList.getAttribute("role")).toBe("list");
+      expect(await localHostList.getAttribute("aria-label")).toBe("Local Codex");
       const projectHeads = section.locator("[data-session-catalog-project]");
       await expect.poll(() => projectHeads.count()).toBe(2);
+      expect(
+        await localHostList
+          .locator(":scope > *")
+          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
+      ).toEqual(["listitem", "listitem"]);
       const openclawProject = section.locator(
         '[data-session-catalog-project="/Users/dev/openclaw"]',
       );
+      const openclawProjectItem = openclawProject.locator("..");
+      const openclawProjectList = openclawProjectItem.locator(":scope > [role=list]");
+      expect(await openclawProjectItem.getAttribute("role")).toBe("listitem");
+      expect(await openclawProjectList.getAttribute("aria-label")).toBe("Local Codex: openclaw");
       expect(
         await openclawProject.locator(".sidebar-session-catalog-project__label").textContent(),
       ).toBe("openclaw");
@@ -463,6 +465,16 @@ suite("Codex native session catalog", () => {
       ).toBe("2");
       const projectRows = section.locator(".sidebar-recent-session--catalog-project-child");
       await expect.poll(() => projectRows.count()).toBe(3);
+      expect(
+        await openclawProjectList
+          .locator(":scope > *")
+          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
+      ).toEqual(["listitem", "listitem"]);
+      const buildHostList = section.locator(
+        '[data-session-catalog-host="node:build"] > .sidebar-session-catalog-host__sessions',
+      );
+      expect(await buildHostList.getAttribute("aria-label")).toBe("Build Node");
+      expect(await buildHostList.locator(":scope > [role=listitem]").count()).toBe(1);
       const threadRows = page.locator(
         '[data-session-section="ungrouped"] .sidebar-recent-session, [data-session-section="catalog:codex"] .sidebar-recent-session--catalog-project-child',
       );
@@ -566,6 +578,11 @@ suite("Codex native session catalog", () => {
       await expect.poll(() => projectHeads.count()).toBe(0);
       expect(await section.locator("[data-session-key]").count()).toBe(4);
       expect(
+        await localHostList
+          .locator(":scope > *")
+          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
+      ).toEqual(["listitem", "listitem", "listitem"]);
+      expect(
         await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
       ).toBe("none");
       if (captureUiProofEnabled) {
@@ -584,6 +601,11 @@ suite("Codex native session catalog", () => {
         .getByRole("menuitemradio", { name: "Person" })
         .evaluate((element) => (element as HTMLElement).click());
       await expect.poll(() => projectHeads.count()).toBe(2);
+      expect(
+        await localHostList
+          .locator(":scope > *")
+          .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
+      ).toEqual(["listitem", "listitem", "listitem"]);
       expect(
         await section
           .locator('[data-session-catalog-project="person:profile-ada"]')
@@ -650,7 +672,7 @@ suite("Codex native session catalog", () => {
   });
 
   it("explains node-list failures and exposes independent discovery settings", async () => {
-    const page = await browser.newPage({ viewport: { height: 1100, width: 1440 } });
+    const page = await suite.browser.newPage({ viewport: { height: 1100, width: 1440 } });
     await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
@@ -754,7 +776,7 @@ suite("Codex native session catalog", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await expandCodingSection(page);
       const warning = page.locator(
         '[data-session-section="catalog:codex"] .sidebar-session-group-toggle',
@@ -778,7 +800,7 @@ suite("Codex native session catalog", () => {
         });
       }
 
-      await page.goto(`${server.baseUrl}settings/automation?section=plugins&advanced=1`);
+      await page.goto(`${suite.server.baseUrl}settings/automation?section=plugins&advanced=1`);
       const expandPluginSetting = async (pluginLabel: string) => {
         const pluginGroup = page
           .getByText(pluginLabel, { exact: true })
@@ -831,7 +853,7 @@ suite("Codex native session catalog", () => {
   });
 
   it("shows a catalog Load More rejection without losing the retry cursor", async () => {
-    const page = await browser.newPage();
+    const page = await suite.browser.newPage();
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     const gateway = await installMockGateway(page, {
@@ -869,7 +891,7 @@ suite("Codex native session catalog", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await expandCodingSection(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
@@ -901,7 +923,7 @@ suite("Codex native session catalog", () => {
   });
 
   it("adopts from the native chat composer, navigates, and auto-sends", async () => {
-    const page = await browser.newPage();
+    const page = await suite.browser.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: {
@@ -942,11 +964,26 @@ suite("Codex native session catalog", () => {
         "chat.send": { runId: "run-adopted", status: "started" },
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     await expandCodingSection(page);
     await page.getByText("Release checklist", { exact: true }).click();
-    await expect.poll(() => page.getByText("prepare release", { exact: true }).count()).toBe(1);
-    const composer = page.locator(".agent-chat__composer-combobox > textarea");
+    const catalogPane = page
+      .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
+      .filter({ hasText: "prepare release" });
+    await catalogPane.getByText("prepare release", { exact: true }).waitFor();
+    expect(
+      (await gateway.getRequests("sessions.catalog.list")).every(
+        (request) => (request.params as { agentId?: string } | undefined)?.agentId === "main",
+      ),
+    ).toBe(true);
+    const read = await gateway.waitForRequest("sessions.catalog.read");
+    expect(read.params).toMatchObject({
+      agentId: "main",
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-1",
+    });
+    const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
     await composer.fill("continue with the final checks");
     await gateway.setMethodResponse("sessions.list", {
       count: 1,
@@ -973,6 +1010,7 @@ suite("Codex native session catalog", () => {
     await composer.press("Enter");
     const continued = await gateway.waitForRequest("sessions.catalog.continue");
     expect(continued.params).toEqual({
+      agentId: "main",
       catalogId: "codex",
       hostId: "gateway:local",
       threadId: "thread-1",

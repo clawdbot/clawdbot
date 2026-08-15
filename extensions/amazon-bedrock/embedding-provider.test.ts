@@ -3,7 +3,6 @@ import * as bedrockRuntimeSdk from "@aws-sdk/client-bedrock-runtime";
 import { NodeHttp2Handler } from "@smithy/node-http-handler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBedrockEmbeddingProvider, hasAwsCredentials } from "./embedding-provider.js";
-import { embeddingTesting as testing } from "./test-support.js";
 
 vi.mock("@aws-sdk/client-bedrock-runtime", { spy: true });
 
@@ -382,88 +381,69 @@ describe("hasAwsCredentials", () => {
   });
 });
 
-describe("bedrock embedding response parsers", () => {
-  it("wraps malformed single embedding JSON", () => {
-    expect(() => testing.parseSingle("titan-v2", "{not json")).toThrow(
+describe("bedrock embedding response parsing", () => {
+  it.each([
+    { name: "malformed single JSON", model: "amazon.titan-embed-text-v2:0", raw: "{not json" },
+    { name: "non-object JSON", model: "amazon.titan-embed-text-v2:0", raw: "[]" },
+    { name: "missing single vector", model: "amazon.titan-embed-text-v2:0", raw: "{}" },
+    {
+      name: "invalid single vector element",
+      model: "amazon.titan-embed-text-v2:0",
+      raw: '{"embedding":[1,"bad"]}',
+    },
+    { name: "malformed batch JSON", model: "cohere.embed-english-v3", raw: "{not json" },
+    { name: "missing batch vectors", model: "cohere.embed-english-v3", raw: "{}" },
+    {
+      name: "invalid batch vector shape",
+      model: "cohere.embed-english-v3",
+      raw: '{"embeddings":[[1],{"bad":true}]}',
+    },
+  ])("rejects $name through the provider boundary", async ({ model, raw }) => {
+    vi.spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      body: new TextEncoder().encode(raw),
+    } as never);
+    const { provider } = await createBedrockEmbeddingProvider({ config: {}, model });
+    const request = model.startsWith("cohere.")
+      ? provider.embedBatch(["private memory"])
+      : provider.embedQuery("private memory");
+
+    await expect(request).rejects.toThrow(
       "Amazon Bedrock embedding response returned malformed JSON",
     );
-  });
-
-  it("wraps malformed batch embedding JSON", () => {
-    expect(() => testing.parseCohereBatch("cohere-v3", "{not json")).toThrow(
-      "Amazon Bedrock embedding response returned malformed JSON",
-    );
-  });
-
-  it("rejects non-object embedding JSON", () => {
-    expect(() => testing.parseSingle("titan-v2", "[]")).toThrow(
-      "Amazon Bedrock embedding response returned malformed JSON",
-    );
-  });
-
-  it("rejects missing single embedding vectors", () => {
-    expect(() => testing.parseSingle("titan-v2", "{}")).toThrow(
-      "Amazon Bedrock embedding response returned malformed JSON",
-    );
-  });
-
-  it("rejects wrong single embedding vector element types", () => {
-    expect(() => testing.parseSingle("titan-v2", '{"embedding":[1,"bad"]}')).toThrow(
-      "Amazon Bedrock embedding response returned malformed JSON",
-    );
-  });
-
-  it("rejects missing batch embedding vectors", () => {
-    expect(() => testing.parseCohereBatch("cohere-v3", "{}")).toThrow(
-      "Amazon Bedrock embedding response returned malformed JSON",
-    );
-  });
-
-  it("rejects wrong batch embedding vector shapes", () => {
-    expect(() =>
-      testing.parseCohereBatch("cohere-v3", '{"embeddings":[[1],{"bad":true}]}'),
-    ).toThrow("Amazon Bedrock embedding response returned malformed JSON");
   });
 });
 
-describe("stripInferenceProfilePrefix", () => {
-  it("strips global prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("global.cohere.embed-v4:0")).toBe(
-      "cohere.embed-v4:0",
-    );
-  });
+describe("bedrock embedding inference profiles", () => {
+  it.each(["global", "us", "eu", "ap", "apac", "au", "jp"])(
+    "uses the Cohere v4 contract for the %s profile prefix",
+    async (prefix) => {
+      const model = `${prefix}.cohere.embed-v4:0`;
+      const send = vi
+        .spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send")
+        .mockResolvedValue({
+          body: new TextEncoder().encode('{"embeddings":{"float":[[3,4]]}}'),
+        } as never);
+      const { provider, client } = await createBedrockEmbeddingProvider({ config: {}, model });
 
-  it("strips us prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("us.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
-  });
+      await expect(provider.embedQuery("private memory")).resolves.toEqual([0.6, 0.8]);
 
-  it("strips eu prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("eu.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
-  });
-
-  it("strips ap prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("ap.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
-  });
-
-  it("strips apac prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("apac.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
-  });
-
-  it("strips au prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("au.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
-  });
-
-  it("strips jp prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("jp.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
-  });
-
-  it("returns unchanged model ID without prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
-  });
-
-  it("returns unchanged model ID for amazon.titan-embed-text-v2:0", () => {
-    expect(testing.stripInferenceProfilePrefix("amazon.titan-embed-text-v2:0")).toBe(
-      "amazon.titan-embed-text-v2:0",
-    );
-  });
+      const command = send.mock.calls.at(-1)?.[0] as {
+        input?: { body?: string | Uint8Array; modelId?: string };
+      };
+      const body =
+        typeof command.input?.body === "string"
+          ? command.input.body
+          : new TextDecoder().decode(command.input?.body);
+      expect(JSON.parse(body)).toEqual({
+        texts: ["private memory"],
+        input_type: "search_query",
+        truncate: "END",
+        embedding_types: ["float"],
+        output_dimension: 1536,
+      });
+      expect(command.input?.modelId).toBe(model);
+      expect(client).toMatchObject({ model, dimensions: 1536 });
+      expect(provider.maxInputTokens).toBe(128_000);
+    },
+  );
 });

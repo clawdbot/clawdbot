@@ -3,6 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { clearMcpAppModelContextForView } from "./mcp-app-model-context.js";
@@ -23,6 +24,7 @@ type McpAppPermissions = Partial<
 export type McpAppViewLease = {
   viewId: string;
   runtime: SessionMcpRuntime;
+  agentId: string;
   sessionId: string;
   serverName: string;
   toolName: string;
@@ -36,6 +38,7 @@ export type McpAppViewLease = {
   readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
+  requestTimeoutMs?: number;
   expiresAtMs: number;
   requestWindowStartedAtMs: number;
   requestCount: number;
@@ -212,6 +215,7 @@ async function resolveListingUiMeta(
 
 export async function fetchMcpAppView(params: {
   runtime: SessionMcpRuntime;
+  agentId?: string;
   serverName: string;
   toolName: string;
   uiResourceUri: string;
@@ -236,6 +240,12 @@ export async function fetchMcpAppView(params: {
   let releaseRuntimeLease: (() => void) | undefined;
   try {
     assertBoundedViewDescriptor(params);
+    const agentId = params.agentId
+      ? normalizeAgentId(params.agentId)
+      : parseAgentSessionKey(params.runtime.sessionKey)?.agentId;
+    if (!agentId) {
+      throw new Error("MCP App view requires a resolved session owner");
+    }
     if (!params.runtime.readResource || !params.uiResourceUri.startsWith("ui://")) {
       return undefined;
     }
@@ -264,12 +274,16 @@ export async function fetchMcpAppView(params: {
     const permissions = normalizePermissions(uiMeta?.permissions);
     const title = `${params.toolName} UI`;
     const viewId = params.viewId ?? `mcp-app-${randomUUID()}`;
+    // resources/read established the authoritative server session above. Carry
+    // its deadline into the view so catalog invalidation cannot change it later.
+    const requestTimeoutMs = params.runtime.getServerRequestTimeoutMs?.(params.serverName);
     releaseRuntimeLease = params.runtime.acquireLease?.();
     deleteView(viewId);
     pruneViewStore(byteSize, { reserveEntry: true });
     const view: McpAppViewLease = {
       viewId,
       runtime: params.runtime,
+      agentId,
       sessionId: params.runtime.sessionId,
       serverName: params.serverName,
       toolName: params.toolName,
@@ -287,6 +301,7 @@ export async function fetchMcpAppView(params: {
       ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       expiresAtMs: Date.now() + MCP_APP_VIEW_TTL_MS,
       requestWindowStartedAtMs: Date.now(),
       requestCount: 0,
@@ -331,10 +346,13 @@ export function getMcpAppViewLease(
 export function getMcpAppViewLeaseForSession(
   viewId: string,
   sessionKey: string,
+  agentId: string,
 ): McpAppViewLease | undefined {
   pruneViewStore();
   const view = getViewStore().get(viewId);
-  return view?.runtime.sessionKey === sessionKey ? view : undefined;
+  return view?.runtime.sessionKey === sessionKey && view.agentId === normalizeAgentId(agentId)
+    ? view
+    : undefined;
 }
 
 export function acquireMcpAppViewRequest(

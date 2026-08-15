@@ -38,6 +38,7 @@ env:
 jobs:
   preflight:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       run_install_smoke: ${{ steps.manifest.outputs.run_install_smoke }}
@@ -118,6 +119,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_fast_install_smoke == 'true' && needs.preflight.outputs.run_full_install_smoke != 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -228,6 +230,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: read
@@ -332,6 +335,7 @@ jobs:
     needs: [preflight, root_dockerfile_image]
     if: always() && needs.preflight.result == 'success' && needs.preflight.outputs.run_full_install_smoke == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -349,6 +353,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Checkout CLI
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -365,6 +370,7 @@ jobs:
     needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     env:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
@@ -419,34 +425,9 @@ jobs:
             echo "Root image artifact name does not match the target and producer run attempt." >&2
             exit 1
           }
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "$ARTIFACT_ID" \
-            --arg name "$ARTIFACT_NAME" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '
-              (.id | tostring) == $id and
-              .name == $name and
-              .expired == false and
-              .digest == $digest and
-              (.workflow_run.id | tostring) == $run_id
-            ' <<< "$artifact_json" >/dev/null || {
-              echo "Root image artifact identity does not match the requested immutable tuple." >&2
-              exit 1
-            }
-          attempt_json="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
-            <<< "$attempt_json" >/dev/null || {
-              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
-              exit 1
-            }
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download root Dockerfile image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -559,6 +540,7 @@ jobs:
     needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 150
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -623,34 +605,9 @@ jobs:
             echo "Root image artifact name does not match the target and producer run attempt." >&2
             exit 1
           }
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "$ARTIFACT_ID" \
-            --arg name "$ARTIFACT_NAME" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '
-              (.id | tostring) == $id and
-              .name == $name and
-              .expired == false and
-              .digest == $digest and
-              (.workflow_run.id | tostring) == $run_id
-            ' <<< "$artifact_json" >/dev/null || {
-              echo "Root image artifact identity does not match the requested immutable tuple." >&2
-              exit 1
-            }
-          attempt_json="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
-            <<< "$attempt_json" >/dev/null || {
-              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
-              exit 1
-            }
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download root Dockerfile image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -750,6 +707,7 @@ jobs:
     needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
     if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     env:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
@@ -804,34 +762,9 @@ jobs:
             echo "Root image artifact name does not match the target and producer run attempt." >&2
             exit 1
           }
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "$ARTIFACT_ID" \
-            --arg name "$ARTIFACT_NAME" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '
-              (.id | tostring) == $id and
-              .name == $name and
-              .expired == false and
-              .digest == $digest and
-              (.workflow_run.id | tostring) == $run_id
-            ' <<< "$artifact_json" >/dev/null || {
-              echo "Root image artifact identity does not match the requested immutable tuple." >&2
-              exit 1
-            }
-          attempt_json="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
-            <<< "$attempt_json" >/dev/null || {
-              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
-              exit 1
-            }
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download root Dockerfile image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

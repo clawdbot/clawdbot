@@ -282,47 +282,6 @@ describe("qa suite planning helpers", () => {
     ).toBe(25);
   });
 
-  it("rejects an explicitly requested scenario for the wrong provider", () => {
-    const scenarios = [
-      makeQaSuiteTestScenario("generic"),
-      makeQaSuiteTestScenario("anthropic-only", {
-        config: {
-          requiredProvider: "anthropic",
-        },
-      }),
-    ];
-
-    expect(() =>
-      selectQaFlowSuiteScenarios({
-        scenarios,
-        scenarioIds: ["anthropic-only"],
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.6-luna",
-      }),
-    ).toThrow(
-      "selected QA scenario(s) do not match the current QA lane: anthropic-only (provider=anthropic)",
-    );
-  });
-
-  it("rejects an explicitly requested scenario for the wrong provider mode", () => {
-    const scenarios = [
-      makeQaSuiteTestScenario("mock-only", {
-        config: { requiredProviderMode: "mock-openai" },
-      }),
-    ];
-
-    expect(() =>
-      selectQaFlowSuiteScenarios({
-        scenarios,
-        scenarioIds: ["mock-only"],
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.6-luna",
-      }),
-    ).toThrow(
-      "selected QA scenario(s) do not match the current QA lane: mock-only (providerMode=mock-openai)",
-    );
-  });
-
   it("rejects an explicitly requested scenario for the wrong model", () => {
     const scenarios = [
       makeQaSuiteTestScenario("openai-model", {

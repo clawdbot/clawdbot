@@ -1,8 +1,8 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
+import { tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope-config.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -26,7 +26,6 @@ import type {
 } from "./operations-parse.js";
 import { formatSystemAgentPersistentPlan } from "./operations-parse.js";
 import type { SystemAgentOverview } from "./overview.js";
-import { validateSystemAgentPluginInstallSpec } from "./plugin-install.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 type ConfigModule = typeof import("../config/config.js");
@@ -36,24 +35,6 @@ const loadOverviewModule = async () => await import("./overview.js");
 
 export const CONFIG_GET_OUTPUT_MAX_CHARS = 2_000;
 export const CONFIG_SCHEMA_CHILDREN_MAX = 40;
-
-export function redactConfigValue(value: unknown, configPath: string): unknown {
-  if (typeof value === "string" || typeof value === "number") {
-    return isSensitiveConfigPath(configPath) ? "<redacted>" : value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactConfigValue(entry, `${configPath}[]`));
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
-        key,
-        redactConfigValue(entry, configPath ? `${configPath}.${key}` : key),
-      ]),
-    );
-  }
-  return value;
-}
 
 export function readConfigValueAtPath(
   config: unknown,
@@ -97,9 +78,9 @@ export async function runGatewayLifecycle(
   surface?: "cli" | "gateway",
 ): Promise<void | boolean> {
   if (operation === "restart" && surface === "gateway") {
-    const { requestSafeGatewayRestart } = await import("../infra/restart-coordinator.js");
+    const { scheduleSafeGatewayRestart } = await import("../infra/restart-coordinator.js");
     // In-process ownership prevents remote URL/config overrides from restarting another Gateway.
-    return requestSafeGatewayRestart({ reason: "gateway.restart.safe", delayMs: 0 }).ok;
+    return scheduleSafeGatewayRestart({ reason: "gateway.restart.safe", delayMs: 0 }).ok;
   }
   const lifecycle = await import("../cli/daemon-cli/lifecycle.js");
   if (operation === "start") {
@@ -187,12 +168,12 @@ export function createNoExitRuntime(runtime: RuntimeEnv): RuntimeEnv {
   };
 }
 
-export async function resolveTuiAgentId(params: {
+export function resolveTuiAgentId(params: {
   requestedAgentId: string | undefined;
   requestedWorkspace?: string;
-  deps?: SystemAgentCommandDeps;
-}): Promise<string | undefined> {
-  const overview = await loadOverviewForOperation(params.deps);
+  overview: SystemAgentOverview;
+}): string | undefined {
+  const { overview } = params;
   const workspace = params.requestedWorkspace
     ? resolveUserPath(params.requestedWorkspace)
     : undefined;
@@ -348,7 +329,6 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     return true;
   }
   const { readConfigFileSnapshot } = await loadConfigModule();
-  const { resolveDefaultAgentId } = await import("../agents/agent-scope.js");
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid) {
     return true;
@@ -360,8 +340,10 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     // Unknown or id-less entry: cannot prove it is off the default route.
     return true;
   }
-  const defaultAgentId = resolveDefaultAgentId(config ?? {});
-  return normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId);
+  const defaultAgentId =
+    config?.agents?.defaults?.systemAgent?.agentId?.trim() ??
+    (config ? tryResolveLegacyCompatibilityAgentId(config) : undefined);
+  return !defaultAgentId || normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId);
 }
 
 export async function assertConfigWriteDoesNotBypassInferenceVerification(
@@ -509,6 +491,7 @@ export async function executeSetup(
         applySetup(
           {
             workspace,
+            ...(operation.agentName ? { firstAgent: { name: operation.agentName } } : {}),
             expectedInferenceRoute: verified.route,
             ...recovery?.applyOptions,
             surface,
@@ -561,11 +544,11 @@ export async function executeSetDefaultModel(
       const { applySystemAgentModelSelection, createSystemAgentModelSelectionUpdater } =
         await import("./setup-apply.js");
       const targetAgentId = operation.agentId;
+      const snapshot = await readConfigFileSnapshot();
       // Route projection and the live probes below all take the same optional
       // agent scope, so a per-agent selection is verified against that agent's
       // route with the exact rigor the default route gets.
       const projectRoute = (config: OpenClawConfig) => projectInferenceRoute(config, targetAgentId);
-      const snapshot = await readConfigFileSnapshot();
       const stagedConfig = await applySystemAgentModelSelection({
         config: snapshot.sourceConfig,
         model: operation.model,
@@ -746,40 +729,4 @@ export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Pr
       (owner) => owner.trim().toLowerCase() === normalizedPluginId,
     ),
   );
-}
-
-export async function executePluginInstall(
-  operation: Extract<SystemAgentOperation, { kind: "plugin-install" }>,
-  runtime: RuntimeEnv,
-  opts: ExecuteOptions,
-): Promise<SystemAgentOperationResult> {
-  // Reject an untrusted plugin source before proposing or installing it, not
-  // only on the approved apply — a formatted "plan" must never surface an
-  // arbitrary npm/url/file spec that bypassed the ClawHub trust boundary.
-  const validationError = validateSystemAgentPluginInstallSpec(operation.spec);
-  if (validationError) {
-    throw new Error(validationError);
-  }
-  const result = await applyPersistentOperation({
-    auditOperation: "plugin.install",
-    operation,
-    runtime,
-    opts,
-    run: async (ctx) => {
-      const runPluginInstall =
-        ctx.deps?.runPluginInstall ??
-        (async (spec: string, pluginRuntime: RuntimeEnv) => {
-          const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
-          await runPluginInstallCommand({ raw: spec, opts: {}, runtime: pluginRuntime });
-        });
-      await ctx.commit(async () => {
-        await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime));
-      });
-      return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
-    },
-  });
-  if (result.applied) {
-    runtime.log("Restart the Gateway to apply installed plugin changes.");
-  }
-  return result;
 }

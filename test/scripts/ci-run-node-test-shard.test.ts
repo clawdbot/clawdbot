@@ -18,8 +18,9 @@ import {
   pruneFsModuleCache,
   resolveShardChildCommand,
   resolveShardPlans,
+  resolveTestProjectsEntrypoint,
   runShardPlans,
-} from "../../scripts/ci-run-node-test-shard.mjs";
+} from "../../scripts/ci-run-node-test-shard.mts";
 
 const scratchDirs: string[] = [];
 
@@ -35,12 +36,27 @@ afterEach(() => {
   }
 });
 
-describe("scripts/ci-run-node-test-shard.mjs", () => {
-  it("launches the child runner directly with Node", () => {
+describe("scripts/ci-run-node-test-shard.mts", () => {
+  it("launches the current TypeScript child runner directly with Node", () => {
     expect(resolveShardChildCommand(["one.config.ts"], "/runtime/node")).toEqual({
+      command: "/runtime/node",
+      args: ["--import", "tsx", "scripts/test-projects.mts", "one.config.ts"],
+    });
+  });
+
+  it("uses the compiled child runner from a frozen candidate", () => {
+    const entrypoint = resolveTestProjectsEntrypoint((candidate) => candidate.endsWith(".mjs"));
+    expect(entrypoint).toBe("scripts/test-projects.mjs");
+    expect(resolveShardChildCommand(["one.config.ts"], "/runtime/node", entrypoint)).toEqual({
       command: "/runtime/node",
       args: ["scripts/test-projects.mjs", "one.config.ts"],
     });
+  });
+
+  it("fails clearly when the candidate has no test-projects entrypoint", () => {
+    expect(() => resolveTestProjectsEntrypoint(() => false)).toThrow(
+      "CI target does not provide scripts/test-projects.mts or .mjs",
+    );
   });
 
   it("prefers explicit targets and keeps one target per child", () => {

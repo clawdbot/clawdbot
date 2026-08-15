@@ -24,6 +24,7 @@ scenario:
     - test/e2e/qa-lab/runtime/channel-health-monitor-lifecycle-runtime.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/channel-health-monitor-lifecycle-runtime.ts
     summary: Runs the production channel health monitor with controlled real-time account snapshots and captures lifecycle operations and logs.
     args:

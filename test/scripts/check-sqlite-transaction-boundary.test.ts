@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findSqliteTransactionBoundaryViolations } from "../../scripts/check-sqlite-transaction-boundary.mjs";
+import { findSqliteTransactionBoundaryViolations } from "../../scripts/check-sqlite-transaction-boundary.mts";
 
 describe("SQLite transaction boundary guard", () => {
   it("rejects removed async transaction primitives", () => {

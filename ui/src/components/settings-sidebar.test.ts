@@ -20,6 +20,11 @@ const saveIndicator = () => ({
   onApply: vi.fn(),
 });
 
+const inactiveRefresh = {
+  refreshRequired: false,
+  onRefresh: () => undefined,
+};
+
 beforeEach(async () => {
   await i18n.setLocale("en");
   container = document.createElement("div");
@@ -42,8 +47,9 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -73,8 +79,9 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -103,8 +110,9 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "cp",
         searchBlockMatches: [
           {
@@ -141,8 +149,9 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "mcp",
         searchBlockMatches: [
           {
@@ -196,8 +205,9 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "infrastructure",
         searchBlockMatches: [
           {
@@ -244,8 +254,9 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "agent defaults",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -275,8 +286,9 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "backend",
         searchBlockMatches: [
           {
@@ -320,8 +332,9 @@ describe("settings sidebar search", () => {
           lastError: null,
           gatewayVersion: "",
           updateAvailable: null,
-          updateRunning: false,
+          updateBusy: false,
           onUpdate: vi.fn(),
+          ...inactiveRefresh,
           searchQuery,
           onExit: vi.fn(),
           onRetryConnect: vi.fn(),
@@ -358,7 +371,8 @@ describe("settings sidebar search", () => {
     expect(allLabels).not.toContain("Activity");
     expect(allLabels).not.toContain("Sessions");
     expect(allLabels).toContain("Privacy & Security");
-    expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Logs") + 1);
+    expect(allLabels.indexOf("Updates")).toBe(allLabels.indexOf("Logs") + 1);
+    expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Updates") + 1);
 
     enterQuery("  ThEmE  ");
     expect(labels()).toEqual(["Appearance"]);
@@ -401,8 +415,9 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -422,8 +437,9 @@ describe("settings sidebar search", () => {
     expect(labels).toContain("Avancado");
   });
 
-  it("keeps the update card above the settings footer", async () => {
+  it("keeps the refresh card above the settings footer and forwards its action", async () => {
     const onUpdate = vi.fn();
+    const onRefresh = vi.fn();
     const onNavigate = vi.fn();
     render(
       renderSettingsSidebar({
@@ -437,8 +453,11 @@ describe("settings sidebar search", () => {
           latestVersion: "2.0.0",
           channel: "stable",
         },
-        updateRunning: false,
+        updateBusy: false,
+        canUpdate: true,
         onUpdate,
+        refreshRequired: true,
+        onRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -456,7 +475,8 @@ describe("settings sidebar search", () => {
     await card?.updateComplete;
     expect(card?.nextElementSibling?.classList.contains("settings-sidebar__footer")).toBe(true);
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(onUpdate).not.toHaveBeenCalled();
 
     const buildChip = container.querySelector<
       HTMLElement & {
@@ -484,8 +504,9 @@ describe("settings sidebar search", () => {
           lastError,
           gatewayVersion: "1.0.0",
           updateAvailable: null,
-          updateRunning: false,
+          updateBusy: false,
           onUpdate: vi.fn(),
+          ...inactiveRefresh,
           searchQuery: "",
           onExit: vi.fn(),
           onRetryConnect,

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderModelRouteResolution,
   ProviderNormalizeModelCatalogIdContext,
+  ProviderResponseModelEquivalenceContext,
   ProviderResolveModelRoutesContext,
 } from "../plugin-sdk/provider-model-types.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
@@ -49,6 +50,9 @@ export type ProviderPolicySurface = {
   normalizeModelCatalogId?: (
     ctx: ProviderNormalizeModelCatalogIdContext,
   ) => string | null | undefined;
+  isResponseModelEquivalent?: (
+    ctx: ProviderResponseModelEquivalenceContext,
+  ) => boolean | null | undefined;
 };
 
 /** Provider policy hooks loaded only from bundled plugin public artifacts. */
@@ -71,6 +75,7 @@ const PROVIDER_POLICY_HOOK_KEYS = [
   "resolveThinkingProfile",
   "resolveModelRoutes",
   "normalizeModelCatalogId",
+  "isResponseModelEquivalent",
 ] as const satisfies readonly (keyof ProviderPolicySurface)[];
 
 function extractProviderPolicySurface(mod: Record<string, unknown>): ProviderPolicySurface | null {

@@ -183,7 +183,7 @@ jobs:
           set -euo pipefail
 
           selected_revision="$(git rev-parse HEAD)"
-          expected_sha="${EXPECTED_SHA,,}"
+          expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
           branch_candidate="${INPUT_REF#refs/heads/}"
           floating_default_branch=false
           trusted_reason=""
@@ -192,7 +192,7 @@ jobs:
             echo "expected_sha must be a full 40-character SHA; got: ${EXPECTED_SHA}" >&2
             exit 1
           fi
-          if [[ -n "${expected_sha// }" && "${selected_revision,,}" != "$expected_sha" ]]; then
+          if [[ -n "${expected_sha// }" && "$selected_revision" != "$expected_sha" ]]; then
             echo "Ref '${INPUT_REF}' resolved to ${selected_revision}, expected ${EXPECTED_SHA}." >&2
             exit 1
           fi
@@ -329,6 +329,7 @@ jobs:
     uses: ./.github/workflows/qa-profile-evidence.yml
     with:
       ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+      trusted_ref: ${{ inputs.ref }}
       expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       qa_profile: all
       allow_failures: ${{ inputs.allow_failures }}
@@ -428,9 +429,11 @@ jobs:
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
         run: |
           set -euo pipefail
-          node --input-type=module <<'NODE'
+          node --import tsx --input-type=module <<'NODE'
           import fs from "node:fs";
           import path from "node:path";
+          import { validateQaEvidenceSummaryJson } from "./extensions/qa-lab/src/evidence-summary.ts";
+          import { qaProfileEvidencePlan } from "./extensions/qa-lab/src/profile-evidence-plan.ts";
 
           const evidencePath = process.env.QA_EVIDENCE_PATH;
           const targetSha = process.env.TARGET_SHA;
@@ -441,9 +444,12 @@ jobs:
             throw new Error("TARGET_SHA is required");
           }
 
-          const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+          const evidence = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
           if (evidence.profile !== "all") {
             throw new Error(`qa-evidence.json profile must be all, got ${JSON.stringify(evidence.profile)}`);
+          }
+          if (!evidence.profilePlan) {
+            throw new Error("qa-evidence.json is missing profilePlan; rerun the QA Profile Evidence workflow with current code.");
           }
 
           const artifactDir = path.dirname(evidencePath);
@@ -465,6 +471,19 @@ jobs:
           }
           if (manifest.targetSha !== targetSha) {
             throw new Error(`QA evidence manifest targetSha ${manifest.targetSha} does not match selected ref ${targetSha}`);
+          }
+          if (typeof manifest.profilePlanSha256 !== "string") {
+            throw new Error("QA evidence manifest is missing profilePlanSha256; rerun the QA Profile Evidence workflow with current code.");
+          }
+          const { plan: profilePlan, sha256: profilePlanSha256 } = qaProfileEvidencePlan.attest(
+            evidence.profilePlan,
+            manifest.qaPassed === true,
+          );
+          if (profilePlan.profile !== "all") {
+            throw new Error(`qa-evidence.json profilePlan.profile must be all, got ${JSON.stringify(profilePlan.profile)}`);
+          }
+          if (profilePlanSha256 !== manifest.profilePlanSha256) {
+            throw new Error("QA evidence profilePlan digest does not match the manifest");
           }
           NODE
 

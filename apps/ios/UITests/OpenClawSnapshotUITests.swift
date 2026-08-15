@@ -44,7 +44,24 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testReleaseChatScreenshot() {
-        self.captureReleaseScreenshot(Self.chatScreenshotTarget)
+        self.captureReleaseScreenshot(Self.chatScreenshotTarget) { app in
+            let input = self.chatMessageInput(in: app)
+            XCTAssertTrue(input.waitForExistence(timeout: 8))
+            input.tap()
+            let keyboard = app.keyboards.firstMatch
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+            }
+            let focusProbe = "focus"
+            input.typeText(focusProbe)
+            XCTAssertEqual(input.value as? String, focusProbe)
+            self.clearTextField(input)
+            XCTAssertEqual(input.value as? String, "")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+            if keyboard.exists {
+                XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
+            }
+        }
     }
 
     func testReleaseAgentScreenshot() {
@@ -681,9 +698,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
-        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
-        app.buttons["Continue"].tap()
         app.tap()
+        XCTAssertFalse(app.staticTexts["Allow access"].exists)
 
         let copySetupCommand = app.buttons["Copy setup code command"]
         XCTAssertTrue(copySetupCommand.waitForExistence(timeout: 8))
@@ -893,8 +909,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
-        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
-        app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
         app.buttons["Connect Manually"].tap()
@@ -904,12 +918,14 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let host = app.textFields["Host"]
         XCTAssertTrue(host.waitForExistence(timeout: 5))
         host.tap()
-        host.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 32) + "localhost")
+        self.clearTextField(host)
+        host.typeText("localhost")
 
         let port = app.textFields["Port"]
         XCTAssertTrue(port.waitForExistence(timeout: 5))
         port.tap()
-        port.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5) + "18920")
+        self.clearTextField(port)
+        port.typeText("18920")
         let unencrypted = app.buttons["Unencrypted"]
         XCTAssertTrue(unencrypted.waitForExistence(timeout: 5))
         unencrypted.tap()
@@ -954,6 +970,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let request = try XCTUnwrap(self.app?.buttons["privacy-access-photos-action"])
         XCTAssertTrue(request.waitForExistence(timeout: 5))
+        XCTAssertEqual(request.label, "Continue")
         request.tap()
         self.app?.tap()
 
@@ -989,6 +1006,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(appleHealth.waitForExistence(timeout: 8))
         let action = try XCTUnwrap(self.app?.buttons["apple-health-summaries-action"])
         XCTAssertTrue(action.waitForExistence(timeout: 5))
+        XCTAssertEqual(action.label, "Enable Apple Health Summaries")
+        let labelWidth = (action.label as NSString).size(withAttributes: [
+            .font: UIFont.preferredFont(forTextStyle: .footnote),
+        ]).width
+        XCTAssertGreaterThanOrEqual(action.frame.width, labelWidth + 24)
         self.attachScreenshot(named: "apple-health-disclosure")
     }
 }
@@ -1074,9 +1096,17 @@ extension OpenClawSnapshotUITests {
         return app
     }
 
-    private func captureReleaseScreenshot(_ target: ScreenshotTarget) {
+    private func captureReleaseScreenshot(
+        _ target: ScreenshotTarget,
+        beforeCapture: ((XCUIApplication) -> Void)? = nil)
+    {
         self.launchApp(for: target)
         self.waitForReleaseScreenshotTarget(target)
+        guard let app = self.app else {
+            XCTFail("OpenClaw is not running for screenshot target \(target.name)")
+            return
+        }
+        beforeCapture?(app)
         snapshot(target.name, timeWaitingForIdle: 5)
         self.attachScreenshot(named: target.name)
     }
@@ -1279,8 +1309,6 @@ extension OpenClawSnapshotUITests {
         self.app = app
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
-        app.buttons["Continue"].tap()
-        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
@@ -1495,6 +1523,19 @@ extension OpenClawSnapshotUITests {
 
     private func chatMessageInput(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)["chat-message-input"]
+    }
+
+    /// A burst of synthetic key events can drop a keystroke under simulator load, so one
+    /// delete-per-character `typeText` does not reliably empty a field. Re-send against
+    /// whatever is actually left instead of assuming the first burst landed in full.
+    private func clearTextField(_ element: XCUIElement, attempts: Int = 4) {
+        for _ in 0 ..< attempts {
+            let value = element.value as? String ?? ""
+            if value.isEmpty {
+                return
+            }
+            element.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
+        }
     }
 
     private func attachFullScreenScreenshot(named name: String) {

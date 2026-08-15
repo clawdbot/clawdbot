@@ -140,6 +140,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       updatedAt: Date.now(),
       totalTokens: 200_000,
       totalTokensFresh: true,
+      totalTokensVersion: 1,
     };
     await writeTestSessionStore(
       path.join(rootDir, "sessions.json"),
@@ -201,6 +202,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
         updatedAt: Date.now(),
         totalTokens: 200_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       };
       await writeTestSessionStore(storePath, "main", sessionEntry);
 

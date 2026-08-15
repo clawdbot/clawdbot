@@ -65,12 +65,14 @@ export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundMessageMetadata,
+  PluginHookLocation,
   PluginHookMediaFact,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
+  PluginHookProviderUpdate,
 } from "./hook-message.types.js";
 export {
   PluginApprovalResolutions,
@@ -127,8 +129,6 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_progress"
   | "subagent_ended"
-  /** @deprecated Use gateway_stop. */
-  | "deactivate"
   | "gateway_start"
   | "gateway_stop"
   | "heartbeat_prompt_contribution"
@@ -174,7 +174,6 @@ const PLUGIN_HOOK_NAMES = [
   "subagent_spawned",
   "subagent_progress",
   "subagent_ended",
-  "deactivate",
   "gateway_start",
   "gateway_stop",
   "heartbeat_prompt_contribution",
@@ -195,7 +194,7 @@ type AssertAllPluginHookNamesListed = MissingPluginHookNames extends never ? tru
 const assertAllPluginHookNamesListed: AssertAllPluginHookNamesListed = true;
 void assertAllPluginHookNamesListed;
 
-type DeprecatedPluginHookName = "subagent_spawning" | "deactivate";
+type DeprecatedPluginHookName = "subagent_spawning";
 
 type PluginHookDeprecation = {
   replacement: string;
@@ -228,11 +227,6 @@ export const DEPRECATED_PLUGIN_HOOKS = {
     reason:
       "Core prepares thread-bound subagent bindings through channel session-binding adapters before `subagent_spawned` fires.",
     removeAfter: "2026-08-30",
-  },
-  deactivate: {
-    replacement: "`gateway_stop`",
-    reason: "`deactivate` is a legacy cleanup hook alias for `gateway_stop`.",
-    removeAfter: "2026-08-16",
   },
 } as const satisfies Record<DeprecatedPluginHookName, PluginHookDeprecation>;
 
@@ -564,6 +558,7 @@ export type PluginHookReplyDispatchEvent = {
   originatingThreadId?: string | number;
   originatingChatType?: ChatType;
   shouldSendToolSummaries: boolean;
+  shouldSendFullToolDetails: boolean;
   sendPolicy: "allow" | "deny";
   isTailDispatch?: boolean;
 };
@@ -1371,19 +1366,6 @@ export type PluginHookHandlerMap = {
   subagent_ended: (
     event: PluginHookSubagentEndedEvent,
     ctx: PluginHookSubagentContext,
-  ) => Promise<void> | void;
-  /**
-   * Deprecated compatibility alias for gateway_stop.
-   *
-   * New plugins should register gateway_stop directly; the loader normalizes
-   * deactivate registrations onto gateway_stop so cleanup handlers still run
-   * during Gateway shutdown.
-   *
-   * @deprecated Use gateway_stop.
-   */
-  deactivate: (
-    event: PluginHookGatewayStopEvent,
-    ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
   gateway_start: (
     event: PluginHookGatewayStartEvent,

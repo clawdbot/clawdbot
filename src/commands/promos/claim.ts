@@ -7,11 +7,8 @@ import { readConfigFileSnapshot, replaceConfigFile } from "../../config/config.j
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  ClawHubRequestError,
-  fetchClawHubPromotion,
-  type ClawHubPromotion,
-} from "../../infra/clawhub.js";
+import { ClawHubRequestError } from "../../infra/clawhub-client.js";
+import { fetchClawHubPromotion, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
 import { markPromotionSlugsNotified, recordPromotionClaim } from "../../infra/promotions-feed.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";

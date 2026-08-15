@@ -28,6 +28,7 @@ export const slackQaCliRegistration: LiveTransportQaCliRegistration =
     commandName: "slack",
     adapterFactory: createLiveTransportQaAdapterFactory({
       id: "slack",
+      supportsModuleFlows: true,
       async create(context) {
         return (await loadSlackQaAdapterRuntime()).createSlackQaTransportAdapter(context);
       },

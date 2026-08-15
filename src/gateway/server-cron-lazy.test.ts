@@ -99,6 +99,37 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["run"]).toHaveBeenCalledWith("demo", "force", { payload });
   });
 
+  it("forwards update authority options through lazy cron loading", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    const opts = {
+      commitGuard: vi.fn(),
+      captureRuntimeAuthority: vi.fn(() => undefined),
+    };
+    const precondition = vi.fn();
+    await lazy.cron.update("demo", { description: "updated" }, opts);
+    await lazy.cron.updateWithPrecondition(
+      "demo",
+      { description: "updated again" },
+      precondition,
+      opts,
+    );
+
+    expect(cron["update"]).toHaveBeenCalledExactlyOnceWith(
+      "demo",
+      { description: "updated" },
+      opts,
+    );
+    expect(cron["updateWithPrecondition"]).toHaveBeenCalledExactlyOnceWith(
+      "demo",
+      { description: "updated again" },
+      precondition,
+      opts,
+    );
+  });
+
   it("preserves system-owned removal authority across lazy cron loading", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));

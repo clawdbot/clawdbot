@@ -89,6 +89,7 @@ export function createCombinedSessionMcpRuntime(params: {
   let mergedSourceCatalogs: ReadonlyArray<McpToolCatalog> | null = null;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   const serverOwner = new Map<string, SessionMcpRuntime>();
+  const requesterConnect = parts.find((part) => part.requesterConnect)?.requesterConnect;
 
   const rememberServerOwners = (catalog: McpToolCatalog, owner: SessionMcpRuntime) => {
     for (const serverName of Object.keys(catalog.servers)) {
@@ -158,6 +159,7 @@ export function createCombinedSessionMcpRuntime(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     configFingerprint: parts.map((part) => part.configFingerprint).join(":"),
+    ...(requesterConnect ? { requesterConnect } : {}),
     isRequesterScopedServer(serverName) {
       // Owner map is populated by the catalog load that exposed the tool.
       return serverOwner.get(serverName)?.requesterScope !== undefined;
@@ -193,6 +195,9 @@ export function createCombinedSessionMcpRuntime(params: {
         return null;
       }
       return mergeMcpToolCatalogs(peeked as McpToolCatalog[]);
+    },
+    getServerRequestTimeoutMs(serverName) {
+      return serverOwner.get(serverName)?.getServerRequestTimeoutMs?.(serverName);
     },
     markUsed() {
       lastUsedAt = Date.now();

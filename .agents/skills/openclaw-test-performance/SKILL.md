@@ -16,8 +16,9 @@ guesswork.
    - `src/channels/AGENTS.md` and `src/plugins/AGENTS.md` for plugin/channel
      laziness.
    - `src/gateway/AGENTS.md` for server lifecycle tests.
-   - `test/helpers/AGENTS.md` and `test/helpers/channels/AGENTS.md` for shared
-     contract helpers.
+   - `test/helpers/AGENTS.md` and
+     `src/channels/plugins/contracts/test-helpers/AGENTS.md` for shared contract
+     helpers.
    - `src/infra/outbound/AGENTS.md` for outbound/media/action tests.
 2. Establish a baseline before changing code:
    - Prefer `pnpm test:perf:groups --full-suite --allow-failures --output <file>`
@@ -62,7 +63,7 @@ test:extensions:batch <plugin[,plugin...]>` or plugin-inspector command
 8. Update the running report when requested or when this thread is tracking one.
    Include before/after commands, artifacts, coverage notes, verification, and
    next attack order.
-9. Commit with `scripts/committer "<message>" <paths...>` and push when the
+9. Stage the intended paths, commit with standard Git, and push when the
    user asked for commits/pushes. Stage only files touched for this attack.
 
 ## Plugin-Suite Workflow
@@ -113,7 +114,7 @@ same command. For Testbox comparisons, use the same `tbx_...` id when possible.
 | import duration | broad barrel/runtime loads         | `OPENCLAW_VITEST_IMPORT_DURATIONS=1`                                        |
 | max RSS         | memory pressure and OOM risk       | `/usr/bin/time -l`, `pnpm test:extensions:memory`, wrapper memory summaries |
 | CPU/user/sys    | CPU-bound vs wait-bound split      | `/usr/bin/time -l` locally, Testbox job timing when local CPU is noisy      |
-| heap snapshots  | real leak vs retained module graph | `openclaw-test-heap-leaks` workflow                                         |
+| heap evidence   | real leak vs retained module graph | `openclaw-test-heap-leaks` workflow                                         |
 
 Local scoped command with CPU/RSS:
 
@@ -137,12 +138,12 @@ pnpm test:extensions:memory -- --extension discord --extension telegram --skip-c
 Heap/RSS escalation:
 
 ```bash
-OPENCLAW_TEST_MEMORY_TRACE=1 \
-OPENCLAW_TEST_HEAPSNAPSHOT_INTERVAL_MS=60000 \
-OPENCLAW_TEST_HEAPSNAPSHOT_DIR=.tmp/heapsnap \
-OPENCLAW_TEST_WORKERS=2 \
-OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144 \
-pnpm test
+pnpm test:perf:groups \
+  --config test/vitest/vitest.unit-fast.config.ts \
+  --allow-failures \
+  --output .artifacts/test-perf/unit-fast-memory.json
+pnpm test:perf:profile:runner -- \
+  --output-dir .artifacts/test-perf/vitest-runner-profile -- <file>
 ```
 
 Use `openclaw-test-heap-leaks` when RSS keeps growing across intervals, workers
@@ -170,8 +171,6 @@ leak until snapshots or retainers support it.
 - Runtime/default model/auth selection paid by idle snapshots or fixtures.
 - Plugin-owned media/action discovery triggered before checking whether args
   contain plugin-owned fields.
-- Timings missing from `test/fixtures/test-timings.unit.json`, causing hotspot
-  files to stay in shared workers.
 - Parallel Vitest runs sharing `node_modules/.experimental-vitest-cache` without
   distinct `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` values.
 
@@ -233,8 +232,10 @@ pnpm test:perf:groups --report <vitest-json> \
 - For test-only changes, run `pnpm test:changed` or the exact edited tests.
 - Run `pnpm build` when touching lazy-loading, bundled artifacts, package
   boundaries, dynamic imports, build output, or public surfaces.
-- For plugin SDK/barrel/runtime changes, add `pnpm plugin-sdk:api:check` or
-  `pnpm plugin-sdk:api:gen` when the API surface may drift.
+- For plugin SDK/barrel/runtime changes, compare exact commits with
+  `pnpm plugin-sdk:api:diff -- --base <base-sha> --head <head-sha>` when the
+  public API surface may drift. For PR-local proof, use the branch merge base
+  as `<base-sha>` and the exact tested head commit as `<head-sha>`.
 - For plugin-suite perf fixes, verify at least one representative plugin batch
   plus the changed gate; use Package Acceptance if the bug only exists in a
   packed artifact.

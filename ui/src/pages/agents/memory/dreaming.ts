@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import type {
   DoctorMemoryDreamActionPayload,
   DoctorMemoryDreamDiaryPayload,
@@ -9,7 +10,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.
 import type { ConfigSnapshot } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
-import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
 import {
   canCallGatewayMethod,
   isGatewayMethodAdvertised,
@@ -284,14 +285,6 @@ function buildDreamDiaryActionSuccessMessage(
       });
   }
   return t("dreaming.actions.complete");
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function resolveSelectedAgentId(state: DreamingState): string | null {

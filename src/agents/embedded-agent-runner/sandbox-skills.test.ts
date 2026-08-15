@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
-import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
+import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
@@ -177,7 +177,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         skillsWorkspaceDir,
         skillsPromptWorkspaceDir,
       });
-      const prompt = resolveSkillsPromptForRun({
+      const prompt = resolveSkillsPrompt({
         skillsSnapshot: skillsSnapshotForRun,
         entries: promptSkillEntries,
         workspaceDir: skillsPromptWorkspaceDir,
@@ -228,7 +228,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         eligibility: skillsEligibility,
         workspaceOnly: true,
       });
-      const prompt = resolveSkillsPromptForRun({
+      const prompt = resolveSkillsPrompt({
         entries: shouldLoadSkillEntries ? skillEntries : undefined,
         workspaceDir: root,
         eligibility: skillsEligibility,

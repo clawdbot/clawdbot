@@ -87,6 +87,7 @@ function captureAuditWriter(inputs: AuditEventInput[]): AuditEventWriter {
       return true;
     },
     recordExecutionIdentity: () => true,
+    recordExecutionDecision: () => true,
     stop: async () => {},
   };
 }
@@ -302,76 +303,122 @@ describe("agent activity audit projection", () => {
     });
   });
 
-  it("keeps a valid unknown agent id distinct from missing provenance", () => {
-    const runId = "run-agent-named-unknown";
-    const started = projectAgentEventToAudit(
-      agentEvent({ runId, sessionKey: "global", agentId: "unknown" }),
-    );
-    const finished = projectAgentEventToAudit(
-      agentEvent({
-        runId,
-        seq: 2,
-        sessionKey: undefined,
-        sessionId: undefined,
-        agentId: undefined,
-        data: { phase: "end" },
-      }),
-    );
-    const tool = projectToolExecutionEventToAudit(
-      toolEvent({
-        runId,
-        seq: 3,
-        sessionKey: undefined,
-        sessionId: undefined,
-        agentId: undefined,
-      }),
-    );
-    const missing = projectAgentEventToAudit(
-      agentEvent({
-        runId: "run-missing-provenance",
-        sessionKey: undefined,
-        sessionId: undefined,
-        agentId: undefined,
-      }),
+  it("does not infer agent identity from a session key", () => {
+    const projected = projectAgentEventToAudit(
+      agentEvent({ agentId: undefined, sessionKey: "agent:admin:main" }),
     );
 
-    expect([started, finished, tool]).toEqual([
-      expect.objectContaining({ actorType: "agent", actorId: "unknown", agentId: "unknown" }),
-      expect.objectContaining({ actorType: "agent", actorId: "unknown", agentId: "unknown" }),
-      expect.objectContaining({ actorType: "agent", actorId: "unknown", agentId: "unknown" }),
-    ]);
-    expect(missing).toMatchObject({
+    expect(projected).toMatchObject({
       actorType: "system",
+      actorId: "unknown",
+      agentId: "unknown",
+      sessionKey: "agent:admin:main",
+    });
+  });
+
+  it("keeps an explicit agent id named unknown distinct from missing identity", () => {
+    const projected = projectAgentEventToAudit(
+      agentEvent({ agentId: "unknown", sessionKey: undefined, sessionId: undefined }),
+    );
+
+    expect(projected).toMatchObject({
+      actorType: "agent",
       actorId: "unknown",
       agentId: "unknown",
     });
   });
 
-  it("keeps tool actions on the canonical lifecycle session", () => {
-    const runId = "run-channel-routed";
+  it("does not share reused run id provenance across recorder instances", () => {
+    const runId = "run-reused-across-recorders";
     projectAgentEventToAudit(
       agentEvent({
         runId,
-        sessionKey: "agent:support:channel:customer",
-        sessionId: "session-canonical",
+        lifecycleGeneration: "gateway-before-reuse",
+        sessionKey: "agent:support:main",
+        sessionId: "session-support",
         agentId: "support",
       }),
     );
 
-    const projected = projectToolExecutionEventToAudit(
-      toolEvent({
+    const projected = projectAgentEventToAudit(
+      agentEvent({
         runId,
-        sessionKey: "agent:main:sandbox:temporary",
-        sessionId: "session-sandbox",
-        agentId: "main",
+        lifecycleGeneration: "gateway-after-reuse",
+        sessionKey: undefined,
+        sessionId: undefined,
+        agentId: undefined,
       }),
     );
 
     expect(projected).toMatchObject({
-      actorId: "support",
-      agentId: "support",
-      sessionKey: "agent:support:channel:customer",
-      sessionId: "session-canonical",
+      actorType: "system",
+      actorId: "unknown",
+      agentId: "unknown",
+    });
+    expect(projected).not.toHaveProperty("sessionKey");
+    expect(projected).not.toHaveProperty("sessionId");
+  });
+
+  it("does not let tool events inherit remembered lifecycle provenance", async () => {
+    const inputs: AuditEventInput[] = [];
+    const recorder = createAgentEventAuditRecorder({ writer: captureAuditWriter(inputs) });
+    const runId = "run-tool-no-provenance";
+    recorder.record(
+      agentEvent({
+        runId,
+        sessionKey: "agent:support:main",
+        sessionId: "session-support",
+        agentId: "support",
+      }),
+    );
+    recorder.recordTool(
+      toolEvent({
+        runId,
+        sessionKey: undefined,
+        sessionId: undefined,
+        agentId: undefined,
+      }),
+    );
+    await recorder.stop();
+
+    expect(inputs.at(-1)).toMatchObject({
+      actorType: "system",
+      actorId: "unknown",
+      agentId: "unknown",
+    });
+    expect(inputs.at(-1)).not.toHaveProperty("sessionKey");
+    expect(inputs.at(-1)).not.toHaveProperty("sessionId");
+  });
+
+  it("preserves explicit lifecycle and tool provenance independently", () => {
+    const lifecycle = projectAgentEventToAudit(
+      agentEvent({
+        sessionKey: "agent:lifecycle:main",
+        sessionId: "session-lifecycle",
+        agentId: "lifecycle",
+      }),
+    );
+    const tool = projectToolExecutionEventToAudit(
+      toolEvent({
+        sessionKey: "agent:tool:sandbox:temporary",
+        sessionId: "session-tool",
+        agentId: "tool",
+      }),
+    );
+
+    expect(lifecycle).toMatchObject({
+      actorType: "agent",
+      actorId: "lifecycle",
+      agentId: "lifecycle",
+      sessionKey: "agent:lifecycle:main",
+      sessionId: "session-lifecycle",
+    });
+    expect(tool).toMatchObject({
+      actorType: "agent",
+      actorId: "tool",
+      agentId: "tool",
+      sessionKey: "agent:tool:sandbox:temporary",
+      sessionId: "session-tool",
     });
   });
 
@@ -415,15 +462,12 @@ describe("agent activity audit projection", () => {
   it("omits prompt, arguments, results, and raw errors from run and tool records", () => {
     const secret = "super-secret-payload";
     projectAgentEventToAudit(agentEvent({ data: { phase: "start", prompt: secret }, seq: 1 }));
-    const started = projectToolExecutionEventToAudit(
-      toolEvent({ seq: 2, sessionKey: undefined, sessionId: undefined }),
-    );
+    const started = projectToolExecutionEventToAudit(toolEvent({ seq: 2, agentId: "coder" }));
     const failed = projectToolExecutionEventToAudit(
       toolEvent({
         type: "tool.execution.error",
         seq: 3,
-        sessionKey: undefined,
-        sessionId: undefined,
+        agentId: "coder",
         durationMs: 10,
         errorCategory: secret,
         errorCode: secret,
@@ -519,6 +563,9 @@ describe("agent activity audit projection", () => {
     const projected = projectToolExecutionEventToAudit(
       toolEvent({
         type,
+        agentId: "tool-agent",
+        sessionKey: "agent:tool-agent:main",
+        sessionId: "session-tool-agent",
         ...(type === "tool.execution.completed" || type === "tool.execution.error"
           ? { durationMs: 10 }
           : { deniedReason: "policy", reason: "secret detail" }),
@@ -526,7 +573,14 @@ describe("agent activity audit projection", () => {
       }),
     );
 
-    expect(projected).toMatchObject({ status });
+    expect(projected).toMatchObject({
+      status,
+      actorType: "agent",
+      actorId: "tool-agent",
+      agentId: "tool-agent",
+      sessionKey: "agent:tool-agent:main",
+      sessionId: "session-tool-agent",
+    });
     expect(projected?.errorCode).toBe(errorCode);
     expect(projected).not.toHaveProperty("reason");
   });
@@ -637,6 +691,7 @@ describe("agent activity audit projection", () => {
         return true;
       },
       recordExecutionIdentity: () => true,
+      recordExecutionDecision: () => true,
       stop: async () => {},
     };
     const recorder = createAgentEventAuditRecorder({ writer });
@@ -668,6 +723,7 @@ describe("agent activity audit projection", () => {
         return true;
       },
       recordExecutionIdentity: () => true,
+      recordExecutionDecision: () => true,
       stop: async () => {},
     };
     const recorder = createAgentEventAuditRecorder({ writer, terminalSettleMs: 60_000 });
@@ -698,6 +754,7 @@ describe("agent activity audit projection", () => {
         return true;
       },
       recordExecutionIdentity: () => true,
+      recordExecutionDecision: () => true,
       stop: async () => {},
     };
     const recorder = createAgentEventAuditRecorder({ writer, terminalSettleMs: 60_000 });
@@ -729,6 +786,7 @@ describe("agent activity audit projection", () => {
         return true;
       },
       recordExecutionIdentity: () => true,
+      recordExecutionDecision: () => true,
       stop: async () => {},
     };
     const recorder = createAgentEventAuditRecorder({ writer });

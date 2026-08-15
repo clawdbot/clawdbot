@@ -255,11 +255,11 @@ describe("qwen video generation provider", () => {
         model: "wan2.6-r2v-flash",
         input: {
           prompt: "animate this shot",
-          img_url: "https://example.com/ref.png",
+          reference_urls: ["https://example.com/ref.png"],
         },
         parameters: {
           duration: 6,
-          enable_audio: true,
+          audio: true,
         },
       },
     });
@@ -378,7 +378,7 @@ describe("qwen video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "qwen",
-        model: "wan2.6-r2v-flash",
+        model: "wan2.6-t2v",
         prompt: "short video",
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
       }),

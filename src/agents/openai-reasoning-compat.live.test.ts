@@ -16,7 +16,7 @@ import {
   readLiveTestConfig,
   resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
-import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import { getApiKeyForModelCore, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 const LIVE = isLiveTestEnabled();
@@ -118,7 +118,7 @@ describeLive("openai reasoning compat live", () => {
 
       let apiKeyInfo;
       try {
-        apiKeyInfo = await getApiKeyForModel({
+        apiKeyInfo = await getApiKeyForModelCore({
           model,
           cfg,
           credentialPrecedence: resolveLiveCredentialPrecedence(
@@ -178,7 +178,7 @@ describeLive("openai reasoning compat live", () => {
 
       let apiKeyInfo;
       try {
-        apiKeyInfo = await getApiKeyForModel({
+        apiKeyInfo = await getApiKeyForModelCore({
           model,
           cfg,
           credentialPrecedence: resolveLiveCredentialPrecedence(

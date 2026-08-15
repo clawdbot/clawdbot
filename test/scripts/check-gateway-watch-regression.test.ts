@@ -12,18 +12,17 @@ import {
   parseArgs,
   resolveTimedWatchShell,
   runTimedWatch,
-  readNonNegativeInteger,
   shouldReportDuplicateDistRuntimeRegression,
   shouldRefreshBuildStampForRestoredArtifacts,
   stopTimedWatchChild,
   updateWatchBuildDetection,
   WATCH_LOG_CAPTURE_MAX_CHARS,
   writeBuildAndRuntimePostBuildStamps,
-} from "../../scripts/check-gateway-watch-regression.mjs";
+} from "../../scripts/check-gateway-watch-regression.mts";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata-paths.mjs";
+} from "../../scripts/lib/local-build-metadata-paths.mts";
 
 describe("check-gateway-watch-regression", () => {
   it("accepts package-manager argument separators before script options", () => {
@@ -34,8 +33,6 @@ describe("check-gateway-watch-regression", () => {
   });
 
   it("parses timing and growth limits as strict non-negative integers", () => {
-    expect(readNonNegativeInteger("0", "limit")).toBe(0);
-    expect(readNonNegativeInteger(" 42 ", "limit")).toBe(42);
     expect(
       parseArgs([
         "--window-ms",
@@ -69,21 +66,15 @@ describe("check-gateway-watch-regression", () => {
       windowMs: 0,
     });
 
-    expect(() => readNonNegativeInteger("1.5", "limit")).toThrow(
-      "limit must be a non-negative integer",
-    );
-    expect(() => readNonNegativeInteger("1e3", "limit")).toThrow(
-      "limit must be a non-negative integer",
-    );
-    expect(() => readNonNegativeInteger("-1", "limit")).toThrow(
-      "limit must be a non-negative integer",
-    );
-    expect(() => readNonNegativeInteger("9007199254740992", "limit")).toThrow(
-      "limit must be a safe integer",
-    );
-    expect(() => parseArgs(["--window-ms", "soon"])).toThrow(
-      "--window-ms must be a non-negative integer",
-    );
+    for (const [value, message] of [
+      ["1.5", "--window-ms must be a non-negative integer"],
+      ["1e3", "--window-ms must be a non-negative integer"],
+      ["-1", "--window-ms must be a non-negative integer"],
+      ["9007199254740992", "--window-ms must be a safe integer"],
+      ["soon", "--window-ms must be a non-negative integer"],
+    ] as const) {
+      expect(() => parseArgs(["--window-ms", value])).toThrow(message);
+    }
   });
 
   it("recognizes current and legacy gateway ready logs", () => {

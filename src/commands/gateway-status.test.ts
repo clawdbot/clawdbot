@@ -1,5 +1,6 @@
-// Gateway status command tests cover probe targets, JSON/text output, SSH tunnels, and warnings.
 import { expectDefined } from "@openclaw/normalization-core";
+// Gateway status command tests cover probe targets, JSON/text output, SSH tunnels, and warnings.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
@@ -256,6 +257,8 @@ type ProbeGatewayCall = {
     token?: string;
   };
   preauthHandshakeTimeoutMs?: number;
+  originScopedDeviceAuth?: boolean;
+  suppressStoredDeviceAuth?: boolean;
   timeoutMs?: number;
   tlsFingerprint?: string;
   url?: string;
@@ -325,12 +328,7 @@ async function runGatewayStatus(
   await gatewayStatusCommand(opts, asRuntimeEnv(runtime));
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireRecordArray(value: unknown, label: string): Array<Record<string, unknown>> {
   if (
@@ -938,7 +936,7 @@ describe("gateway-status command", () => {
         config: {
           ...createSecretRefGatewayConfig({ gatewayMode: "remote" }),
           discovery: {
-            wideArea: { enabled: true },
+            wideArea: { domain: "openclaw.internal" },
           },
         },
         issues: [],
@@ -1002,8 +1000,16 @@ describe("gateway-status command", () => {
     expect(probeGateway).toHaveBeenCalled();
     const tunnelCall = probeGateway.mock.calls.find(
       (call) => typeof call?.[0]?.url === "string" && call[0].url.startsWith("ws://127.0.0.1:"),
-    )?.[0] as { auth?: { token?: string } } | undefined;
+    )?.[0] as
+      | {
+          auth?: { token?: string };
+          originScopedDeviceAuth?: boolean;
+          suppressStoredDeviceAuth?: boolean;
+        }
+      | undefined;
     expect(tunnelCall?.auth?.token).toBe("rtok");
+    expect(tunnelCall?.originScopedDeviceAuth).toBeUndefined();
+    expect(tunnelCall?.suppressStoredDeviceAuth).toBe(true);
     expect(sshStop).toHaveBeenCalledTimes(1);
 
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
@@ -1028,6 +1034,7 @@ describe("gateway-status command", () => {
 
     expect(loadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
     const localProbeCall = requireProbeCall("wss://127.0.0.1:18789");
+    expect(localProbeCall.originScopedDeviceAuth).toBeUndefined();
     expect(localProbeCall.tlsFingerprint).toBe("sha256:local-fingerprint");
     expect(localProbeCall.timeoutMs).toBe(15_000);
   });
@@ -1146,7 +1153,9 @@ describe("gateway-status command", () => {
 
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
 
-    expect(requireProbeCall("wss://remote.example:18789").timeoutMs).toBe(15_000);
+    const remoteProbeCall = requireProbeCall("wss://remote.example:18789");
+    expect(remoteProbeCall.timeoutMs).toBe(15_000);
+    expect(remoteProbeCall.originScopedDeviceAuth).toBe(true);
   });
 
   it("keeps inactive local loopback probes on the short timeout in remote mode", async () => {

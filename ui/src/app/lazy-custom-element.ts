@@ -56,6 +56,12 @@ export const BROWSER_PANEL_ELEMENT = {
   loadModule: () => import("../components/browser/browser-panel.ts"),
 } satisfies OptionalCustomElement;
 
+export const DESKTOP_PANEL_ELEMENT = {
+  tagName: "openclaw-desktop-panel",
+  label: "desktop panel",
+  loadModule: () => import("../components/desktop/desktop-panel.ts"),
+} satisfies OptionalCustomElement;
+
 export const CUSTODIAN_PANEL_ELEMENT = {
   tagName: "openclaw-custodian-panel",
   label: "custodian panel",

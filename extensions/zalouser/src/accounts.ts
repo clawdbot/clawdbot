@@ -77,19 +77,6 @@ export function resolveZalouserAccountSync(params: {
   };
 }
 
-export async function getZcaUserInfo(
-  profile: string,
-): Promise<{ userId?: string; displayName?: string } | null> {
-  const info = await (await loadZalouserAccountsRuntime()).getZaloUserInfo(profile);
-  if (!info) {
-    return null;
-  }
-  return {
-    userId: info.userId,
-    displayName: info.displayName,
-  };
-}
-
 export async function checkZcaAuthenticated(
   profile: string,
   options?: { credentialPersistence?: "persist" | "read-only" },

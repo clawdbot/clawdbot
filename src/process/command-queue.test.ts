@@ -1,7 +1,9 @@
 // Command queue tests cover bounded command execution and queue ordering.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 import {
   tryBeginGatewayRootWorkAdmission,
@@ -39,17 +41,6 @@ let resetAllLanes: CommandQueueModule["resetAllLanes"];
 let resetCommandLane: CommandQueueModule["resetCommandLane"];
 let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
 let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
-
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
 
 function mockCallArg(
   mock: { mock: { calls: readonly unknown[][] } },
@@ -158,6 +149,25 @@ describe("command queue", () => {
     expect(calls).toEqual([1, 2, 3]);
     expect(maxActive).toBe(1);
     expect(getQueueSize()).toBe(0);
+  });
+
+  it("runs queued tasks in their enqueue-time async context", async () => {
+    const context = new AsyncLocalStorage<string>();
+    const blocker = createDeferred();
+    const first = context.run("first", () =>
+      enqueueCommandInLane(CommandLane.Main, async () => {
+        await blocker.promise;
+        return context.getStore();
+      }),
+    );
+    const second = context.run("second", () =>
+      enqueueCommandInLane(CommandLane.Main, async () => context.getStore()),
+    );
+
+    blocker.resolve();
+
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
   });
 
   it("runs foreground work before already queued background work", async () => {
@@ -893,6 +903,46 @@ describe("command queue", () => {
     markGatewayDraining();
     resetAllLanes();
     await expect(enqueueCommandInLane(CommandLane.Main, async () => "ok")).resolves.toBe("ok");
+  });
+
+  it("re-admits preserved queued work after reset retires its captured root", async () => {
+    const outerLane = `restart-outer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const innerLane = `restart-inner-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(outerLane, 0);
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+    let task: Promise<string> | undefined;
+    await root?.run(async () => {
+      task = enqueueCommandInLane(outerLane, async () =>
+        enqueueCommandInLane(innerLane, async () => "continued"),
+      );
+    });
+
+    markGatewayDraining();
+    resetAllLanes();
+    setCommandLaneConcurrency(outerLane, 1);
+
+    await expect(task).resolves.toBe("continued");
+    root?.release();
+  });
+
+  it("does not re-admit queued work after its root is released normally", async () => {
+    const outerLane = `released-outer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const innerLane = `released-inner-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(outerLane, 0);
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+    let task: Promise<string> | undefined;
+    await root?.run(async () => {
+      task = enqueueCommandInLane(outerLane, async () =>
+        enqueueCommandInLane(innerLane, async () => "unexpected"),
+      );
+    });
+
+    root?.release();
+    setCommandLaneConcurrency(outerLane, 1);
+
+    await expect(task).rejects.toBeInstanceOf(GatewayDrainingError);
   });
 
   it("migrates legacy queue state missing activeTaskWaiters without crashing", async () => {

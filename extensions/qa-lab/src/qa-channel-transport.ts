@@ -10,7 +10,6 @@ import {
 import type {
   QaTransportActionName,
   QaTransportGatewayConfig,
-  QaTransportGatewayClient,
   QaTransportNativeCommandInput,
   QaTransportOutboundSequenceMatch,
   QaTransportPolicy,
@@ -109,11 +108,7 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
 
   createGatewayConfig = ({ baseUrl }: { baseUrl: string }) =>
     createQaChannelGatewayConfig({ baseUrl, transportPolicy: this.#transportPolicy });
-  waitReady = (params: {
-    gateway: QaTransportGatewayClient;
-    timeoutMs?: number;
-    pollIntervalMs?: number;
-  }) =>
+  waitReady = (params: Parameters<QaStateBackedTransportAdapter["waitReady"]>[0]) =>
     waitForQaTransportAccountReady({
       ...params,
       accountId: QA_CHANNEL_ACCOUNT_ID,
@@ -129,7 +124,7 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
     await this.sendInbound({
       ...message,
       text: `/${command}`,
-      nativeCommand: { name: command },
+      nativeCommand: { name: command.split(/\s+/u, 1)[0] ?? command },
     });
   }
   async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {

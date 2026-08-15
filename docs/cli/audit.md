@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for metadata-only run, tool, and message lifecycle audit records"
+summary: "CLI reference for activity records, execution identity, and decision receipts"
 read_when:
   - You need to answer who ran an agent or tool, when it ran, and how it ended
   - You need content-free inbound or outbound message lifecycle metadata
@@ -114,7 +114,8 @@ view renders these sections:
 2. **Authority**: applicable grants and assurance evidence.
 3. **Lineage**: parent context or an explicit absent, unknown, or unsupported
    state.
-4. **Decisions**: the bounded run-admission receipt page.
+4. **Decisions**: bounded run-admission and authoritative action-decision
+   receipts, including terminal operator approvals.
 5. **Missing evidence** and **Next steps**.
 
 Every field includes `present`, `absent`, `unknown`, or `unsupported`; the CLI
@@ -123,6 +124,49 @@ credential. A direct local run currently shows authoritative `local-cli`
 ingress, an absent invoker, and
 `unattributed` coverage. Its admission receipt says `not-applicable` because no
 identity-aware policy or grant evaluation was proven.
+
+For Gateway runs, a resolved authenticated profile can make the invoker
+`present` and coverage `attribution-only`. Paired devices and shared credentials
+do not establish a person: without a durable profile the invoker stays absent,
+or `unknown` when authenticated user evidence promised a profile that could not
+be resolved. Session creation retains the live canonical durable profile id so
+profile linking does not orphan ownership, while run inspection consumes the
+immutable connection-time audit fact. Ordinary session provenance stores no
+display label. An optional bounded, secret-redacted label can be retained only
+in execution identity after that audit storage is explicitly enabled.
+
+An admitted channel run can also show a pseudonymized person invoker. The
+trusted active registered native plugin produces the remote participant fact;
+core verifies its exact record, registry epoch, scope, and one-shot handoff.
+The resulting `boundary-verified` assurance describes that in-process boundary,
+not an independent core query to the remote service. Identity never comes from
+the conversation, room, route, account, thread, message, transport, session
+key, or display name. A collected run shows the person only when all queued
+inputs carry valid evidence for the same participant; mixed or missing evidence
+shows an unknown invoker. Its `channel/admission` receipt is enforced only when
+the participant affected every contributing access decision; otherwise it is
+attribution-only.
+
+For channel ingress, `unknown` means a supported integration could not supply
+valid host-bound evidence; it never means allowed. `unsupported` is reserved
+for a named path with no authoritative Phase 0 integration. A plugin-provided
+sender or structurally copied resolver result cannot upgrade either state.
+
+A terminal approval receipt shows `allowed` or `denied`, its stable reason
+code, enforcement state, authoritative source boundary, policy and grant
+references, context fields used, and remediation. Expired and cancelled
+approvals are denied non-actions with distinct reason codes. `no-route` is an
+enforced denial only when the approval owner recorded that terminal state. A
+corrupt approval is `unknown`. The text view labels `operator_approvals` as an
+authoritative owner-native SQLite record retained for 30 days; JSON preserves
+the same source owner and record reference without lossy reformatting.
+`enforced` requires the approval's immutable owner-local binding to match the
+selected context, execution, and run exactly. A missing, malformed, or
+mismatched binding reports `operator_approval_execution_link_missing`,
+`operator_approval_execution_link_malformed`, or
+`operator_approval_execution_link_mismatch` with unknown coverage and no grant
+references. The inspector never reconstructs that binding from `runId`, session
+metadata, timestamps, or the number of retained executions.
 
 JSON output is the Gateway result without lossy reformatting. An exact result contains one
 bounded V1 context (maximum 16 KiB), up to 100 decision receipts, coverage and
@@ -145,7 +189,7 @@ writer queue; retry inspection after the run or normal process shutdown.
 Admission never waits for writer readiness, schema or HMAC-key initialization,
 SQLite, or persistence.
 
-Once a context is older than 30 days, the CLI returns no fields or admission
+Once a context is older than 30 days, the CLI returns no fields or linked
 decisions from it. While bounded cleanup is pending, the result is `unsupported`
 with an expiry-and-rerun next step. After cleanup it can become `unknown` if no
 separately retained activity remains; this absence does not prove that the run
@@ -234,6 +278,19 @@ The closed request accepts exactly one of `executionId` or `runId`.
 accepts `executionLimit` from 1–50 and an optional `executionCursor`. A run
 with multiple retained executions returns the typed `ambiguous` identity state
 and no identity context or decisions until the caller selects an execution id.
+For one selected context, receipt paging starts with admission, then reads
+owner-native terminal approvals, then generic facts for boundaries without a
+native durable record. Approval inspection never writes a generic duplicate.
+Generic fact writes and projections also require the full context, execution,
+and run tuple to match the immutable execution context.
+
+The activity ledger remains best-effort. By contrast, a returned approval
+receipt comes from the authoritative first-answer-wins approval row, and a
+returned generic receipt comes from the additive immutable decision-fact
+table. All three surfaces use 30-day retention, but absence from the activity
+ledger cannot prove that an approval or action did not occur. Generic fact
+delivery is also best-effort until its bounded worker write persists the row;
+owner-native approval persistence does not use that queue.
 
 The shipped `audit.list` RPC remains unchanged for older run/tool clients. When
 `audit.activity.list` is unavailable on an older Gateway, the CLI retries

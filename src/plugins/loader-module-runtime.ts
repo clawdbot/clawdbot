@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { attachPluginApiFacades } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
@@ -40,14 +41,6 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "musicGeneration",
   "llm",
 ] as const satisfies readonly (keyof PluginRuntime)[];
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (
-    (typeof value === "object" || typeof value === "function") &&
-    value !== null &&
-    typeof (value as { then?: unknown }).then === "function"
-  );
-}
 
 function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   api: OpenClawPluginApi;
@@ -109,7 +102,6 @@ export function runPluginRegisterSyncInRegistry(
 export function createPluginModuleLoader(options: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
-  aliasOverrides?: Readonly<Record<string, string>>;
   tryNative?: boolean;
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
@@ -125,16 +117,13 @@ export function createPluginModuleLoader(options: {
         pluginSdkResolution: options.pluginSdkResolution,
       });
     }
-    const defaultAliasMap = buildPluginLoaderAliasMap(
+    const aliasMap = buildPluginLoaderAliasMap(
       modulePath,
       process.argv[1],
       import.meta.url,
       options.pluginSdkResolution,
       options.devSourceRoot,
     );
-    const aliasMap = options.aliasOverrides
-      ? { ...defaultAliasMap, ...options.aliasOverrides }
-      : defaultAliasMap;
     return getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath,

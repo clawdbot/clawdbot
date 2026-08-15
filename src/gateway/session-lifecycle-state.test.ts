@@ -105,7 +105,12 @@ async function persistLifecycle(entry: SessionEntry, event: LifecycleEvent): Pro
 describe("session lifecycle state", () => {
   it("treats a pre-reset run's lifecycle event as stale once the row's sessionId rotated (#88538)", () => {
     expect(
-      isStaleLifecycleEventForSession({ owningSessionId: "old-id", currentSessionId: "new-id" }),
+      isStaleLifecycleEventForSession({
+        owningSessionId: "old-id",
+        currentSessionId: "new-id",
+        eventRunId: "same-run",
+        currentRunId: "same-run",
+      }),
     ).toBe(true);
   });
 
@@ -122,20 +127,26 @@ describe("session lifecycle state", () => {
   });
 
   it.each([
-    { eventStartedAt: 100, currentStartedAt: 200, stale: true },
-    { eventStartedAt: 200, currentStartedAt: 200, stale: false },
-    { eventStartedAt: 300, currentStartedAt: 200, stale: false },
-    { eventStartedAt: undefined, currentStartedAt: 200, stale: false },
-    { eventStartedAt: Number.NaN, currentStartedAt: 200, stale: false },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: 100, stale: true },
+    { eventRunId: "run-a", currentRunId: "run-a", eventStartedAt: 100, stale: false },
+    { eventRunId: "run-a", currentRunId: "run-b", eventStartedAt: 100, stale: true },
+    { eventRunId: "run-a", currentRunId: undefined, eventStartedAt: 100, stale: true },
+    { eventRunId: undefined, currentRunId: "run-a", eventStartedAt: 100, stale: true },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: 200, stale: false },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: 300, stale: false },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: undefined, stale: false },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: Number.NaN, stale: false },
   ])(
     "correlates explicit same-session run start times",
-    ({ eventStartedAt, currentStartedAt, stale }) => {
+    ({ eventRunId, currentRunId, eventStartedAt, stale }) => {
       expect(
         isStaleLifecycleEventForSession({
           owningSessionId: "session-id",
           currentSessionId: "session-id",
+          eventRunId,
+          currentRunId,
           eventStartedAt,
-          currentStartedAt,
+          currentStartedAt: 200,
         }),
       ).toBe(stale);
     },
@@ -159,6 +170,7 @@ describe("session lifecycle state", () => {
         runId: "run-b",
         data: { phase: "start", startedAt: 2_000 },
       });
+      expect(second.lifecycleRunId).toBe("run-b");
       const afterOlderTerminal = await persistLifecycle(second, {
         ts: 3_000,
         sessionId: "session-id",
@@ -172,6 +184,7 @@ describe("session lifecycle state", () => {
       });
 
       expect(afterOlderTerminal).toMatchObject({ status: "running", startedAt: 2_000 });
+      expect(afterOlderTerminal.lifecycleRunId).toBe("run-b");
       expect(afterOlderTerminal.endedAt).toBeUndefined();
       expect(afterOlderTerminal.lastRunError).toBeUndefined();
 
@@ -187,8 +200,54 @@ describe("session lifecycle state", () => {
         endedAt: 4_000,
         runtimeMs: 2_000,
       });
+      expect(completed.lifecycleRunId).toBeUndefined();
     },
   );
+
+  it("settles a same-run terminal event whose outer start time predates its embedded start", async () => {
+    const started = await persistLifecycle(
+      { sessionId: "session-id", updatedAt: 900 },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "run-a",
+        data: { phase: "start", startedAt: 2_000 },
+      },
+    );
+    const completed = await persistLifecycle(started, {
+      ts: 3_000,
+      sessionId: "session-id",
+      runId: "run-a",
+      data: { phase: "end", startedAt: 1_900, endedAt: 3_000 },
+    });
+
+    expect(completed).toMatchObject({
+      status: "done",
+      startedAt: 1_900,
+      endedAt: 3_000,
+      runtimeMs: 1_100,
+    });
+    expect(completed.lifecycleRunId).toBeUndefined();
+  });
+
+  it("clears inherited run ownership when a start event has no run id", async () => {
+    const started = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 900,
+        status: "running",
+        startedAt: 900,
+        lifecycleRunId: "old-run",
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        data: { phase: "start", startedAt: 2_000 },
+      },
+    );
+
+    expect(started.lifecycleRunId).toBeUndefined();
+  });
 
   it.each([
     {
@@ -399,6 +458,7 @@ describe("session lifecycle state", () => {
         updatedAt: 1_000,
         startedAt: 1_050,
         status: "running",
+        lifecycleRunId: "foreground-run",
         abortedLastRun: true,
         restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
         mainRestartRecovery: {
@@ -464,6 +524,7 @@ describe("session lifecycle state", () => {
     });
     expect(persisted.restartRecoveryRuns).toBeUndefined();
     expect(persisted.mainRestartRecovery).toBeUndefined();
+    expect(persisted.lifecycleRunId).toBeUndefined();
   });
 
   it("clears every generation of a resumed run when its current owner completes", async () => {
@@ -474,6 +535,7 @@ describe("session lifecycle state", () => {
         updatedAt: 1_000,
         startedAt: 1_050,
         status: "running",
+        lifecycleRunId: "recovery-run",
         abortedLastRun: false,
         restartRecoveryRuns: [
           { runId: "recovery-run", lifecycleGeneration: "pre-restart" },
@@ -501,6 +563,7 @@ describe("session lifecycle state", () => {
     });
     expect(persisted.restartRecoveryRuns).toBeUndefined();
     expect(persisted.mainRestartRecovery).toBeUndefined();
+    expect(persisted.lifecycleRunId).toBeUndefined();
   });
 
   it("keeps an active recovery when an older same-run terminal arrives", async () => {
@@ -511,6 +574,7 @@ describe("session lifecycle state", () => {
         updatedAt: 1_000,
         startedAt: 1_050,
         status: "running",
+        lifecycleRunId: "recovery-run",
         abortedLastRun: false,
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryRuns: [
@@ -540,6 +604,7 @@ describe("session lifecycle state", () => {
       mainRestartRecovery: { cycleId: "cycle-1" },
     });
     expect(persisted.restartRecoveryTerminalRunIds).toBeUndefined();
+    expect(persisted.lifecycleRunId).toBe("recovery-run");
   });
 
   it("does not settle a foreground owner from a stale lifecycle generation", async () => {
@@ -549,6 +614,7 @@ describe("session lifecycle state", () => {
         updatedAt: 1_000,
         startedAt: 1_050,
         status: "running",
+        lifecycleRunId: "foreground-run",
         abortedLastRun: true,
         restartRecoveryRuns: [
           { runId: "interrupted-run", lifecycleGeneration: "pre-restart" },
@@ -582,6 +648,7 @@ describe("session lifecycle state", () => {
         foregroundClaims: { tokens: ["owner-claim"] },
       },
     });
+    expect(persisted.lifecycleRunId).toBe("foreground-run");
   });
 
   it("clears only the completed recovery marker", async () => {
@@ -591,6 +658,7 @@ describe("session lifecycle state", () => {
         updatedAt: 1_000,
         startedAt: 1_050,
         status: "running",
+        lifecycleRunId: "interrupted-run",
         abortedLastRun: true,
         restartRecoveryRuns: [
           { runId: "completed-run", lifecycleGeneration: "pre-restart" },
@@ -610,6 +678,7 @@ describe("session lifecycle state", () => {
       { runId: "interrupted-run", lifecycleGeneration: "pre-restart" },
     ]);
     expect(persisted.status).toBe("running");
+    expect(persisted.lifecycleRunId).toBe("interrupted-run");
   });
 
   it.each([

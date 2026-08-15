@@ -10,6 +10,7 @@ import {
   type ChatHistoryResult,
   type ChatState,
 } from "./chat-history.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import {
   cacheChatSessionSnapshot,
@@ -23,41 +24,31 @@ type TestState = ChatState &
   Parameters<typeof handleAgentEvent>[0] & {
     requestUpdate: () => void;
   };
+type TestSessions = NonNullable<ChatState["sessions"]> &
+  Parameters<typeof handleAgentEvent>[0]["sessions"];
 
 function createState(result: ChatHistoryResult): TestState {
-  const client = {
-    request: vi.fn().mockResolvedValue(result),
-  } as unknown as GatewayBrowserClient;
-  return {
-    client,
-    connected: true,
-    connectionEpoch: 1,
+  const host = makeChatHost({
+    requestHandlers: { "chat.history": result },
     sessionKey: "main",
-    chatLoading: false,
-    chatMessages: [],
+  });
+  const sessions: TestSessions = { setModelOverride: vi.fn() };
+  return {
+    ...host,
+    chatToolMessages: host.chatToolMessages ?? [],
+    chatStreamSegments: host.chatStreamSegments ?? [],
+    connectionEpoch: 1,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
-    chatSending: false,
-    chatMessage: "",
-    chatAttachments: [],
-    chatQueue: [],
-    chatRunId: null,
-    chatStream: null,
     chatStreamStartedAt: null,
-    chatStreamSegments: [],
-    toolStreamById: new Map<string, ToolStreamEntry>(),
-    toolStreamOrder: [],
-    chatToolMessages: [],
-    toolStreamSyncTimer: null,
     planStatus: {
       runId: "stale-run",
       steps: [{ step: "Reset me", status: "in_progress" }],
     },
-    lastError: null,
-    hello: null,
-    sessions: {
-      setModelOverride: vi.fn(),
-    },
+    sessions,
+    toolStreamById: host.toolStreamById ?? new Map<string, ToolStreamEntry>(),
+    toolStreamOrder: host.toolStreamOrder ?? [],
+    toolStreamSyncTimer: host.toolStreamSyncTimer ?? null,
     requestUpdate: vi.fn(),
   };
 }
@@ -423,6 +414,45 @@ describe("switchChatHistoryBranch", () => {
 
     expect(state.sessions.listBranches).toHaveBeenCalledWith(state.sessionKey, expect.any(Object));
     expect(state.chatBranchesConnectionEpoch).toBe(state.connectionEpoch);
+  });
+
+  it("retries the branch list on the next history load after a transient failure", async () => {
+    const state = createState({ messages: [] }) as TestState & {
+      sessions: { listBranches: ReturnType<typeof vi.fn> };
+    };
+    state.sessions = {
+      listBranches: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("gateway hiccup"))
+        .mockResolvedValue([
+          { leafEntryId: "tip", headline: "tip", messageCount: 1, active: true },
+        ]),
+      setModelOverride: vi.fn(),
+    };
+
+    await loadChatHistory(state);
+    // The transient failure must not latch success state; the next load retries.
+    expect(state.chatBranchesSessionKey ?? null).toBeNull();
+
+    await loadChatHistory(state);
+    expect(state.sessions.listBranches).toHaveBeenCalledTimes(2);
+    expect(state.chatBranchesSessionKey).toBe(state.sessionKey);
+    expect(state.chatBranches).toHaveLength(1);
+  });
+
+  it("treats the legacy main alias and canonical key as the same branch owner", async () => {
+    const state = createState({ messages: [] }) as TestState & {
+      sessions: { listBranches: ReturnType<typeof vi.fn> };
+    };
+    state.sessionKey = "main";
+    state.chatBranchesSessionKey = "agent:main:main";
+    state.chatBranchesConnectionEpoch = state.connectionEpoch;
+    state.sessions = { listBranches: vi.fn().mockResolvedValue([]), setModelOverride: vi.fn() };
+
+    await loadChatHistory(state);
+
+    // Equivalent spellings must not force a redundant branch reload.
+    expect(state.sessions.listBranches).not.toHaveBeenCalled();
   });
 
   it("starts a fresh snapshot and rejects in-flight history after a same-key branch switch", async () => {

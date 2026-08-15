@@ -14,7 +14,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { AgentTool } from "../runtime/index.js";
 
 /** Runtime transport selected for one model attempt. */
-export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
+export type AgentRuntimeTransport = "sse" | "websocket" | "websocket-cached" | "auto";
 
 /** Thinking levels accepted by runtime-plan extra-param preparation. */
 type AgentRuntimeThinkLevel =
@@ -50,9 +50,6 @@ type AgentRuntimeFailoverReason =
   | "no_error_details"
   | "unclassified"
   | "unknown";
-
-/** Provider/runtime config object passed through plugin boundaries. */
-type AgentRuntimeConfig = unknown;
 
 /** Provider model descriptor consumed by runtime-plan hooks. */
 type AgentRuntimeModel = {
@@ -91,11 +88,10 @@ type AgentRuntimeTextTransforms = {
 type AgentRuntimeProviderHandle = {
   provider: string;
   modelId?: string | null;
-  config?: AgentRuntimeConfig;
+  config?: unknown;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
-  bundledProviderVitestCompat?: boolean;
 };
 
 type PreparedAgentRuntimeProviderHandle = AgentRuntimeProviderHandle & {
@@ -342,7 +338,7 @@ type AgentRuntimeSystemPromptContribution = {
 
 /** Context passed when resolving provider system prompt contributions. */
 type AgentRuntimeSystemPromptContributionContext = {
-  config?: AgentRuntimeConfig;
+  config?: unknown;
   agentDir?: string;
   workspaceDir?: string;
   provider: string;
@@ -567,7 +563,7 @@ export type AgentRuntimePlan = {
 
 /** Inputs needed to build delivery-only runtime decisions. */
 export type BuildAgentRuntimeDeliveryPlanParams = {
-  config?: AgentRuntimeConfig;
+  config?: unknown;
   workspaceDir?: string;
   agentDir?: string;
   provider: string;
@@ -577,7 +573,7 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
 
 /** Inputs needed to build the full prepared runtime plan. */
 export type BuildAgentRuntimePlanParams = {
-  config?: AgentRuntimeConfig;
+  config?: unknown;
   workspaceDir?: string;
   agentDir?: string;
   provider: string;

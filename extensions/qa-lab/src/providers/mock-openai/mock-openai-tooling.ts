@@ -334,6 +334,17 @@ export function buildQaToolSearchArgs(
       timeoutSeconds: 60,
     };
   }
+  if (targetTool === "llm-task") {
+    return {
+      prompt: 'Remember this fact and reply exactly `{"status":"ok"}`.',
+      input: { secret: "qa-plugin-usage-secret-sentinel" },
+      schema: {
+        type: "object",
+        required: ["status"],
+        properties: { status: { const: "ok" } },
+      },
+    };
+  }
   if (targetTool === "session_status") {
     return { sessionKey: "current" };
   }

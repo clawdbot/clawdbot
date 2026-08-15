@@ -29,8 +29,10 @@ vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
 import {
   TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
   TELEGRAM_THREAD_BINDINGS_NAMESPACE,
-  testing,
+} from "./thread-bindings-store.js";
+import {
   createTelegramThreadBindingManager as createTelegramThreadBindingManagerImpl,
+  resetTelegramThreadBindingsForTests,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
@@ -111,12 +113,12 @@ describe("telegram thread bindings", () => {
       "openclaw/plugin-sdk/acp-runtime",
     );
     readAcpSessionEntryMock.mockImplementation(acpRuntime.readAcpSessionEntry);
-    await testing.resetTelegramThreadBindingsForTests();
+    await resetTelegramThreadBindingsForTests();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
-    await testing.resetTelegramThreadBindingsForTests();
+    await resetTelegramThreadBindingsForTests();
     clearTelegramRuntimeForTest();
     resetPluginStateStoreForTests();
     await openClawState.cleanup();
@@ -211,7 +213,7 @@ describe("telegram thread bindings", () => {
       import.meta.url,
       "./thread-bindings.js?scope=shared-b",
     );
-    await bindingsA.testing.resetTelegramThreadBindingsForTests();
+    await bindingsA.resetTelegramThreadBindingsForTests();
 
     try {
       const managerA = bindingsA.createTelegramThreadBindingManager({
@@ -246,7 +248,7 @@ describe("telegram thread bindings", () => {
           ?.getByConversationId("-100200300:topic:44")?.targetSessionKey,
       ).toBe("agent:main:subagent:child-shared");
     } finally {
-      await bindingsA.testing.resetTelegramThreadBindingsForTests();
+      await bindingsA.resetTelegramThreadBindingsForTests();
     }
   });
 
@@ -354,7 +356,7 @@ describe("telegram thread bindings", () => {
       reason: "test-detach",
     });
 
-    await testing.resetTelegramThreadBindingsForTests();
+    await resetTelegramThreadBindingsForTests();
 
     const reloaded = createTelegramThreadBindingManager({
       accountId: "default",
@@ -439,7 +441,7 @@ describe("telegram thread bindings", () => {
       },
     });
 
-    await testing.resetTelegramThreadBindingsForTests();
+    await resetTelegramThreadBindingsForTests();
 
     const reloaded = createTelegramThreadBindingManager({
       accountId: "metadata",
@@ -491,7 +493,7 @@ describe("telegram thread bindings", () => {
       },
     });
 
-    await testing.resetTelegramThreadBindingsForTests();
+    await resetTelegramThreadBindingsForTests();
     readAcpSessionEntryMock.mockReturnValue({
       cfg: {} as never,
       storePath: "/tmp/acp-store.json",
@@ -509,7 +511,7 @@ describe("telegram thread bindings", () => {
     });
 
     expect(reloaded.getByConversationId("cleanup-me")).toBeUndefined();
-    await testing.resetTelegramThreadBindingsForTests();
+    await resetTelegramThreadBindingsForTests();
     expect(storedBindings().map((binding) => binding.conversationId)).not.toContain("cleanup-me");
   });
 
@@ -530,7 +532,7 @@ describe("telegram thread bindings", () => {
       },
     });
 
-    await testing.resetTelegramThreadBindingsForTests();
+    await resetTelegramThreadBindingsForTests();
 
     const reloaded = createTelegramThreadBindingManager({
       accountId: "default",
@@ -561,7 +563,7 @@ describe("telegram thread bindings", () => {
       },
     });
 
-    await testing.resetTelegramThreadBindingsForTests();
+    await resetTelegramThreadBindingsForTests();
     readAcpSessionEntryMock.mockReturnValue({
       cfg: {} as never,
       storePath: "/tmp/acp-store.json",
@@ -609,7 +611,7 @@ describe("telegram thread bindings", () => {
       idleTimeoutMs: 90_000,
     });
 
-    await testing.resetTelegramThreadBindingsForTests();
+    await resetTelegramThreadBindingsForTests();
 
     expect(
       storedBindings().find((binding) => binding.accountId === "persist-reset")?.idleTimeoutMs,
@@ -648,7 +650,7 @@ describe("telegram thread bindings", () => {
       });
       manager.touchConversation("-100200300:topic:100");
 
-      await testing.resetTelegramThreadBindingsForTests();
+      await resetTelegramThreadBindingsForTests();
       await flushMicrotasks();
       expect(unhandled).toStrictEqual([]);
     } finally {

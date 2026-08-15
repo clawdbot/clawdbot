@@ -326,6 +326,17 @@ export default defineSingleProviderPluginEntry({
             }
           : undefined;
       },
+      classifyFailoverReason: ({ provider, errorMessage }) => {
+        if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
+          return undefined;
+        }
+        if (
+          /\b(?:api\s+key\s+budget|key)\s+limit\s*(?:exceeded|reached|hit)\b/i.test(errorMessage)
+        ) {
+          return "billing";
+        }
+        return /provider returned error/i.test(errorMessage) ? "timeout" : undefined;
+      },
       ...passthroughGeminiReplayHooks,
       buildReplayPolicy: buildOpenRouterReplayPolicy,
       resolveReasoningOutputMode: () => "native",

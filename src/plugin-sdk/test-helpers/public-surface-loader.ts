@@ -39,35 +39,10 @@ function resolveExtensionDirByManifestId(pluginId: string): string {
   throw new Error(`Unknown bundled plugin id: ${pluginId}`);
 }
 
-function resolveWorkspacePackageDir(packageName: string): string {
-  for (const rootName of ["extensions", "packages"]) {
-    const rootDir = path.resolve(repoRoot, rootName);
-    for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const packageDir = path.join(rootDir, entry.name);
-      const manifest = readJson(path.join(packageDir, "package.json")) as
-        | { name?: unknown }
-        | undefined;
-      if (manifest?.name === packageName) {
-        return packageDir;
-      }
-    }
-  }
-  throw new Error(`Unknown workspace package: ${packageName}`);
-}
-
 type AsyncBundledPluginPublicSurfaceLoader = <T extends object>(params: {
   pluginId: string;
   artifactBasename: string;
 }) => Promise<T>;
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
-type BundledPluginPublicSurfaceLoader = <T extends object>(params: {
-  pluginId: string;
-  artifactBasename: string;
-}) => T;
 
 export const loadBundledPluginPublicSurface: AsyncBundledPluginPublicSurfaceLoader = async (
   params,
@@ -78,18 +53,3 @@ export const loadBundledPluginPublicSurface: AsyncBundledPluginPublicSurfaceLoad
   );
   return await import(pathToFileURL(artifactPath).href);
 };
-
-export const loadBundledPluginPublicSurfaceSync: BundledPluginPublicSurfaceLoader = (_params) => {
-  throw new Error("Synchronous bundled plugin public-surface loading is not available here");
-};
-
-export function resolveWorkspacePackagePublicModuleUrl(params: {
-  packageName: string;
-  artifactBasename: string;
-}): string {
-  const artifactPath = resolveSourceArtifactPath(
-    resolveWorkspacePackageDir(params.packageName),
-    params.artifactBasename,
-  );
-  return pathToFileURL(artifactPath).href;
-}

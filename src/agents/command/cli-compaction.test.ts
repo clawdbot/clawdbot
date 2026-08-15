@@ -5,7 +5,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -139,6 +139,7 @@ async function prepareCompactionScenario(params: {
     contextTokens: 1_000,
     totalTokens: 950,
     totalTokensFresh: true,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     ...params.sessionEntry,
   };
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -238,6 +239,19 @@ describe("runCliTurnCompactionLifecycle", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("ignores an unversioned fresh total on the first upgraded turn", async () => {
+    const scenario = await prepareCompactionScenario({
+      suffix: "legacy-unversioned-total",
+      tmpDir,
+      sessionEntry: { totalTokens: 950, totalTokensFresh: true, totalTokensVersion: undefined },
+    });
+
+    const updatedEntry = await scenario.run();
+
+    expect(scenario.compactCalls).toEqual([]);
+    expect(updatedEntry).toBe(scenario.sessionEntry);
   });
 
   it("accepts no compactable entries only from a successful compaction result", async () => {
@@ -377,6 +391,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     );
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
+        compactionKind: "context-engine",
         newSessionId: successorSessionId,
         tokensAfter: 100,
       }),
@@ -480,12 +495,12 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it.each([
-    ["agent", { agentId: "other" }],
-    ["session key", { sessionKey: "agent:main:other" }],
-    ["store", { storePath: "/tmp/other-openclaw-sessions.sqlite" }],
-  ])("rejects a CLI successor outside the active %s binding", async (_label, override) => {
+    ["agent", () => ({ agentId: "other" })],
+    ["session key", () => ({ sessionKey: "agent:main:other" })],
+    ["store", () => ({ storePath: path.join(tmpDir, "other-openclaw-sessions.sqlite") })],
+  ])("rejects a CLI successor outside the active %s binding", async (label, buildOverride) => {
     const scenario = await prepareContextSuccessorScenario({
-      suffix: `outside-${_label.replace(" ", "-")}`,
+      suffix: `outside-${label.replace(" ", "-")}`,
       tmpDir,
       result: ({ sessionKey, storePath }) => ({
         ok: true,
@@ -497,7 +512,7 @@ describe("runCliTurnCompactionLifecycle", () => {
             sessionId: "outside-successor",
             sessionKey,
             storePath,
-            ...override,
+            ...buildOverride(),
           },
         },
       }),
@@ -658,7 +673,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "openai",
+        compactionKind: "native-harness",
         sessionKey,
         tokensAfter: 100,
       }),
@@ -875,7 +890,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "codex",
         sessionKey,
         tokensAfter: 42,
         newSessionId: "session-codex-owned-engine-rotated",
@@ -910,7 +924,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(maintenance).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "external-harness",
+        compactionKind: "context-engine",
         sessionKey,
         tokensAfter: 100,
       }),
@@ -954,7 +968,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(maintenance).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "codex",
         sessionKey,
         tokensAfter: 100,
       }),
@@ -1031,7 +1044,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(maintenance).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "codex",
         sessionKey,
         tokensAfter: 100,
       }),
@@ -1065,7 +1077,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCalls).toHaveLength(1);
     expect(maintenance).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "codex", sessionKey }),
+      expect.objectContaining({ sessionKey }),
     );
     expect(updatedEntry?.compactionCount).toBe(1);
   });

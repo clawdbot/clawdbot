@@ -5,7 +5,7 @@ description: "Maintain the canonical live OpenClaw main checkout, managed Gatewa
 
 # OpenClaw Live Updater
 
-Keep `/Users/steipete/openclaw` a read-only-to-the-agent deployment mirror: clean, standalone, full, on `main`, and fast-forwarded only. Make every repair in the controlling Codex project worktree.
+Keep one operator-selected canonical live checkout as a read-only-to-the-agent deployment mirror: clean, standalone, full, on `main`, and fast-forwarded only. Make every repair in the controlling Codex project worktree.
 
 ## Boundaries
 
@@ -20,10 +20,11 @@ Keep `/Users/steipete/openclaw` a read-only-to-the-agent deployment mirror: clea
 1. Run the deterministic updater and retain its JSON:
 
    ```bash
-   node .agents/skills/openclaw-live-updater/scripts/update-main.mjs
+   cd "<canonical-live-checkout>"
+   node --import tsx .agents/skills/openclaw-live-updater/scripts/update-main.mjs
    ```
 
-   Stop on any failed invariant. Do not repair the mirror destructively. The helper holds one checkout-scoped lock across update, build, Gateway proof, and Mac work. A concurrent heartbeat returns `reason: "overlap"`; it must not start another build. A dead owner lock may be recovered, but unreadable or unsafe lock state fails closed.
+   The helper owns the current working directory by default; it does not search parent directories or infer a clone from the user's home directory. From a controlling worktree, pass the canonical mirror explicitly with `--checkout "<canonical-live-checkout>"`. Stop on any failed invariant. Do not repair the mirror destructively. The helper holds one checkout-scoped lock across update, build, Gateway proof, and Mac work. A concurrent heartbeat returns `reason: "overlap"`; it must not start another build. A dead owner lock may be recovered, but unreadable or unsafe lock state fails closed.
 
 2. The helper verifies one unrewritten expected origin, an owned non-symlinked standalone/full clone, single worktree, clean `main`, fetches `origin/main`, rechecks for concurrent changes, and merges `--ff-only`. It then uses the source runner's canonical local-build metadata contract and parser: both `dist/.buildstamp` and `dist/.runtime-postbuildstamp` heads, required runtime-postbuild outputs, `dist/entry.js`, Control UI index plus referenced local assets, and `dist/build-info.json` must all match exact `afterSha`.
 
@@ -39,7 +40,7 @@ Keep `/Users/steipete/openclaw` a read-only-to-the-agent deployment mirror: clea
 
    Re-run the canonical freshness check immediately before every `pnpm openclaw` restart or probe so the source runner cannot hide stale output with an implicit auto-build. Every pass, including a no-update/current-build pass, must run deep RPC status and verbose health. If that first probe fails while the build is already exact-current, perform one managed Gateway restart and repeat both probes once. Do not rebuild a current exact-SHA artifact merely to self-heal the managed process; fail and diagnose if the one restart does not recover it.
 
-3. If changed paths can affect macOS, the helper runs `scripts/restart-mac.sh --sign --wait --target-only` with `SKIP_TSC=1` and `SKIP_UI_BUILD=1` only after the exact-SHA JS/UI build completes. Reusing those artifacts keeps the live app bundle out of any later JavaScript build cleanup. Target-only mode may stop the canonical `/Applications/OpenClaw.app` process and this checkout's exact `dist` process before launching the rebuilt `dist` app. It defers when another worktree, temporary bundle, test, or agent-owned OpenClaw process is active; it never kills that process. The script's immediate `OK` is not proof. The helper waits and requires the exact executable `/Users/steipete/openclaw/dist/OpenClaw.app/Contents/MacOS/OpenClaw`, then repeats Gateway RPC and health proof.
+3. If changed paths can affect macOS, the helper runs `scripts/restart-mac.sh --sign --wait --target-only` with `SKIP_TSC=1` and `SKIP_UI_BUILD=1` only after the exact-SHA JS/UI build completes. Reusing those artifacts keeps the live app bundle out of any later JavaScript build cleanup. Target-only mode may stop the canonical `/Applications/OpenClaw.app` process and this checkout's exact `dist` process before launching the rebuilt `dist` app. It defers when another worktree, temporary bundle, test, or agent-owned OpenClaw process is active; it never kills that process. The script's immediate `OK` is not proof. The helper waits and requires the exact executable `<canonical-live-checkout>/dist/OpenClaw.app/Contents/MacOS/OpenClaw`, derived from the verified checkout, then repeats Gateway RPC and health proof.
 
    Never kill another worktree, temporary bundle, test, or agent-owned OpenClaw process. If a foreign app prevents the exact target from staying alive, record the pending Mac attempt, report it, and retry on the next heartbeat. Escalate only after the conflict persists across repeated heartbeats; never claim Mac proof from another bundle or the short launch check. If `actions.macUiVerification` is true, exercise the changed behavior with the existing macOS/UI automation workflow after delayed exact-bundle proof.
 
@@ -57,10 +58,12 @@ Load `$release-openclaw-ci` and `$openclaw-testing`. This is validation only, ne
 2. Only when the cadence is due, confirm no full/all run is active, then snapshot exact current `origin/main` after checking mirror invariants. Run the provider-secret preflight without printing secrets and dispatch the trusted workflow once:
 
    ```bash
+   MAIN_SHA="<exact-main-sha>"
    gh workflow run full-release-validation.yml \
      --repo openclaw/openclaw \
      --ref main \
-     -f ref=<exact-main-sha> \
+     -f ref="$MAIN_SHA" \
+     -f expected_sha="$MAIN_SHA" \
      -f provider=openai \
      -f mode=both \
      -f release_profile=full \

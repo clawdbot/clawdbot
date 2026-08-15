@@ -12,7 +12,7 @@ describe("formatStartupPluginVerificationFailure", () => {
       [
         "OpenClaw plugin verification failed; refusing to report the gateway ready.",
         '- Plugin "discord" has no install path.',
-        "Resolve the plugin verification errors above, then restart the gateway.",
+        "Resolve the plugin verification errors above, then restart the Gateway.",
       ].join("\n"),
     );
   });

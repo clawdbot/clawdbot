@@ -22,7 +22,7 @@ scenario:
   codeRefs:
     - src/cli/plugins-search-command.ts
     - src/plugins/catalog-search.ts
-    - src/infra/clawhub.ts
+    - src/infra/clawhub-client.ts
     - scripts/e2e/lib/clawhub-fixture-server.cjs
     - src/cli/plugins-search-command.clawhub.e2e.test.ts
   execution:

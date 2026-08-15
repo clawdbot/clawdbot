@@ -1,27 +1,27 @@
 // Control UI tests cover Appearance override provenance and restoring product defaults.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
 import { importCustomThemeFromUrl } from "../app/custom-theme.ts";
 import {
-  canRunPlaywrightChromium,
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
   waitForControlUiSettingsTakeover,
-  type ControlUiE2eServer,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createTweakcnThemePayload } from "../test-helpers/custom-theme.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI Appearance defaults mocked Gateway E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
+
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const uiProofArtifactDir = path.join(
   process.cwd(),
@@ -29,11 +29,8 @@ const uiProofArtifactDir = path.join(
   "control-ui-e2e",
   "appearance-settings-defaults",
 );
-let browser: Browser;
-let server: ControlUiE2eServer;
-
 function settingsStorageKey(): string {
-  return controlUiBundledSettingsStorageKey(server.baseUrl);
+  return controlUiBundledSettingsStorageKey(suite.server.baseUrl);
 }
 
 function configResponse(prefs: Record<string, unknown>, hash: string) {
@@ -150,24 +147,9 @@ async function captureViewport(page: Page, filename: string): Promise<void> {
   });
 }
 
-describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not available at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("removes synced and browser-local overrides, then reloads inherited defaults", async () => {
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
@@ -188,7 +170,7 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
           }),
         );
       },
-      { gatewayUrl: controlUiBundledGatewayUrl(server.baseUrl), key: settingsStorageKey() },
+      { gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl), key: settingsStorageKey() },
     );
     const page = await context.newPage();
     const initialPrefs: Record<string, unknown> = {
@@ -205,7 +187,7 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       await waitForControlUiSettingsTakeover(page);
       await gateway.waitForRequest("config.get");
@@ -375,113 +357,244 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
   });
 
   it("keeps rejected edits browser-local and resets them without another server write", async () => {
-    const context = await browser.newContext({
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        const initialPrefs = {
+          locale: "en",
+          theme: "claw",
+          chatFollowUpMode: "queue",
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(initialPrefs, "appearance-rejected-1"),
+          },
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
+        expect(response?.status()).toBe(200);
+        await waitForControlUiSettingsTakeover(page);
+        await gateway.waitForRequest("config.get");
+
+        const languageRow = page.locator("#settings-language .settings-row");
+        const languageSelect = languageRow.locator("wa-select");
+        const themeSection = page.locator("#settings-appearance-theme");
+        const themeDescription = themeSection.locator(":scope > .settings-section__desc");
+        const followUpSelect = page.locator("[data-settings-follow-up-mode]");
+        const followUpRow = page.locator(".settings-row").filter({ has: followUpSelect });
+
+        await expect.poll(() => selectValue(languageSelect)).toBe("en");
+        await expect
+          .poll(() =>
+            themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"),
+          )
+          .toBe("true");
+        await expect.poll(() => followUpSelect.inputValue()).toBe("queue");
+
+        await gateway.deferNext("config.patch");
+        await themeSection.locator(".settings-theme-card--knot").click();
+        await waitForRequestCount(gateway, "config.patch", 1);
+        expect(
+          patchPrefs((await gateway.getRequests("config.patch"))[0] as MockGatewayRequest),
+        ).toEqual({ theme: "knot" });
+        await gateway.rejectDeferred("config.patch", {
+          code: "INVALID_REQUEST",
+          message: "mock validation failure",
+        });
+
+        await expect
+          .poll(() =>
+            themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"),
+          )
+          .toBe("true");
+        await expect.poll(() => themeDescription.textContent()).toContain("Default: Claw");
+        await expect
+          .poll(() => themeDescription.textContent())
+          .toContain("Stored in this browser only");
+
+        await gateway.deferNext("config.patch");
+        await languageSelect.evaluate((element) => {
+          const select = element as HTMLElement & { value: string };
+          select.value = "fr";
+          select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        });
+        await waitForRequestCount(gateway, "config.patch", 2);
+        expect(
+          patchPrefs((await gateway.getRequests("config.patch"))[1] as MockGatewayRequest),
+        ).toEqual({ locale: "fr" });
+        await gateway.rejectDeferred("config.patch", {
+          code: "INVALID_REQUEST",
+          message: "mock validation failure",
+        });
+
+        await expect.poll(() => selectValue(languageSelect)).toBe("fr");
+        await expect.poll(() => languageRow.textContent()).toContain("Par défaut : Anglais");
+        await expect
+          .poll(() => languageRow.textContent())
+          .toContain("Stocké uniquement dans ce navigateur");
+
+        await gateway.deferNext("config.patch");
+        await followUpSelect.selectOption("steer");
+        await waitForRequestCount(gateway, "config.patch", 3);
+        expect(
+          patchPrefs((await gateway.getRequests("config.patch"))[2] as MockGatewayRequest),
+        ).toEqual({ chatFollowUpMode: "steer" });
+        await gateway.rejectDeferred("config.patch", {
+          code: "INVALID_REQUEST",
+          message: "mock validation failure",
+        });
+
+        await expect.poll(() => followUpSelect.inputValue()).toBe("steer");
+        await expect
+          .poll(() => followUpRow.textContent())
+          .toContain("Stocké uniquement dans ce navigateur");
+
+        await themeSection
+          .locator(":scope > .settings-section__header")
+          .locator("button.btn--icon")
+          .click();
+        await languageRow.locator("button.btn--icon").click();
+        await followUpRow.locator("button.btn--sm").click();
+
+        await expect
+          .poll(() =>
+            themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"),
+          )
+          .toBe("true");
+        await expect.poll(() => selectValue(languageSelect)).toBe("en");
+        await expect.poll(() => followUpSelect.inputValue()).toBe("queue");
+        await expect.poll(() => page.locator("html").getAttribute("lang")).toBe("en");
+        await page.waitForTimeout(100);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(3);
+      },
+    );
+  });
+
+  it("keeps every read-only preference surface browser-local across reload", async () => {
+    const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    const initialPrefs = {
-      locale: "en",
-      theme: "claw",
-      chatFollowUpMode: "queue",
-    };
     const gateway = await installMockGateway(page, {
+      operatorScopes: ["operator.read"],
       methodResponses: {
-        "config.get": configResponse(initialPrefs, "appearance-rejected-1"),
+        "config.get": configResponse({ theme: "knot" }, "appearance-read-only-1"),
       },
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       await waitForControlUiSettingsTakeover(page);
       await gateway.waitForRequest("config.get");
 
-      const languageRow = page.locator("#settings-language .settings-row");
-      const languageSelect = languageRow.locator("wa-select");
       const themeSection = page.locator("#settings-appearance-theme");
       const themeDescription = themeSection.locator(":scope > .settings-section__desc");
-      const followUpSelect = page.locator("[data-settings-follow-up-mode]");
-      const followUpRow = page.locator(".settings-row").filter({ has: followUpSelect });
+      await themeSection.locator(".settings-theme-card--claw").click();
 
-      await expect.poll(() => selectValue(languageSelect)).toBe("en");
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
         .toBe("true");
-      await expect.poll(() => followUpSelect.inputValue()).toBe("queue");
+      await expect
+        .poll(() => themeDescription.textContent())
+        .toContain("Stored in this browser only");
+      await expect.poll(() => readPersistedSettings(page)).toMatchObject({ theme: "claw" });
+      await page.waitForTimeout(100);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
-      await gateway.deferNext("config.patch");
-      await themeSection.locator(".settings-theme-card--knot").click();
-      await waitForRequestCount(gateway, "config.patch", 1);
-      expect(
-        patchPrefs((await gateway.getRequests("config.patch"))[0] as MockGatewayRequest),
-      ).toEqual({ theme: "knot" });
-      await gateway.rejectDeferred("config.patch", {
-        code: "INVALID_REQUEST",
-        message: "mock validation failure",
-      });
+      await page.reload();
+      await waitForControlUiSettingsTakeover(page);
+      await expect
+        .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
+        .toBe("true");
+      await expect
+        .poll(() => themeDescription.textContent())
+        .toContain("Stored in this browser only");
+      await expect.poll(() => readPersistedSettings(page)).toMatchObject({ theme: "claw" });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
+      await themeSection
+        .locator(":scope > .settings-section__header")
+        .locator("button.btn--icon")
+        .click();
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
         .toBe("true");
       await expect.poll(() => themeDescription.textContent()).toContain("Default: Claw");
       await expect
         .poll(() => themeDescription.textContent())
-        .toContain("Stored in this browser only");
-
-      await gateway.deferNext("config.patch");
-      await languageSelect.evaluate((element) => {
-        const select = element as HTMLElement & { value: string };
-        select.value = "fr";
-        select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-      });
-      await waitForRequestCount(gateway, "config.patch", 2);
-      expect(
-        patchPrefs((await gateway.getRequests("config.patch"))[1] as MockGatewayRequest),
-      ).toEqual({ locale: "fr" });
-      await gateway.rejectDeferred("config.patch", {
-        code: "INVALID_REQUEST",
-        message: "mock validation failure",
-      });
-
-      await expect.poll(() => selectValue(languageSelect)).toBe("fr");
-      await expect.poll(() => languageRow.textContent()).toContain("Par défaut : Anglais");
-      await expect
-        .poll(() => languageRow.textContent())
-        .toContain("Stocké uniquement dans ce navigateur");
-
-      await gateway.deferNext("config.patch");
-      await followUpSelect.selectOption("steer");
-      await waitForRequestCount(gateway, "config.patch", 3);
-      expect(
-        patchPrefs((await gateway.getRequests("config.patch"))[2] as MockGatewayRequest),
-      ).toEqual({ chatFollowUpMode: "steer" });
-      await gateway.rejectDeferred("config.patch", {
-        code: "INVALID_REQUEST",
-        message: "mock validation failure",
-      });
-
-      await expect.poll(() => followUpSelect.inputValue()).toBe("steer");
-      await expect
-        .poll(() => followUpRow.textContent())
-        .toContain("Stocké uniquement dans ce navigateur");
-
-      await themeSection
-        .locator(":scope > .settings-section__header")
-        .locator("button.btn--icon")
-        .click();
-      await languageRow.locator("button.btn--icon").click();
-      await followUpRow.locator("button.btn--sm").click();
-
-      await expect
-        .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
-        .toBe("true");
-      await expect.poll(() => selectValue(languageSelect)).toBe("en");
-      await expect.poll(() => followUpSelect.inputValue()).toBe("queue");
-      await expect.poll(() => page.locator("html").getAttribute("lang")).toBe("en");
+        .not.toContain("Stored in this browser only");
       await page.waitForTimeout(100);
-      expect(await gateway.getRequests("config.patch")).toHaveLength(3);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const viewMenuTrigger = page.locator(".chat-header-session-menu__trigger");
+      await viewMenuTrigger.click();
+      const viewMenu = page.locator("wa-dropdown.chat-header-session-menu");
+      await expect
+        .poll(() => viewMenu.locator('[role="note"]').textContent())
+        .toContain("Stored in this browser only");
+      const viewItem = viewMenu.getByRole("menuitem", { name: "View", exact: true });
+      await viewItem.hover();
+      const reasoning = viewMenu.getByRole("menuitemcheckbox", { name: "Reasoning" });
+      await expect.poll(() => reasoning.isVisible()).toBe(true);
+      await reasoning.click();
+      await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
+
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar
+        .locator("wa-dropdown.sidebar-more-menu")
+        .getByRole("menuitem", { name: "Edit pinned items" })
+        .click();
+      const customizeMenu = sidebar.locator(
+        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
+      );
+      await expect
+        .poll(() => customizeMenu.locator(".sidebar-customize-menu__provenance").textContent())
+        .toContain("Stored in this browser only");
+      const tasks = customizeMenu.getByRole("menuitemcheckbox", { name: "Tasks" });
+      await tasks.click();
+      await expect.poll(() => tasks.getAttribute("aria-checked")).toBe("true");
+      await page.waitForTimeout(100);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+
+      await page.reload();
+      await viewMenuTrigger.click();
+      await expect
+        .poll(() => viewMenu.locator('[role="note"]').textContent())
+        .toContain("Stored in this browser only");
+      await viewItem.hover();
+      await expect
+        .poll(() =>
+          viewMenu
+            .getByRole("menuitemcheckbox", { name: "Reasoning" })
+            .getAttribute("aria-checked"),
+        )
+        .toBe("false");
+
+      await sidebar.locator(".sidebar-nav__head-action").click();
+      await sidebar
+        .locator("wa-dropdown.sidebar-more-menu")
+        .getByRole("menuitem", { name: "Edit pinned items" })
+        .click();
+      await expect
+        .poll(() => customizeMenu.locator(".sidebar-customize-menu__provenance").textContent())
+        .toContain("Stored in this browser only");
+      await expect
+        .poll(() =>
+          customizeMenu
+            .getByRole("menuitemcheckbox", { name: "Tasks" })
+            .getAttribute("aria-checked"),
+        )
+        .toBe("true");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
     } finally {
       await context.close();
     }
@@ -501,7 +614,7 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
     const replacementGate = new Promise<void>((resolve) => {
       releaseReplacement = resolve;
     });
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
@@ -519,7 +632,7 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
         );
       },
       {
-        gatewayUrl: controlUiBundledGatewayUrl(server.baseUrl),
+        gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
         key: settingsStorageKey(),
         theme: existingTheme,
       },
@@ -537,7 +650,7 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       await waitForControlUiSettingsTakeover(page);
       await gateway.waitForRequest("config.get");
@@ -623,7 +736,7 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
     const importGate = new Promise<void>((resolve) => {
       releaseImport = resolve;
     });
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
@@ -642,7 +755,7 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       await waitForControlUiSettingsTakeover(page);
       await gateway.waitForRequest("config.get");

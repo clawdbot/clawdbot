@@ -1,4 +1,5 @@
 // Zalouser tests cover monitor.account scope plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send.test-mocks.js";
@@ -18,12 +19,7 @@ import { startZaloListenerMock } from "./zalo-js.test-mocks.js";
 type ZaloJsModule = typeof import("./zalo-js.js");
 type ListenerParams = Parameters<ZaloJsModule["startZaloListener"]>[0];
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 describe("zalouser monitor pairing account scoping", () => {
   it("scopes DM pairing-store reads and pairing requests to accountId", async () => {

@@ -11,6 +11,7 @@ import {
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -171,10 +172,7 @@ function extractOpenRouterImagesFromResponse(body: unknown): GeneratedImageAsset
 }
 
 function resolveImageCount(count: number | undefined): number {
-  if (typeof count !== "number" || !Number.isFinite(count)) {
-    return 1;
-  }
-  return Math.max(1, Math.min(MAX_IMAGE_RESULTS, Math.trunc(count)));
+  return resolveIntegerOption(count, 1, { min: 1, max: MAX_IMAGE_RESULTS });
 }
 
 function isGeminiImageModel(model: string): boolean {

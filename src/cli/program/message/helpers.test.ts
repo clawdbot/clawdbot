@@ -1,4 +1,5 @@
 // Message program helper tests cover message command helper behavior and mocks.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const messageCommandMock = vi.fn(async () => {});
@@ -102,12 +103,7 @@ function expectNoAccountFieldInPassedOptions() {
   expect(passedOpts).not.toHaveProperty("account");
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectMessageCommandOptions(expected: Record<string, unknown>, callIndex = 0): void {
   const call = (messageCommandMock.mock.calls as unknown[][])[callIndex];
@@ -293,7 +289,7 @@ describe("runMessageAction", () => {
     await runSendAction();
 
     expect(messageCommandMock).not.toHaveBeenCalled();
-    expect(errorMock).toHaveBeenCalledWith("Error: plugin load failed");
+    expect(errorMock).toHaveBeenCalledWith("plugin load failed");
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(1);
     expect(exitMock).not.toHaveBeenCalledWith(0);
@@ -314,7 +310,7 @@ describe("runMessageAction", () => {
     ).rejects.toThrow("exit");
 
     expect(errorMock).toHaveBeenCalledWith(
-      "Error: --poll-anonymous and --poll-public are mutually exclusive.",
+      "--poll-anonymous and --poll-public are mutually exclusive.",
     );
     expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expect(messageCommandMock).not.toHaveBeenCalled();
@@ -381,7 +377,7 @@ describe("runMessageAction", () => {
     await expect(runMessageAction(action, opts)).rejects.toThrow("exit");
 
     const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
-    expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
+    expect(errorMock).toHaveBeenCalledWith(`${flag} must be a ${kind} integer.`);
     expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expect(messageCommandMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(1);
@@ -406,7 +402,7 @@ describe("runMessageAction", () => {
     ).rejects.toThrow("exit");
 
     const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
-    expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
+    expect(errorMock).toHaveBeenCalledWith(`${flag} must be a ${kind} integer.`);
     expect(messageCommandMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(1);
   });
@@ -500,7 +496,7 @@ describe("runMessageAction", () => {
     messageCommandMock.mockRejectedValueOnce(new Error("send failed"));
     await runSendAction();
 
-    expect(errorMock).toHaveBeenCalledWith("Error: send failed");
+    expect(errorMock).toHaveBeenCalledWith("send failed");
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(1);
   });
@@ -519,7 +515,7 @@ describe("runMessageAction", () => {
     runGatewayStopMock.mockRejectedValueOnce(new Error("hook failed"));
     await runSendAction();
 
-    expect(errorMock).toHaveBeenCalledWith("gateway_stop hook failed: Error: hook failed");
+    expect(errorMock).toHaveBeenCalledWith("gateway_stop hook failed: hook failed");
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
@@ -529,30 +525,9 @@ describe("runMessageAction", () => {
     runGatewayStopMock.mockRejectedValueOnce(new Error("hook failed"));
     await runSendAction();
 
-    expect(errorMock).toHaveBeenNthCalledWith(1, "Error: send failed");
-    expect(errorMock).toHaveBeenNthCalledWith(2, "gateway_stop hook failed: Error: hook failed");
+    expect(errorMock).toHaveBeenNthCalledWith(1, "send failed");
+    expect(errorMock).toHaveBeenNthCalledWith(2, "gateway_stop hook failed: hook failed");
     expect(exitMock).toHaveBeenCalledWith(1);
-  });
-
-  it("does not call exit(0) when the action throws", async () => {
-    messageCommandMock.mockRejectedValueOnce(new Error("boom"));
-    await runSendAction();
-
-    // exit should only be called once with code 1, never with 0
-    expect(exitMock).toHaveBeenCalledOnce();
-    expect(exitMock).not.toHaveBeenCalledWith(0);
-  });
-
-  it("does not call exit(0) if the error path returns", async () => {
-    messageCommandMock.mockRejectedValueOnce(new Error("boom"));
-    exitMock.mockClear().mockImplementation(() => undefined as never);
-    const runMessageAction = createRunMessageAction();
-    await expect(runMessageAction("send", baseSendOptions)).resolves.toBeUndefined();
-
-    expect(errorMock).toHaveBeenCalledWith("Error: boom");
-    expect(exitMock).toHaveBeenCalledOnce();
-    expect(exitMock).toHaveBeenCalledWith(1);
-    expect(exitMock).not.toHaveBeenCalledWith(0);
   });
 
   it("passes action and maps account to accountId", async () => {

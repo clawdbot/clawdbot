@@ -6,8 +6,7 @@ import type { AgentMessage } from "./runtime/index.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 function parseCompactionUsageTimestamp(value: unknown): number | null {
-  const timestamp = typeof value === "string" ? Date.parse(value) : value;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
+  return parseDateFirstTimestampMs(value) ?? null;
 }
 
 export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends AgentMessage>(
@@ -60,3 +59,4 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
   }
   return out;
 }
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";

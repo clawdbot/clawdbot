@@ -1,6 +1,7 @@
 /**
  * Installs replay, tool-call, timeout, and diagnostic guards around an embedded stream.
  */
+import type { OpenAIResponsesCompactionRejection } from "@openclaw/ai/transports";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
@@ -8,39 +9,42 @@ import type { resolveProviderTextTransforms } from "../../../plugins/provider-ru
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import type { StreamFn } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { log } from "../logger.js";
 import { collectPromptCacheTools } from "../prompt-cache-observability.js";
-import { repairRejectedThinkingReplayInSessionManager } from "../thinking-replay-repair.js";
+import {
+  repairRejectedCompactionReplayInSessionManager,
+  repairRejectedThinkingReplayInSessionManager,
+} from "../thinking-replay-repair.js";
 import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
-import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
-import { resolveUnknownToolGuardThreshold } from "./attempt.run-decisions.js";
-import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
+import { resolveUnknownToolGuardThreshold } from "./attempt-run-decisions.js";
 import {
   createYieldAbortedResponse,
   isSessionsYieldAbortReason,
-} from "./attempt.sessions-yield.js";
-import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
+} from "./attempt-sessions-yield.js";
+import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
+import {
+  sanitizeOpenAIResponsesReplayForStream,
+  sanitizeReplayToolCallIdsForStream,
+  shouldApplyReplayToolCallIdSanitizer,
+  wrapStreamFnSanitizeMalformedToolCalls,
+} from "./attempt-tool-call-replay-sanitization.js";
+import { wrapStreamFnTrimToolCallNames } from "./attempt-tool-call-stream-normalization.js";
+import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import {
   shouldRepairMalformedToolCallArguments,
   wrapStreamFnDecodeXaiToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
-import {
-  sanitizeOpenAIResponsesReplayForStream,
-  sanitizeReplayToolCallIdsForStream,
-  shouldApplyReplayToolCallIdSanitizer,
-  wrapStreamFnPromoteStandaloneTextToolCalls,
-  wrapStreamFnSanitizeMalformedToolCalls,
-  wrapStreamFnTrimToolCallNames,
-} from "./attempt.tool-call-normalization.js";
 import {
   resolveLlmFirstEventTimeoutMs,
   resolveLlmIdleTimeoutMs,
@@ -51,9 +55,28 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type CacheTrace = ReturnType<typeof createCacheTrace>;
 type AnthropicPayloadLogger = ReturnType<typeof createAnthropicPayloadLogger>;
-type AttemptSessionLockController = Awaited<
-  ReturnType<typeof createEmbeddedAttemptSessionLockController>
->;
+type CompactionReplayStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
+  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
+};
+
+function wrapStreamFnWithCompactionReplayRepair(
+  streamFn: StreamFn,
+  onRejected: (checkpoint: OpenAIResponsesCompactionRejection) => void,
+): StreamFn {
+  return (model, context, options) => {
+    const replayOptions = options as CompactionReplayStreamOptions | undefined;
+    const nextOptions: CompactionReplayStreamOptions = {
+      ...options,
+      onCompactionRejected: (checkpoint) => {
+        onRejected(checkpoint);
+        if (replayOptions?.onCompactionRejected) {
+          replayOptions.onCompactionRejected(checkpoint);
+        }
+      },
+    };
+    return streamFn(model, context, nextOptions);
+  };
+}
 
 export function installEmbeddedAttemptStreamGuards(input: {
   attempt: EmbeddedRunAttemptParams;
@@ -64,7 +87,6 @@ export function installEmbeddedAttemptStreamGuards(input: {
   systemPromptText: string;
   transcriptPolicy: TranscriptPolicy;
   sessionManager: SessionManager | undefined;
-  sessionLockController: AttemptSessionLockController;
   isOpenAIResponsesApi: boolean;
   replayAllowedToolNames: Set<string>;
   liveAllowedToolNames: Set<string>;
@@ -73,7 +95,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
     typeof import("../../agent-tools.js").resolveToolLoopDetectionConfig
   >;
   anthropicPayloadLogger: AnthropicPayloadLogger;
-  onRejectedThinkingReplayRepaired: () => void;
+  onRejectedProviderReplayRepaired: () => void;
   onIdleTimeout: (error: Error) => void;
   effectiveAgentTransport: AgentSession["agent"]["transport"];
   providerTextTransforms: ReturnType<typeof resolveProviderTextTransforms>;
@@ -82,6 +104,53 @@ export function installEmbeddedAttemptStreamGuards(input: {
 }) {
   const attempt = input.attempt;
   const session = input.session;
+  const repairRejectedReplay = (
+    kind: "compaction" | "thinking",
+    checkpoint?: OpenAIResponsesCompactionRejection,
+  ) => {
+    try {
+      if (!input.sessionManager) {
+        log.warn(
+          `[session-recovery] unable to repair rejected ${kind} replay: ` +
+            `session manager unavailable sessionId=${session.sessionId}`,
+        );
+        return;
+      }
+      const repairParams = {
+        sessionManager: input.sessionManager,
+        sessionFile: attempt.sessionFile,
+        sessionId: attempt.sessionId,
+        sessionKey: attempt.sessionKey,
+        agentId: input.sessionAgentId,
+      };
+      let repair;
+      if (kind === "compaction") {
+        if (!checkpoint) {
+          log.warn(
+            `[session-recovery] unable to repair rejected compaction replay: ` +
+              `checkpoint identity unavailable sessionId=${session.sessionId}`,
+          );
+          return;
+        }
+        repair = repairRejectedCompactionReplayInSessionManager({ ...repairParams, checkpoint });
+      } else {
+        repair = repairRejectedThinkingReplayInSessionManager(repairParams);
+      }
+      if (repair.repaired) {
+        input.onRejectedProviderReplayRepaired();
+        return;
+      }
+      log.warn(
+        `[session-recovery] provider rejected ${kind} replay but transcript repair made no changes: ` +
+          `sessionId=${session.sessionId} reason=${repair.reason ?? "unknown"}`,
+      );
+    } catch (error) {
+      log.warn(
+        `[session-recovery] unable to repair rejected ${kind} replay: ` +
+          `sessionId=${session.sessionId} error=${String(error)}`,
+      );
+    }
+  };
   const cacheObservabilityEnabled = Boolean(input.cacheTrace) || log.isEnabled("debug");
   const promptCacheTools = cacheObservabilityEnabled
     ? collectPromptCacheTools(input.allCustomTools)
@@ -122,30 +191,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
   ) {
     session.agent.streamFn = wrapAnthropicStreamWithRecovery(session.agent.streamFn, {
       id: session.sessionId,
-      onRecoveredAnthropicThinking: () => {
-        if (!input.sessionManager) {
-          log.warn(
-            `[session-recovery] unable to repair rejected thinking replay: session manager unavailable sessionId=${session.sessionId}`,
-          );
-          return;
-        }
-        const repair = repairRejectedThinkingReplayInSessionManager({
-          sessionManager: input.sessionManager,
-          sessionFile: attempt.sessionFile,
-          sessionId: attempt.sessionId,
-          sessionKey: attempt.sessionKey,
-          agentId: input.sessionAgentId,
-        });
-        if (repair.repaired) {
-          input.onRejectedThinkingReplayRepaired();
-          input.sessionLockController.refreshAfterOwnedSessionWrite();
-          return;
-        }
-        log.warn(
-          `[session-recovery] rejected thinking replay retry succeeded but transcript repair made no changes: ` +
-            `sessionId=${session.sessionId} reason=${repair.reason ?? "unknown"}`,
-        );
-      },
+      onRecoveredAnthropicThinking: () => repairRejectedReplay("thinking"),
     });
   }
 
@@ -182,6 +228,10 @@ export function installEmbeddedAttemptStreamGuards(input: {
   }
 
   if (input.isOpenAIResponsesApi) {
+    session.agent.streamFn = wrapStreamFnWithCompactionReplayRepair(
+      session.agent.streamFn,
+      (checkpoint) => repairRejectedReplay("compaction", checkpoint),
+    );
     session.agent.streamFn = wrapStreamFnWithMessageTransform(session.agent.streamFn, (messages) =>
       sanitizeOpenAIResponsesReplayForStream(messages),
     );

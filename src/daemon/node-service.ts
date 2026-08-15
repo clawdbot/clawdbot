@@ -1,12 +1,5 @@
 /** Adapts the generic gateway service manager for OpenClaw node-host services. */
-import {
-  NODE_SERVICE_KIND,
-  NODE_SERVICE_MARKER,
-  NODE_WINDOWS_TASK_SCRIPT_NAME,
-  resolveNodeLaunchAgentLabel,
-  resolveNodeSystemdServiceName,
-  resolveNodeWindowsTaskName,
-} from "./constants.js";
+import { resolveNodeServiceIdentityEnvironment } from "./constants.js";
 import type { GatewayService, GatewayServiceInstallArgs } from "./service.js";
 import { resolveGatewayService } from "./service.js";
 
@@ -18,14 +11,7 @@ function withNodeServiceEnv(
   // node-specific labels, logs, task script, and service marker.
   return {
     ...env,
-    OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
-    OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
-    OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
-    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
-    OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
-    OPENCLAW_LOG_PREFIX: "node",
-    OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,
-    OPENCLAW_SERVICE_KIND: NODE_SERVICE_KIND,
+    ...resolveNodeServiceIdentityEnvironment(),
   };
 }
 
@@ -40,6 +26,7 @@ function withNodeInstallEnv(args: GatewayServiceInstallArgs): GatewayServiceInst
 /** Returns a service controller bound to node-host labels across all platforms. */
 export function resolveNodeService(): GatewayService {
   const base = resolveGatewayService();
+  const hasInstalledDefinition = base.hasInstalledDefinition;
   return {
     ...base,
     stage: (args) => base.stage(withNodeInstallEnv(args)),
@@ -53,6 +40,9 @@ export function resolveNodeService(): GatewayService {
       // wedged service manager instead of hanging the whole status command.
       return base.isLoaded({ env: withNodeServiceEnv(args.env ?? {}), timeoutMs: args.timeoutMs });
     },
+    hasInstalledDefinition: hasInstalledDefinition
+      ? (args) => hasInstalledDefinition({ ...args, env: withNodeServiceEnv(args.env ?? {}) })
+      : undefined,
     readCommand: (env) => base.readCommand(withNodeServiceEnv(env)),
     readRuntime: (env, opts) => base.readRuntime(withNodeServiceEnv(env), opts),
   };

@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
@@ -149,10 +150,6 @@ function normalizeImportRunEntries(value: unknown): ChatGptImportRunEntry[] {
   });
 }
 
-function asNonNegativeInteger(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
-}
-
 function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecord | null {
   const record = asNullableRecord(raw);
   if (!record) {
@@ -182,10 +179,10 @@ function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecor
     exportPath,
     sourcePath,
     appliedAt,
-    conversationCount: asNonNegativeInteger(record.conversationCount),
-    createdCount: asNonNegativeInteger(record.createdCount),
-    updatedCount: asNonNegativeInteger(record.updatedCount),
-    skippedCount: asNonNegativeInteger(record.skippedCount),
+    conversationCount: resolveNonNegativeIntegerOption(record.conversationCount, 0),
+    createdCount: resolveNonNegativeIntegerOption(record.createdCount, 0),
+    updatedCount: resolveNonNegativeIntegerOption(record.updatedCount, 0),
+    skippedCount: resolveNonNegativeIntegerOption(record.skippedCount, 0),
     createdPaths: normalizeImportRunEntries(record.createdPaths),
     updatedPaths: normalizeImportRunEntries(record.updatedPaths),
     ...(rollbackStartedAt ? { rollbackStartedAt } : {}),

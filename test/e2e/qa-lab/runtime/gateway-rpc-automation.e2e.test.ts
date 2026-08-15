@@ -211,10 +211,9 @@ describe("Gateway task and automation RPCs", () => {
             providers: {
               [provider.providerId]: {
                 ...provider.config,
-                models: provider.config.models.map((model) => ({
-                  ...model,
-                  input: Array.from(model.input),
-                })),
+                models: provider.config.models.map((model) =>
+                  Object.assign({}, model, { input: Array.from(model.input) }),
+                ),
               },
             },
           },
@@ -406,12 +405,15 @@ describe("Gateway task and automation RPCs", () => {
                 ts: number;
                 status: string;
                 reason?: string;
+                message?: string;
                 preview?: string;
               }>("last-heartbeat", {});
               return (
                 lastHeartbeat.ts >= wakeRequestedAt &&
                 lastHeartbeat.status === "skipped" &&
                 lastHeartbeat.reason === "target-none" &&
+                lastHeartbeat.message ===
+                  "Heartbeat delivery is disabled by configuration (target: none)." &&
                 lastHeartbeat.preview === `Heartbeat handled: ${wakeText}`
               );
             },
@@ -425,7 +427,9 @@ describe("Gateway task and automation RPCs", () => {
         }
         releaseTaskResponse?.();
         providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => providerServer.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          providerServer.close(() => resolve());
+        });
         envSnapshot.restore();
       }
     },

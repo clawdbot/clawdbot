@@ -1,9 +1,11 @@
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Model-backed image understanding runtime for providers without a native media
 // provider hook.
-import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { requireApiKey, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import {
   getModelProviderRequestTransport,
@@ -22,7 +24,6 @@ import { isSecretRef } from "../config/types.secrets.js";
 import { complete } from "../llm/stream.js";
 import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
 import { getResolvedImageRuntimeContext, resolveImageRuntime } from "./image-model-runtime.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -91,10 +92,6 @@ function disableReasoningForImageRetryPayload(payload: unknown, model: Model): u
 
 function isImageModelNoTextError(err: unknown): boolean {
   return err instanceof Error && /^Image model returned no text\b/.test(err.message);
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return Boolean(value) && typeof (value as { then?: unknown }).then === "function";
 }
 
 function composeImageDescriptionPayloadHandlers(
@@ -313,7 +310,7 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   preferredProfile?: string;
 }): Promise<{ runtimeValue: string; modelBaseUrl?: string }> {
   const authProvider = resolveMinimaxVlmAuthProvider(params.cfg, params.provider);
-  const auth = await resolveApiKeyForProvider({
+  const auth = await resolveApiKeyForProviderCore({
     provider: authProvider,
     cfg: params.cfg,
     secretSentinels: true,
@@ -600,30 +597,30 @@ function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDesc
   };
 }
 
-export async function describeImagesWithModel(
+export async function describeImagesWithModelCore(
   params: ImagesDescriptionRequest,
 ): Promise<ImagesDescriptionResult> {
   return await describeImagesWithModelInternal(params);
 }
 
-export async function describeImagesWithModelPayloadTransform(
+export async function describeImagesWithModelPayloadTransformCore(
   params: ImagesDescriptionRequest,
   onPayload: ProviderStreamOptions["onPayload"],
 ): Promise<ImagesDescriptionResult> {
   return await describeImagesWithModelInternal(params, { onPayload });
 }
 
-export async function describeImageWithModel(
+export async function describeImageWithModelCore(
   params: ImageDescriptionRequest,
 ): Promise<ImageDescriptionResult> {
-  return await describeImagesWithModel(toImagesDescriptionRequest(params));
+  return await describeImagesWithModelCore(toImagesDescriptionRequest(params));
 }
 
-export async function describeImageWithModelPayloadTransform(
+export async function describeImageWithModelPayloadTransformCore(
   params: ImageDescriptionRequest,
   onPayload: ProviderStreamOptions["onPayload"],
 ): Promise<ImageDescriptionResult> {
-  return await describeImagesWithModelPayloadTransform(
+  return await describeImagesWithModelPayloadTransformCore(
     toImagesDescriptionRequest(params),
     onPayload,
   );

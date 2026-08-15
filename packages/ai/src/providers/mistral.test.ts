@@ -82,6 +82,17 @@ function makeUnreadableParameterTool() {
   return tool;
 }
 
+function makeUnreadableNameTool() {
+  const tool = makeHealthyTool();
+  Object.defineProperty(tool, "name", {
+    enumerable: true,
+    get() {
+      throw new Error("fuzzplugin name getter exploded");
+    },
+  });
+  return tool;
+}
+
 function makeHealthyTool(parameters: Record<string, unknown> = { type: "object", properties: {} }) {
   return {
     name: "healthy_tool",
@@ -225,7 +236,7 @@ describe("Mistral provider", () => {
     expect((mistralMockState.payloads[0] as { stop?: unknown }).stop).toEqual(["STOP"]);
   });
 
-  it("keeps truncated Mistral error bodies UTF-16 safe with an exact omitted count", async () => {
+  it("preserves Mistral messages while keeping error bodies UTF-16 safe and bounded", async () => {
     const prefix = "a".repeat(3_999);
     mistralMockState.streamError = Object.assign(new Error("invalid request"), {
       statusCode: 400,
@@ -234,7 +245,8 @@ describe("Mistral provider", () => {
 
     const result = await runMistralFixture();
 
-    expect(result.errorMessage).toBe(`Mistral API error (400): ${prefix}... [truncated 6 chars]`);
+    expect(result.errorMessage).toBe("invalid request");
+    expect(result.errorBody).toBe(`${prefix.slice(0, 500)}... [truncated]`);
   });
 
   it("routes the Mistral HTTPClient through the host guarded fetch", async () => {
@@ -271,11 +283,15 @@ describe("Mistral provider", () => {
     expect(payload).not.toHaveProperty("promptMode");
   });
 
-  it("skips unreadable tool schemas while preserving healthy Mistral tools", async () => {
+  it("skips unreadable tool fields while preserving healthy Mistral tools", async () => {
     const healthyParameters = { type: "object", properties: { query: { type: "string" } } };
     const result = await runMistralFixture({
       ...context,
-      tools: [makeUnreadableParameterTool(), makeHealthyTool(healthyParameters)] as never,
+      tools: [
+        makeUnreadableNameTool(),
+        makeUnreadableParameterTool(),
+        makeHealthyTool(healthyParameters),
+      ] as never,
     });
 
     expect(result.stopReason).toBe("error");
@@ -290,6 +306,25 @@ describe("Mistral provider", () => {
         },
       },
     ]);
+  });
+
+  it("keeps request bytes stable across equivalent tool input order", async () => {
+    const tools = [
+      { ...makeHealthyTool(), name: "zeta_tool", description: "Zeta tool" },
+      { ...makeHealthyTool(), name: "alpha_tool", description: "Alpha tool" },
+    ];
+
+    await runMistralFixture({ ...context, tools } as never);
+    await runMistralFixture({ ...context, tools: tools.toReversed() } as never);
+
+    expect(JSON.stringify(mistralMockState.payloads[0])).toBe(
+      JSON.stringify(mistralMockState.payloads[1]),
+    );
+    expect(
+      (mistralMockState.payloads[0] as { tools: Array<{ function: { name: string } }> }).tools.map(
+        (tool) => tool.function.name,
+      ),
+    ).toEqual(["alpha_tool", "zeta_tool"]);
   });
 
   it("omits tools and automatic tool choice when every schema is unreadable", async () => {
@@ -651,7 +686,6 @@ describe("Mistral provider", () => {
       messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
     };
     const toolMessage = payload.messages.find((message) => message.role === "tool");
-    expect(toolMessage).toBeDefined();
     const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
     const textBlock = toolContent.find((block) => block.type === "text");
     expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource"'));
@@ -698,7 +732,6 @@ describe("Mistral provider", () => {
       messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
     };
     const toolMessage = payload.messages.find((message) => message.role === "tool");
-    expect(toolMessage).toBeDefined();
     const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
     const textBlock = toolContent.find((block) => block.type === "text");
     // Structured blocks should provide the output, not an empty fallback

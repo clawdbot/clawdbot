@@ -7,7 +7,7 @@ read_when:
 title: "SecretRef credential surface"
 ---
 
-This page defines the canonical SecretRef credential surface: which credential fields accept a `SecretRef` (env/file/exec-backed reference) instead of a raw secret value.
+This page defines the canonical SecretRef credential surface: which credential fields accept a `SecretRef` (env/file/exec/store-backed reference) instead of a raw secret value.
 
 Scope:
 
@@ -133,6 +133,7 @@ The lists below are generated from the source target registry and checked agains
 
 Notes:
 
+- Store refs use names matching `^[A-Z][A-Z0-9_]{0,127}$` and resolve only from the Gateway-wide team scope in this release. A typical ref is `{"source":"store","provider":"default","id":"OPENAI_API_KEY"}`.
 - Auth-profile plan targets require `agentId`; plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`). Auth-profile refs are included in runtime resolution and audit coverage.
 - In `openclaw.json`, SecretRefs must use structured objects such as `{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}`. Legacy `secretref-env:<ENV_VAR>` marker strings are rejected on SecretRef credential paths; run `openclaw doctor --fix` to migrate valid markers.
 - OAuth policy guard: `auth.profiles.<id>.mode = "oauth"` cannot be combined with SecretRef inputs for that profile. Startup/reload and auth-profile resolution fail fast when this policy is violated.

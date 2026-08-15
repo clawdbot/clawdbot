@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
@@ -15,7 +16,6 @@ type AuthRunCall = {
 
 type ResolvePluginProvidersCall = {
   activate?: boolean;
-  bundledProviderVitestCompat?: boolean;
   config?: unknown;
   includeUntrustedWorkspacePlugins?: boolean;
   providerRefs?: string[];
@@ -53,7 +53,7 @@ const mocks = vi.hoisted(() => ({
   upsertAuthProfile: vi.fn(),
   upsertAuthProfileWithLock: vi.fn(),
   removeProviderAuthProfilesWithLock: vi.fn(),
-  resolvePluginProviders: vi.fn(),
+  resolvePluginProvidersCore: vi.fn(),
   createClackPrompter: vi.fn(),
   loadValidConfigOrThrow: vi.fn(),
   updateConfig: vi.fn(),
@@ -66,7 +66,7 @@ const mocks = vi.hoisted(() => ({
   promoteAuthProfileInOrder: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
   callGateway: vi.fn(),
-  resolvePluginSetupProvider: vi.fn(),
+  resolvePluginSetupProviderCore: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
 }));
 
@@ -76,6 +76,7 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   removeProviderAuthProfilesWithLock: mocks.removeProviderAuthProfilesWithLock,
   upsertAuthProfile: mocks.upsertAuthProfile,
   upsertAuthProfileWithLock: mocks.upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow: mocks.upsertAuthProfileWithLock,
 }));
 
 vi.mock("../../agents/auth-profiles/store.js", () => ({
@@ -137,11 +138,11 @@ vi.mock("../../agents/workspace.js", () => ({
 }));
 
 vi.mock("../../plugins/providers.runtime.js", () => ({
-  resolvePluginProviders: mocks.resolvePluginProviders,
+  resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
 }));
 
 vi.mock("../../plugins/setup-registry.js", () => ({
-  resolvePluginSetupProvider: mocks.resolvePluginSetupProvider,
+  resolvePluginSetupProviderCore: mocks.resolvePluginSetupProviderCore,
   resolvePluginSetupRegistry: mocks.resolvePluginSetupRegistry,
 }));
 
@@ -189,8 +190,6 @@ vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) 
   const actual =
     await importOriginal<typeof import("../../plugins/provider-auth-choice-helpers.js")>();
   const normalize = (value: string | undefined) => value?.trim().toLowerCase() ?? "";
-  const isRecord = (value: unknown): value is Record<string, unknown> =>
-    Boolean(value && typeof value === "object" && !Array.isArray(value));
   const mergePatch = <T>(base: T, patch: unknown): T => {
     if (!isRecord(base) || !isRecord(patch)) {
       return patch as T;
@@ -273,7 +272,7 @@ const {
   modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
-  runModelsAuthLoginFlow,
+  runModelsAuthLoginFlowCore,
 } = await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
@@ -382,7 +381,7 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.resolveDefaultAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.isRemoteEnvironment.mockReturnValue(false);
-    mocks.resolvePluginSetupProvider.mockReturnValue(undefined);
+    mocks.resolvePluginSetupProviderCore.mockReturnValue(undefined);
     mocks.resolvePluginSetupRegistry.mockReturnValue({
       providers: [],
       cliBackends: [],
@@ -418,7 +417,7 @@ describe("modelsAuthLoginCommand", () => {
       ],
       defaultModel: "openai/gpt-5.5",
     });
-    mocks.resolvePluginProviders.mockReturnValue([
+    mocks.resolvePluginProvidersCore.mockReturnValue([
       createProvider({
         id: "openai",
         label: "OpenAI Codex",
@@ -636,7 +635,7 @@ describe("modelsAuthLoginCommand", () => {
           ? ["openai:user@example.com"]
           : [],
     );
-    mocks.resolvePluginProviders.mockReturnValue([
+    mocks.resolvePluginProvidersCore.mockReturnValue([
       createProvider({
         id: "openai",
         label: "OpenAI runtime",
@@ -651,7 +650,7 @@ describe("modelsAuthLoginCommand", () => {
         ],
       }),
     ]);
-    mocks.resolvePluginSetupProvider.mockReturnValue(
+    mocks.resolvePluginSetupProviderCore.mockReturnValue(
       createProvider({
         id: "openai",
         label: "OpenAI",
@@ -675,7 +674,7 @@ describe("modelsAuthLoginCommand", () => {
 
     await modelsAuthLoginCommand({ provider: "openai" }, runtime);
 
-    expect(mocks.resolvePluginSetupProvider).toHaveBeenCalledWith({
+    expect(mocks.resolvePluginSetupProviderCore).toHaveBeenCalledWith({
       provider: "openai",
       config: initialConfig,
       workspaceDir: "/tmp/openclaw/workspace",
@@ -695,7 +694,7 @@ describe("modelsAuthLoginCommand", () => {
     const runtime = createRuntime();
     const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
     const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
-    mocks.resolvePluginProviders.mockReturnValue([
+    mocks.resolvePluginProvidersCore.mockReturnValue([
       createProvider({
         id: "openai",
         label: "OpenAI runtime",
@@ -710,7 +709,7 @@ describe("modelsAuthLoginCommand", () => {
         ],
       }),
     ]);
-    mocks.resolvePluginSetupProvider.mockReturnValue(
+    mocks.resolvePluginSetupProviderCore.mockReturnValue(
       createProvider({
         id: "openai",
         label: "OpenAI",
@@ -742,7 +741,7 @@ describe("modelsAuthLoginCommand", () => {
     const runtime = createRuntime();
     const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
     const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
-    mocks.resolvePluginSetupProvider.mockReturnValue(
+    mocks.resolvePluginSetupProviderCore.mockReturnValue(
       createProvider({
         id: "openai",
         label: "OpenAI",
@@ -781,7 +780,7 @@ describe("modelsAuthLoginCommand", () => {
       note: vi.fn(async () => {}),
       select,
     });
-    mocks.resolvePluginProviders.mockReturnValue([
+    mocks.resolvePluginProvidersCore.mockReturnValue([
       createProvider({
         id: "anthropic",
         label: "Anthropic",
@@ -864,7 +863,7 @@ describe("modelsAuthLoginCommand", () => {
     const runtime = createRuntime();
     const abortController = new AbortController();
 
-    await runModelsAuthLoginFlow({
+    await runModelsAuthLoginFlowCore({
       provider: "openai",
       method: "oauth",
       config: currentConfig,
@@ -899,7 +898,7 @@ describe("modelsAuthLoginCommand", () => {
     });
 
     await expect(
-      runModelsAuthLoginFlow({
+      runModelsAuthLoginFlowCore({
         provider: "openai",
         method: "oauth",
         config: currentConfig,
@@ -929,7 +928,7 @@ describe("modelsAuthLoginCommand", () => {
         },
       },
     });
-    mocks.resolvePluginProviders.mockImplementation(
+    mocks.resolvePluginProvidersCore.mockImplementation(
       (params: { activate?: boolean; providerRefs?: string[] } | undefined) =>
         params?.activate === true && params?.providerRefs?.[0] === "anthropic"
           ? [
@@ -955,11 +954,10 @@ describe("modelsAuthLoginCommand", () => {
     );
 
     const providerResolutionCall = readMockCallArg(
-      mocks.resolvePluginProviders,
+      mocks.resolvePluginProvidersCore,
     ) as ResolvePluginProvidersCall;
     expect(providerResolutionCall.config).toEqual({});
     expect(providerResolutionCall.workspaceDir).toBe("/tmp/openclaw/workspace");
-    expect(providerResolutionCall.bundledProviderVitestCompat).toBe(true);
     expect(providerResolutionCall.includeUntrustedWorkspacePlugins).toBe(false);
     expect(providerResolutionCall.providerRefs).toEqual(["anthropic"]);
     expect(providerResolutionCall.activate).toBe(true);
@@ -1057,7 +1055,7 @@ describe("modelsAuthLoginCommand", () => {
     };
     mocks.loadAuthProfileStoreForRuntime.mockReturnValue(fakeStore);
     mocks.listProfilesForProvider.mockReturnValue(["anthropic:claude-cli", "anthropic:legacy"]);
-    mocks.resolvePluginProviders.mockReturnValue([
+    mocks.resolvePluginProvidersCore.mockReturnValue([
       {
         id: "anthropic",
         label: "Anthropic",
@@ -1188,7 +1186,7 @@ describe("modelsAuthLoginCommand", () => {
       },
       defaultModel: "openai/gpt-5.5",
     });
-    mocks.resolvePluginProviders.mockReturnValue([
+    mocks.resolvePluginProvidersCore.mockReturnValue([
       createProvider({
         id: "openai",
         label: "OpenAI",
@@ -1224,7 +1222,7 @@ describe("modelsAuthLoginCommand", () => {
       ],
       defaultModel: "google/gemini-3-pro-preview",
     });
-    mocks.resolvePluginProviders.mockReturnValue([
+    mocks.resolvePluginProvidersCore.mockReturnValue([
       createProvider({
         id: "google",
         label: "Google",
@@ -1331,7 +1329,7 @@ describe("modelsAuthLoginCommand", () => {
     const runtime = createRuntime();
     const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
     const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
-    mocks.resolvePluginSetupProvider.mockReturnValue(
+    mocks.resolvePluginSetupProviderCore.mockReturnValue(
       createProvider({
         id: "openai",
         label: "OpenAI",
@@ -1686,7 +1684,7 @@ describe("modelsAuthLoginCommand", () => {
         },
       ],
     });
-    mocks.resolvePluginProviders.mockReturnValue([
+    mocks.resolvePluginProvidersCore.mockReturnValue([
       {
         id: "moonshot",
         label: "Moonshot",
@@ -1730,7 +1728,7 @@ describe("modelsAuthLoginCommand", () => {
         },
       ],
     });
-    mocks.resolvePluginProviders.mockReturnValue([
+    mocks.resolvePluginProvidersCore.mockReturnValue([
       {
         id: "moonshot",
         label: "Moonshot",
@@ -1771,7 +1769,7 @@ describe("modelsAuthLoginCommand", () => {
         },
       ],
     });
-    mocks.resolvePluginProviders.mockReturnValue([
+    mocks.resolvePluginProvidersCore.mockReturnValue([
       {
         id: "moonshot",
         label: "Moonshot",
@@ -1801,7 +1799,7 @@ describe("modelsAuthLoginCommand", () => {
   it("keeps the requested agent store when interactive auth add falls back to paste-token", async () => {
     const runtime = createRuntime();
     useCoderAgentConfig();
-    mocks.resolvePluginProviders.mockReturnValue([]);
+    mocks.resolvePluginProvidersCore.mockReturnValue([]);
     mocks.clackSelect.mockResolvedValue("custom");
     mocks.clackText.mockResolvedValueOnce("openai").mockResolvedValueOnce("openai:manual");
     mocks.clackPassword.mockResolvedValue("openai-token");

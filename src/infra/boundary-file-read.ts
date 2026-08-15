@@ -25,7 +25,7 @@ export {
 } from "@openclaw/fs-safe/advanced";
 
 /**
- * Opens a root-scoped file after canonicalizing symlink parents. fs-safe 0.5.2
+ * Opens a root-scoped file after canonicalizing symlink parents. fs-safe
  * rejects every symlink path component by default; the workspace contract
  * follows contained parent symlinks (directory aliases) while final-symlink
  * targets and out-of-root escapes stay rejected by openRootFile itself.

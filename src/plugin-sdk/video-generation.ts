@@ -6,6 +6,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,
   DASHSCOPE_WAN_VIDEO_MODELS,
   DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
@@ -288,6 +289,9 @@ export function buildDashscopeVideoGenerationProvider(
     label: options.label,
     defaultModel: DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
     models: [...DASHSCOPE_WAN_VIDEO_MODELS],
+    catalogByModel: DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+    resolveModelCapabilities: ({ model }) =>
+      DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[model]?.capabilities,
     isConfigured: (ctx) => {
       const baseUrl = ctx.cfg?.models?.providers?.[options.providerId]?.baseUrl;
       if (options.credentialPolicy?.acceptsBaseUrl?.(baseUrl) === false) {

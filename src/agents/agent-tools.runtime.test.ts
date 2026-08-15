@@ -1,4 +1,5 @@
 // Coverage for agent tool runtime execution and scoped authority.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -9,6 +10,10 @@ import {
   runWithAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "./runtime/internal-hooks.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import {
   getToolTerminalPresentation,
@@ -382,6 +387,69 @@ describe("wrapToolWithAbortSignal", () => {
     const wrapped = wrapToolWithAbortSignal(tool, new AbortController().signal);
 
     expect(getToolTerminalPresentation(wrapped)).toBe(formatter);
+  });
+
+  it("does not enter private preparation when the run is already aborted", async () => {
+    const sourcePreparer = vi.fn(async () => ({
+      kind: "ready" as const,
+      args: {},
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+      dispose: vi.fn(),
+    }));
+    const tool = attachInternalToolExecutionPreparer(
+      asAgentTool({ name: "prepared", execute: vi.fn() }),
+      sourcePreparer,
+    );
+    const runAbort = new AbortController();
+    runAbort.abort();
+    const wrapped = wrapToolWithAbortSignal(tool, runAbort.signal);
+    const preparer = expectDefined(
+      getInternalToolExecutionPreparer(wrapped),
+      "abort-adapted preparer",
+    );
+
+    await expect(preparer({ toolCallId: "already-aborted", args: {} })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(sourcePreparer).not.toHaveBeenCalled();
+  });
+
+  it("disposes cancellation-ignoring private preparation after a later abort", async () => {
+    let release!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const dispose = vi.fn();
+    const body = vi.fn(async () => ({ content: [], details: {} }));
+    const sourcePreparer = vi.fn(async () => {
+      markStarted();
+      await blocked;
+      return { kind: "ready" as const, args: {}, execute: body, dispose };
+    });
+    const tool = attachInternalToolExecutionPreparer(
+      asAgentTool({ name: "prepared", execute: vi.fn() }),
+      sourcePreparer,
+    );
+    const runAbort = new AbortController();
+    const wrapped = wrapToolWithAbortSignal(tool, runAbort.signal);
+    const preparer = expectDefined(
+      getInternalToolExecutionPreparer(wrapped),
+      "abort-adapted preparer",
+    );
+
+    const preparing = preparer({ toolCallId: "later-aborted", args: {} });
+    await started;
+    runAbort.abort();
+    await expect(preparing).rejects.toMatchObject({ name: "AbortError" });
+    release();
+    await flushMicrotasks();
+
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(body).not.toHaveBeenCalled();
   });
 });
 

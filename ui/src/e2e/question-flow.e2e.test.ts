@@ -2,32 +2,31 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { QuestionResolveResult } from "@openclaw/gateway-protocol";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Page } from "playwright";
+import { afterEach, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
+import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import {
-  canRunPlaywrightChromium,
   controlUiSessionUrl,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI Gateway question flow",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not available at ${executablePath}`,
+});
+
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "question-flow");
 const mainSessionKey = "agent:main:main";
 const questionSessionKey = "agent:main:question-proof";
 
-let browser: Browser;
 let context: BrowserContext | undefined;
-let server: ControlUiE2eServer;
-
 function questionRecord(
   id: string,
   questions: Array<{
@@ -80,7 +79,7 @@ function historyMessages() {
 }
 
 async function openQuestionPage() {
-  context = await browser.newContext({
+  context = await suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1440 },
@@ -125,7 +124,7 @@ async function openQuestionPage() {
     // lives in its own existing thread so the real sidebar can render its row.
     sessionKey: mainSessionKey,
   });
-  await page.goto(controlUiSessionUrl(server.baseUrl, questionSessionKey));
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, questionSessionKey));
   // Chat and sidebar each own a projection; both must bind to the advertised
   // real client before a lost-broadcast test can prove cross-surface delivery.
   await expect
@@ -159,23 +158,95 @@ async function emitRequested(
   await gateway.emitGatewayEvent("question.requested", record);
 }
 
-describeControlUiE2e("Control UI Gateway question flow", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is not available at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
+function scrollRegressionQuestion(id: string, prompt: string) {
+  return questionRecord(id, [
+    {
+      questionId: "release_strategy",
+      header: "Strategy",
+      question: prompt,
+      options: Array.from({ length: 4 }, (_, index) => ({
+        label: `Release strategy ${index + 1}`,
+        description: `Deterministic option ${index + 1} makes the rendered panel exceed the near-bottom threshold after layout, proving resize reconciliation follows explicit user intent instead of stale geometry.`,
+      })),
+      isOther: true,
+    },
+  ]);
+}
 
+suite.define(() => {
   afterEach(async () => {
     await context?.close().catch(() => {});
     context = undefined;
   });
 
-  afterAll(async () => {
-    await browser?.close().catch(() => {});
-    await server?.close();
+  it("settles a live-edge transcript after a question enters footer flow", async () => {
+    const { gateway, page } = await openQuestionPage();
+    await waitForChatScrollIdle(page);
+    await expect
+      .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+      .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+
+    const prompt = "Which detailed release strategy should I use?";
+    await emitRequested(gateway, scrollRegressionQuestion("question-live-edge-scroll", prompt));
+    const panel = panelFor(page, prompt);
+    await panel.waitFor();
+    await waitForChatScrollIdle(page);
+
+    await expect
+      .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+      .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+    await expect
+      .poll(async () => {
+        const panelBox = await panel.boundingBox();
+        const conversationBox = await page.locator(".chat-main__conversation").boundingBox();
+        return Boolean(
+          panelBox &&
+          conversationBox &&
+          panelBox.y >= conversationBox.y - 1 &&
+          panelBox.y + panelBox.height <= conversationBox.y + conversationBox.height + 1,
+        );
+      })
+      .toBe(true);
+    await expect.poll(() => page.getByRole("button", { name: "Scroll to latest" }).count()).toBe(0);
+    await screenshot(page, "05-question-live-edge-scroll.png");
+  });
+
+  it("preserves explicit backscroll and keeps the latest arrow above the question", async () => {
+    const { gateway, page } = await openQuestionPage();
+    await waitForChatScrollIdle(page);
+    const thread = page.locator(".chat-thread");
+    await thread.hover();
+    await page.mouse.wheel(0, -600);
+    await expect
+      .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+      .toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+    const scrollToLatest = page.getByRole("button", { name: "Scroll to latest" });
+    await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
+    await waitForChatScrollIdle(page);
+    const readingScrollTop = await thread.evaluate((element) => element.scrollTop);
+
+    const prompt = "Which detailed release strategy should stay below my reading position?";
+    await emitRequested(gateway, scrollRegressionQuestion("question-backscroll-position", prompt));
+    const panel = panelFor(page, prompt);
+    await panel.waitFor();
+    await waitForChatScrollIdle(page);
+
+    await expect
+      .poll(
+        async () =>
+          Math.abs((await thread.evaluate((element) => element.scrollTop)) - readingScrollTop),
+        { timeout: 10_000 },
+      )
+      .toBeLessThanOrEqual(2);
+    await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
+    await expect
+      .poll(async () => {
+        const arrowBox = await scrollToLatest.boundingBox();
+        const panelBox = await panel.boundingBox();
+        return Boolean(arrowBox && panelBox && arrowBox.y + arrowBox.height <= panelBox.y);
+      })
+      .toBe(true);
+    await screenshot(page, "06-question-backscroll-arrow.png");
   });
 
   it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
@@ -233,15 +304,6 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
         };
       })
       .toEqual({ left: 0, width: 0 });
-    await expect
-      .poll(async () => {
-        const panelHeight = (await panel.boundingBox())?.height ?? 0;
-        const padding = await page
-          .locator(".chat-thread")
-          .evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingBottom));
-        return padding >= panelHeight;
-      })
-      .toBe(true);
     await screenshot(page, "01-question-pending.png");
 
     await panel.locator(".chat-question-panel__collapse").click();

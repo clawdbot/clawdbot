@@ -21,6 +21,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
+import { toStandardGoogleProviderBase64 } from "./base64.js";
 
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image";
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
@@ -248,8 +249,12 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
           if (!data) {
             throw new Error(GOOGLE_IMAGE_MALFORMED_RESPONSE);
           }
+          const standardData = toStandardGoogleProviderBase64(data);
+          if (!standardData) {
+            throw new Error(GOOGLE_IMAGE_MALFORMED_RESPONSE);
+          }
           const image = generatedImageAssetFromBase64({
-            base64: data,
+            base64: standardData,
             index: imageIndex,
             mimeType:
               normalizeOptionalString(inline.mimeType) ??

@@ -106,7 +106,7 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
 }
 
 /** Resolves configured heartbeat prompt text with the built-in default fallback. */
-export function resolveHeartbeatPrompt(raw?: string): string {
+export function resolveHeartbeatPromptCore(raw?: string): string {
   const trimmed = normalizeOptionalString(raw) ?? "";
   return trimmed || HEARTBEAT_PROMPT;
 }

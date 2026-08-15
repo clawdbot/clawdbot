@@ -32,12 +32,16 @@ import {
   TINY_PNG_BASE64,
   QA_REASONING_ONLY_RECOVERY_PROMPT_RE,
   QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE,
+  QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT_RE,
   QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE,
   QA_THINKING_VISIBILITY_OFF_PROMPT_RE,
   QA_THINKING_VISIBILITY_MAX_PROMPT_RE,
   QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE,
   QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE,
   QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE,
+  QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
+  QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
+  QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
   QA_STREAMING_PROMPT_RE,
   QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
   QA_BLOCK_STREAMING_PROMPT_RE,
@@ -64,12 +68,15 @@ import {
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE,
+  QA_SUBAGENT_SELF_YIELD_WORKER_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE,
   buildStrandedFinalRecoveryText,
   buildStrandedFinalRetryFailureText,
   isStrandedFinalRetryFailureRequest,
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
+  QA_SUBAGENT_SELF_YIELD_MARKER,
   QA_SUBAGENT_TERMINAL_MARKERS,
   QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
   QA_NATIVE_STOP_DELAY_PROMPT_RE,
@@ -127,7 +134,6 @@ import {
   isHeartbeatPrompt,
 } from "./mock-openai-directives.js";
 import {
-  buildToolCallEvents,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
   extractPlannedToolName,
@@ -137,8 +143,10 @@ import {
   buildQaLongFinalText,
   buildAssistantThenToolCallEvents,
   buildAssistantEvents,
+  buildPartialFailureEvents,
   buildReasoningOnlyEvents,
   buildReasoningAndAssistantEvents,
+  buildFailedResponseEvents,
 } from "./mock-openai-events.js";
 import {
   extractLastUserText,
@@ -280,6 +288,12 @@ const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
 const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
+const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
+const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
+const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
+// Keep each real provider request active long enough for retries to span the
+// unchanged five-minute recovery bound while remaining below first-byte timeout.
+const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 110_000;
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -779,9 +793,8 @@ async function buildResponsesPayload(
     compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
   } = {},
 ) {
-  const providerVariant = resolveProviderVariant(
-    typeof body.model === "string" ? body.model : undefined,
-  );
+  const model = typeof body.model === "string" ? body.model : "";
+  const providerVariant = resolveProviderVariant(model);
   const input = normalizeResponsesInput(body.input);
   const toolDeclarationBody = resolveCurrentToolDeclarationSurface(body, input);
   const prompt = extractLastUserText(input);
@@ -853,6 +866,20 @@ async function buildResponsesPayload(
     )
       ? extractLatestToolOutput(input)
       : "");
+  // The queued followup carries the stalled prompt in transcript history, so
+  // current-turn dispatch must win before the persistent recovery fixture.
+  if (QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)) {
+    return buildAssistantEvents(QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER);
+  }
+  if (QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE.test(prompt)) {
+    return buildPartialFailureEvents(QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER);
+  }
+  if (QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE.test(prompt)) {
+    return buildFailedResponseEvents();
+  }
+  if (QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText)) {
+    return buildFailedResponseEvents();
+  }
   const toolJson = parseToolOutputJson(scenarioToolOutput);
   if (codeModeControlJson?.status === "waiting" && hasToolDefinition(toolDeclarationBody, "wait")) {
     if ("cellId" in codeModeControlJson && typeof codeModeControlJson.cellId === "string") {
@@ -956,11 +983,11 @@ async function buildResponsesPayload(
     if (!hasCompletedToolOutput) {
       scenarioState.toolLoopReadAttempts = 0;
     }
-    if (/global circuit breaker/i.test(toolOutput)) {
+    if (/do not repeat this exact tool action/i.test(toolOutput)) {
       return buildAssistantEvents(exactReplyDirective ?? "GLOBAL-LOOP-BREAKER-OK");
     }
     scenarioState.toolLoopReadAttempts += 1;
-    if (scenarioState.toolLoopReadAttempts > 31) {
+    if (scenarioState.toolLoopReadAttempts > 21) {
       return buildAssistantEvents("GLOBAL-LOOP-BREAKER-NOT-REACHED");
     }
     return buildToolCallEventsWithArgs("read", { path: "LOOP_STEADY.txt" });
@@ -1122,6 +1149,18 @@ async function buildResponsesPayload(
   if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
     return buildAssistantEvents(QA_SUBAGENT_DIRECT_FALLBACK_MARKER);
   }
+  // A child that pauses itself and finishes only when a later follow-up arrives
+  // on the same session. Both turns are matched on the current prompt so the
+  // yielded kickoff, still present in the shared transcript, cannot make the
+  // follow-up turn yield a second time.
+  if (QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE.test(prompt)) {
+    return buildAssistantEvents(QA_SUBAGENT_SELF_YIELD_MARKER);
+  }
+  if (QA_SUBAGENT_SELF_YIELD_WORKER_RE.test(prompt) && canCallSessionsYield) {
+    return buildToolCallEventsWithArgs("sessions_yield", {
+      message: "Waiting for the remote job to report back.",
+    });
+  }
   const terminalCompletionCase = extractLastMatchingUserTurn(
     input,
     QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
@@ -1129,7 +1168,13 @@ async function buildResponsesPayload(
     ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
     ?.toLowerCase();
   if (terminalCompletionCase && /Internal task completion event/i.test(allInputText)) {
-    if (terminalCompletionCase === "empty") {
+    const visibleRepresentation =
+      terminalCompletionCase === "silent"
+        ? QA_SUBAGENT_TERMINAL_MARKERS.silent
+        : terminalCompletionCase === "empty"
+          ? QA_SUBAGENT_TERMINAL_MARKERS.empty
+          : undefined;
+    if (visibleRepresentation) {
       if (completedToolName === "message") {
         return buildAssistantEvents("");
       }
@@ -1144,15 +1189,15 @@ async function buildResponsesPayload(
           );
         return buildToolCallEventsWithArgs("message", {
           action: "send",
-          message: QA_SUBAGENT_TERMINAL_MARKERS.empty,
+          message: visibleRepresentation,
           ...(requiresFinal ? { final: true } : {}),
         });
       }
-      return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS.empty);
+      return buildAssistantEvents(visibleRepresentation);
     }
-    // The direct delivery fallback owns visible, silent, restart, and sanitized
-    // fallback results. Use explicit silence so generic empty-response recovery
-    // cannot replay the historical spawn before that fallback runs.
+    // The direct delivery fallback owns visible, restart, and sanitized fallback
+    // results. Use explicit silence so generic empty-response recovery cannot
+    // replay the historical spawn before that fallback runs.
     return buildAssistantEvents("NO_REPLY");
   }
   const terminalWorkerCase = Array.from(
@@ -1321,6 +1366,17 @@ async function buildResponsesPayload(
       );
     }
     return buildAssistantEvents("BUG-SHOULD-NOT-AUTO-RETRY");
+  }
+  if (QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT_RE.test(allInputText)) {
+    // The catalog's default mock alternate and the explicit proof model both
+    // recover, so the scenario exercises the same fallback path with or without flags.
+    if (model === "gpt-5.6-luna-alt" || model === "mock-visible-fallback") {
+      return buildAssistantEvents("MODEL-FALLBACK-VISIBLE-OK");
+    }
+    return buildReasoningAndAssistantEvents({
+      reasoningId: `rs_mock_mixed_blank_${model.replaceAll(/[^a-z0-9]+/gi, "_")}`,
+      answerText: " ",
+    });
   }
   if (QA_THINKING_VISIBILITY_MAX_PROMPT_RE.test(prompt)) {
     return buildReasoningAndAssistantEvents({
@@ -2306,7 +2362,7 @@ async function buildResponsesPayload(
     });
   }
   if (!hasCompletedToolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
-    return buildToolCallEvents(prompt);
+    return buildToolCallEventsWithArgs("read", { path: readTargetFromPrompt(prompt) });
   }
   if (/visible skill marker/i.test(prompt) && !hasCompletedToolOutput) {
     return buildAssistantEvents("VISIBLE-SKILL-OK");
@@ -2520,7 +2576,11 @@ export async function startQaMockOpenAiServer(params?: {
         : undefined);
     recordRequest({
       ...requestSnapshotBase,
-      outcome: failure ? "error" : "success",
+      outcome:
+        failure || events.some((event) => event.type === "response.failed") ? "error" : "success",
+      ...(events.some((event) => event.type === "response.failed")
+        ? { errorCode: "response_failed_no_details" }
+        : {}),
       plannedToolCallId: plannedToolIdentity.callId,
       ...(request.route === "responses" && plannedToolIdentity.itemId
         ? { plannedToolItemId: plannedToolIdentity.itemId }
@@ -2548,6 +2608,10 @@ export async function startQaMockOpenAiServer(params?: {
       ...(failure ? { failure } : {}),
       ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
         ? { previewPauseMs: finalOnlyMarkerPauseMs }
+        : {}),
+      ...(QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText) &&
+      !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)
+        ? { responsePauseMs: QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS }
         : {}),
     };
   };
@@ -2696,6 +2760,9 @@ export async function startQaMockOpenAiServer(params?: {
           return;
         }
         const { events } = dispatched;
+        if (dispatched.responsePauseMs !== undefined) {
+          await sleep(dispatched.responsePauseMs);
+        }
         if (body.stream === false) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {

@@ -636,9 +636,15 @@ export function buildBuiltinChatCommands(
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.exec,
     }),
-    defineBuiltinCommand("model", "Show or set the model.", "options", "essential", {
-      args: [defineCommandArgument("model", "Model id (provider/model or id)")],
-    }),
+    defineBuiltinCommand(
+      "model",
+      "Show or set the model; direct owner/admin selections request a default update.",
+      "options",
+      "essential",
+      {
+        args: [defineCommandArgument("model", "Model id; add -s to change only this session")],
+      },
+    ),
     defineBuiltinCommand("models", "List model providers/models.", "options", "standard", {
       acceptsArgs: true,
     }),

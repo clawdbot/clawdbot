@@ -36,6 +36,24 @@ export function isVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: st
   return chatOutboxOwner(host).hasVolatile(host, id);
 }
 
+/** True while the row has a stored copy that would survive a reload. */
+export function isDurableQueuedMessage(host: ChatQueueScopedSessionHost, id: string): boolean {
+  return chatOutboxOwner(host).durable(host, id) !== undefined;
+}
+
+/**
+ * Every pane sharing an outbox also shares its drain, and any of them can own the
+ * drain lane. A fact one pane records about a row — a delivery hold, say — has to
+ * be read across all of them, or the pane that drains will not see it. Panes
+ * registered with an owner are the same kind of chat host as the caller.
+ */
+export function anyChatOutboxPaneMatches<T extends ChatQueueScopedSessionHost>(
+  host: T,
+  matches: (pane: T) => boolean,
+): boolean {
+  return matches(host) || chatOutboxOwner(host).anyPane((pane) => matches(pane as T));
+}
+
 export function keepVolatileQueuedMessage(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
@@ -259,15 +277,21 @@ export function updateQueuedMessageForSession(
   return nextItem;
 }
 
+/**
+ * `replacesId` admits the item as the stored replacement for another row, which
+ * retires the source in the same write. A rejected write changes nothing, so an
+ * edited message can never lose both its original and its replacement.
+ */
 export function admitQueuedMessageForSession(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
   item: ChatQueueItem,
+  replacesId?: string,
 ): boolean {
   const owner = chatOutboxOwner(host);
   const scope = resolveStoredChatOutboxScope(host, sessionKey, item.agentId);
   owner.keep(host, scope, item);
-  if (!admitStoredChatComposerQueueItem(host, sessionKey, item, item.agentId)) {
+  if (!admitStoredChatComposerQueueItem(host, sessionKey, item, item.agentId, replacesId)) {
     return false;
   }
   if (item.sendState !== "waiting-model") {
@@ -337,10 +361,12 @@ export function excludeComposerAttachments(
 }
 
 export function removeQueuedMessage(host: ChatQueueScopedSessionHost, id: string) {
-  const removed = removeQueuedMessageWithoutReleasing(host, id);
+  const item = readQueuedMessageById(host, id);
+  const removed = item ? removeQueuedMessageWithoutReleasing(host, id) : null;
   if (removed) {
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
   }
+  return removed ? ("removed" as const) : item ? ("rejected" as const) : ("absent" as const);
 }
 
 export function removeDeliveredQueuedChatSendForRun(

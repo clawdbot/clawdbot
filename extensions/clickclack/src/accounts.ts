@@ -9,6 +9,7 @@ import {
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
@@ -36,7 +37,7 @@ const {
 } = createAccountListHelpers<ClickClackAccountConfig>("clickclack", {
   normalizeAccountId,
   omitKeys: ["defaultAccount"],
-  nestedObjectKeys: ["discussions"],
+  nestedObjectKeys: ["botLoopProtection", "discussions"],
   hasImplicitDefaultAccount: (cfg) => {
     const channel = cfg.channels?.clickclack;
     return Boolean(
@@ -61,10 +62,16 @@ function mergeClickClackGroups(
       if (!key) {
         continue;
       }
+      const mergedBotLoopProtection = mergePairLoopGuardConfig(
+        merged.get(key)?.botLoopProtection,
+        value.botLoopProtection,
+      );
       merged.set(key, {
         ...merged.get(key),
         ...(value.requireMention !== undefined ? { requireMention: value.requireMention } : {}),
         ...(value.mentionPatterns !== undefined ? { mentionPatterns: value.mentionPatterns } : {}),
+        ...(value.allowBots !== undefined ? { allowBots: value.allowBots } : {}),
+        ...(mergedBotLoopProtection ? { botLoopProtection: mergedBotLoopProtection } : {}),
       });
     }
   }
@@ -217,6 +224,8 @@ export function resolveClickClackAccount(params: {
     // the ClickClack side, so this stays a per-account opt-in (default off),
     // matching the streaming-progress commentary opt-in precedent.
     agentActivity: merged.agentActivity === true,
+    // Native progress is a compatibility-sensitive endpoint opt-in.
+    nativeProgress: merged.nativeProgress === true,
     // Command-menu sync is best effort and current bot:write tokens include
     // commands:write, so resolved accounts default on unless explicitly disabled.
     commandMenu: merged.commandMenu !== false,
@@ -228,6 +237,8 @@ export function resolveClickClackAccount(params: {
     },
     requireMention: merged.requireMention === true,
     mentionPatterns: merged.mentionPatterns ?? [],
+    allowBots: merged.allowBots ?? false,
+    botLoopProtection: merged.botLoopProtection,
     groups: mergeClickClackGroups(merged.groups),
     config: {
       ...merged,

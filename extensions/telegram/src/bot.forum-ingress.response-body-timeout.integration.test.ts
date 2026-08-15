@@ -2,11 +2,23 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { Bot } from "grammy";
+import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { registerTelegramMessageHandlers } from "./bot-handlers.message-events.runtime.js";
+import { defaultTelegramBotDeps } from "./bot-deps.js";
+import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
+import {
+  createTelegramInboundPipeline,
+  registerTelegramInboundHandlers,
+} from "./bot-handlers.inbound-pipeline.js";
+import {
+  createTelegramMessagePipeline,
+  type TelegramMessagePipeline,
+} from "./bot-handlers.message-pipeline.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
+import { createTelegramIngressResolver, createTelegramIngressSubject } from "./ingress.js";
 import * as telegramRequestTimeouts from "./request-timeouts.js";
 
 describe("Telegram supergroup ingress with a stalled Bot API response body", () => {
@@ -72,37 +84,75 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       botInfo,
       client: { apiRoot, fetch: asTelegramClientFetch(clientFetch) },
     });
-    const dispatched = vi.fn<
-      Parameters<typeof registerTelegramMessageHandlers>[3]["processInboundMessage"]
-    >(async () => undefined);
+    const dispatched = vi.fn<TelegramMessagePipeline["processMessageWithReplyChain"]>(async () => ({
+      kind: "completed",
+    }));
     const emptyAllow = {
       entries: [],
       hasWildcard: false,
       hasEntries: false,
       invalidEntries: [],
     };
-    const authorization = {
-      authorizeInboundMessage: vi.fn(async () => ({
+    const params: RegisterTelegramHandlerParams = {
+      accountId: "default",
+      ownerAgentId: "main",
+      bot,
+      cfg: {},
+      mediaMaxBytes: 1,
+      opts: { token: "123456:integration-token", botInfo },
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+      telegramCfg: {},
+      telegramDeps: defaultTelegramBotDeps,
+      logger: getChildLogger({ module: "telegram/forum-ingress-test" }),
+      resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
+      resolveGroupActivation: () => undefined,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({}),
+      shouldSkipUpdate: () => false,
+      processMessage: async () => ({ kind: "completed" }),
+    };
+    const authorizeInboundMessage = vi.fn<
+      ReturnType<typeof createTelegramHandlerAuthorization>["authorizeInboundMessage"]
+    >(async (inbound) => {
+      const resolver = createTelegramIngressResolver({ accountId: "default" });
+      return {
         allowed: true as const,
+        resolveChannelIngress: async (contextBinding) =>
+          await resolver.message({
+            subject: createTelegramIngressSubject(inbound.senderId),
+            conversation: {
+              kind: inbound.isGroup ? "group" : "direct",
+              id: String(inbound.chatId),
+            },
+            contextBinding,
+            dmPolicy: "open",
+            groupPolicy: "open",
+          }),
         effectiveDmAllow: emptyAllow,
         context: {
           cfg: {},
           telegramCfg: {},
           allowFrom: [],
           dmPolicy: "open" as const,
+          threadSpec: inbound.isGroup ? ({ scope: "none" } as const) : ({ scope: "dm" } as const),
           storeAllowFrom: [],
           effectiveGroupAllow: emptyAllow,
           hasGroupAllowOverride: false,
         },
-      })),
-    } satisfies Parameters<typeof registerTelegramMessageHandlers>[2];
-    const messageRuntime = {
+      };
+    });
+    const authorization = {
+      ...createTelegramHandlerAuthorization(params),
+      authorizeInboundMessage,
+    };
+    const message: TelegramMessagePipeline = {
+      ...createTelegramMessagePipeline(params),
       normalizePromptContextMinTimestampMs: () => undefined,
       promptContextBoundaryOptions: () => ({}),
       releaseDispatchDedupeClaims: () => undefined,
       claimMessageDispatchDedupe: async () => ({ process: true, claims: [] }),
-      buildSyntheticContext: (context, message) => ({
-        message,
+      buildSyntheticContext: (context, syntheticMessage) => ({
+        message: syntheticMessage,
         me: context.me,
         getFile: context.getFile.bind(context),
       }),
@@ -114,20 +164,15 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
         model: undefined,
       }),
       resolvePromptContextAmbientWatermark: () => undefined,
-      recordMessageForReplyChain: async () => undefined,
-    } satisfies Parameters<typeof registerTelegramMessageHandlers>[1];
-
-    registerTelegramMessageHandlers(
-      {
-        bot,
-        opts: { botInfo },
-        runtime: { error: vi.fn() },
-        shouldSkipUpdate: () => false,
-      } satisfies Parameters<typeof registerTelegramMessageHandlers>[0],
-      messageRuntime,
-      authorization,
-      { processInboundMessage: dispatched },
-    );
+      recordMessageForReplyChain: async (msg) => ({
+        messageId: String(msg.message_id),
+        sender: "integration sender",
+        sourceMessage: msg,
+      }),
+      processMessageWithReplyChain: dispatched,
+    };
+    const pipeline = createTelegramInboundPipeline({ params, message, authorization });
+    registerTelegramInboundHandlers({ bot, pipeline });
 
     const headersReceived = new Promise<void>((resolve) => {
       resolveGetChatHeaders = resolve;
@@ -156,7 +201,12 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       },
     });
     expect(dispatched).toHaveBeenCalledTimes(1);
-    expect(dispatched.mock.calls[0]?.[0]).toMatchObject({ chatId: 222, isGroup: false });
+    expect(dispatched.mock.calls[0]?.[0].msg.chat.id).toBe(222);
+    expect(authorizeInboundMessage.mock.calls[0]?.[0]).toMatchObject({
+      chatId: 222,
+      isGroup: false,
+      isForum: false,
+    });
 
     const groupResult = await Promise.race([
       groupDelivery.then(() => "dispatched" as const),
@@ -167,7 +217,8 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
 
     expect(groupResult).toBe("dispatched");
     expect(dispatched).toHaveBeenCalledTimes(2);
-    expect(dispatched.mock.calls[1]?.[0]).toMatchObject({
+    expect(dispatched.mock.calls[1]?.[0].msg.chat.id).toBe(-100364);
+    expect(authorizeInboundMessage.mock.calls[1]?.[0]).toMatchObject({
       chatId: -100364,
       isGroup: true,
       isForum: false,

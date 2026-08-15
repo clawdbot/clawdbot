@@ -1,17 +1,13 @@
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
-  TaskSuggestion,
-  TaskSuggestionEvent,
-  TaskSuggestionsAcceptResult,
-  TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedSessionPullRequestKey,
@@ -26,13 +22,9 @@ import {
 } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
-import { refreshChatAvatar } from "./chat-avatar.ts";
-import {
-  loadChatBranches,
-  loadChatHistory,
-  syncSelectedSessionMessageSubscription,
-} from "./chat-history.ts";
+import { loadChatBranches } from "./chat-history.ts";
 import {
   CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS,
   catalogRawResult,
@@ -40,75 +32,21 @@ import {
   nativeHistoryMessageIdentity,
   summarizeSessionPullRequests,
 } from "./chat-pane-shared.ts";
-import { ChatPaneSharing } from "./chat-pane-sharing.ts";
-import { applySelectedSessionProjection } from "./chat-pane-state.ts";
-import { flushChatQueueForEvent } from "./chat-send-actions.ts";
-import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
+import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { refreshChatMetadata } from "./chat-state-refresh.ts";
-import {
-  refreshRouteSessionOptions,
-  resetChatStateForRouteSession,
-  retryChatComposerMemoryFallback,
-  resolveChatAgentId,
-  saveRouteSessionSettings,
-} from "./chat-state-route.ts";
-import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
+import { resolveChatAgentId, saveRouteSessionSettings } from "./chat-state-route.ts";
 import {
   dismissChatPullRequest,
   listDismissedChatPullRequests,
 } from "./components/chat-pull-requests.ts";
-import { resetChatThreadSessionPresentationState } from "./components/chat-thread.ts";
-import {
-  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
-  loadChatComposerSnapshot,
-  resolveStoredChatOutboxScope,
-  storedChatOutboxScopeKey,
-} from "./composer-persistence.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
-export abstract class ChatPaneSession extends ChatPaneSharing {
-  protected async refreshTaskSuggestions(): Promise<void> {
-    const requestVersion = ++this.taskSuggestionsRequestVersion;
-    const scope = this.captureConnectionScope();
-    if (
-      !scope ||
-      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.list")
-    ) {
-      this.taskSuggestions = [];
-      this.requestUpdate();
-      return;
-    }
-    const sessionKey = scope.state.sessionKey;
-    if (parseCatalogSessionKey(sessionKey)) {
-      this.taskSuggestions = [];
-      this.requestUpdate();
-      return;
-    }
-    const agentId = resolveChatAgentId(scope.state);
-    try {
-      const result = await scope.client.request<TaskSuggestionsListResult>("taskSuggestions.list", {
-        agentId,
-      });
-      if (
-        requestVersion !== this.taskSuggestionsRequestVersion ||
-        !this.isConnectionScopeCurrent(scope) ||
-        sessionKey !== scope.state.sessionKey
-      ) {
-        return;
-      }
-      this.taskSuggestions = result.suggestions.filter((suggestion) =>
-        this.suggestionMatchesCurrentSession(suggestion),
-      );
-      this.requestUpdate();
-    } catch {
-      // Suggestions are an optional ephemeral affordance; chat remains usable
-      // when an older Gateway or a reconnect loses the process-local registry.
-      // Keep event-delivered cards when a background reconciliation fails.
-    }
-  }
-
+export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   protected async refreshSessionPullRequests(options: { refresh?: boolean } = {}): Promise<void> {
+    if (!this.presented) {
+      sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
+      return;
+    }
     const scope = this.captureConnectionScope();
     if (
       !scope ||
@@ -189,81 +127,6 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
     this.requestUpdate();
   };
 
-  protected handleTaskSuggestionEvent(event: TaskSuggestionEvent): void {
-    if (event.action === "created") {
-      if (!this.suggestionMatchesCurrentSession(event.suggestion)) {
-        return;
-      }
-      this.taskSuggestions = [
-        event.suggestion,
-        ...this.taskSuggestions.filter((item) => item.id !== event.suggestion.id),
-      ];
-    } else {
-      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== event.taskId);
-      this.taskSuggestionBusyIds.delete(event.taskId);
-    }
-    this.requestUpdate();
-    // The replacement snapshot includes the event plus unrelated suggestions;
-    // its request version prevents any older snapshot from overwriting either.
-    void this.refreshTaskSuggestions();
-  }
-
-  protected readonly acceptTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
-    this.resolveTaskSuggestion(suggestion, "accept");
-
-  protected readonly dismissTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
-    this.resolveTaskSuggestion(suggestion, "dismiss");
-
-  protected async resolveTaskSuggestion(
-    suggestion: TaskSuggestion,
-    action: "accept" | "dismiss",
-  ): Promise<void> {
-    const scope = this.captureConnectionScope();
-    if (
-      !scope ||
-      !this.suggestionMatchesCurrentSession(suggestion) ||
-      this.taskSuggestionOperations.has(suggestion.id)
-    ) {
-      return;
-    }
-    const sessionKey = scope.state.sessionKey;
-    const operation = Symbol();
-    const isCurrent = () =>
-      this.isConnectionScopeCurrent(scope) &&
-      scope.state.sessionKey === sessionKey &&
-      this.taskSuggestionOperations.get(suggestion.id) === operation;
-    this.taskSuggestionOperations.set(suggestion.id, operation);
-    this.taskSuggestionBusyIds.add(suggestion.id);
-    this.requestUpdate();
-    try {
-      const result = await scope.client.request<TaskSuggestionsAcceptResult>(
-        action === "accept" ? "taskSuggestions.accept" : "taskSuggestions.dismiss",
-        { taskId: suggestion.id },
-      );
-      if (!isCurrent()) {
-        return;
-      }
-      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== suggestion.id);
-      if (action === "accept") {
-        this.onPaneSessionChange?.(this.paneId, result.key);
-      }
-    } catch (error) {
-      if (!isCurrent()) {
-        return;
-      }
-      scope.state.lastError = error instanceof Error ? error.message : String(error);
-      scope.state.chatError = scope.state.lastError;
-    } finally {
-      if (this.taskSuggestionOperations.get(suggestion.id) === operation) {
-        this.taskSuggestionOperations.delete(suggestion.id);
-        this.taskSuggestionBusyIds.delete(suggestion.id);
-        if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
-          this.requestUpdate();
-        }
-      }
-    }
-  }
-
   protected deferSessionHydrationUntilTranscript(
     sessionKey: string,
     transcriptLoad: Promise<unknown>,
@@ -327,14 +190,23 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
       return;
     }
     const guardKey = state.sessionKey;
-    void this.context.sessions.patch(row.key, { unread: false }, { agentId }).catch(() => {
-      // Unlatch so later unread snapshots retry; the session capability
-      // publishes the actionable error for the owning page.
-      this.unreadPatchGuard.patchFailed(guardKey);
-    });
+    void this.context.sessions.patch(row.key, { unread: false }, { agentId }).then(
+      (result) => {
+        // A null result means no request was sent (connection scope lost);
+        // unlatch like a failure or the badge stays lit until navigation.
+        if (result === null) {
+          this.unreadPatchGuard.patchFailed(guardKey);
+        }
+      },
+      () => {
+        // Unlatch so later unread snapshots retry; the session capability
+        // publishes the actionable error for the owning page.
+        this.unreadPatchGuard.patchFailed(guardKey);
+      },
+    );
   }
 
-  protected async restoreArchivedSession(sessionKey: string) {
+  protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {
     const scope = this.captureConnectionScope();
     if (!scope || scope.state.sessionKey !== sessionKey) {
       return;
@@ -353,7 +225,11 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
     let failure: string | null = null;
     try {
       // The patch can resolve falsy on failure; the capability error explains it.
-      const patched = await scope.sessions.patch(sessionKey, { archived: false }, { agentId });
+      const patched = await scope.sessions.patch(
+        sessionKey,
+        { archived: false },
+        { agentId, expectedSessionId },
+      );
       if (!patched) {
         failure = scope.sessions.state.error;
       }
@@ -390,6 +266,7 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
     if (
       !state ||
       !this.active ||
+      !this.presented ||
       !this.sessionKey.trim() ||
       parseCatalogSessionKey(state.sessionKey)
     ) {
@@ -404,142 +281,15 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
     });
   }
 
-  protected switchPaneSession(nextSessionKey: string) {
-    const state = this.state;
-    if (!state) {
-      return;
-    }
-    // Close old-session listener owners before the next render detaches their
-    // DOM; thread-global portals and caches are reset separately.
-    dismissConfirmedActionPopovers(this);
-    resetChatThreadSessionPresentationState(this.paneId);
-    this.sessionDiscussionOpenUrls.clear();
-    const previousSessionKey = state.sessionKey;
-    // An in-progress title edit belongs to the previous session; committing
-    // it against the newly routed row would rename the wrong session.
-    this.cancelHeaderRename();
-    const restoredPosition = this.resetOlderMessagesViewport(nextSessionKey);
-    const catalogKey = parseCatalogSessionKey(nextSessionKey);
-    const previousAgentId = resolveChatAgentId(state);
-    const previousSessionsResult = state.sessionsResult;
-    const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
-    const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
-    const previousComposerScope =
-      this.chatState.composerScopeForRouteSwitch() ??
-      resolveStoredChatOutboxScope(state, previousSessionKey);
-    const previousComposerScopeKey = storedChatOutboxScopeKey(previousComposerScope);
-    const existingFallback = state.chatComposerFallbackByScope[previousComposerScopeKey];
-    const draftPersistResult = this.chatState.persistComposerForRouteSwitch();
-    const draftPersisted = draftPersistResult.status === "persisted";
-    const previousStoredSnapshot = loadChatComposerSnapshot(
-      state,
-      previousSessionKey,
-      previousComposerScope.agentId,
-    );
-    const previousStoredDraft = previousStoredSnapshot ? previousStoredSnapshot.draft : null;
-    const storedDraftMatches = previousStoredDraft === state.chatMessage;
-    const hasStagedAttachments = state.chatAttachments.length > 0;
-    const retainExistingFallback = existingFallback !== undefined && !storedDraftMatches;
-    const previousDraftRetry =
-      draftPersistResult.status === "storage-failed"
-        ? {
-            expectedDraftRevision: draftPersistResult.expectedDraftRevision,
-            draftRevision: draftPersistResult.draftRevision,
-          }
-        : existingFallback?.storageFailed && !storedDraftMatches
-          ? existingFallback.draftRetry
-          : undefined;
-    resetChatStateForRouteSession(state, nextSessionKey, {
-      retainPreviousComposerInMemory:
-        !draftPersisted || hasStagedAttachments || retainExistingFallback,
-      previousDraftRetry,
-      previousComposerScope,
-    });
-    // The sidebar row is already authoritative enough for first paint: it supplies
-    // the header and run controls while the reset restores any cached transcript.
-    applySelectedSessionProjection(state, nextSessionRow);
-    this.reconcileWaitingApprovalSnapshot();
-    retryChatComposerMemoryFallback(state, nextSessionKey);
-    // Route restoration is the new persistence baseline. An untouched pane
-    // must not later erase a draft written by another split pane. Memory-only
-    // fallbacks stay pane-local until a later edit persists successfully.
-    this.chatState.adoptComposerRoute();
-    this.taskSuggestionsRequestVersion += 1;
-    this.catalogLoadGeneration += 1;
-    this.taskSuggestions = [];
-    this.taskSuggestionBusyIds.clear();
-    this.taskSuggestionOperations.clear();
-    this.resetSessionSuggestions();
-    this.clearTypingActors();
-    this.resetSessionPullRequests();
-    if (catalogKey) {
-      this.openCatalogSession(catalogKey, state);
-      return;
-    }
-    this.catalogRequestedSessionKey = null;
-    this.markSessionRead(nextSessionRow);
-    if (previousSessionKey !== nextSessionKey) {
-      state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
-    }
-    void state.loadAssistantIdentity();
-    void refreshChatAvatar(state).finally(() => this.requestUpdate());
-    const nextAgentId = resolveChatAgentId(state);
-    // Agent-scoped catalogs remain valid across same-agent sessions. Cross-agent
-    // failures must clear instead of retaining models owned by the previous agent.
-    void refreshChatMetadata(state, {
-      preserveModelCatalogOnFallback: Boolean(previousAgentId && previousAgentId === nextAgentId),
-    }).finally(() => state.requestUpdate?.());
-    const subscriptionSync = syncSelectedSessionMessageSubscription(state);
-    const composerStorageError = state.chatError === CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-    const historyLoad = loadChatHistory(state, { deferBranches: true });
-    if (composerStorageError) {
-      // History loading clears the shared error slot synchronously. Restore the
-      // pane-local storage warning unless the retry above made the draft durable.
-      state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-      state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-    }
-    state.requestUpdate();
-    void this.refreshTaskSuggestions();
-    void this.refreshSessionSuggestions();
-    this.deferSessionHydrationUntilTranscript(nextSessionKey, historyLoad);
-    const scheduleHistoryScroll = () => {
-      if (state.sessionKey !== nextSessionKey) {
-        return;
-      }
-      state.requestUpdate();
-      if (restoredPosition === null || restoredPosition.anchorToEnd) {
-        scheduleChatScroll(state, true);
-      } else {
-        this.restoreOlderMessagesViewport(nextSessionKey, restoredPosition.scrollTop);
-      }
-    };
-    void historyLoad.then(scheduleHistoryScroll, scheduleHistoryScroll);
-    void historyLoad.then(
-      () => this.sendPendingSkillWorkshopRevision(nextSessionKey),
-      () => this.sendPendingSkillWorkshopRevision(nextSessionKey),
-    );
-    if (state.chatQueue.length > 0) {
-      const sessionsRefresh = refreshRouteSessionOptions(state);
-      flushChatQueueAfterIdleSessionReconciliation(
-        state,
-        nextSessionKey,
-        historyLoad,
-        sessionsRefresh,
-        previousSessionsResult,
-        () => void flushChatQueueForEvent(state),
-      );
-      void sessionsRefresh;
-    }
-    void subscriptionSync;
-    void historyLoad;
-  }
-
   protected openCatalogSession(key: CatalogSessionKey, state: ChatPageHost) {
     this.catalogRequestedSessionKey = buildCatalogSessionKey(key);
     this.catalogMessages = [];
     this.catalogCursor = undefined;
     this.catalogSession = null;
     this.catalogHost = null;
+    // Payload-store entries and their object URLs are reclaimed only by
+    // explicit release; clearing the array alone strands them for the tab.
+    releaseChatAttachmentPayloads(state.chatAttachments);
     state.chatAttachments = [];
     state.chatLoading = true;
     state.requestUpdate();
@@ -547,8 +297,7 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
   }
 
   protected catalogItemMessage(item: SessionCatalogTranscriptItem): Record<string, unknown> | null {
-    const parsedTimestamp = item.timestamp ? Date.parse(item.timestamp) : Number.NaN;
-    const timestamp = Number.isFinite(parsedTimestamp) ? parsedTimestamp : null;
+    const timestamp = parseDateStringTimestampMs(item.timestamp) ?? null;
     const text = item.text?.trim() ? item.text : null;
     if (item.type === "userMessage") {
       return text
@@ -635,10 +384,13 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
     if (older && !this.catalogCursor) {
       return false;
     }
+    const agentId = resolveChatAgentId(state);
     const generation = older ? this.catalogLoadGeneration : ++this.catalogLoadGeneration;
     const requestedSessionKey = buildCatalogSessionKey(key);
     const isCurrent = () =>
-      generation === this.catalogLoadGeneration && this.sessionKey === requestedSessionKey;
+      generation === this.catalogLoadGeneration &&
+      this.sessionKey === requestedSessionKey &&
+      resolveChatAgentId(state) === agentId;
     if (!older) {
       this.catalogLoading = true;
       this.catalogCursor = undefined;
@@ -651,7 +403,7 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
     }
     try {
       if (!older) {
-        const lookup = await lookupCatalogSession({ client, key, isCurrent });
+        const lookup = await lookupCatalogSession({ agentId, client, key, isCurrent });
         if (!lookup) {
           return false;
         }
@@ -663,9 +415,13 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
         this.olderCursorsSeen.add(requestedOlderCursor);
       }
       const page = await client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
+        agentId,
         catalogId: key.catalogId,
         hostId: key.hostId,
         threadId: key.threadId,
+        ...(this.catalogSession?.sourceHomeId
+          ? { sourceHomeId: this.catalogSession.sourceHomeId }
+          : {}),
         limit: 50,
         ...(older && this.catalogCursor ? { cursor: this.catalogCursor } : {}),
       });

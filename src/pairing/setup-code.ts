@@ -8,6 +8,7 @@ import {
   isRfc1918Ipv4Address,
   parseCanonicalIpAddress,
 } from "@openclaw/net-policy/ip";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -17,8 +18,9 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
-import { resolveAdvertisedLanHost } from "../infra/advertised-lan-host.js";
-import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
+import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
+import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
@@ -26,9 +28,10 @@ import {
 import {
   deviceBootstrapProfilesEqual,
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  resolvePairingSetupAccess,
   type DeviceBootstrapProfileInput,
+  type PairingSetupAccess,
 } from "../shared/device-bootstrap-profile.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import {
@@ -41,9 +44,9 @@ type PairingSetupPayload = {
   url: string;
   urls?: string[];
   bootstrapToken: string;
+  expiresAtMs?: number;
+  tlsFingerprint?: string;
 };
-
-type PairingSetupAccess = "full" | "limited" | "node";
 
 const PAIRING_SETUP_MAX_URLS = 8;
 
@@ -67,6 +70,8 @@ type ResolvePairingSetupOptions = {
   pairingBaseDir?: string;
   runCommandWithTimeout?: PairingSetupCommandRunner;
   networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
+  localTlsFingerprint?: string;
+  loadLocalTlsFingerprint?: () => Promise<string | undefined>;
 };
 
 type PairingSetupResolution =
@@ -77,6 +82,8 @@ type PairingSetupResolution =
       urlSource: string;
       access: PairingSetupAccess;
       accessDowngraded: boolean;
+      setupId: string;
+      expiresAtMs: number;
     }
   | {
       ok: false;
@@ -165,16 +172,6 @@ function isFullAccessMobilePairingUrl(url: string): boolean {
   }
 }
 
-function resolvePairingSetupAccess(profile: DeviceBootstrapProfileInput): PairingSetupAccess {
-  if (deviceBootstrapProfilesEqual(profile, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
-    return "full";
-  }
-  if (deviceBootstrapProfilesEqual(profile, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
-    return "node";
-  }
-  return "limited";
-}
-
 function validateMobilePairingUrl(url: string, source?: string): string | null {
   let parsed: URL;
   try {
@@ -182,8 +179,7 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   } catch {
     return "Resolved mobile pairing URL is invalid.";
   }
-  const protocol =
-    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  const protocol = normalizeWebSocketProtocol(parsed.protocol);
   if (protocol === "wss:") {
     return null;
   }
@@ -226,11 +222,11 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
     if (parsed.username || parsed.password) {
       return null;
     }
-    const scheme = parsed.protocol.replace(":", "");
-    if (!scheme) {
+    const protocol = normalizeWebSocketProtocol(parsed.protocol);
+    if (!protocol) {
       return null;
     }
-    const resolvedScheme = scheme === "http" ? "ws" : scheme === "https" ? "wss" : scheme;
+    const resolvedScheme = protocol.replace(":", "");
     if (resolvedScheme !== "ws" && resolvedScheme !== "wss") {
       return null;
     }
@@ -239,7 +235,8 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
       return null;
     }
     const port = parsed.port ? `:${parsed.port}` : "";
-    return `${resolvedScheme}://${host}${port}`;
+    const contextPath = parsed.pathname === "/" ? "" : parsed.pathname;
+    return `${resolvedScheme}://${host}${port}${contextPath}`;
   } catch {
     return null;
   }
@@ -380,7 +377,7 @@ async function resolveGatewayUrl(
 
   const advertisedLanHost =
     cfg.gateway?.bind === "lan"
-      ? await resolveAdvertisedLanHost({
+      ? await resolveAdvertisedLanHostCore({
           networkInterfaces: opts.networkInterfaces,
           runCommandWithTimeout: opts.runCommandWithTimeout,
         })
@@ -407,6 +404,79 @@ export function encodePairingSetupCode(payload: PairingSetupPayload): string {
   const json = JSON.stringify(payload);
   const base64 = Buffer.from(json, "utf8").toString("base64");
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+const PAIRING_SETUP_URL_PREFIX = "oc-pair://";
+const PAIRING_SETUP_CODE_RE = /^[A-Za-z0-9_-]+$/u;
+
+/** Decode the current setup payload plus additive fields emitted by older pairing surfaces. */
+export function decodePairingSetupCode(
+  input: string,
+  options: { nowMs?: number } = {},
+): PairingSetupPayload {
+  const trimmed = input.trim();
+  const setupCode = trimmed.toLowerCase().startsWith(PAIRING_SETUP_URL_PREFIX)
+    ? trimmed.slice(PAIRING_SETUP_URL_PREFIX.length)
+    : trimmed;
+  if (!setupCode || !PAIRING_SETUP_CODE_RE.test(setupCode)) {
+    throw new Error("Invalid pairing setup code or URL.");
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(setupCode, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Invalid pairing setup code or URL.");
+  }
+  if (!isRecord(decoded)) {
+    throw new Error("Invalid pairing setup payload.");
+  }
+
+  const url = normalizeOptionalString(decoded.url);
+  const bootstrapToken = normalizeOptionalString(decoded.bootstrapToken);
+  if (!url || !bootstrapToken || normalizeUrl(url, "ws") !== url) {
+    throw new Error("Invalid pairing setup payload.");
+  }
+
+  let urls: string[] | undefined;
+  if (decoded.urls !== undefined) {
+    if (
+      !Array.isArray(decoded.urls) ||
+      decoded.urls.length === 0 ||
+      decoded.urls.length > PAIRING_SETUP_MAX_URLS ||
+      decoded.urls.some(
+        (candidate) => typeof candidate !== "string" || normalizeUrl(candidate, "ws") !== candidate,
+      )
+    ) {
+      throw new Error("Invalid pairing setup payload.");
+    }
+    urls = decoded.urls;
+  }
+
+  let expiresAtMs: number | undefined;
+  if (decoded.expiresAtMs !== undefined) {
+    const candidate = decoded.expiresAtMs;
+    if (typeof candidate !== "number" || !Number.isSafeInteger(candidate) || candidate < 0) {
+      throw new Error("Invalid pairing setup payload.");
+    }
+    expiresAtMs = candidate;
+    if (candidate <= (options.nowMs ?? Date.now())) {
+      throw new Error("Pairing setup code has expired.");
+    }
+  }
+
+  const tlsFingerprint = normalizeOptionalString(decoded.tlsFingerprint);
+  if (decoded.tlsFingerprint !== undefined && !tlsFingerprint) {
+    throw new Error("Invalid pairing setup payload.");
+  }
+
+  return {
+    url,
+    ...(urls ? { urls } : {}),
+    bootstrapToken,
+    ...(expiresAtMs !== undefined ? { expiresAtMs } : {}),
+    ...(tlsFingerprint ? { tlsFingerprint } : {}),
+  };
 }
 
 export async function resolvePairingSetupFromConfig(
@@ -475,22 +545,33 @@ export async function resolvePairingSetupFromConfig(
   const issuedBootstrapProfile = accessDowngraded
     ? PAIRING_SETUP_BOOTSTRAP_PROFILE
     : requestedBootstrapProfile;
+  const issued = await issueDevicePairSetupBootstrapToken({
+    baseDir: options.pairingBaseDir,
+    profile: issuedBootstrapProfile,
+  });
+
+  const directGatewayTlsFingerprint =
+    urlResult.url.startsWith("wss://") && urlResult.source?.startsWith("gateway.bind=")
+      ? (normalizeOptionalString(options.localTlsFingerprint) ??
+        (await options.loadLocalTlsFingerprint?.()))
+      : urlResult.url.startsWith("wss://") && urlResult.source === "gateway.remote.url"
+        ? normalizeOptionalString(cfgForAuth.gateway?.remote?.tlsFingerprint)
+        : undefined;
 
   return {
     ok: true,
     payload: {
       url: urlResult.url,
       ...(uniqueUrls.length > 1 ? { urls: uniqueUrls } : {}),
-      bootstrapToken: (
-        await issueDeviceBootstrapToken({
-          baseDir: options.pairingBaseDir,
-          profile: issuedBootstrapProfile,
-        })
-      ).token,
+      bootstrapToken: issued.token,
+      expiresAtMs: issued.expiresAtMs,
+      ...(directGatewayTlsFingerprint ? { tlsFingerprint: directGatewayTlsFingerprint } : {}),
     },
     authLabel: authLabel.label,
     urlSource: urlResult.source ?? "unknown",
     access: resolvePairingSetupAccess(issuedBootstrapProfile),
     accessDowngraded,
+    setupId: issued.setupId,
+    expiresAtMs: issued.expiresAtMs,
   };
 }

@@ -147,7 +147,7 @@ enum RuntimeLocator {
                 path: binary,
                 arguments: ["--version"],
                 environment: ["PATH": pathEnv],
-                timeout: 2)
+                timeout: CommandResolver.versionProbeTimeout)
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(

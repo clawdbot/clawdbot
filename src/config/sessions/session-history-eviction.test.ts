@@ -10,7 +10,6 @@ import {
 import {
   createOpenClawTestState,
   type OpenClawTestState,
-  withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
@@ -23,7 +22,6 @@ import {
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
-  kickSessionHistoryDiskBudgetMaintenance,
   inspectSqliteSessionHistoryDiskBudget,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -309,50 +307,3 @@ function createTrajectoryEvent(sessionId: string, sessionKey: string): Trajector
     sessionKey,
   };
 }
-
-describe("kickSessionHistoryDiskBudgetMaintenance", () => {
-  it("throttles repeat kicks and skips warn mode entirely", async () => {
-    await withOpenClawTestState(
-      { prefix: "openclaw-session-history-kick-", layout: "state-only" },
-      async (testState) => {
-        const tempDir = testState.sessionsDir();
-        fs.mkdirSync(tempDir, { recursive: true });
-        const storePath = path.join(tempDir, "sessions.json");
-        const maintenance = {
-          mode: "warn",
-          maxDiskBytes: 1,
-          highWaterBytes: 0,
-        } as never;
-        // Warn mode must not schedule background enforcement at all.
-        kickSessionHistoryDiskBudgetMaintenance({
-          storePath,
-          maintenanceConfig: maintenance,
-        });
-        const enforceMaintenance = {
-          mode: "enforce",
-          maxDiskBytes: Number.MAX_SAFE_INTEGER,
-          highWaterBytes: Number.MAX_SAFE_INTEGER - 1,
-        } as never;
-        const first = Date.now();
-        kickSessionHistoryDiskBudgetMaintenance({
-          storePath,
-          maintenanceConfig: enforceMaintenance,
-          now: first,
-        });
-        // Second kick inside the throttle window is a no-op (single-slot state).
-        kickSessionHistoryDiskBudgetMaintenance({
-          storePath,
-          maintenanceConfig: enforceMaintenance,
-          now: first + 1_000,
-        });
-        // A queued no-op pass is a deterministic barrier behind the fire-and-forget kick.
-        await enforceSqliteSessionHistoryDiskBudget({
-          storePath,
-          mode: "warn",
-          maintenance: { maxDiskBytes: null, highWaterBytes: null },
-        });
-        closeOpenClawAgentDatabasesForTest();
-      },
-    );
-  });
-});

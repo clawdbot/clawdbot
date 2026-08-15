@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   collectDeprecatedInternalConfigApiViolations,
   collectRuntimeActionLoadConfigViolations,
-} from "../../../scripts/lib/config-boundary-guard.mjs";
+} from "../../../scripts/lib/config-boundary-guard.mts";
 
 let tempRoots: string[] = [];
 

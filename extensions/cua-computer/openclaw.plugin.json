@@ -4,11 +4,16 @@
     "onStartup": true
   },
   "enabledByDefault": false,
+  "enabledByDefaultOnPlatforms": ["darwin"],
   "name": "CUA Computer",
-  "description": "Experimental CUA Driver SDK computer control for Windows and Linux node hosts.",
+  "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "driverPath": {
+        "type": "string"
+      }
+    }
   }
 }

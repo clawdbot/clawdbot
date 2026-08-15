@@ -195,6 +195,7 @@ describe("qa channel transport", () => {
     state.addOutboundMessage({
       accountId: "other",
       to: "dm:alice",
+      isError: true,
       text: "⚠️ agent failed before reply: foreign account failure",
     });
     const expected = state.addOutboundMessage({
@@ -239,6 +240,7 @@ describe("qa channel transport", () => {
         state.addOutboundMessage({
           accountId: "other",
           to: "dm:alice",
+          isError: true,
           text: "⚠️ agent failed before reply: foreign account failure",
         });
         return "owned condition completed";
@@ -246,21 +248,28 @@ describe("qa channel transport", () => {
     ).resolves.toBe("owned condition completed");
   });
 
-  it("injects native commands with transport metadata", async () => {
-    const transport = createQaChannelTransport(createQaBusState());
+  it.each([
+    { command: "stop", name: "stop" },
+    { command: "queue collect please help", name: "queue" },
+    { command: "think high", name: "think" },
+  ])(
+    "injects /$name with its complete command and token-only metadata",
+    async ({ command, name }) => {
+      const transport = createQaChannelTransport(createQaBusState());
 
-    await transport.sendNativeCommand({
-      command: "stop",
-      conversation: { id: "alice", kind: "direct" },
-      senderId: "alice",
-    });
+      await transport.sendNativeCommand({
+        command,
+        conversation: { id: "alice", kind: "direct" },
+        senderId: "alice",
+      });
 
-    const [message] = transport.state.getSnapshot().messages;
-    expect(message).toMatchObject({
-      text: "/stop",
-      nativeCommand: { name: "stop" },
-    });
-  });
+      const [message] = transport.state.getSnapshot().messages;
+      expect(message).toMatchObject({
+        text: `/${command}`,
+        nativeCommand: { name },
+      });
+    },
+  );
 
   it("inherits the shared failure-aware wait helper", async () => {
     const transport = createQaChannelTransport(createQaBusState());
@@ -274,6 +283,7 @@ describe("qa channel transport", () => {
             await transport.state.addOutboundMessage({
               accountId: "default",
               to: "dm:qa-operator",
+              isError: true,
               text: "⚠️ agent failed before reply: synthetic failure for wait helper",
             });
           }
@@ -291,6 +301,7 @@ describe("qa channel transport", () => {
     await transport.state.addOutboundMessage({
       accountId: "default",
       to: "dm:qa-operator",
+      isError: true,
       text: "⚠️ agent failed before reply: stale failure should not leak",
     });
 

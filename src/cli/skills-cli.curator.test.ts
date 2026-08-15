@@ -110,7 +110,7 @@ describe("skills curator cli", () => {
         from: "user",
       }),
     ).rejects.toThrow("__exit__:1");
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith("Error: remote unavailable");
+    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith("remote unavailable");
   });
 
   it("disambiguates duplicate skill keys in text status", async () => {
