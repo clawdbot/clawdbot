@@ -119,6 +119,12 @@ describe("sanitizeForPlainText", () => {
     );
   });
 
+  it("preserves large control-character runs around code", () => {
+    const reply = `${"\u0000".repeat(40_000)}e\u0000p\n\`\`\`text\nline one\n\n\n<Button>\n\`\`\``;
+
+    expect(sanitizeForPlainText(reply)).toBe(reply);
+  });
+
   it("preserves generics and JSX inside inline code spans", () => {
     expect(
       sanitizeForPlainText("Use `Array<string>` for ids, and render `<Button onClick={save}>`."),

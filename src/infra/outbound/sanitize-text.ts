@@ -8,6 +8,9 @@ import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 export { stripInternalRuntimeScaffolding };
 
 const HTML_TAG_RE = /<\/?[a-z][a-z0-9_-]*\b[^>]*>/gi;
+const MAY_CONTAIN_MARKDOWN_CODE_RE = /[`~]|\t| {4}/;
+const CODE_ESCAPE = "\u0000e";
+const CODE_PLACEHOLDER = "\u0000p";
 
 // Quoted attribute values may contain `>`; normalize convertible openers without leaking attribute text.
 const CONVERTIBLE_HTML_OPEN_TAG_RE =
@@ -21,14 +24,6 @@ function stripRemainingHtmlTags(text: string): string {
     current = current.replace(HTML_TAG_RE, "");
   } while (current !== previous);
   return current;
-}
-
-function reserveCodeMarker(text: string): string {
-  let marker = "\u0000";
-  while (text.includes(marker)) {
-    marker += "\u0000";
-  }
-  return marker;
 }
 
 function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): string {
@@ -69,22 +64,33 @@ function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): 
  */
 export function sanitizeForPlainText(text: string, options: { style?: "markdown" } = {}): string {
   const prepared = flattenMarkdownDetails(stripInternalRuntimeScaffolding(text));
-  const codeRegions = findCodeRegions(prepared);
+  const conversionCanChangeCode = prepared.includes("<") || prepared.includes("\n\n\n");
+  const codeRegions =
+    conversionCanChangeCode && MAY_CONTAIN_MARKDOWN_CODE_RE.test(prepared)
+      ? findCodeRegions(prepared)
+      : [];
   if (codeRegions.length === 0) {
     return convertHtmlOutsideCode(prepared, options);
   }
-  const marker = reserveCodeMarker(prepared);
   const preservedCode: string[] = [];
   let masked = "";
   let cursor = 0;
   for (const region of codeRegions) {
-    masked += `${prepared.slice(cursor, region.start)}${marker}${preservedCode.length}${marker}`;
+    masked += prepared.slice(cursor, region.start).replaceAll("\u0000", CODE_ESCAPE);
+    masked += CODE_PLACEHOLDER;
     preservedCode.push(prepared.slice(region.start, region.end));
     cursor = region.end;
   }
-  masked += prepared.slice(cursor);
-  return convertHtmlOutsideCode(masked, options).replace(
-    new RegExp(`${marker}(\\d+)${marker}`, "g"),
-    (_match, index: string) => preservedCode[Number(index)] ?? "",
-  );
+  masked += prepared.slice(cursor).replaceAll("\u0000", CODE_ESCAPE);
+
+  const converted = convertHtmlOutsideCode(masked, options);
+  let restored = "";
+  cursor = 0;
+  for (const code of preservedCode) {
+    const placeholder = converted.indexOf(CODE_PLACEHOLDER, cursor);
+    restored += converted.slice(cursor, placeholder).replaceAll(CODE_ESCAPE, "\u0000");
+    restored += code;
+    cursor = placeholder + CODE_PLACEHOLDER.length;
+  }
+  return restored + converted.slice(cursor).replaceAll(CODE_ESCAPE, "\u0000");
 }
