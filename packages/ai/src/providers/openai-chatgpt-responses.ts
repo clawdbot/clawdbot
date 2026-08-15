@@ -747,7 +747,7 @@ function buildRequestBody(
     }
   }
 
-  if (options?.reasoningEffort !== undefined) {
+  if (options?.reasoningEffort !== undefined || options?.reasoningSummary !== undefined) {
     const effort =
       options.reasoningEffort === "none"
         ? (model.thinkingLevelMap?.off ?? "none")
