@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
 
 type DriverClickButton = import("@trycua/cua-driver").ClickButton;
-type DriverCaptureScope = import("@trycua/cua-driver").CaptureScope;
 type DriverEscalationReason = import("@trycua/cua-driver").EscalationReason;
 type CuaDriverLike = import("@trycua/cua-driver").CuaDriverLike;
 type CuaDriverSessionLike = import("@trycua/cua-driver").CuaDriverSessionLike;
@@ -151,16 +150,26 @@ class DirectCuaDriverSession implements CuaDriverSession {
       const start = session
         .startSession({ session: publicSession, captureScope }, asyncOptions(signal))
         .then(() => {
-          if (isWindow) this.windowStarted = true;
-          else this.desktopStarted = true;
+          if (isWindow) {
+            this.windowStarted = true;
+          } else {
+            this.desktopStarted = true;
+          }
         });
-      if (isWindow) this.windowStartPromise = start;
-      else this.desktopStartPromise = start;
+      if (isWindow) {
+        this.windowStartPromise = start;
+      } else {
+        this.desktopStartPromise = start;
+      }
       try {
         await start;
       } catch (error) {
-        if (isWindow && this.windowStartPromise === start) this.windowStartPromise = undefined;
-        if (!isWindow && this.desktopStartPromise === start) this.desktopStartPromise = undefined;
+        if (isWindow && this.windowStartPromise === start) {
+          this.windowStartPromise = undefined;
+        }
+        if (!isWindow && this.desktopStartPromise === start) {
+          this.desktopStartPromise = undefined;
+        }
         throw error;
       }
       return;
