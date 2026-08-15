@@ -5831,7 +5831,7 @@ describe("chat model controls", () => {
     expect(container.querySelector('[data-chat-model-provider-group="moonshotai"]')).toBeNull();
   });
 
-  it("distinguishes the active context budget from native model capacity", () => {
+  it("keeps active context in picker details without crowding the compact trigger", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.6-sol",
       modelProvider: "openai",
@@ -5863,9 +5863,7 @@ describe("chat model controls", () => {
     expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
       "272k active · 1M max · OpenClaw",
     );
-    expect(
-      getChatModelSelect(container).querySelector(".chat-controls__trigger-meta")?.textContent,
-    ).toBe("272k active");
+    expect(getChatModelSelect(container).querySelector(".chat-controls__trigger-meta")).toBeNull();
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
   });
 
@@ -5898,9 +5896,12 @@ describe("chat model controls", () => {
       modelOverrides: { main: "openai/gpt-5.6-sol" },
       modelSwitching: true,
     });
+    const selectedModelOption = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.6-sol"]',
+    );
 
     expect(
-      getChatModelSelect(container).querySelector(".chat-controls__trigger-meta")?.textContent,
+      selectedModelOption?.querySelector(".chat-controls__model-option-meta")?.textContent,
     ).toBe("1M");
   });
 
@@ -6158,6 +6159,7 @@ describe("chat model controls", () => {
         id: "google/gemma-4-26b-a4b-it",
         name: "Gemma 4",
         provider: "openrouter",
+        contextWindow: 1_000_000,
       },
     ];
     state.sessionsResult = createSessionsListResult({
@@ -6166,6 +6168,7 @@ describe("chat model controls", () => {
       defaultsModel: "google/gemma-4-26b-a4b-it",
       defaultsProvider: "openrouter",
     });
+    state.sessionsResult.sessions[0]!.contextTokens = 272_000;
     const container = renderModelControls(state);
 
     const providerButtons = Array.from(
@@ -6182,7 +6185,7 @@ describe("chat model controls", () => {
     expect(
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="openrouter"]')
         ?.textContent,
-    ).toContain("Gemma 4");
+    ).toContain("272k active · 1M max");
   });
 
   it("uses a unique catalog provider before an unrelated stale session hint", () => {
