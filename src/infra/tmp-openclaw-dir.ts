@@ -1,4 +1,5 @@
 // Creates temporary OpenClaw directories for runtime scratch work.
+import { getWorkerDeploySecureTempRoot } from "../worker/worker-deploy-runtime-registry.js";
 
 /** Preferred shared OpenClaw temp root on POSIX systems when ownership and permissions are safe. */
 export const DEFAULT_POSIX_TMP_ROOT = "/tmp/openclaw";
@@ -25,20 +26,18 @@ export type ResolvePreferredOpenClawTmpDirOptions = {
 type ResolveSecureTempRoot = typeof import("@openclaw/fs-safe/temp").resolveSecureTempRoot;
 
 let resolveSecureTempRootRuntime: ResolveSecureTempRoot | undefined;
-// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled worker builds replace this compile-time define.
-declare const __WORKER_DEPLOY_BUILD__: boolean;
-
-/** Registers the statically bundled temp-root runtime for portable worker startup. */
-export function registerSecureTempRootRuntime(runtime: ResolveSecureTempRoot): void {
-  resolveSecureTempRootRuntime = runtime;
-}
+declare const WORKER_DEPLOY_BUILD: boolean;
 
 function loadResolveSecureTempRoot(): ResolveSecureTempRoot {
   if (resolveSecureTempRootRuntime) {
     return resolveSecureTempRootRuntime;
   }
-  // oxlint-disable-next-line unicorn/no-typeof-undefined -- The build define is absent in source runtimes.
-  if (typeof __WORKER_DEPLOY_BUILD__ !== "undefined" && __WORKER_DEPLOY_BUILD__) {
+  const injected = getWorkerDeploySecureTempRoot();
+  if (injected) {
+    resolveSecureTempRootRuntime = injected;
+    return injected;
+  }
+  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
     throw new Error("worker temp-root runtime was not registered before use");
   }
   // Keep this module browser-import safe: fs-safe's temp barrel owns Node-only

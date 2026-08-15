@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createWorkerDeployBuildPlugin } from "../../scripts/lib/worker-deploy-build-plugin.mts";
+import {
+  createWorkerDeployBuildPlugin,
+  WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+} from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const fail = (message: string): never => {
@@ -10,6 +13,14 @@ const fail = (message: string): never => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker deploy build plugin", () => {
+  it("replaces optional host-native modules with a failing virtual module", () => {
+    const plugin = createWorkerDeployBuildPlugin();
+
+    expect(plugin.load(WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID)).toContain(
+      "optional host-native dependency unavailable",
+    );
+  });
+
   it("composes the bundled Browser runtime only in the deploy build", () => {
     const bridgePath = path.resolve("src/worker/worker-deploy-browser-runtime.ts");
     const source = fs.readFileSync(bridgePath, "utf8");

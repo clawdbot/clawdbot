@@ -1945,6 +1945,7 @@ public struct EnvironmentSummary: Codable, Sendable {
     public let trust: String?
     public let capabilities: [String]?
     public let desktop: Bool?
+    public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
 
     public init(
@@ -1961,6 +1962,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         trust: String? = nil,
         capabilities: [String]? = nil,
         desktop: Bool? = nil,
+        issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
     {
         self.id = id
@@ -1976,6 +1978,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         self.trust = trust
         self.capabilities = capabilities
         self.desktop = desktop
+        self.issues = issues
         self.worker = worker
     }
 
@@ -1993,6 +1996,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         case trust
         case capabilities
         case desktop
+        case issues
         case worker
     }
 }
@@ -2029,6 +2033,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
     public let trust: String?
     public let capabilities: [String]?
     public let desktop: Bool?
+    public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
 
     public init(
@@ -2045,6 +2050,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         trust: String? = nil,
         capabilities: [String]? = nil,
         desktop: Bool? = nil,
+        issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
     {
         self.id = id
@@ -2060,6 +2066,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         self.trust = trust
         self.capabilities = capabilities
         self.desktop = desktop
+        self.issues = issues
         self.worker = worker
     }
 
@@ -2077,6 +2084,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         case trust
         case capabilities
         case desktop
+        case issues
         case worker
     }
 }
@@ -2113,6 +2121,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
     public let trust: String?
     public let capabilities: [String]?
     public let desktop: Bool?
+    public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
 
     public init(
@@ -2129,6 +2138,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         trust: String? = nil,
         capabilities: [String]? = nil,
         desktop: Bool? = nil,
+        issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
     {
         self.id = id
@@ -2144,6 +2154,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         self.trust = trust
         self.capabilities = capabilities
         self.desktop = desktop
+        self.issues = issues
         self.worker = worker
     }
 
@@ -2161,6 +2172,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         case trust
         case capabilities
         case desktop
+        case issues
         case worker
     }
 }
@@ -2213,6 +2225,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
     public let trust: String?
     public let capabilities: [String]?
     public let desktop: Bool?
+    public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
 
     public init(
@@ -2229,6 +2242,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         trust: String? = nil,
         capabilities: [String]? = nil,
         desktop: Bool? = nil,
+        issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
     {
         self.id = id
@@ -2244,6 +2258,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         self.trust = trust
         self.capabilities = capabilities
         self.desktop = desktop
+        self.issues = issues
         self.worker = worker
     }
 
@@ -2261,6 +2276,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         case trust
         case capabilities
         case desktop
+        case issues
         case worker
     }
 }

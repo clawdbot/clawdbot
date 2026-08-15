@@ -6,6 +6,7 @@
  */
 import { createRequire } from "node:module";
 import { decodeHtmlEntities } from "../../shared/html-entities.js";
+import { getWorkerDeployHighlightJs } from "../../worker/worker-deploy-runtime-registry.js";
 
 type HighlightJs = {
   getLanguage(name: string): unknown;
@@ -17,8 +18,7 @@ type HighlightJs = {
 };
 
 let highlightJsRuntime: HighlightJs | undefined;
-// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled worker builds replace this compile-time define.
-declare const __WORKER_DEPLOY_BUILD__: boolean;
+declare const WORKER_DEPLOY_BUILD: boolean;
 
 function isHighlightJs(value: unknown): value is HighlightJs {
   return (
@@ -33,28 +33,29 @@ function isHighlightJs(value: unknown): value is HighlightJs {
   );
 }
 
-/** Registers the statically bundled highlighter for portable worker startup. */
-export function registerHighlightJsRuntime(runtime: unknown): void {
+function setHighlightJsRuntime(runtime: unknown): HighlightJs {
   if (!isHighlightJs(runtime)) {
     throw new TypeError("highlight.js did not expose the expected Node API");
   }
   highlightJsRuntime = runtime;
+  return runtime;
 }
 
 function loadHighlightJsRuntime(): HighlightJs {
   if (highlightJsRuntime) {
     return highlightJsRuntime;
   }
-  // oxlint-disable-next-line unicorn/no-typeof-undefined -- The build define is absent in source runtimes.
-  if (typeof __WORKER_DEPLOY_BUILD__ !== "undefined" && __WORKER_DEPLOY_BUILD__) {
+  const injected = getWorkerDeployHighlightJs();
+  if (injected !== undefined) {
+    return setHighlightJsRuntime(injected);
+  }
+  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
     throw new Error("worker highlight.js runtime was not registered before use");
   }
   // highlight.js ships `/// <reference lib="dom" />` in its d.ts, which would
   // silently re-inject DOM globals into the DOM-free core program. Load it
   // untyped and validate the narrow API we use instead of importing its types.
-  const loaded: unknown = createRequire(import.meta.url)("highlight.js");
-  registerHighlightJsRuntime(loaded);
-  return highlightJsRuntime!;
+  return setHighlightJsRuntime(createRequire(import.meta.url)("highlight.js"));
 }
 
 /** Formatter applied to highlighted text segments. */

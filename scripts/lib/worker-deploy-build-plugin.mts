@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const WORKER_DEPLOY_BUILD_PLUGIN_NAME = "openclaw:worker-deploy";
+export const WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID = `${path.resolve("src/worker/worker-deploy-runtime.ts")}?optional-native`;
 
 const PLAYWRIGHT_PACKAGE_INIT = `    packageRoot = import_path9.default.join(__dirname, "..");
     packageJSON = require(import_path9.default.join(packageRoot, "package.json"));
@@ -30,6 +31,11 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
 
   return {
     name: WORKER_DEPLOY_BUILD_PLUGIN_NAME,
+    load(id: string) {
+      return id === WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID
+        ? 'throw new Error("optional host-native dependency unavailable in portable worker runtime");'
+        : null;
+    },
     transform(this: { error(message: string): never }, code: string, id: string) {
       let resolvedId: string;
       try {

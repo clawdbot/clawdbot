@@ -23,7 +23,10 @@ import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
-import { createWorkerDeployBuildPlugin } from "./scripts/lib/worker-deploy-build-plugin.mts";
+import {
+  createWorkerDeployBuildPlugin,
+  WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+} from "./scripts/lib/worker-deploy-build-plugin.mts";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
@@ -176,21 +179,17 @@ function workerDeployBuildConfig(): UserConfig {
     dts: false,
     env,
     define: {
-      __WORKER_DEPLOY_BUILD__: "true",
-      __WORKER_DEPLOY_VERSION__: JSON.stringify(workerDeployVersion),
+      WORKER_DEPLOY_BUILD: "true",
+      WORKER_DEPLOY_VERSION: JSON.stringify(workerDeployVersion),
     },
     alias: {
-      bufferutil: path.resolve("src/worker/worker-deploy-optional-native.ts"),
-      "chromium-bidi/lib/cjs/bidiMapper/BidiMapper": path.resolve(
-        "src/worker/worker-deploy-optional-native.ts",
-      ),
-      "chromium-bidi/lib/cjs/cdp/CdpConnection": path.resolve(
-        "src/worker/worker-deploy-optional-native.ts",
-      ),
-      "electron/index.js": path.resolve("src/worker/worker-deploy-optional-native.ts"),
-      fsevents: path.resolve("src/worker/worker-deploy-optional-native.ts"),
-      kerberos: path.resolve("src/worker/worker-deploy-optional-native.ts"),
-      "utf-8-validate": path.resolve("src/worker/worker-deploy-optional-native.ts"),
+      bufferutil: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "chromium-bidi/lib/cjs/bidiMapper/BidiMapper": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "chromium-bidi/lib/cjs/cdp/CdpConnection": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "electron/index.js": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      fsevents: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      kerberos: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "utf-8-validate": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
     },
     deps: {
       alwaysBundle: (id) => !isBuiltin(id),

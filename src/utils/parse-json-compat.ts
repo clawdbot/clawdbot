@@ -3,11 +3,11 @@
  * Strict JSON stays the fast path; JSON5 is only the authored/legacy fallback.
  */
 import { createRequire } from "node:module";
+import { getWorkerDeployJson5 } from "../worker/worker-deploy-runtime-registry.js";
 
 type Json5Parser = { parse: (value: string) => unknown };
 let json5Runtime: Json5Parser | undefined;
-// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled worker builds replace this compile-time define.
-declare const __WORKER_DEPLOY_BUILD__: boolean;
+declare const WORKER_DEPLOY_BUILD: boolean;
 
 function isJson5Parser(value: unknown): value is Json5Parser {
   return (
@@ -18,8 +18,7 @@ function isJson5Parser(value: unknown): value is Json5Parser {
   );
 }
 
-/** Registers the statically bundled JSON5 parser for portable worker startup. */
-export function registerJson5Runtime(runtime: unknown): void {
+function setJson5Runtime(runtime: unknown): Json5Parser {
   const parser = isJson5Parser(runtime)
     ? runtime
     : typeof runtime === "object" && runtime !== null && "default" in runtime
@@ -29,18 +28,21 @@ export function registerJson5Runtime(runtime: unknown): void {
     throw new Error("json5 parser unavailable");
   }
   json5Runtime = parser;
+  return parser;
 }
 
 function loadJson5Parser(): Json5Parser {
   if (json5Runtime) {
     return json5Runtime;
   }
-  // oxlint-disable-next-line unicorn/no-typeof-undefined -- The build define is absent in source runtimes.
-  if (typeof __WORKER_DEPLOY_BUILD__ !== "undefined" && __WORKER_DEPLOY_BUILD__) {
+  const injected = getWorkerDeployJson5();
+  if (injected !== undefined) {
+    return setJson5Runtime(injected);
+  }
+  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
     throw new Error("worker JSON5 runtime was not registered before use");
   }
-  registerJson5Runtime(createRequire(import.meta.url)("json5"));
-  return json5Runtime!;
+  return setJson5Runtime(createRequire(import.meta.url)("json5"));
 }
 
 /** Parses strict JSON first, then accepts JSON5 syntax such as comments and trailing commas. */
