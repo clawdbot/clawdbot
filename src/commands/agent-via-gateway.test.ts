@@ -366,6 +366,30 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("leaves an omitted timeout server-owned", () => {
+    expect(agentViaGatewayTesting.parseTimeoutSeconds({})).toBeUndefined();
+  });
+
+  it.each([
+    { label: "CLI", timeout: "45", expected: 45 },
+    { label: "CLI zero", timeout: "0", expected: 0 },
+  ] as const)("preserves explicit $label timeout", ({ timeout, expected }) => {
+    expect(agentViaGatewayTesting.parseTimeoutSeconds({ timeout })).toBe(expected);
+  });
+
+  it("omits the gateway timeout override when --timeout is unset", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params).not.toHaveProperty("timeout");
+      expect(request.timeoutMs).toBe(2_147_000_000);
+    });
+  });
+
   it("rejects partial gateway timeout values", async () => {
     await withTempStore(async () => {
       await expect(

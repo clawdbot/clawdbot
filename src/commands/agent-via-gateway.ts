@@ -357,6 +357,7 @@ export const agentViaGatewayTesting = {
     agentSessionModuleCache.clear();
     agentSessionModuleLoader = loader;
   },
+  parseTimeoutSeconds,
   resolveGatewayAgentTimeoutMs,
   setGatewayAbortRetryDelaysMsForTests(delays?: readonly number[]): void {
     gatewayAbortRetryDelaysMsForTests = delays;
@@ -451,11 +452,11 @@ async function resolveAgentMessageOpts(opts: AgentCliOpts): Promise<AgentDispatc
   return { ...rest, message };
 }
 
-function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
-  const raw =
-    opts.timeout !== undefined
-      ? parseStrictNonNegativeInteger(opts.timeout)
-      : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
+function parseTimeoutSeconds(opts: { timeout?: string }) {
+  if (opts.timeout === undefined) {
+    return undefined;
+  }
+  const raw = parseStrictNonNegativeInteger(opts.timeout);
   if (raw === undefined) {
     throw new Error(
       `Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.`,
@@ -464,8 +465,8 @@ function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   return raw;
 }
 
-function resolveGatewayAgentTimeoutMs(timeoutSeconds: number): number {
-  if (timeoutSeconds === 0) {
+function resolveGatewayAgentTimeoutMs(timeoutSeconds: number | undefined): number {
+  if (timeoutSeconds === undefined || timeoutSeconds === 0) {
     return NO_GATEWAY_TIMEOUT_MS;
   }
   return resolveTimerTimeoutMs((timeoutSeconds + 30) * 1000, 10_000, 10_000);
@@ -993,7 +994,7 @@ async function agentViaGatewayCommand(
       );
     }
   }
-  const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
+  const timeoutSeconds = parseTimeoutSeconds({ timeout: opts.timeout });
   const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(timeoutSeconds);
   const channel = normalizeMessageChannel(opts.channel);
   const deferExplicitRecipientSession = Boolean(
@@ -1088,7 +1089,7 @@ async function agentViaGatewayCommand(
             replyChannel: opts.replyChannel,
             replyAccountId: opts.replyAccount,
             bestEffortDeliver: opts.bestEffortDeliver,
-            timeout: timeoutSeconds,
+            ...(timeoutSeconds === undefined ? {} : { timeout: timeoutSeconds }),
             lane: opts.lane,
             extraSystemPrompt: opts.extraSystemPrompt,
             cleanupBundleMcpOnRunEnd: true,

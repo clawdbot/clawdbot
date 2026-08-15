@@ -380,7 +380,6 @@ date context. Falls back to the host timezone.
       toolProgressDetail: "explain",
       reasoningDefault: "off",
       elevatedDefault: "on",
-      timeoutSeconds: 600,
       mediaMaxMb: 5,
       contextTokens: 200000,
       maxConcurrent: 4,
