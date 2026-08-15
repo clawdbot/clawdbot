@@ -2403,8 +2403,83 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+    );
+    const planRestoreRequest = harness.requests.find(
+      (request) => request.method === "thread/inject_items",
+    );
+    expect(planRestoreRequest?.params).toMatchObject({
+      threadId: "thread-1",
+      items: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: expect.stringContaining('"step":"Restore progress","status":"in_progress"'),
+            },
+          ],
+        },
+      ],
+    });
+
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+  });
+
+  it("does not inject plan state after compaction when the turn has no plan", async () => {
+    const params = createRunParams();
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+    );
+    expect(harness.requests.map((request) => request.method)).not.toContain("thread/inject_items");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("continues the turn when restoring plan state after compaction fails", async () => {
+    const params = createRunParams();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/inject_items") {
+        throw new Error("injected test failure");
+      }
+      return undefined;
+    });
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/plan/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        explanation: "Keep working",
+        plan: [{ step: "Finish safely", status: "inProgress" }],
+      },
+    });
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+    );
+    expect(harness.requests.map((request) => request.method)).toContain("thread/inject_items");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+    expect(readAttemptTerminal(result).promptError).toBeNull();
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
