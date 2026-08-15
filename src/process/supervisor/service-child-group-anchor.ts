@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { Socket } from "node:net";
-import type { Readable } from "node:stream";
+import { pipeline, type Readable } from "node:stream";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorMessage,
@@ -266,38 +266,6 @@ export function runServiceChildGroupAnchor(): void {
     lineage.once("end", markLineageClosed);
     lineage.once("close", markLineageClosed);
     lineage.once("error", markLineageClosed);
-    let stdoutEnded = false;
-    let stderrEnded = false;
-    let pendingStdoutWrites = 0;
-    let pendingStderrWrites = 0;
-    const maybeMarkStdoutDrained = () => {
-      if (!stdoutDrained && stdoutEnded && pendingStdoutWrites === 0) {
-        stdoutDrained = true;
-        void settleRoot();
-      }
-    };
-    const maybeMarkStderrDrained = () => {
-      if (!stderrDrained && stderrEnded && pendingStderrWrites === 0) {
-        stderrDrained = true;
-        void settleRoot();
-      }
-    };
-    command.stdout?.on("data", (chunk) => {
-      pendingStdoutWrites += 1;
-      process.stdout.write(chunk, () => {
-        pendingStdoutWrites -= 1;
-        maybeMarkStdoutDrained();
-      });
-    });
-    command.stderr?.on("data", (chunk) => {
-      pendingStderrWrites += 1;
-      process.stderr.write(chunk, () => {
-        pendingStderrWrites -= 1;
-        maybeMarkStderrDrained();
-      });
-    });
-    command.stdout?.on("error", () => {});
-    command.stderr?.on("error", () => {});
     const settleRoot = async () => {
       if (rootSettlementStarted || !rootExit || !stdoutDrained || !stderrDrained) {
         return;
@@ -310,18 +278,16 @@ export function runServiceChildGroupAnchor(): void {
         await closeAuthority("lineage-closed", false);
       }
     };
-    const markStdoutDrained = () => {
-      stdoutEnded = true;
-      maybeMarkStdoutDrained();
-    };
-    const markStderrDrained = () => {
-      stderrEnded = true;
-      maybeMarkStderrDrained();
-    };
-    command.stdout?.once("end", markStdoutDrained);
-    command.stdout?.once("close", markStdoutDrained);
-    command.stderr?.once("end", markStderrDrained);
-    command.stderr?.once("close", markStderrDrained);
+    // Output EOF is independent of lineage EOF. Pipeline closes each forwarded stream
+    // after its final write while the control channel retains descendant authority.
+    pipeline(command.stdout!, process.stdout, () => {
+      stdoutDrained = true;
+      void settleRoot();
+    });
+    pipeline(command.stderr!, process.stderr, () => {
+      stderrDrained = true;
+      void settleRoot();
+    });
     if (start.stdinMode !== "inherit" && command.stdin) {
       process.stdin.pipe(command.stdin);
       if (start.stdinMode === "pipe-closed" && process.stdin.readableEnded) {

@@ -274,6 +274,42 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     expect(stderr).toBe("😀");
   });
 
+  it("flushes incomplete UTF-8 before exposing a root result with retained authority", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const descendantScript = "setTimeout(() => {}, 1500)";
+    const rootScript = `
+      const { spawn } = require("node:child_process");
+      const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], {
+        stdio: ["ignore", "ignore", "ignore", 3],
+      });
+      descendant.unref();
+      process.stderr.write(descendant.pid + "\\n");
+      process.stdout.write(Buffer.from([0x58, 0xe2, 0x82]), () => process.exit(0));
+    `;
+    let streamed = "";
+    const run = await createProcessSupervisor().spawn({
+      mode: "child",
+      argv: [process.execPath, "-e", rootScript],
+      stdinMode: "pipe-closed",
+      sessionId: "service-incomplete-utf8-test",
+      backendId: "service-incomplete-utf8-test",
+      onStdout: (chunk) => {
+        streamed += chunk;
+      },
+    });
+    const startedAt = Date.now();
+    const exit = await run.wait();
+    const elapsed = Date.now() - startedAt;
+    const descendantPid = Number.parseInt(exit.stderr.trim(), 10);
+    activePids.add(descendantPid);
+
+    expect(exit.stdout).toBe("X�");
+    expect(streamed).toBe("X�");
+    expect(elapsed).toBeLessThan(1_000);
+    expect(isAlive(descendantPid)).toBe(true);
+    await waitFor(() => !isAlive(descendantPid));
+  });
+
   it("reports startup failure before secret-pipe failure without an unhandled rejection", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const unhandled: unknown[] = [];

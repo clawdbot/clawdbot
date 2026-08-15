@@ -126,21 +126,22 @@ export async function createServiceChildRelayAdapter(params: {
     retainedRelays.delete(generation);
     throw new Error("service child relay channels were not created");
   }
+  const { stdout, stderr } = relay;
 
   const stdoutListeners = new Set<(chunk: string) => void>();
   const stderrListeners = new Set<(chunk: string) => void>();
-  onDecodedOutput(relay.stdout, (text) => {
+  onDecodedOutput(stdout, (text) => {
     for (const listener of stdoutListeners) {
       listener(text);
     }
   });
-  onDecodedOutput(relay.stderr, (text) => {
+  onDecodedOutput(stderr, (text) => {
     for (const listener of stderrListeners) {
       listener(text);
     }
   });
-  relay.stdout?.on("error", () => {});
-  relay.stderr?.on("error", () => {});
+  stdout.on("error", () => {});
+  stderr.on("error", () => {});
 
   let state: AuthorityState = "starting";
   let commandPid: number | undefined;
@@ -172,7 +173,11 @@ export async function createServiceChildRelayAdapter(params: {
       rejectWait?.(waitError);
       return;
     }
-    if (!rootResult) {
+    if (
+      !rootResult ||
+      !(stdout.readableEnded || stdout.closed) ||
+      !(stderr.readableEnded || stderr.closed)
+    ) {
       return;
     }
     if (requestedSignal && state !== "closed") {
@@ -181,6 +186,13 @@ export async function createServiceChildRelayAdapter(params: {
     waitSettled = true;
     resolveWait?.(rootResult);
   };
+
+  // Root result and output EOF cross different channels. Decoder flush listeners were
+  // registered first, so settlement observes both final text tails before disposal.
+  stdout.once("end", settleWait);
+  stdout.once("close", settleWait);
+  stderr.once("end", settleWait);
+  stderr.once("close", settleWait);
 
   const loseIdentity = (message: string) => {
     if (state === "closed" || state === "identity-lost") {

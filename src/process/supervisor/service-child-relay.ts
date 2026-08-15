@@ -96,6 +96,10 @@ export function runServiceChildRelay(): void {
       process.exitCode = 1;
       return;
     }
+    // The anchor owns forwarded output lifetime. Drop the relay's duplicate writers so
+    // root output can reach EOF while the anchor retains descendant cleanup authority.
+    process.stdout.destroy();
+    process.stderr.destroy();
     anchor.once("spawn", () => {
       anchor?.send(start);
       if (parentLost) {
