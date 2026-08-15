@@ -401,20 +401,31 @@ describe("full-release-validation-at-sha", () => {
         ),
       );
       const dispatch = ghCalls.find((args) => args[0] === "workflow" && args[1] === "run");
-      expect(dispatch).toEqual(
-        expect.arrayContaining([
-          "--ref",
-          workflowBranch,
-          "-f",
-          `ref=${targetBranch}`,
-          "-f",
-          `expected_sha=${fixture.targetSha}`,
-          "-f",
-          `target_context_ref=${fixture.releaseRef}`,
-          "-f",
-          "allow_unreleased_changelog=false",
-        ]),
-      );
+      expect(dispatch?.slice(0, 5)).toEqual([
+        "workflow",
+        "run",
+        "full-release-validation.yml",
+        "--ref",
+        workflowBranch,
+      ]);
+      const inputArgs = dispatch?.slice(5) ?? [];
+      expect(inputArgs.length % 2).toBe(0);
+      const dispatchInputs: Record<string, string> = {};
+      for (let index = 0; index < inputArgs.length; index += 2) {
+        expect(inputArgs[index]).toBe("-f");
+        const assignment = inputArgs[index + 1];
+        const separatorIndex = assignment?.indexOf("=") ?? -1;
+        if (!assignment || separatorIndex <= 0) {
+          throw new Error(`invalid workflow input assignment: ${String(assignment)}`);
+        }
+        dispatchInputs[assignment.slice(0, separatorIndex)] = assignment.slice(separatorIndex + 1);
+      }
+      expect(dispatchInputs).toMatchObject({
+        ref: targetBranch,
+        expected_sha: fixture.targetSha,
+        target_context_ref: fixture.releaseRef,
+        allow_unreleased_changelog: "false",
+      });
       expect(ghCalls).toContainEqual(["api", "repos/openclaw/openclaw/actions/runs/123"]);
       expect(ghCalls.some((args) => args[0] === "graphql")).toBe(false);
       expect(ghCalls.some((args) => args[0] === "run" && args[1] === "watch")).toBe(false);
